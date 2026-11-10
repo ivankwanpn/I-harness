@@ -1,11 +1,12 @@
+import { createSessionCoordinator } from './helpers/composed.ts'
 import { afterEach, expect, it } from 'vitest'
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { exportConversationSeed, type SessionEvent } from '@i-harness/core-session'
+import { CURRENT_FORMAT_VERSION, exportConversationSeed, type SessionEvent } from '@i-harness/core-session'
 import { semanticSeedFromRecords } from '@i-harness/core-session/internal/bootstrap'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
-import { createSessionCoordinator, compileSemanticSeed, readForkRequestCore, createBootstrapRequestIntent, type SessionCoordinator, type BootstrapGuards, type BootstrapRequest, type ManagedDocument } from '../src/index.ts'
+import { compileSemanticSeed, readForkRequestCore, createBootstrapRequestIntent, type SessionCoordinator, type BootstrapGuards, type BootstrapRequest, type ManagedDocument } from '../src/index.ts'
 import { createContext } from '../../core-plugin/src/index.ts'
 import { createToolRegistry } from '../../core-tools/src/index.ts'
 import { registerCodeMode } from '../../code-mode/src/register.ts'
@@ -49,7 +50,7 @@ it('publishes V2 through original B2 once, cold resumes original bytes and keeps
   await expect(lostResponse()).rejects.toThrow('READY caller response lost'); expect(captures).toBe(1)
   const before = await readFile(join(root, 'target.jsonl')), names = await readdir(root), stageName = names.find(name => name.startsWith('target.jsonl.bootstrap-') && name.endsWith('.stage'))!
   const stage = await readFile(join(root, stageName)), lines = before.toString().trimEnd().split('\n').map(line => JSON.parse(line)), header = lines[0]
-  expect(header.formatVersion).toBe(13); expect(header.semanticSeed).toMatchObject({ version: 2, codec: 'semantic-seed-v2', seedLength: 2, groupCount: 1 })
+  expect(header.formatVersion).toBe(CURRENT_FORMAT_VERSION); expect(header.semanticSeed).toMatchObject({ version: 2, codec: 'semantic-seed-v2', seedLength: 2, groupCount: 1 })
   expect(Buffer.byteLength(JSON.stringify(header))).toBeLessThanOrEqual(65536); expect(stage.length).toBeLessThanOrEqual(262144)
   expect(JSON.parse(stage.toString())).toMatchObject({ version: 1, kind: 'semantic-bootstrap-header' })
   expect(lines.slice(1).map(line => line.batchId)).toEqual(['bootstrap:passive-target:seed', 'bootstrap:passive-target:complete'])
@@ -66,8 +67,7 @@ it('publishes V2 through original B2 once, cold resumes original bytes and keeps
   expect(seed.passive.codeStore.values).toEqual([{ valueJson: '{"z":7,"a":1}' }])
   expect(await readFile(join(root, stageName))).toEqual(stage); expect(await readFile(join(root, 'target.jsonl'))).toEqual(before)
 })
-it('rejects corrupt persisted V2 codec or body before a cold document becomes ready', async () => {
-  for (const field of ['codec', 'body']) {
+it.each(['codec', 'body'])('rejects corrupt persisted V2 %s before a cold document becomes ready', async field => {
     const { coordinator, root } = await setup(), document = await source(coordinator)
     expect((await coordinator.bootstrapSemanticTarget(payload(document), guards)).kind).toBe('ready')
     await coordinator.close(); coordinators.splice(coordinators.indexOf(coordinator), 1)
@@ -77,7 +77,6 @@ it('rejects corrupt persisted V2 codec or body before a cold document becomes re
     const cold = await setup(root)
     await expect(cold.coordinator.openManagedDocument('target')).rejects.toThrow()
     expect(await readFile(path, 'utf8')).toBe(changed)
-  }
 })
 it('admits genuine loadOwned positional views and preserves append seq assignment', async () => {
   const { coordinator, root } = await setup()
@@ -91,9 +90,12 @@ it('admits genuine loadOwned positional views and preserves append seq assignmen
   const action = document.beginAction()
   try { expect((await action.facts.agent.lifecycle({ type: 'turn/start' })).kind).toBe('committed') } finally { action.finish() }
   expect(document.view.events.map(event => event.seq)).toEqual([0, 1])
-  await expect(coordinator.openManagedDocument('nonpositional')).rejects.toThrow('sequence invariant')
+  const invalidBytes = await readFile(join(root, 'nonpositional.jsonl'))
+  await expect(coordinator.openManagedDocument('nonpositional')).rejects.toThrow('TASK_TRANSITION_FAILED')
+  expect(await readFile(join(root, 'nonpositional.jsonl'))).toEqual(invalidBytes)
   expect(JSON.parse((await readFile(join(root, 'missing.jsonl'), 'utf8')).split('\n')[1]!).seq).toBe(0)
 })
+// Five real VM executions cross source, child, cold reopen and grandchild durable native owners.
 it('restores actual same-owner B2 x7, commits x8, cold recaptures x8 and excludes source globals', async () => {
   const { coordinator, root } = await setup(), document = await source(coordinator)
   const mount = (document: ManagedDocument, id: string) => {
@@ -119,7 +121,7 @@ it('restores actual same-owner B2 x7, commits x8, cold recaptures x8 and exclude
   try { expect(await run(next, 'text(load("x"));text(typeof secret);')).toMatchObject({ status: 'completed', text: '8\nundefined' }) } finally { await next.code.dispose() }
   const unchanged = mount(await cold.coordinator.openManagedDocument('source'), 'source')
   try { expect(await run(unchanged, 'text(load("x"));text(typeof secret);')).toMatchObject({ status: 'completed', text: '7\nundefined' }) } finally { await unchanged.code.dispose() }
-})
+}, 10000)
 it('uses actual target configured/default quotas on complete loaded V2 entry bytes including Unicode and escaping', async () => {
   const max = 4 * 1024 * 1024, overhead = Buffer.byteLength(JSON.stringify([['x', '']])), chunk = 'é"\\', width = Buffer.byteLength(JSON.stringify(chunk)) - 2
   const valueAt = (bytes: number) => chunk.repeat(Math.floor((bytes - overhead) / width)) + 'a'.repeat((bytes - overhead) % width)
@@ -131,7 +133,7 @@ it('uses actual target configured/default quotas on complete loaded V2 entry byt
     if (target.kind !== 'ready') throw Error(JSON.stringify(target))
     const context = createContext(), tools = createToolRegistry(context), code = registerCodeMode(context, tools, { session: target.document.view, factOwner: target.document, sessionId: 'target', config: { mode: 'only', maxStoreBytes: example.limit } })
     try {
-      const execution = tools.get('code_exec')!.execute({ code: 'text(load("x").length);' }, { sessionId: 'target' })
+      const execution = tools.execute({ name: 'code_exec', args: { code: 'text(load("x").length);', yield_time_ms: 30000 } }).then(result => result.output)
       if (example.accepted) expect(await execution).toMatchObject({ status: 'completed', text: String(value.length) })
       else await expect(execution).rejects.toThrow('Session store transfer limit exceeded')
     } finally { await code.dispose() }
@@ -159,7 +161,7 @@ it('captures overflow exposed by removing a reducing completion and restores exa
   expect(seed.passive.codeStore.cuts[seed.passive.codeStore.groups[1]!]!.overLimit).toBe(true)
   expect(seed.passive.codeStore.cuts[seed.passive.codeStore.latest]!.overLimit).toBeUndefined()
   const context = createContext(), tools = createToolRegistry(context), code = registerCodeMode(context, tools, { session: target.document.view, factOwner: target.document, sessionId: 'target', config: { mode: 'only', maxStoreBytes: 4 * 1024 * 1024 } })
-  const run = (code: string) => tools.get('code_exec')!.execute({ code }, { sessionId: 'target' })
+  const run = (code: string) => tools.execute({ name: 'code_exec', args: { code } }).then(result => result.output)
   const rewind = async (anchorSeq: number) => { const action = target.document.beginAction(); try { expect((await action.facts.compaction.commit([{ type: 'rewind/point', version: 1, targetTurn: 1, anchorSeq, mode: 'conversation', fileOps: [] }])).kind).toBe('committed') } finally { action.finish() } }
   try {
     expect(await run('text(load("x").length);text(load("y"));')).toMatchObject({ status: 'completed', text: '2100000\n0' })

@@ -1,3 +1,4 @@
+import { capturePublishedBootstrap } from './backend/bootstrap-published.ts'
 import { associateArchiveReadResources, associateArchiveHistoryPrefixReader } from '@i-harness/session-persistence/internal/archive-read'
 import {associateOriginalTeamTargetBackend,associateOriginalTeamBindingBackend} from '../../session-persistence/src/team-child-recovery-internal.ts'
 import { createArchiveReadOwner } from './backend/archive-read-owner.ts'
@@ -71,6 +72,16 @@ export function composeJsonlTaskTransitionCoordinator(backend: PersistenceBacken
           owner.assertOriginal(); scope.assertActive(); const state = await owner.readTrackedState(route,held); scope.assertActive(); owner.assertOriginal()
           if (state.kind === 'unavailable' || state.foreign || state.meta || state.rawHeader || state.publicationPresent || state.promotionPresent || state.stagePresent && !state.stageBytes && !state.captureReservation) throw new Error('Bootstrap target unavailable')
           return canonicalJsonData({ kind: state.kind, stagePresent: !!state.stagePresent, stage: state.stageBytes ? Buffer.from(state.stageBytes).toString('base64') : null, reservation: state.captureReservation ?? null })
+        })
+      }, observePublishedBootstrap(scope, route, held, operation, seed) {
+        owner.assertOriginal()
+        if (route.protocol === 'public-results-v1' || routeInvocation(route).targetSessionId !== scope.parentSessionId) throw new Error('Invalid published bootstrap route')
+        const expected = capturePublishedBootstrap(route, operation, seed)
+        return owner.capability.observePublishedTaskParent(scope, async () => {
+          owner.assertOriginal(); scope.assertActive()
+          const state = await owner.readTrackedState(route, held)
+          scope.assertActive(); owner.assertOriginal()
+          return expected.check(state)
         })
       }, openHistory(scope, held) {
         owner.assertOriginal()

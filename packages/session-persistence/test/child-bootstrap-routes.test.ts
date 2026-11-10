@@ -1,22 +1,31 @@
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { appendFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
+import { createSessionCoordinator, createControlledJsonlBackend as createJsonlBackend, backendControls, ownedControls } from './helpers/composed.ts'
 import * as p from '../src/index.ts'
 import { bootstrapPathsForRoute } from '../../session-persistence-jsonl/src/backend/bootstrap-stage.ts'
 import { buildBootstrapHeader } from '../src/coordinator/bootstrap-header.ts'
 import { createSession, append, exportConversationSeed } from '@i-harness/core-session'
+const readCuts=vi.hoisted(()=>new Map<string,()=>Promise<void>>())
+vi.mock('../../session-persistence-jsonl/src/backend/bootstrap-header.ts',async load=>{
+ const api=await load<typeof import('../../session-persistence-jsonl/src/backend/bootstrap-header.ts')>()
+ return {...api,createBootstrapHeaderBackend:(...args:Parameters<typeof api.createBootstrapHeaderBackend>)=>{
+  const backend=api.createBootstrapHeaderBackend(...args),read=backend.readTrackedState
+  backend.readTrackedState=async(route,owner)=>{const state=await read(route,owner),id=route.protocol==='public'?route.invocation.targetSessionId:route.request.invocation.targetSessionId,path=args[0](id),cut=readCuts.get(path);if(cut){readCuts.delete(path);await cut()}return state}
+  return backend
+ }}
+})
 const roots:string[]=[], coordinators:p.SessionCoordinator[]=[]
 afterEach(async()=>{for(const c of coordinators.splice(0))await c.close().catch(()=>{});for(const root of roots.splice(0))await rm(root,{recursive:true,force:true})})
 import { pair, guards } from './child-bootstrap-fixture.ts'
-async function setup(root?:string){root??=await mkdtemp(join(tmpdir(),'ih-child-'));if(!roots.includes(root))roots.push(root);const backend=createJsonlBackend(root),coordinator=p.createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(coordinator);return{root,backend,coordinator}}
+async function setup(root?:string){root??=await mkdtemp(join(tmpdir(),'ih-child-'));if(!roots.includes(root))roots.push(root);const backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(coordinator);return{root,backend,coordinator}}
 it('exposes all three child methods only with the complete routed capability',async()=>{
  const {backend,coordinator}=await setup();expect(typeof (coordinator as any).inspectChildBootstrapCapture).toBe('function');expect(typeof (coordinator as any).bootstrapChildTargetWithCapture).toBe('function');expect(typeof (coordinator as any).resumeChildTarget).toBe('function')
  for(const missing of ['readState','readCapture','reserveCapture','resolveBirth']){const partial={...backend,bootstrapRoutes:{...(backend as any).bootstrapRoutes,[missing]:undefined}},c=p.createSessionCoordinator(partial,{lock:{enabled:true}});coordinators.push(c);expect((c as any).inspectChildBootstrapCapture).toBeUndefined();expect((c as any).bootstrapChildTargetWithCapture).toBeUndefined();expect((c as any).resumeChildTarget).toBeUndefined()}
  for(const candidate of [p.createSessionCoordinator(backend),p.createSessionCoordinator({...backend,bootstrapRoutes:undefined},{lock:{enabled:true}}),p.createSessionCoordinator({...backend,settleBootstrapCaptureIO:undefined},{lock:{enabled:true}})]){coordinators.push(candidate);expect(candidate.inspectChildBootstrapCapture).toBeUndefined();expect(candidate.bootstrapChildTargetWithCapture).toBeUndefined();expect(candidate.resumeChildTarget).toBeUndefined()}
- const platform=Object.getOwnPropertyDescriptor(process,'platform')!;try{Object.defineProperty(process,'platform',{value:'darwin'});const c=p.createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(c);expect(c.inspectChildBootstrapCapture).toBeUndefined();expect(c.bootstrapChildTargetWithCapture).toBeUndefined();expect(c.resumeChildTarget).toBeUndefined()}finally{Object.defineProperty(process,'platform',platform)}
+ const platform=Object.getOwnPropertyDescriptor(process,'platform')!;try{Object.defineProperty(process,'platform',{value:'darwin'});expect(()=>p.createSessionCoordinator(backend,{lock:{enabled:true}})).toThrow('unsupported')}finally{Object.defineProperty(process,'platform',platform)}
 })
 it('reserves none child before callback, reaches actual READY and resumes through ordinary open',async()=>{
  const {root,coordinator}=await setup(),{request,payload}=pair();let callbacks=0,capturedReservation:Buffer|undefined
@@ -58,14 +67,20 @@ it('matches a real generic positive for the approved long initial text and spend
  await expect(readFile(join(root,'changed.jsonl'))).rejects.toMatchObject({code:'ENOENT'});expect(await coordinator.bootstrapChildTargetWithCapture!(changed.request,guards,async()=>{calls++;return changed.payload})).toMatchObject({kind:'blocked',reason:'payload-required'});expect(calls).toBe(1)
 })
 it.each(['no-header','header-only','complete'] as const)('recovers an exact cold full stage %s using only its original payload where needed',async cut=>{
- const {root,coordinator}=await setup(),{request,payload}=pair(),reservation={version:1 as const,kind:'semantic-bootstrap-child-capture' as const,request},built=buildBootstrapHeader(payload,undefined,undefined,reservation),paths=bootstrapPathsForRoute(join(root,'target.jsonl'),{protocol:'child-v1',request})
- if(cut==='complete'){expect((await coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>payload)).kind).toBe('ready');await coordinator.close()}else{await writeFile(paths.stage,built.operation.stageBytes);if(cut==='header-only')await writeFile(join(root,'target.jsonl'),built.operation.headerBytes)}
+ const {root,backend,coordinator}=await setup(),{request,payload}=pair(),reservation={version:1 as const,kind:'semantic-bootstrap-child-capture' as const,request},built=buildBootstrapHeader(payload,undefined,undefined,reservation),paths=bootstrapPathsForRoute(join(root,'target.jsonl'),{protocol:'child-v1',request})
+ if(cut==='complete'){expect((await coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>payload)).kind).toBe('ready');await coordinator.close()}
+ else if(cut==='header-only'){
+  const original=backendControls(backend).original.prepareBootstrapHeader!;let published=false
+  backendControls(backend).methods.prepareBootstrapHeader=async(...args)=>{const result=await original(...args);published=result.kind==='committed';return result}
+  expect((await coordinator.bootstrapChildTargetWithCapture!(request,{...guards,assertCurrent(){if(published)throw Error('source retired after original header ACK')}},async()=>payload)).kind).toBe('blocked')
+  expect(published).toBe(true);await coordinator.close()
+ }else await writeFile(paths.stage,built.operation.stageBytes)
  const cold=await setup(root)
  if(cut!=='complete')expect(await cold.coordinator.resumeChildTarget!(request,guards)).toMatchObject({kind:'blocked',reason:'payload-required'})
  const wrong={...payload,initial:{...payload.initial!,text:'changed'}};expect(await cold.coordinator.resumeChildTarget!(request,guards,wrong)).toMatchObject({kind:'refused',reason:'conflict'})
  const result=await cold.coordinator.resumeChildTarget!(request,guards,cut==='complete'?undefined:payload);expect(['ready','already-ready']).toContain(result.kind);expect(await readFile(paths.stage)).toEqual(Buffer.from(built.operation.stageBytes))
 })
-it('preserves actual child birth frame bytes and keys through ordinary suffix replace, repair, metadata and cold/current-owner resume',async()=>{
+it('preserves child birth bytes through raw suffix replacement and refuses stale task metadata',async()=>{
  const {root,backend,coordinator}=await setup(),{request,payload}=pair(),ready=await coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>payload);expect(ready.kind).toBe('ready');if(ready.kind!=='ready')throw Error('ready required')
  await ready.document.metadata.admit({type:'plan/mode',mode:'on'});await coordinator.close()
  const path=join(root,'target.jsonl'),raw=await readFile(path),end=raw.indexOf(10),body=raw.subarray(end+1),birth=body.subarray(0,body.indexOf(10)+1),loaded=await backend.read('target')
@@ -73,8 +88,21 @@ it('preserves actual child birth frame bytes and keys through ordinary suffix re
  expect((await readFile(path)).subarray(end+1,end+1+birth.length)).toEqual(birth)
  const before=await readFile(path);const changed=structuredClone(suffix);(changed[1] as any).text='changed';await expect(backend.replaceEvents!('target',changed)).rejects.toThrow();expect(await readFile(path)).toEqual(before)
  await appendFile(path,'{"torn":');await backend.repair('target');await backend.updateMeta('target',{title:'new title'})
- const cold=await setup(root),doc=await cold.coordinator.openManagedDocument('target'),result=await cold.coordinator.resumeChildTarget!(request,guards);expect(result.kind).toBe('already-ready');if(result.kind!=='already-ready')throw Error('resume required')
- expect(result.document).toBe(doc);expect(result.receipt.completion.key).toEqual(ready.receipt.completion.key);expect(result.receipt.completion.owner).not.toEqual(ready.receipt.completion.owner);expect(result.document.view.events.at(-1)).toMatchObject({type:'plan/mode',mode:'off'})
+ const cold=await setup(root);await expect(cold.coordinator.openManagedDocument('target')).rejects.toThrow('TASK_TRANSITION_FAILED')
+ const after=await readFile(path);expect(after.subarray(after.indexOf(10)+1,after.indexOf(10)+1+birth.length)).toEqual(birth)
+
+})
+it('resumes the original child receipt after native suffix facts and a user title update',async()=>{
+ const {root,coordinator}=await setup(),{request,payload}=pair(),ready=await coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>payload)
+ expect(ready.kind).toBe('ready');if(ready.kind!=='ready')throw Error('ready required')
+ const path=join(root,'target.jsonl'),before=await readFile(path),body=before.subarray(before.indexOf(10)+1),birth=body.subarray(0,body.indexOf(10)+1)
+ await ready.document.metadata.admit({type:'plan/mode',mode:'off'})
+ await ready.document.metadata.admit({type:'session/title',title:'new title',source:'user',messageSeqs:[]})
+ await coordinator.close()
+ const cold=await setup(root),doc=await cold.coordinator.openManagedDocument('target'),result=await cold.coordinator.resumeChildTarget!(request,guards)
+ expect(result.kind).toBe('already-ready');if(result.kind!=='already-ready')throw Error('resume required')
+ expect(result.document).toBe(doc);expect(result.receipt.completion.key).toEqual(ready.receipt.completion.key);expect(result.receipt.completion.owner).not.toEqual(ready.receipt.completion.owner)
+ expect(result.document.view.events.at(-1)).toMatchObject({type:'session/title',title:'new title',source:'user'})
  const after=await readFile(path);expect(after.subarray(after.indexOf(10)+1,after.indexOf(10)+1+birth.length)).toEqual(birth)
 })
 it('binds existing V1 all/last-turns source data and rejects changed selection without parent transfer',async()=>{
@@ -82,14 +110,27 @@ it('binds existing V1 all/last-turns source data and rejects changed selection w
 })
 it('none reaches actual READY without reading any parent/history/legacy/CodeStore backend port',async()=>{
  const {backend,coordinator}=await setup(),{request,payload}=pair();let reads=0
- for(const key of ['read','profile','getDocument','readDocumentObserved'] as const){const original=backend[key];if(original)(backend as any)[key]=async(id:string,...args:unknown[])=>{if(id!=='target'){reads++;throw Error('forbidden parent/CodeStore read '+key)}return Reflect.apply(original,backend,[id,...args])}}
+ for(const key of ['read','profile','getDocument','readDocumentObserved'] as const){const original=backendControls(backend).original[key];if(original)(backendControls(backend).methods as any)[key]=async(id:string,...args:unknown[])=>{if(id!=='target'){reads++;throw Error('forbidden parent/CodeStore read '+key)}return Reflect.apply(original,backend,[id,...args])}}
  const outcome=await coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>payload);expect(outcome.kind).toBe('ready');expect(reads).toBe(0);if(outcome.kind==='ready'){expect(outcome.receipt.seedLength).toBe(0);expect(outcome.receipt.initial).toEqual({inputId:'input',seq:1,startedAt:1,expiresAt:11});expect(outcome.document.view.events).toHaveLength(2)}
 })
-it('cached child receipt adoption checks the actual original document prefix after the routed read await',async()=>{
- const {root,coordinator}=await setup(),{request,payload}=pair();expect((await coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>payload)).kind).toBe('ready');await coordinator.close();const cold=await setup(root),document=await cold.coordinator.openManagedDocument('target'),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>(),read=cold.backend.bootstrapRoutes!.readState
- cold.backend.bootstrapRoutes!.readState=async route=>{const result=await read(route);entered.resolve();await release.promise;return result}
- const resume=cold.coordinator.resumeChildTarget!(request,guards);await entered.promise;expect((await document.metadata.admit({type:'plan/mode',mode:'on'})).kind).toBe('committed');release.resolve();expect((await resume).kind).not.toBe('already-ready')
+it('cached child qualification serializes the original prefix and expires it after native append',async()=>{
+ const {root,coordinator}=await setup(),{request,payload}=pair(),birth=await coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>payload)
+ expect(birth.kind).toBe('ready');if(birth.kind!=='ready')throw Error('Original ready birth required');await coordinator.close()
+ const cold=await setup(root),document=await cold.coordinator.openManagedDocument('target'),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ readCuts.set(join(root,'target.jsonl'),async()=>{entered.resolve();await release.promise})
+ const resume=cold.coordinator.resumeChildTarget!(request,guards)
+ await entered.promise
+ let appended=false
+ const work=document.metadata.admit({type:'plan/mode',mode:'on'}).then(result=>{appended=true;return result})
+ await Promise.resolve();expect(appended).toBe(false);release.resolve()
+ expect((await resume).kind).not.toBe('already-ready')
+ const result=await work;expect(result.kind).toBe('committed')
+ const current=await cold.coordinator.resumeChildTarget!(request,guards)
+ expect(current.kind).toBe('already-ready');if(current.kind!=='already-ready'||result.kind!=='committed')throw Error('Original current result required')
+ expect(current.document).toBe(document);expect(current.receipt.completion.owner).toEqual(result.receipt.owner);expect(current.receipt.completion.key).toEqual(birth.receipt.completion.key)
+ expect((await cold.backend.read('target')).events.at(-1)).toMatchObject({type:'plan/mode',mode:'on'})
 })
+
 it('refuses a changed V1 history selection after reservation and accepts anonymous V1 only without durable lineage',async()=>{
  const source=createSession();append(source,{type:'turn/start'});append(source,{type:'user/message',text:'source'});append(source,{type:'turn/end'})
  const make=(anonymous:boolean)=>{const values=pair(),lineage=anonymous?{origin:'subagent' as const,subagentProtocolVersion:1 as const}:values.request.core.lineage,initial=anonymous?{inputId:'input',text:'original prompt',startedAt:1,expiresAt:11}:values.payload.initial!,payload={...values.payload,lineage,initial},core={...values.request.core,lineage,caller:{kind:'task' as const,taskId:'task',parentSessionId:anonymous?'':'parent'},initial:p.childInitialCommitment(payload),history:{selection:{kind:'all' as const},source:anonymous?{kind:'anonymous' as const}:{kind:'session' as const,sessionId:'parent'}}},intent=p.createChildBootstrapRequestIntent(core,{kind:'unmanaged'}),request=p.captureChildBootstrapCaptureRequest({...values.request,core,requestIntent:intent.intent,invocation:{...values.request.invocation,requestDigest:intent.requestDigest}});payload.invocation=request.invocation;return{payload,request}}
@@ -104,11 +145,15 @@ it('rejects an actual public passive V2 payload after child reservation before a
 })
 it('retains the actual synced V1 seed cut and completes the original initial tuple from a cold exact payload',async()=>{
  const {root,backend,coordinator}=await setup(),values=pair(),source=createSession();append(source,{type:'turn/start'});append(source,{type:'user/message',text:'source seed cut'});append(source,{type:'turn/end'});const exported=exportConversationSeed(source,{kind:'session',sessionId:'parent'},{kind:'all'});if(exported.kind!=='seed')throw Error('V1 required')
- const core={...values.request.core,history:{selection:{kind:'all' as const},source:{kind:'session' as const,sessionId:'parent'}}},intent=p.createChildBootstrapRequestIntent(core,{kind:'unmanaged'}),request=p.captureChildBootstrapCaptureRequest({...values.request,core,requestIntent:intent.intent,invocation:{...values.request.invocation,requestDigest:intent.requestDigest}}),payload={...values.payload,invocation:request.invocation,seed:p.compileSemanticSeed(exported)};let current=true,calls=0;const appendBatch=backend.appendOwnedBatch!
- backend.appendOwnedBatch=async(...args)=>{const result=await appendBatch(...args);if(args[3].key.batchId.endsWith(':seed'))current=false;return result}
+ const core={...values.request.core,history:{selection:{kind:'all' as const},source:{kind:'session' as const,sessionId:'parent'}}},intent=p.createChildBootstrapRequestIntent(core,{kind:'unmanaged'}),request=p.captureChildBootstrapCaptureRequest({...values.request,core,requestIntent:intent.intent,invocation:{...values.request.invocation,requestDigest:intent.requestDigest}}),payload={...values.payload,invocation:request.invocation,seed:p.compileSemanticSeed(exported)};let current=true,calls=0;const appendBatch=ownedControls(backend).originalAppend
+ ownedControls(backend).append =async(...args)=>{const result=await appendBatch(...args);if(args[3].key.batchId.endsWith(':seed'))current=false;return result}
  expect(await coordinator.bootstrapChildTargetWithCapture!(request,{...guards,assertCurrent(){if(!current)throw Error('source revoked after actual seed sync')}},async()=>{calls++;return payload})).toMatchObject({kind:'blocked',reason:'source-changed'});const path=join(root,'target.jsonl'),before=await readFile(path),seedFrame=before.subarray(before.indexOf(10)+1);expect(JSON.parse(seedFrame.toString()).batchId).toBe('bootstrap:child:seed');await coordinator.close()
  const cold=await setup(root);expect(await cold.coordinator.resumeChildTarget!(request,guards)).toMatchObject({kind:'blocked',reason:'payload-required'});const ready=await cold.coordinator.resumeChildTarget!(request,guards,payload);expect(ready.kind).toBe('ready');if(ready.kind!=='ready')throw Error('ready required');const after=await readFile(path),body=after.subarray(after.indexOf(10)+1);expect(body.subarray(0,seedFrame.length)).toEqual(seedFrame);expect(ready.receipt.seed!.key.batchId).toBe('bootstrap:child:seed');expect(ready.receipt.initial).toEqual({inputId:'input',seq:payload.seed.records.length+1,startedAt:1,expiresAt:11});expect(calls).toBe(1)
 })
 it.each(['absent','readState','resolveBirth'] as const)('keeps actual public generic READY and ordinary cached resume with %s route capability',async missing=>{
- const {root,backend,coordinator}=await setup();await coordinator.close();if(missing==='absent')backend.bootstrapRoutes=undefined;else (backend.bootstrapRoutes as any)[missing]=undefined;const c=p.createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(c);expect(c.bootstrapChildTargetWithCapture).toBeUndefined();const {payload}=pair();expect((await c.bootstrapSemanticTarget(payload,guards)).kind).toBe('ready');await c.close();const cold=p.createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(cold);await cold.openManagedDocument('target');expect((await cold.resumeSemanticTarget(payload.invocation,guards)).kind).toBe('already-ready');expect((await readdir(root)).filter(n=>n.endsWith('.stage'))).toHaveLength(1)
+ const {root,coordinator}=await setup();await coordinator.close()
+ const backend=createJsonlBackend(root,original=>{if(missing==='absent')original.bootstrapRoutes=undefined;else (original.bootstrapRoutes as unknown as Record<string,unknown>)[missing]=undefined})
+ const c=createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(c);expect(c.bootstrapChildTargetWithCapture).toBeUndefined()
+ const {payload}=pair();expect((await c.bootstrapSemanticTarget(payload,guards)).kind).toBe('ready');await c.close()
+ const cold=createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(cold);await cold.openManagedDocument('target');expect((await cold.resumeSemanticTarget(payload.invocation,guards)).kind).toBe('already-ready');expect((await readdir(root)).filter(n=>n.endsWith('.stage'))).toHaveLength(1)
 })

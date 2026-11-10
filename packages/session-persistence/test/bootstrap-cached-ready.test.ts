@@ -1,22 +1,68 @@
+import { createSessionCoordinator } from './helpers/composed.ts'
 import { mkdtemp, rm, readFile, writeFile, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
-import { exportConversationSeed, legacyPrefixDigest } from '@i-harness/core-session'
-import { createSessionCoordinator, compileSemanticSeed, forkSession, retryForkSession, parseBootstrapHeaderStage, encodeBootstrapCaptureReservation, rawHeaderDigest, type BootstrapRequest, type ForkOperation, type SessionCoordinator } from '../src/index.ts'
+import { exportConversationSeed, legacyPrefixDigest, deriveSessionTitle } from '@i-harness/core-session'
+import { compileSemanticSeed, createForkOperation, readForkRequestCore, createBootstrapRequestIntent, retryForkSession, parseBootstrapHeaderStage, encodeBootstrapCaptureReservation, rawHeaderDigest, type BootstrapRequest, type ForkOperation, type SessionCoordinator } from '../src/index.ts'
 import { bootstrapPaths } from '../../session-persistence-jsonl/src/backend/bootstrap-header.ts'
 import { captureManagedReadyObservation } from '../src/coordinator/managed-document.ts'
 import { createOwnership } from '../src/coordinator/ownership.ts'
+
+const originalOwners = vi.hoisted(() => new WeakMap<object, unknown>())
+vi.mock('../src/coordinator/ownership.ts', async load => {
+  const api = await load<typeof import('../src/coordinator/ownership.ts')>()
+  return { ...api, createOwnership: (...args: Parameters<typeof api.createOwnership>) => {
+    const owner = api.createOwnership(...args); originalOwners.set(args[0], owner); return owner
+  } }
+})
+const readCuts = vi.hoisted(() => new Map<string, () => Promise<void>>())
+// Pause after the actual original route read settles its tracked IO. Public
+// backend methods are not the warm owned-reader path and must stay unchanged.
+vi.mock('../../session-persistence-jsonl/src/backend/bootstrap-header.ts', async load => {
+  const api = await load<typeof import('../../session-persistence-jsonl/src/backend/bootstrap-header.ts')>()
+  return { ...api, createBootstrapHeaderBackend: (...args: Parameters<typeof api.createBootstrapHeaderBackend>) => {
+    const backend = api.createBootstrapHeaderBackend(...args)
+    const pause = async (id: string) => {
+      const path = args[0](id), cut = readCuts.get(path)
+      if (cut) { readCuts.delete(path); await cut() }
+    }
+    const read = backend.readBootstrapState!
+    backend.readBootstrapState = async invocation => { const result = await read(invocation); await pause(invocation.targetSessionId); return result }
+    const tracked = backend.readTrackedState
+    backend.readTrackedState = async (route, owner) => { const result = await tracked(route, owner); await pause(route.protocol === 'public' ? route.invocation.targetSessionId : route.request.invocation.targetSessionId); return result }
+    const routed = backend.bootstrapRoutes.readState
+    backend.bootstrapRoutes.readState = async route => { const result = await routed(route); await pause(route.protocol === 'public' ? route.invocation.targetSessionId : route.request.invocation.targetSessionId); return result }
+    return backend
+  } }
+})
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'ih-bcr-')), original = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   await original.create({ sessionId: 'source', title: 'original' })
   await original.append('source', [{ type: 'turn/start' }, { type: 'user/message', text: 'cached original observation' }, { type: 'turn/end' }])
-  const fork = await forkSession(original, 'source'); await original.close()
-  const backend = createJsonlBackend(root), c = createSessionCoordinator(backend, { lock: { enabled: true } })
+  // Cache qualification tests need a real published birth, not the separate
+  // policy/controller pipeline (covered by fork-controller and gateway tests).
+  const core = readForkRequestCore({ version: 1, kind: 'session-fork-core', sourceSessionId: 'source', selection: { kind: 'completed' }, sourceCapture: 'first-authorized-capture', metadata: { title: 'original' } })
+  const intent = createBootstrapRequestIntent(core, { kind: 'unmanaged' })
+  const operation = createForkOperation({ version: 1, kind: 'session-fork-prepared', core, requestIntent: intent.intent, requestDigest: intent.requestDigest }, { operationId: 'cached-birth', targetSessionId: 'cached-child', createdAt: '2026-10-26T00:00:00.000Z' })
+  const exported = exportConversationSeed((await original.snapshot!('source')).session, { kind: 'session', sessionId: 'source' }, { kind: 'completed' })
+  if (exported.kind !== 'seed') throw new Error('Original durable source seed required')
+  const payload: BootstrapRequest = { invocation: operation.invocation, target: { kind: 'new' }, metadata: core.metadata, lineage: { origin: 'fork', parentSession: 'source' }, seed: compileSemanticSeed(exported) }
+  const ready = await original.bootstrapSemanticTargetWithCapture!({ invocation: operation.invocation, core, requestIntent: intent.intent }, { assertCurrent() {}, dependencies: { confirm: never, reconcile: never } }, async () => payload)
+  if (ready.kind !== 'ready') throw new Error('Original target birth did not commit')
+  const fork = { sessionId: operation.invocation.targetSessionId, operation }
+  await original.close()
+  const routeControl: { profileForbidden: boolean } = { profileForbidden: false }
+  const probes = { profile: vi.fn(), capture: vi.fn() }
+  const backend = createJsonlBackend(root, { wrap(original) {
+    const profile = original.profile!, prepare = original.prepareBootstrapCapture!
+    original.profile = (...args) => { if (routeControl.profileForbidden && args[0] === 'source') { probes.profile(); throw new Error('Source profile forbidden') }; return Reflect.apply(profile, original, args) }
+    original.prepareBootstrapCapture = (...args) => { probes.capture(); return Reflect.apply(prepare, original, args) }
+  } }), c = createSessionCoordinator(backend, { lock: { enabled: true } })
   const document = await c.openManagedDocument(fork.sessionId)
-  return { root, backend, c, document, fork, async close() { await c.close(); await rm(root, { recursive: true, force: true }) } }
+  return { root, backend, c, document, fork, routeControl, probes, ownership: originalOwners.get(backend) as ReturnType<typeof createOwnership>, async close() { await c.close(); await rm(root, { recursive: true, force: true }) } }
 }
 const never = async (): Promise<never> => { throw new Error('Empty actual artifact closure must not call dependencies') }
 function resume(c: SessionCoordinator, operation: Pick<ForkOperation,'invocation'>) {
@@ -79,10 +125,12 @@ it('cached READY keeps the original header invocation identity conflict disposit
     expect(await resume(f.c,f.fork.operation)).toMatchObject({kind:'refused',reason:'conflict'})
   }finally{await writeFile(path,bytes);await f.close()}
 })
+// Includes durable source/child births, cold ownership, two native qualifications and a metadata append.
 it('ordinary cold READY read preserves exact cached document and original native receipt owner on passive retry', async () => {
   const f = await fixture()
   try {
-    await f.c.updateMeta(f.fork.sessionId, { title: 'latest mutable title' })
+    const title = f.document.beginAction()
+    await title.facts.metadata.admit({ type: 'session/title', title: 'latest mutable title', source: 'user', messageSeqs: [] }); title.finish()
     const profile = vi.spyOn(f.c, 'profile').mockRejectedValue(new Error('Source profile forbidden'))
     const capture = vi.fn(f.c.bootstrapSemanticTargetWithCapture!); f.c.bootstrapSemanticTargetWithCapture = capture
     const outcome = await resume(f.c, f.fork.operation)
@@ -96,9 +144,9 @@ it('ordinary cold READY read preserves exact cached document and original native
     expect((await retryForkSession(f.c, f.fork.operation)).kind).toBe('adopted')
     expect(profile).not.toHaveBeenCalled(); expect(capture).not.toHaveBeenCalled()
     expect(f.document.view.events.filter(event => event.type === 'session/bootstrap')).toHaveLength(1)
-    expect((await f.backend.profile(f.fork.sessionId)).meta.title).toBe('latest mutable title')
+    expect(deriveSessionTitle((await f.c.snapshot!(f.fork.sessionId)).session)).toMatchObject({ title: 'latest mutable title' })
   } finally { await f.close() }
-})
+}, 10000)
 it.each(['stage-missing', 'body-corrupt'] as const)('cached READY never replaces original %s proof with header authority', async mode => {
   const f = await fixture(), target = join(f.root, f.fork.sessionId + '.jsonl'), originalBytes = await readFile(target)
   const stagePath = bootstrapPaths(target, f.fork.operation.invocation).stage, stage = await readFile(stagePath)
@@ -110,27 +158,50 @@ it.each(['stage-missing', 'body-corrupt'] as const)('cached READY never replaces
     expect(f.document.view.events.filter(event => event.type === 'session/bootstrap')).toHaveLength(1)
   } finally { await writeFile(target, originalBytes); await writeFile(stagePath, stage); await f.close() }
 })
-it.each(['append', 'revoke', 'metadata', 'metadata-aba'] as const)('cached original %s race never returns an old successful qualification', async mode => {
+it.each(['append', 'revoke', 'metadata', 'metadata-aba'] as const)('original cached qualification serializes the %s boundary without stale publication', async mode => {
   const f = await fixture(), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   try {
-    const read = f.backend.bootstrapRoutes!.readState.bind(f.backend)
-    f.backend.bootstrapRoutes!.readState = async invocation => { const value = await read(invocation); entered.resolve(); await release.promise; return value }
+    const witness = captureManagedReadyObservation(f.document, f.ownership)
+    const path = join(f.root, f.fork.sessionId + '.jsonl')
+    const before = await readFile(path)
+    readCuts.set(path, async () => { entered.resolve(); await release.promise })
     const recovering = resume(f.c, f.fork.operation).catch(error => error)
     await entered.promise
-    let metadata: Promise<unknown> | undefined
-    if (mode === 'append') await f.document.metadata.admit({ type: 'plan/mode', mode: 'on' })
-    else if (mode === 'revoke') f.c.revokeManagedDocumentNewWork(f.fork.sessionId)
-    else if(mode==='metadata')metadata = f.c.updateMeta(f.fork.sessionId, { title: 'latest title' })
-    else metadata=Promise.all([f.c.updateMeta(f.fork.sessionId,{title:'away'}),f.c.updateMeta(f.fork.sessionId,{title:'original'})])
-    release.resolve()
-    const outcome = await recovering
-    if(mode==='metadata'||mode==='metadata-aba')expect(outcome).toMatchObject({reason:'revoked'})
-    else expect(outcome).toMatchObject({kind:'refused',reason:'wrong-view'})
-    await metadata
-    if (mode === 'metadata') expect((await f.backend.profile(f.fork.sessionId)).meta.title).toBe('latest title')
-    if(mode==='metadata-aba')expect((await f.backend.profile(f.fork.sessionId)).meta.title).toBe('original')
+    if (mode === 'append') {
+      let committed = false
+      const appending = f.document.metadata.admit({ type: 'plan/mode', mode: 'on' }).then(value => { committed = true; return value })
+      await Promise.resolve(); expect(committed).toBe(false)
+      release.resolve()
+      const ready = await recovering
+      expect(ready).toMatchObject({ kind: 'refused', reason: 'wrong-view' })
+      const appended = await appending
+      expect(appended.kind).toBe('committed')
+      if (appended.kind !== 'committed') throw new Error('Original serialized append did not commit')
+      const fresh = await resume(f.c, f.fork.operation)
+      expect(fresh).toMatchObject({ kind: 'already-ready', document: f.document })
+      if (fresh.kind !== 'already-ready') throw new Error('Fresh current receipt required')
+      expect(fresh.receipt.completion.owner).toEqual(appended.receipt.owner)
+      expect(() => witness.assertCurrent()).toThrow()
+      expect((await f.backend.read(f.fork.sessionId)).events.filter(event => event.type === 'plan/mode')).toEqual([expect.objectContaining({ mode: 'on' })])
+    } else if (mode === 'revoke') {
+      f.c.revokeManagedDocumentNewWork(f.fork.sessionId)
+      expect(() => witness.assertCurrent()).toThrow()
+      release.resolve()
+      expect(await recovering).toMatchObject({ kind: 'blocked', reason: 'unknown' })
+      expect(await readFile(path)).toEqual(before)
+    } else {
+      const changes = mode === 'metadata' ? [{ title: 'latest title' }] : [{ title: 'away' }, { title: 'original' }]
+      const results = await Promise.all(changes.map(patch => f.c.updateMeta(f.fork.sessionId, patch).catch(error => error)))
+      for (const failure of results) expect(failure).toMatchObject({ reason: 'conflict' })
+      expect(await readFile(path)).toEqual(before)
+      witness.assertCurrent()
+      release.resolve()
+      expect(await recovering).toMatchObject({ kind: 'already-ready', document: f.document })
+      expect((await f.backend.profile(f.fork.sessionId)).meta.title).toBe('original')
+    }
   } finally { release.resolve(); await f.close() }
 })
+
 it('only the exact factory document and its actual original Ownership can issue a ready observation', async () => {
   const f=await fixture()
   try{
@@ -141,17 +212,21 @@ it('only the exact factory document and its actual original Ownership can issue 
     expect((await resume(f.c,f.fork.operation)).kind).toBe('already-ready')
   }finally{await f.close()}
 })
-it('unproved raw cached documents and active capture/payload calls retain cached-unprepared',async()=>{
+it.each(['raw', 'capture', 'payload'] as const)('unproved %s cached authority retains cached-unprepared',async mode=>{
   const f=await fixture()
   try{
+    if (mode === 'raw') {
     await f.c.create({sessionId:'raw'});await f.c.append('raw',[{type:'turn/start'},{type:'user/message',text:'not bootstrap'},{type:'turn/end'}]);await f.c.openManagedDocument('raw')
     const rawOperation={...f.fork.operation,invocation:{...f.fork.operation.invocation,targetSessionId:'raw'}}
-    expect(await resume(f.c,rawOperation)).toMatchObject({kind:'refused',reason:'cached-unprepared'})
+    expect(await resume(f.c,rawOperation)).toMatchObject({kind:'refused',reason:'cached-unprepared'}); return
+    }
     const request={invocation:f.fork.operation.invocation,core:f.fork.operation.prepared.core,requestIntent:f.fork.operation.prepared.requestIntent}
     let captures=0
+    if (mode === 'capture') {
     const active=await f.c.withSessionBindingObservation!({existingSessionIds:[],target:request.invocation},()=>f.c.bootstrapSemanticTargetWithCapture!(request,
       {assertCurrent(){throw new Error('No new work allowed')},dependencies:{confirm:never,reconcile:never}},async()=>{captures++;throw new Error('must not capture')}))
-    expect(active).toMatchObject({kind:'refused',reason:'cached-unprepared'});expect(captures).toBe(0)
+    expect(active).toMatchObject({kind:'refused',reason:'cached-unprepared'});expect(captures).toBe(0); return
+    }
     const source=await f.c.openManagedDocument('source'),exported=exportConversationSeed(source.view,{kind:'session',sessionId:'source'},{kind:'completed'})
     if(exported.kind==='refused')throw new Error('Actual negative-control source export refused')
     const payload:BootstrapRequest={invocation:request.invocation,target:{kind:'new'},metadata:request.core.metadata,lineage:{origin:'fork',parentSession:'source'},seed:compileSemanticSeed(exported)}
@@ -163,8 +238,7 @@ it('unproved raw cached documents and active capture/payload calls retain cached
 it('coordinator retirement joins the original cached adoption and invalidates it before disposal',async()=>{
   const f=await fixture(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
   try{
-    const read=f.backend.bootstrapRoutes!.readState.bind(f.backend)
-    f.backend.bootstrapRoutes!.readState=async invocation=>{const state=await read(invocation);entered.resolve();await release.promise;return state}
+    readCuts.set(join(f.root, f.fork.sessionId + '.jsonl'), async () => { entered.resolve(); await release.promise })
     const recovering=resume(f.c,f.fork.operation).catch(error=>error)
     await entered.promise
     let closed=false;const closing=f.c.close().then(()=>{closed=true})

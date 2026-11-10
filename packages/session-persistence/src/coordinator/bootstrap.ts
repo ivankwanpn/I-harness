@@ -141,7 +141,14 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       if (outcome.kind === 'ready' || outcome.kind === 'already-ready') owned.ready = true
       else if (ownsIssuedWork()) { owned.retained = true; owned.ready = false }
       return outcome
-    }, error => { if (ownsIssuedWork()) owned.retained = true; else owned.unknown = true; owned.ready = false; throw error }).finally(() => {
+    }, error => {
+      if (ownsIssuedWork()) owned.retained = true
+      // Original observation admission can refuse before the managed owner is
+      // entered. That known refusal has no mutation outcome to poison.
+      else if (!(error instanceof SessionBindingObservationError)) owned.unknown = true
+      owned.ready = false
+      throw error
+    }).finally(() => {
       owned.active--
       if (!owned.active && (owned.ready || !owned.retained)) { owned.token.end(owned.unknown ? 'unknown' : 'settled'); bootstrapWitnesses.delete(key) }
     })
@@ -168,6 +175,12 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
   async function settleCapture(entry:ManagedEntry) {
     const io=entry.captureIO
     if(io&&!io.settled){await backend.settleBootstrapCaptureIO!((entry.bootstrap?.invocation??entry.selected!.route.request.invocation).targetSessionId,io.held);io.settled=true}
+  }
+  function reconcileHeader(entry: ManagedEntry, held: HeldFactOwner, operation: BootstrapHeaderOperation) {
+    // Only an entered native callback can create capture IO. A barrier may
+    // reject its precondition before this callback is reached.
+    if (entry.captureIO) entry.captureIO.settled = false
+    return backend.reconcileBootstrapHeader!(operation.invocation.targetSessionId, held, operation)
   }
   type InspectionResource={request:BootstrapCaptureRequest|ChildBootstrapCaptureRequest;done:Promise<OwnedCaptureInspection>;claim?:Awaited<ReturnType<Ownership['pinOwnership']>>;held?:HeldFactOwner;ioStarted:boolean;ioSettled:boolean;released:boolean}
   const inspections=new Set<InspectionResource>()
@@ -326,8 +339,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         let headerOutcome = b.taskBarrier.headerOutcome ?? b.headerOutcome
         if (!b.taskBarrier.headerCommitted || headerOutcome?.kind !== 'committed') {
           const operation:BootstrapHeaderOperation = { invocation:stage.invocation, target:stage.originalTarget, stageBytes:state.stageBytes, headerBytes:Buffer.from(stage.headerBytes) }
-          if (entry.captureIO) entry.captureIO.settled = false
-          headerOutcome = await b.taskBarrier.runHeader(h => backend.reconcileBootstrapHeader!(b.invocation.targetSessionId,h,operation))
+          headerOutcome = await b.taskBarrier.runHeader(h => reconcileHeader(entry,h,operation))
           await settleCapture(entry)
           if (headerOutcome.kind !== 'committed') return blocked(entry)
           b.headerOutcome = headerOutcome; b.taskBarrier.markHeaderCommitted()
@@ -484,15 +496,22 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       if(publicationStatus(state,b.stage)!=='valid')return blocked(entry)
       const predecessorBirth = !!state.meta?.semanticSeed && state.meta.formatVersion === 13 && !b.taskBarrier?.mode
       if (transitions && !predecessorBirth) {
-        if (!b.taskBarrier?.mode && (b.request.target.kind === 'resume' || b.request.target.kind === 'new' && !!state.meta)) return {kind:'not-issued',reason:'unsupported'}
         const barrier = b.taskBarrier; if (!barrier) return blocked(entry)
-        barrier.setMode(b.request.target.kind === 'existing-empty' ? 'existing-empty' : 'new'); barrier.setGuard(() => { if (barrier.headerWasIssued) { if (guards.signal?.aborted || entry.revoked) throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'}) } else current(guards,entry); if (targetPrepared) targetCurrent(guards) })
-        try { await barrier.prepare(); held = barrier.held(); await barrier.settleHeader() }
+        const published = !barrier.mode && !!state.meta?.semanticSeed && !!state.stageBytes && state.meta.formatVersion === 14
+        if (!barrier.mode && (b.request.target.kind === 'resume' || b.request.target.kind === 'new' && !!state.meta) && !published) return {kind:'not-issued',reason:'unsupported'}
+        if (!published) barrier.setMode(b.request.target.kind === 'existing-empty' ? 'existing-empty' : 'new')
+        barrier.setGuard(() => { if (barrier.headerWasIssued) { if (guards.signal?.aborted || entry.revoked) throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'}) } else current(guards,entry); if (targetPrepared) targetCurrent(guards) })
+        try {
+          if (published) {
+            const seed = b.stage.seed.seedLength ? encodeFactBatch('bootstrap:' + b.invocation.operationId + ':seed', emptyPrefix().prefixDigest, b.request.seed.records).bytes : undefined
+            await barrier.preparePublished(b.operation!, seed)
+          } else await barrier.prepare()
+          held = barrier.held(); await barrier.settleHeader()
+        }
         catch (error) { const conflict = barrier.taskConflict; if (!barrier.taskIssued || conflict) { await barrier.close(); b.taskBarrier = undefined }; return conflict ? {kind:'refused',reason:'conflict'} : blocked(entry) }
       }
       b.phase='header'
-      if(entry.captureIO)entry.captureIO.settled=false
-      let outcome = !predecessorBirth && b.taskBarrier?.headerCommitted && b.taskBarrier.headerOutcome?.kind === 'committed' ? b.taskBarrier.headerOutcome : !predecessorBirth && b.taskBarrier ? await b.taskBarrier.runHeader(h => backend.reconcileBootstrapHeader!(id,h,b.operation!)) : await ownership.withSessionOperation(id,()=>backend.reconcileBootstrapHeader!(id,held,b.operation!))
+      let outcome = !predecessorBirth && b.taskBarrier?.headerCommitted && b.taskBarrier.headerOutcome?.kind === 'committed' ? b.taskBarrier.headerOutcome : !predecessorBirth && b.taskBarrier ? await b.taskBarrier.runHeader(h => reconcileHeader(entry,h,b.operation!)) : await ownership.withSessionOperation(id,()=>reconcileHeader(entry,held,b.operation!))
       await settleCapture(entry)
       if(outcome.kind!=='committed') {
         if(outcome.kind==='conflict')return {kind:'refused',reason:'conflict'}
@@ -500,6 +519,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         const issue = async (headerHeld: HeldFactOwner, beforeIssue: () => void) => {
           if(mutations.pendingWriteBehind(id)?.hasWork)return {kind:'conflict' as const}
           const issuing=entry.captureIO?.issuer??issuingFactOwner(headerHeld,()=>{beforeIssue();current(guards,entry);b.issued=true;entry.headerUnknown=true})
+          if (entry.captureIO) entry.captureIO.settled = false
           return backend.prepareBootstrapHeader!(id,issuing,b.operation!)
         }
         outcome = !predecessorBirth && b.taskBarrier ? await b.taskBarrier.runHeader(issue) : await ownership.withSessionOperation(id,()=>issue(held,()=>{}))

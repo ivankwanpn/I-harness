@@ -198,6 +198,36 @@ export function createJsonlProcessReadCapability(ports: Ports) {
         const proof = Object.freeze({ async assertCurrent() { if (this !== proof) bad(); await absent() }, async assertRoot() { if (this !== proof) bad(); await rootCurrent() } })
         freshOwners.set(proof,scope); await proof.assertCurrent(); return proof
     }
+    async function observePublishedTaskParent(scope: HeldTaskDocumentScope, readNamespace: () => Promise<string>) {
+        if (!isHeldTaskDocumentScope(scope)) bad()
+        scope.assertActive(); ports.assertOriginal()
+        const id = scope.parentSessionId, path = ports.file(id), parents = await ancestors(path)
+        const before = await lstat(path, { bigint: true })
+        if (!before.isFile() || before.isSymbolicLink()) bad()
+        const original = identity(before), baseline = await readNamespace()
+        async function rootCurrent() {
+            scope.assertActive(); ports.assertOriginal()
+            await ports.checkDeleted('session', id); await ports.checkDeleted('document', scope.key)
+            const current = await ancestors(path), file = await lstat(path, { bigint: true })
+            if (parents.root.dev !== current.root.dev || parents.root.ino !== current.root.ino
+                || parents.rootAncestry !== current.rootAncestry || parents.pathAncestry !== current.pathAncestry
+                || !file.isFile() || file.isSymbolicLink() || !same(original, identity(file))) bad()
+            scope.assertActive(); ports.assertOriginal()
+        }
+        const proof = Object.freeze({
+            async assertCurrent() {
+                if (this !== proof) bad()
+                await rootCurrent()
+                if (await readNamespace() !== baseline) bad()
+                await rootCurrent()
+            },
+            async assertRoot() { if (this !== proof) bad(); await rootCurrent() },
+        })
+        // This scope authenticates the published partial prefix. Creation and
+        // history writers require proofs from their dedicated constructors.
+        await proof.assertCurrent()
+        return proof
+    }
     function openTaskHistory(scope: HeldTaskDocumentScope, namespaceCheck?: () => Promise<void | string>) {
         if (!isHeldTaskDocumentScope(scope)) bad();
         scope.assertActive(); ports.assertOriginal();
@@ -273,7 +303,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
         return session;
     }
     return {
-        openTaskHistory, observeFreshTaskParent, observeReservedTaskParent,
+        openTaskHistory, observeFreshTaskParent, observeReservedTaskParent, observePublishedTaskParent,
         assertFreshOwner(proof: object, scope: HeldTaskDocumentScope) { if (freshOwners.get(proof) !== scope) bad(); scope.assertActive(); },
         qualifiedHistoryPrefix(proof:object){const value=historyOwners.get(proof);if(!value?.prefix)return undefined;try{value.assertPrefixCurrent();return value.prefix}catch{return undefined}},
         originalHistory(proof: object, scope: HeldTaskDocumentScope) { const value = historyOwners.get(proof); if (!value || value.scope !== scope) return bad(); scope.assertActive(); return { bytes: value.bytes, identity: value.identity }; },

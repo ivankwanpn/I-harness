@@ -14,7 +14,7 @@ const roots:string[]=[],coordinators:p.SessionCoordinator[]=[]
 afterEach(async()=>{vi.restoreAllMocks();vi.mocked(open).mockImplementation(native.open);vi.mocked(readdir).mockImplementation(native.readdir);vi.mocked(acquireSessionLock).mockImplementation(nativeAcquire);for(const c of coordinators.splice(0))await c.close().catch(()=>{});for(const root of roots.splice(0))await rm(root,{recursive:true,force:true})})
 async function setup(){const root=await mkdtemp(join(tmpdir(),'ih-ca-'));roots.push(root);const backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true},acquireDeadlineMs:40,acquireRetryMs:5});coordinators.push(coordinator);return{root,backend,coordinator}}
 it('keeps existing-read without a target mutation exemption and grants only the exact complete fork target',async()=>{
- const {coordinator}=await setup(),{request,payload}=pair();await coordinator.create({sessionId:'parent'})
+ const {root,coordinator}=await setup(),{request,payload}=pair();await coordinator.create({sessionId:'parent'})
  await coordinator.withExistingSessionBindingObservation!({sessionIds:['parent']},async()=>{
   const core={...request.core,caller:{...request.core.caller,kind:'task' as const,taskId:'task',parentSessionId:'source'},lineage:{...request.core.lineage,parentSession:'source'},initial:{...request.core.initial,parentSessionId:'source'}},intent=p.createChildBootstrapRequestIntent(core,{kind:'unmanaged'}),self={...request,core,requestIntent:intent.intent,invocation:{...request.invocation,targetSessionId:'parent',requestDigest:intent.requestDigest}}
   await expect(coordinator.bootstrapChildTargetWithCapture!(self,guards,async()=>{throw Error('self callback')})).rejects.toMatchObject({reason:'conflict'})
@@ -22,6 +22,8 @@ it('keeps existing-read without a target mutation exemption and grants only the 
  await coordinator.withSessionBindingObservation!({existingSessionIds:[],target:request.invocation},async observed=>{
   const wrong={...request,invocation:{...request.invocation,operationId:'different'}}
   await expect(coordinator.resumeChildTarget!(wrong,guards)).rejects.toMatchObject({reason:'conflict'})
+  expect((await readdir(root)).filter(name=>name.startsWith('target.jsonl'))).toEqual([])
+  observed.assertCurrent()
   const outcome=await coordinator.bootstrapChildTargetWithCapture!(request,{...guards,assertCurrent(){observed.assertCurrent()}},async()=>payload);expect(outcome.kind).toBe('ready');observed.assertCurrent()
  })
 })
