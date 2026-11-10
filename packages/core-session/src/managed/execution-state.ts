@@ -2,6 +2,7 @@ import {canonicalJsonData} from '../serialization/json-data.ts'
 import {legacyResultMetadata} from '../conversation/history/result-metadata.ts'
 import {validManagedArtifactRef} from '../results/validate.ts'
 import { types } from 'node:util'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import {bindOriginalCurrentnessDescriptors,composeOriginalCurrentnessGuards,runUnassociatedCurrentnessChecks,runOriginalCurrentnessRead,runOpaqueCurrentnessRead,propagateOriginalCurrentnessReader,readOriginalCurrentnessMember,callOriginalCurrentnessMethod,originalCurrentnessClone,wrapOriginalSourceCurrentness} from './currentness-guards.ts'
 import { restoreManagedConversation,installRestoredManagedConversation } from './restored-view.ts'
 import { createExecutionMemberOwner,isExecutionMemberOf,isExecutionCaptureSource,readAcknowledgedExecutionMembers,retainAcknowledgedExecutionMembers } from './execution-members.ts'
@@ -37,7 +38,7 @@ export function isOriginalManagedTeamParentIdentity(domain:ManagedExecutionDomai
 export function captureManagedTeamParent(domain:ManagedExecutionDomain){const registered=domains.get(domain),owner=registered&&owners.get(registered.identity);if(!registered||!owner||owner.owner!==registered.owner)throw TypeError('Original managed Team domain required');domain.assertCurrent();return owner.reserveTeamParent(domain)}
 /** Hydrate only the original Team inbox member, not a Session or a caller-supplied receipt. */
 export function readManagedTeamInbox(domain:ManagedExecutionDomain,messageId:string){const registered=domains.get(domain),owner=registered&&owners.get(registered.identity);if(!registered||!owner||owner.owner!==registered.owner||typeof messageId!=='string'||!messageId)throw TypeError('Original Team inbox owner required');domain.assertCurrent();return owner.readTeamInbox(messageId)}
-export function readManagedTeamDeliveryFence(domain:ManagedExecutionDomain){const registered=domains.get(domain),owner=registered&&owners.get(registered.identity);if(!registered||!owner||owner.owner!==registered.owner)throw TypeError('Original Team recipient required');domain.assertCurrent();const result=owner.teamDeliveryFence();domain.assertCurrent();return freezeJsonData(structuredClone(result))}
+export function readManagedTeamDeliveryFence(domain:ManagedExecutionDomain){const registered=domains.get(domain),owner=registered&&owners.get(registered.identity);if(!registered||!owner||owner.owner!==registered.owner)throw TypeError('Original Team recipient required');registered.current();const result=owner.teamDeliveryFence();registered.current();return freezeJsonData(structuredClone(result))}
 export function readManagedTeamAdmissionDisposition(domain:ManagedExecutionDomain,inputId:string,seq:number){const registered=domains.get(domain),owner=registered&&owners.get(registered.identity);if(!registered||!owner||owner.owner!==registered.owner)throw TypeError('Original Team recipient required');domain.assertCurrent();const result=owner.teamAdmissionDisposition(inputId,seq);domain.assertCurrent();return result}
 /** Original subscriptions use the same store as explicit compatibility views.
  * A private execution key is never a Session or a durable admission port. */
@@ -132,39 +133,54 @@ export function readManagedSourceCodeState(domain:ManagedExecutionDomain,source:
 const actionCaptureSources=new WeakMap<object,object>()
 const actionSources=new WeakMap<object,{identity:ManagedExecutionIdentity;action:object}>()
 const actions=new WeakMap<object,{identity:ManagedExecutionIdentity;current():void}>()
+/** Revalidate an already captured action without admitting new work. */
+export function assertManagedActionLifetimeCurrent(domain:ManagedExecutionDomain,action:object){
+ const original=domains.get(domain),registered=actions.get(action)
+ if(!original||registered?.identity!==original.identity)throw TypeError('Original same-domain action required')
+ return runOriginalCurrentnessRead(original.current,()=>{original.current();registered.current()})
+}
 export function assertManagedActionCurrent(domain:ManagedExecutionDomain,action:object){const original=domains.get(domain),registered=actions.get(action);if(!original||registered?.identity!==original.identity)throw TypeError('Original same-domain action required');return runOriginalCurrentnessRead(original.current,()=>{domain.assertCurrent();registered.current()})}
 /** Original action/source relationship; it grants no new capture or write. */
-export function assertOriginalManagedActionSource(domain:ManagedExecutionDomain,action:object,source:object){const original=domains.get(domain),registered=sources.get(source),relation=actionSources.get(source),owner=original&&owners.get(original.identity);if(!original||!owner||owner.owner!==original.owner||registered?.identity!==original.identity||relation?.identity!==original.identity||relation.action!==action||!owner.owner.ownsAction(action))throw TypeError('Original same-action source required');assertManagedActionCurrent(domain,action);registered.current()}
+export function assertOriginalManagedActionSource(domain:ManagedExecutionDomain,action:object,source:object){const original=domains.get(domain),registered=sources.get(source),relation=actionSources.get(source),owner=original&&owners.get(original.identity);if(!original||!owner||owner.owner!==original.owner||registered?.identity!==original.identity||relation?.identity!==original.identity||relation.action!==action||!owner.owner.ownsAction(action))throw TypeError('Original same-action source required');assertManagedActionLifetimeCurrent(domain,action);registered.current()}
 /** Consult the original live fence; this check issues no fact or model permission. */
-export function assertManagedExecDeliveryCurrent(domain:ManagedExecutionDomain,binding:Readonly<{recipientSessionId:string;generationId:string;sourceId:string;callSeq:number;delivery:'tool'|'parent'}>){
+function checkExecDelivery(domain:ManagedExecutionDomain,binding:Readonly<{recipientSessionId:string;generationId:string;sourceId:string;callSeq:number;delivery:'tool'|'parent'}>,fresh:boolean){
  const registered=domains.get(domain),owner=registered&&owners.get(registered.identity)
  if(!registered||!owner||owner.owner!==registered.owner||!binding||typeof binding!=='object'||types.isProxy(binding))throw TypeError('Original managed Exec delivery domain required')
  const keys=['recipientSessionId','generationId','sourceId','callSeq','delivery'] as const,fields=Object.getOwnPropertyDescriptors(binding)
  if(Reflect.ownKeys(fields).length!==keys.length||keys.some(key=>!fields[key]||!('value'in fields[key]!)))throw TypeError('Closed original Exec binding required')
  const recipient:unknown=fields.recipientSessionId!.value,generation:unknown=fields.generationId!.value,source:unknown=fields.sourceId!.value,call:unknown=fields.callSeq!.value,delivery:unknown=fields.delivery!.value
  if(recipient!==owner.sessionId||typeof generation!=='string'||!generation||typeof source!=='string'||!source||typeof call!=='number'||!Number.isSafeInteger(call)||call<0||delivery!=='tool'&&delivery!=='parent')throw TypeError('Closed original Exec binding required')
- domain.assertCurrent();owner.assertExecIssue({type:'agent/delivery-source',version:1,kind:'exec',sourceNamespace:'exec',recipientSessionId:recipient,generationId:generation,sourceId:source,callSeq:call,delivery});domain.assertCurrent()
+ if(fresh)domain.assertCurrent();else registered.current();owner.assertExecIssue({type:'agent/delivery-source',version:1,kind:'exec',sourceNamespace:'exec',recipientSessionId:recipient,generationId:generation,sourceId:source,callSeq:call,delivery});if(fresh)domain.assertCurrent();else registered.current()
 }
+export function assertManagedExecDeliveryCurrent(domain:ManagedExecutionDomain,binding:Parameters<typeof checkExecDelivery>[1]){return checkExecDelivery(domain,binding,true)}
+/** Existing captured binding only; does not admit a source or native effect. */
+export function assertManagedExecDeliveryLifetimeCurrent(domain:ManagedExecutionDomain,binding:Parameters<typeof checkExecDelivery>[1]){return checkExecDelivery(domain,binding,false)}
 /** Original Code fence check; this observation cannot issue a source or grant a model member. */
-export function assertManagedCodeDeliveryCurrent(domain:ManagedExecutionDomain,binding:Readonly<{recipientSessionId:string;generationId:string;sourceId:string;callSeq:number;cellId:string;delivery:'tool'}>){
+function checkCodeDelivery(domain:ManagedExecutionDomain,binding:Readonly<{recipientSessionId:string;generationId:string;sourceId:string;callSeq:number;cellId:string;delivery:'tool'}>,fresh:boolean){
  const registered=domains.get(domain),owner=registered&&owners.get(registered.identity)
  if(!registered||!owner||owner.owner!==registered.owner||!binding||typeof binding!=='object'||types.isProxy(binding))throw TypeError('Original managed Code delivery domain required')
  const keys=['recipientSessionId','generationId','sourceId','callSeq','cellId','delivery'] as const,fields=Object.getOwnPropertyDescriptors(binding)
  if(Reflect.ownKeys(fields).length!==keys.length||keys.some(key=>!fields[key]||!('value'in fields[key]!)||!fields[key]!.enumerable))throw TypeError('Closed original Code binding required')
  const recipient:unknown=fields.recipientSessionId!.value,generation:unknown=fields.generationId!.value,source:unknown=fields.sourceId!.value,call:unknown=fields.callSeq!.value,cell:unknown=fields.cellId!.value,delivery:unknown=fields.delivery!.value
  if(recipient!==owner.sessionId||typeof generation!=='string'||!generation||typeof source!=='string'||!source||typeof call!=='number'||!Number.isSafeInteger(call)||call<0||typeof cell!=='string'||!cell||delivery!=='tool')throw TypeError('Closed original Code binding required')
- domain.assertCurrent();owner.assertCodeIssue({type:'agent/delivery-source',version:1,kind:'code',sourceNamespace:'code',recipientSessionId:recipient,generationId:generation,sourceId:source,callSeq:call,cellId:cell,delivery});domain.assertCurrent()
+ if(fresh)domain.assertCurrent();else registered.current();owner.assertCodeIssue({type:'agent/delivery-source',version:1,kind:'code',sourceNamespace:'code',recipientSessionId:recipient,generationId:generation,sourceId:source,callSeq:call,cellId:cell,delivery});if(fresh)domain.assertCurrent();else registered.current()
 }
+export function assertManagedCodeDeliveryCurrent(domain:ManagedExecutionDomain,binding:Parameters<typeof checkCodeDelivery>[1]){return checkCodeDelivery(domain,binding,true)}
+/** Existing captured binding only; does not admit a source or native effect. */
+export function assertManagedCodeDeliveryLifetimeCurrent(domain:ManagedExecutionDomain,binding:Parameters<typeof checkCodeDelivery>[1]){return checkCodeDelivery(domain,binding,false)}
 /** Original Workflow fence check; it is not an issuer grant. */
-export function assertManagedWorkflowDeliveryCurrent(domain:ManagedExecutionDomain,binding:Readonly<{recipientSessionId:string;generationId:string;sourceId:string;callSeq:number;delivery:'tool'}>){
+function checkWorkflowDelivery(domain:ManagedExecutionDomain,binding:Readonly<{recipientSessionId:string;generationId:string;sourceId:string;callSeq:number;delivery:'tool'}>,fresh:boolean){
  const registered=domains.get(domain),owner=registered&&owners.get(registered.identity)
  if(!registered||!owner||owner.owner!==registered.owner||!binding||typeof binding!=='object'||types.isProxy(binding))throw TypeError('Original managed Workflow delivery domain required')
  const keys=['recipientSessionId','generationId','sourceId','callSeq','delivery'] as const,fields=Object.getOwnPropertyDescriptors(binding)
  if(Reflect.ownKeys(fields).length!==keys.length||keys.some(key=>!fields[key]||!('value'in fields[key]!)||!fields[key]!.enumerable))throw TypeError('Closed original Workflow binding required')
  const recipient:unknown=fields.recipientSessionId!.value,generation:unknown=fields.generationId!.value,source:unknown=fields.sourceId!.value,call:unknown=fields.callSeq!.value,delivery:unknown=fields.delivery!.value
  if(recipient!==owner.sessionId||typeof generation!=='string'||!generation||typeof source!=='string'||!source||typeof call!=='number'||!Number.isSafeInteger(call)||call<0||delivery!=='tool')throw TypeError('Closed original Workflow binding required')
- domain.assertCurrent();owner.assertWorkflowIssue({type:'agent/delivery-source',version:1,kind:'workflow',sourceNamespace:'workflow',recipientSessionId:recipient,generationId:generation,sourceId:source,callSeq:call,delivery});domain.assertCurrent()
+ if(fresh)domain.assertCurrent();else registered.current();owner.assertWorkflowIssue({type:'agent/delivery-source',version:1,kind:'workflow',sourceNamespace:'workflow',recipientSessionId:recipient,generationId:generation,sourceId:source,callSeq:call,delivery});if(fresh)domain.assertCurrent();else registered.current()
 }
+export function assertManagedWorkflowDeliveryCurrent(domain:ManagedExecutionDomain,binding:Parameters<typeof checkWorkflowDelivery>[1]){return checkWorkflowDelivery(domain,binding,true)}
+/** Existing captured binding only; does not admit a source or native effect. */
+export function assertManagedWorkflowDeliveryLifetimeCurrent(domain:ManagedExecutionDomain,binding:Parameters<typeof checkWorkflowDelivery>[1]){return checkWorkflowDelivery(domain,binding,false)}
 export function createManagedExecutionDomain(identity:ManagedExecutionIdentity,owner:ManagedExecutionOwner,context:object,sessionId?:string):ManagedExecutionDomain{
  const original=owners.get(identity);if(!original||original.owner!==owner||!original.newWork||!context||typeof context!=='object'||types.isProxy(context)||sessionId!==undefined&&sessionId!==original.sessionId)throw TypeError('Original managed execution domain required');original.newWork()
  const domain=Object.freeze({identity,owner,context,sessionId:original.sessionId,assertCurrent(){if(this!==domain)throw TypeError('Original domain receiver required');original.newWork!()}}) as ManagedExecutionDomain
@@ -250,7 +266,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
   const candidateOwner=Object.freeze({}),candidate=await restoreManagedConversation(originalSource,candidateOwner,token.sessionId,foldFactory)
   assertHeld()
   const original=installRestoredManagedConversation(candidate,candidateOwner),identity=Object.freeze({}) as ManagedExecutionIdentity,members=createExecutionMemberOwner(assertHeld,identity),debt=new Set<OriginalWriterDependencyScope>(),activeDependencyScopes=new Set<OriginalWriterDependencyScope>(),taskHistoryScopes=new Set<OriginalWriterDependencyScope>(),admissionReads=new Map<OriginalWriterDependencyScope,Promise<void>>()
-  let stopped=false,ownerBound=false,closed=false,pendingWrite:object|undefined
+  let stopped=false,ownerBound=false,closed=false,pendingWrite:{phase:'staged'|'issued'}|undefined
   let pendingWriteActive=false
   let readinessWasReady=false,readinessEpoch=0,readinessQueued=false,ownerRecoveryBlocked=false
   let readinessFailure:{error:unknown;terminal:boolean}|undefined
@@ -308,6 +324,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       throw Object.assign(new Error('Original committed observation requires recovery', { cause: dependencyFailure?.cause }), { code: 'FACT_RECOVERY_REQUIRED' })
     }
   }
+  const assertCapturedIssue=()=>{assertCommittedRead();if(pendingWrite?.phase==='issued')throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'})}
   const requestActions=new WeakMap<object,()=>void>()
   function observe():ExecutionObservation{
     return runOriginalCurrentnessRead(assertHeld,()=>{
@@ -408,7 +425,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     const readCurrent=()=>{if(retired)throw TypeError('Original Team parent retired');assertFresh(scope);scope.assertCurrent();if(original.eventCount!==prefix.eventCount||JSON.stringify(original.prefix)!==JSON.stringify(prefix))throw Object.assign(new TypeError('Original Team ledger prefix changed'),{code:'TEAM_DELIVERY_PREFIX_ADVANCED'})}
     const settle=()=>{if(scopeClosed)return Promise.resolve();if(closing)return closing;const flight=scope.close().then(()=>{scopeClosed=true;activeDependencyScopes.delete(scope);debt.delete(scope);if(!debt.size){dependencyFailure=undefined;readinessFailure=undefined}signalReady()},error=>{activeDependencyScopes.delete(scope);dependencyFailure={cause:error};signalUnavailable(error,!sameHeldOwner());throw error});closing=flight;void flight.finally(()=>{if(closing===flight)closing=undefined}).catch(()=>{});return flight}
     const ready=(async()=>{let primary:unknown,failed=false;try{const events:import('./execution-types.ts').ManagedTeamLedgerEvent[]=[];for(const ordinal of ordinals){readCurrent();const event=await scope.readEvent(ordinal);readCurrent();if(event.seq!==ordinal||!event.type.startsWith('team/'))throw TypeError('Original Team ledger member changed');events.push(event as import('./execution-types.ts').ManagedTeamLedgerEvent)}ledger=freezeJsonData(structuredClone(events))}catch(error){failed=true;primary=error}try{await settle()}catch(error){if(failed)throw new AggregateError([primary,error],'Team ledger and cleanup failed');throw error}if(failed)throw primary;if(retired)throw TypeError('Original Team parent retired');domain.assertCurrent()})();void ready.catch(()=>{})
-    const parent:import('./execution-types.ts').OriginalManagedTeamParent=Object.freeze({domain,ready,get ledger(){if(this!==parent||!ledger)throw TypeError('Original Team ledger unavailable');parent.assertCurrent();consumed=true;return ledger},assertInitialPrefix(){if(this!==parent)throw TypeError('Original Team parent required');parent.assertCurrent();if(original.eventCount!==prefix.eventCount||JSON.stringify(original.prefix)!==JSON.stringify(prefix))throw Object.assign(new TypeError('Original Team ledger prefix changed'),{code:'TEAM_DELIVERY_PREFIX_ADVANCED'})},authorizeTeamDeliveryOpen(source:object,capture:object,outcome:FactOutcome){if(this!==parent||deliveryOpen||outcome.kind!=='committed')throw TypeError('Original Team delivery open required');parent.assertCurrent();const members=readManagedSourceAcknowledgedMembers(domain,source,capture,outcome),event=members[0],key=outcome.receipt.key;if(members.length!==1||event?.type!=='agent/delivery-generation'||event.op!=='open'||event.recipientSessionId!==domain.sessionId||event.seq!==prefix.eventCount||key.firstSeq!==prefix.eventCount||key.count!==1||key.previousPrefixDigest!==prefix.prefixDigest)throw TypeError('Original Team delivery open changed');if(original.eventCount!==prefix.eventCount+1||original.prefix.prefixDigest!==outcome.receipt.prefixDigest)throw Object.assign(Error('Original Team delivery prefix advanced'),{code:'TEAM_DELIVERY_PREFIX_ADVANCED'});const pin=retainAcknowledgedExecutionMembers(capture,outcome);deliveryOpen={source,capture,outcome,event,pin}},assertTeamDeliveryCut(){if(this!==parent)throw TypeError('Original Team parent required');parent.assertCurrent();if(!deliveryOpen){if(original.eventCount!==prefix.eventCount||JSON.stringify(original.prefix)!==JSON.stringify(prefix))throw Object.assign(Error('Original Team delivery prefix advanced'),{code:'TEAM_DELIVERY_PREFIX_ADVANCED'});return}deliveryOpen.pin.assertCurrent();const members=readManagedSourceAcknowledgedMembers(domain,deliveryOpen.source,deliveryOpen.capture,deliveryOpen.outcome);if(members.length!==1||members[0]!==deliveryOpen.event)throw TypeError('Original Team delivery cut changed');if(original.eventCount!==prefix.eventCount+1||original.prefix.prefixDigest!==deliveryOpen.outcome.receipt.prefixDigest)throw Object.assign(Error('Original Team delivery prefix advanced'),{code:'TEAM_DELIVERY_PREFIX_ADVANCED'})},hasInbox(messageId:string){if(this!==parent||typeof messageId!=='string')throw TypeError('Original Team inbox identity required');parent.assertCurrent();return original.hasTeamInbox(messageId)},assertCurrent(){if(this!==parent||retired||closed||!ledger)throw TypeError('Original Team parent unavailable');domain.assertCurrent();if(!consumed&&(original.eventCount!==prefix.eventCount||JSON.stringify(original.prefix)!==JSON.stringify(prefix)))throw Object.assign(new TypeError('Original Team ledger prefix changed'),{code:'TEAM_DELIVERY_PREFIX_ADVANCED'})},async close(){if(this!==parent)throw TypeError('Original Team parent required');if(closed)return;retired=true;await ready.catch(()=>{});await settle();deliveryOpen?.pin.release();deliveryOpen=undefined;closed=true}})
+    const parent:import('./execution-types.ts').OriginalManagedTeamParent=Object.freeze({domain,ready,get ledger(){if(this!==parent||!ledger)throw TypeError('Original Team ledger unavailable');parent.assertCurrent();consumed=true;return ledger},assertInitialPrefix(){if(this!==parent)throw TypeError('Original Team parent required');parent.assertCurrent();if(original.eventCount!==prefix.eventCount||JSON.stringify(original.prefix)!==JSON.stringify(prefix))throw Object.assign(new TypeError('Original Team ledger prefix changed'),{code:'TEAM_DELIVERY_PREFIX_ADVANCED'})},authorizeTeamDeliveryOpen(source:object,capture:object,outcome:FactOutcome){if(this!==parent||deliveryOpen||outcome.kind!=='committed')throw TypeError('Original Team delivery open required');parent.assertCurrent();const members=readManagedSourceAcknowledgedMembers(domain,source,capture,outcome),event=members[0],key=outcome.receipt.key;if(members.length!==1||event?.type!=='agent/delivery-generation'||event.op!=='open'||event.recipientSessionId!==domain.sessionId||event.seq!==prefix.eventCount||key.firstSeq!==prefix.eventCount||key.count!==1||key.previousPrefixDigest!==prefix.prefixDigest)throw TypeError('Original Team delivery open changed');if(original.eventCount!==prefix.eventCount+1||original.prefix.prefixDigest!==outcome.receipt.prefixDigest)throw Object.assign(Error('Original Team delivery prefix advanced'),{code:'TEAM_DELIVERY_PREFIX_ADVANCED'});const pin=retainAcknowledgedExecutionMembers(capture,outcome);deliveryOpen={source,capture,outcome,event,pin}},assertTeamDeliveryCut(){if(this!==parent)throw TypeError('Original Team parent required');parent.assertCurrent();if(!deliveryOpen){if(original.eventCount!==prefix.eventCount||JSON.stringify(original.prefix)!==JSON.stringify(prefix))throw Object.assign(Error('Original Team delivery prefix advanced'),{code:'TEAM_DELIVERY_PREFIX_ADVANCED'});return}deliveryOpen.pin.assertCurrent();const members=readManagedSourceAcknowledgedMembers(domain,deliveryOpen.source,deliveryOpen.capture,deliveryOpen.outcome);if(members.length!==1||members[0]!==deliveryOpen.event)throw TypeError('Original Team delivery cut changed');if(original.eventCount!==prefix.eventCount+1||original.prefix.prefixDigest!==deliveryOpen.outcome.receipt.prefixDigest)throw Object.assign(Error('Original Team delivery prefix advanced'),{code:'TEAM_DELIVERY_PREFIX_ADVANCED'})},hasInbox(messageId:string){if(this!==parent||typeof messageId!=='string')throw TypeError('Original Team inbox identity required');parent.assertCurrent();return original.hasTeamInbox(messageId)},assertCurrent(){if(this!==parent||retired||closed||!ledger)throw TypeError('Original Team parent unavailable');domains.get(domain)!.current();assertCommittedRead();if(!consumed&&(original.eventCount!==prefix.eventCount||JSON.stringify(original.prefix)!==JSON.stringify(prefix)))throw Object.assign(new TypeError('Original Team ledger prefix changed'),{code:'TEAM_DELIVERY_PREFIX_ADVANCED'})},async close(){if(this!==parent)throw TypeError('Original Team parent required');if(closed)return;retired=true;await ready.catch(()=>{});await settle();deliveryOpen?.pin.release();deliveryOpen=undefined;closed=true}})
     teamParents.set(parent,domain);return parent
   }
   async function readTeamInbox(messageId:string):Promise<Extract<import('./types.ts').SessionEventView,{type:'subagent/inbox'}>|undefined>{
@@ -443,9 +460,54 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     try{current();archive=original.reserveTaskHistory(index=>scope.readEvent(index),current)}catch(error){active=false;activeDependencyScopes.delete(scope);taskHistoryScopes.delete(scope);dependencyFailure={cause:error};throw error}
     return Object.freeze({count:prefix.eventCount,legacy:archive.legacy,inheritedLegacyUnknown:archive.inheritedLegacyUnknown,assertCurrent(){passive()},assertCount(count:number){passive();if(original.eventCount!==count)throw TypeError('Original Task history suffix changed')},async export(selection:Extract<import('../conversation/seed-types.ts').SeedSelection,{kind:'all'|'last-turns'}>){if(exported)throw TypeError('Original Task history already exported');exported=true;let result:Awaited<ReturnType<typeof exportManagedTaskConversationSeed>>|undefined,primary:unknown,failed=false;try{current();result=await exportManagedTaskConversationSeed(archive.source,selection);current()}catch(error){failed=true;primary=error}try{await settle()}catch(cleanup){throw failed?new AggregateError([primary,cleanup],'Task history capture and cleanup failed'):cleanup}if(failed)throw primary;passive();return result!},async close(){active=false;await settle()}})
   }
+  let hydration:Promise<void>|undefined
+  const hydrationContext=new AsyncLocalStorage<Promise<void>>()
+  function prepare():Promise<PreparedExecutionRequest['archive']>{
+    assertCommittedRead()
+    if(hydration){
+      if(hydrationContext.getStore()===hydration)return Promise.reject(TypeError('Original conversation hydration cannot join itself'))
+      return hydration.then(prepare)
+    }
+    if(!original.needsPreparation())return original.prepare()
+    const expected=original.prefix,scope=captureWriterDependencies(open(expected)),finished=Promise.withResolvers<void>()
+    void finished.promise.catch(()=>{})
+    debt.add(scope);activeDependencyScopes.add(scope);admissionReads.set(scope,finished.promise);markBusy()
+    const current=()=>{assertCommittedRead(scope);scope.assertCurrent();if(original.prefix!==expected)throw TypeError('Original conversation preparation expired')}
+    const read=async(ordinal:number)=>{
+      current()
+      const event=await scope.readEvent(ordinal)
+      current()
+      return compatibility?.view.events[ordinal]??liveEvents.get(ordinal)?.deref()??event
+    }
+    const flight:Promise<void>=Promise.resolve().then(()=>hydrationContext.run(flight,async()=>{
+      let failed=false,primary:unknown
+      try{
+        current()
+        const archive=await original.prepare(read)
+        // This temporary lease only materializes the original cache. Every
+        // caller obtains a distinct lease after this finite hydration joins.
+        await archive.settle()
+        current()
+      }catch(error){failed=true;primary=error}
+      try{
+        await scope.close()
+        activeDependencyScopes.delete(scope);debt.delete(scope);admissionReads.delete(scope);finished.resolve()
+      }catch(cleanup){
+        activeDependencyScopes.delete(scope);admissionReads.delete(scope)
+        const cause=failed?new AggregateError([primary,cleanup],'Conversation hydration and exact dependency cleanup failed'):cleanup
+        dependencyFailure={cause};finished.reject(cause);signalUnavailable(cause,!sameHeldOwner());throw cause
+      }
+      signalReady()
+      if(failed)throw primary
+    }))
+    hydration=flight
+    const release=()=>{if(hydration===flight)hydration=undefined}
+    void flight.then(release,release)
+    return flight.then(prepare)
+  }
   async function prepareRequest(action:import('./ports.ts').ManagedAction<FactOutcome>):Promise<PreparedExecutionRequest>{
     const actionCurrent=requestActions.get(action);if(!actionCurrent)throw TypeError('Original request action required')
-    actionCurrent();const observation=observe(),archive=await original.prepare();let active=true,settled=false,settling:Promise<void>|undefined
+    actionCurrent();const observation=observe(),archive=await prepare();let active=true,settled=false,settling:Promise<void>|undefined
     const current=()=>{if(!active)throw TypeError('Original request preparation expired');actionCurrent();observation.assertCurrent();archive.assertCurrent()}
     try{current()}catch(primary){try{await archive.settle()}catch(cleanup){throw aggregateErrors([primary,cleanup],'Request preparation and original lease cleanup failed')}throw primary}
     const request:PreparedExecutionRequest=Object.freeze({archive,observation,assertCurrent(){if(this!==request)throw TypeError('Original request receiver required');current()},settle(){if(this!==request)return Promise.reject(TypeError('Original request receiver required'));active=false;if(settled)return Promise.resolve();if(settling)return settling;const flight=archive.settle().then(()=>{settled=true});settling=flight;void flight.finally(()=>{if(settling===flight)settling=undefined}).catch(()=>{});return flight}})
@@ -474,14 +536,14 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       const newWorkBody=()=>{current();assertNewWork();if(readyRead)readyRead();else if(ready)runOpaqueCurrentnessRead(current,()=>Reflect.apply(ready.value,owner,[]))}
       const newWorkGuard=readyRead&&composeOriginalCurrentnessGuards(current,readyRead)
       const newWork=newWorkGuard?wrapOriginalSourceCurrentness(newWorkGuard,newWorkBody)!:newWorkBody
-      ownerBound=true;owners.set(identity,{owner,sessionId:token.sessionId,current,reserveTaskHistory,settleDependencies,generations(){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.generations()},codeState(){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.codeState()},execSource(id){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().source('exec',id)},codeSource(id){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().source('code',id)},workflowSource(id){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().source('workflow',id)},codeEvidence(first,last){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().codeEvidence(first,last)},readTaskResult,readTeamInbox,teamDeliveryFence(){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});const delivery=original.delivery();return {generation:delivery.activeGeneration(),lastFenceSeq:delivery.lastFenceSeq()}},teamAdmissionDisposition(inputId,seq){current();if(original.intake.admission(inputId)!==seq)throw TypeError('Original Team admission changed');if(original.intake.isPending(inputId)){if(originalDeliveryObservation(original.delivery).isExecutable(inputId))return 'pending';if((original.delivery().lastFenceSeq()??-1)>seq)return 'suppressed';throw Object.assign(Error('Original Team delivery fence requires settlement'),{code:'FACT_RECOVERY_REQUIRED'})}return (original.intake.lastCancellationSeq(inputId)??-1)>seq?'cancelled':'claimed'},reserveTeamParent,reserveReviewerContext,taskCandidate(namespace,id){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().taskCandidate(namespace,id)},taskEvidence(first,last){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().taskEvidence(first,last)},assertExecIssue(event){current();assertNewWork();const index=original.delivery();if(index.activeGeneration()?.generationId!==event.generationId)throw Object.assign(Error('Delivery precondition is stale'),{code:'FACT_PRECONDITION_STALE'});originalDeliveryObservation(original.delivery).assertIssue([event])},assertCodeIssue(event){current();assertNewWork();const index=original.delivery();if(index.activeGeneration()?.generationId!==event.generationId)throw Object.assign(Error('Delivery precondition is stale'),{code:'FACT_PRECONDITION_STALE'});originalDeliveryObservation(original.delivery).assertIssue([event])},assertWorkflowIssue(event){current();assertNewWork();const index=original.delivery();if(index.activeGeneration()?.generationId!==event.generationId)throw Object.assign(Error('Delivery precondition is stale'),{code:'FACT_PRECONDITION_STALE'});originalDeliveryObservation(original.delivery).assertIssue([event])},...ready?{newWork}:{}})
+      ownerBound=true;owners.set(identity,{owner,sessionId:token.sessionId,current,reserveTaskHistory,settleDependencies,generations(){current();if(pendingWrite?.phase==='issued')throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.generations()},codeState(){current();if(pendingWrite?.phase==='issued')throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.codeState()},execSource(id){current();if(pendingWrite?.phase==='issued')throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().source('exec',id)},codeSource(id){current();if(pendingWrite?.phase==='issued')throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().source('code',id)},workflowSource(id){current();if(pendingWrite?.phase==='issued')throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().source('workflow',id)},codeEvidence(first,last){current();if(pendingWrite?.phase==='issued')throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().codeEvidence(first,last)},readTaskResult,readTeamInbox,teamDeliveryFence(){current();assertCapturedIssue();const delivery=original.delivery();return {generation:delivery.activeGeneration(),lastFenceSeq:delivery.lastFenceSeq()}},teamAdmissionDisposition(inputId,seq){current();if(original.intake.admission(inputId)!==seq)throw TypeError('Original Team admission changed');if(original.intake.isPending(inputId)){if(originalDeliveryObservation(original.delivery).isExecutable(inputId))return 'pending';if((original.delivery().lastFenceSeq()??-1)>seq)return 'suppressed';throw Object.assign(Error('Original Team delivery fence requires settlement'),{code:'FACT_RECOVERY_REQUIRED'})}return (original.intake.lastCancellationSeq(inputId)??-1)>seq?'cancelled':'claimed'},reserveTeamParent,reserveReviewerContext,taskCandidate(namespace,id){current();if(pendingWrite?.phase==='issued')throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().taskCandidate(namespace,id)},taskEvidence(first,last){current();if(pendingWrite?.phase==='issued')throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().taskEvidence(first,last)},assertExecIssue(event){current();assertCapturedIssue();const index=original.delivery();if(index.activeGeneration()?.generationId!==event.generationId)throw Object.assign(Error('Delivery precondition is stale'),{code:'FACT_PRECONDITION_STALE'});originalDeliveryObservation(original.delivery).assertIssue([event])},assertCodeIssue(event){current();assertCapturedIssue();const index=original.delivery();if(index.activeGeneration()?.generationId!==event.generationId)throw Object.assign(Error('Delivery precondition is stale'),{code:'FACT_PRECONDITION_STALE'});originalDeliveryObservation(original.delivery).assertIssue([event])},assertWorkflowIssue(event){current();assertCapturedIssue();const index=original.delivery();if(index.activeGeneration()?.generationId!==event.generationId)throw Object.assign(Error('Delivery precondition is stale'),{code:'FACT_PRECONDITION_STALE'});originalDeliveryObservation(original.delivery).assertIssue([event])},...ready?{newWork}:{}})
     },
     assertNewWork,
     readinessChanged(recoverableBlocked=false){ownerRecoveryBlocked=recoverableBlocked;if(recoverableBlocked){pendingWriteActive=false;signalUnavailable(Object.assign(Error('Original owner requires explicit recovery'),{code:'FACT_RECOVERY_REQUIRED'}));return}if(!readinessListeners.size&&!readinessFailure)return;const state=readinessState();if(state.kind==='failed')signalUnavailable(state.error,true);else if(state.kind==='busy')markBusy();else{readinessFailure=undefined;signalReady()}},
     readinessUnavailable(error:unknown,terminal=false){pendingWriteActive=false;signalUnavailable(error,terminal)},
     settleDependencies,
     stopNewWork(){if(!stopped){stopped=true;signalUnavailable(Object.assign(new Error('FACT_CLOSED'),{code:'FACT_CLOSED'}),true)}},
-    prepare(){assertCommittedRead();return original.prepare()},
+    prepare,
     observe,prepareRequest,
     async prepareWrite(groups:readonly CapturedFactGroup[],rejectInvalidGroups=false){
       // Only the original writer invokes this after its real authorization;
@@ -504,13 +566,21 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       try{await close();activeDependencyScopes.delete(scope);debt.delete(scope)}catch(cleanup){activeDependencyScopes.delete(scope);prepared?.discard();const cause=failed?new AggregateError([primary,cleanup],'Writer preparation and exact dependency cleanup failed'):cleanup;dependencyFailure={cause};signalUnavailable(cause,!sameHeldOwner());throw cause}finally{reading=false}
       if(failed){signalReady();throw primary}
       try{assertHeld()}catch(error){prepared?.discard();throw error}
-      signalReady()
-      const staged=prepared!,operation=Object.freeze({});let installed=false,started=false,discarded=false,absent=false,published=0,issuedBatch:EncodedFactBatch|undefined,originalBatch:EncodedFactBatch|undefined,originalReceipt:FactReceipt|undefined
-      const assertIssuable=()=>{assertHeld();if(discarded||absent||pendingWrite||issuedBatch||started||original.prefix!==expected)throw new TypeError('Writer prefix changed or original issuance already started')}
-      return {events:staged.events,members:staged.members,rejected:staged.rejected,assertIssuable,discardUnissued(){if(issuedBatch||started)throw new TypeError('Original issued write cannot be discarded');discarded=true;staged.discard()},beforeIssue(batch:EncodedFactBatch){
+      const staged=prepared!,operation:{phase:'staged'|'issued'}={phase:'staged'};let installed=false,started=false,discarded=false,absent=false,published=0,issuedBatch:EncodedFactBatch|undefined,originalBatch:EncodedFactBatch|undefined,originalReceipt:FactReceipt|undefined
+      // Preparation and native issuance belong to one accepted operation.
+      // Keep its existing reservation busy across the caller's awaited backend
+      // boundary, including the interval before the first native syscall.
+      pendingWrite=operation;pendingWriteActive=true;markBusy()
+      const assertIssuable=()=>{assertHeld();if(discarded||absent||pendingWrite!==operation||issuedBatch||started||original.prefix!==expected)throw new TypeError('Writer prefix changed or original issuance already started')}
+      return {events:staged.events,members:staged.members,rejected:staged.rejected,assertIssuable,discardUnissued(){
+        if(issuedBatch||started)throw new TypeError('Original issued write cannot be discarded')
+        if(discarded)return
+        if(pendingWrite!==operation)throw new TypeError('Original staged write reservation required')
+        staged.discard();discarded=true;pendingWrite=undefined;pendingWriteActive=false;signalReady()
+      },beforeIssue(batch:EncodedFactBatch){
         assertIssuable()
         if(batch.key.firstSeq!==expected.eventCount||batch.key.count!==staged.events.length||batch.key.previousPrefixDigest!==expected.prefixDigest)throw new TypeError('Original writer batch scope required')
-        issuedBatch=batch;pendingWrite=operation;pendingWriteActive=true;markBusy()
+        issuedBatch=batch;operation.phase='issued';pendingWrite=operation;pendingWriteActive=true;markBusy()
       },settleAbsent(outcome:Extract<FactOutcome,{key:BatchKey}>&{readonly kind:'absent'}){
         assertHeld();if(started||absent||!issuedBatch||outcome.kind!=='absent'||outcome.key!==issuedBatch.key||pendingWrite!==operation)throw new TypeError('Original verified absence required')
         absent=true;staged.discard();pendingWrite=undefined;pendingWriteActive=false;signalReady()
@@ -554,7 +624,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'})
       await settleDependencies()
       members.assertReleased()
-      await original.close();members.close();liveEvents.clear();closed=true;readinessOwners.delete(identity);owners.delete(identity)
+      await original.close();members.close();liveEvents.clear();closed=true;hydrationContext.disable();readinessOwners.delete(identity);owners.delete(identity)
     }
   }
 }

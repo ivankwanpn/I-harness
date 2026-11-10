@@ -1,6 +1,6 @@
 import { receivedExecutionInputsFor } from '../../../session-executor/src/lifecycle/execution-inputs.ts';
 import { isStrictFactData } from '@i-harness/core-session';
-import { createManagedExecutionDomain, isManagedExecutionSource, assertManagedActionCurrent, getManagedExecutionAdmissionWait, readManagedActionMembers,retainAcknowledgedExecutionMembers, type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution';
+import { createManagedExecutionDomain, isManagedExecutionSource, assertManagedActionCurrent, assertManagedActionLifetimeCurrent, getManagedExecutionAdmissionWait, readManagedActionMembers,retainAcknowledgedExecutionMembers, type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution';
 import { canonicalJsonData, type FactOutcome, type CapturedActionFact, type ManagedAction, type SettlementFacts } from '@i-harness/core-session';
 import { assertModelOriginPair, type ConstructorManagedModelOriginVerifier, type ManagedModelOriginExpectation, type PreparedModelOriginDriver } from '@i-harness/core-tools/model-origin';
 import type { ToolRegistry, PreparedCall } from '@i-harness/core-tools';
@@ -26,6 +26,7 @@ const origins = new WeakSet<object>();
 type MemberProof = {
     origin: Origin;
     check(expected: ManagedModelOriginExpectation): void;
+    captured(expected: ManagedModelOriginExpectation): void;
     schedule(expected: ManagedModelOriginExpectation):void;
     retainTeam(expected:ManagedModelOriginExpectation):import('@i-harness/core-tools/model-origin').OriginalTeamBirthPermit;
     action?: ManagedAction<FactOutcome>;
@@ -75,7 +76,7 @@ export function createManagedAgentModelOriginOwner(context: PluginContext, execu
                             captured = true;
                             return member.action!.captureExecDeliverySource({ type: 'agent/delivery-source', version: 1, kind: 'exec', ...binding }, () => {
                                 try {
-                                    member.check(expected);
+                                    member.captured(expected);
                                     return recipientCurrent();
                                 }
                                 catch {
@@ -92,7 +93,7 @@ export function createManagedAgentModelOriginOwner(context: PluginContext, execu
                         assertAdmissionCurrent(){if(this!==issuer)throw TypeError('Original Workflow issuer receiver required');member.check(expected)},
                         registerCompletion(drain:()=>Promise<void>){if(this!==issuer||registered)throw TypeError('Original Workflow completion required');issuer.assertAdmissionCurrent();registered=true;return member.action!.registerSettlementSource(drain)},
                         async prepareLaunch(sourceId:string){if(this!==issuer||!registered||preparing)throw TypeError('Original Workflow launch preparation required');issuer.assertAdmissionCurrent();preparing=true;const prepared=await recipient.prepareWorkflowLaunch({sessionId:domain.sessionId,callId:expected.callId,callSeq:expected.callEventSeq,sourceId});issuer.assertAdmissionCurrent();if(prepared.kind!=='bound')throw Object.assign(Error('Private Workflow launch unavailable'),{reason:prepared.reason});if(prepared.binding.sourceId!==sourceId||!isStrictFactData(prepared.binding))throw TypeError('Original Workflow launch binding required');preparedBinding=canonicalJsonData(prepared.binding);return prepared},
-                        captureSource(binding:Readonly<import('@i-harness/core-tools/model-origin').WorkflowSourceBinding>,recipientCurrent:()=>boolean){if(this!==issuer||!registered||captured||!preparedBinding||!isStrictFactData(binding)||canonicalJsonData(binding)!==preparedBinding||binding.recipientSessionId!==domain.sessionId||binding.callSeq!==expected.callEventSeq||binding.sourceNamespace!=='workflow'||binding.delivery!=='tool')throw TypeError('Original Workflow source binding required');issuer.assertAdmissionCurrent();captured=true;return member.action!.captureWorkflowDeliverySource({type:'agent/delivery-source',version:1,kind:'workflow',...binding},()=>{try{issuer.assertAdmissionCurrent();return recipientCurrent()}catch{return false}})},
+                        captureSource(binding:Readonly<import('@i-harness/core-tools/model-origin').WorkflowSourceBinding>,recipientCurrent:()=>boolean){if(this!==issuer||!registered||captured||!preparedBinding||!isStrictFactData(binding)||canonicalJsonData(binding)!==preparedBinding||binding.recipientSessionId!==domain.sessionId||binding.callSeq!==expected.callEventSeq||binding.sourceNamespace!=='workflow'||binding.delivery!=='tool')throw TypeError('Original Workflow source binding required');issuer.assertAdmissionCurrent();captured=true;return member.action!.captureWorkflowDeliverySource({type:'agent/delivery-source',version:1,kind:'workflow',...binding},()=>{try{member.captured(expected);return recipientCurrent()}catch{return false}})},
                     });return issuer
                 }, takeCodeSourceIssuer() {
                     if(this!==permit||codeIssued)throw TypeError('Original Code source issuer required');
@@ -105,7 +106,7 @@ export function createManagedAgentModelOriginOwner(context: PluginContext, execu
                         assertAdmissionCurrent(){if(this!==issuer)throw TypeError('Original Code issuer receiver required');member.check(expected)},
                         registerCompletion(drain:()=>Promise<void>){if(this!==issuer||registered)throw TypeError('Original Code completion required');issuer.assertAdmissionCurrent();registered=true;return member.action!.registerSettlementSource(drain)},
                         async prepareLaunch(cellId:string,sourceId:string){if(this!==issuer||!registered||preparing)throw TypeError('Original Code launch preparation required');issuer.assertAdmissionCurrent();preparing=true;const prepared=await recipient.prepareCodeLaunch({sessionId:domain.sessionId,callId:expected.callId,callSeq:expected.callEventSeq,cellId,sourceId});issuer.assertAdmissionCurrent();if(prepared.kind!=='bound')throw Object.assign(Error('Private Code launch unavailable'),{reason:prepared.reason});if(prepared.binding.cellId!==cellId||prepared.binding.sourceId!==sourceId||!isStrictFactData(prepared.binding))throw TypeError('Original Code launch binding required');preparedBinding=canonicalJsonData(prepared.binding);return prepared},
-                        captureSource(binding:Readonly<import('@i-harness/core-tools/model-origin').CodeSourceBinding>,recipientCurrent:()=>boolean){if(this!==issuer||!registered||captured||!preparedBinding||!isStrictFactData(binding)||canonicalJsonData(binding)!==preparedBinding||binding.recipientSessionId!==domain.sessionId||binding.callSeq!==expected.callEventSeq||binding.sourceNamespace!=='code'||binding.delivery!=='tool')throw TypeError('Original Code source binding required');issuer.assertAdmissionCurrent();captured=true;return member.action!.captureCodeDeliverySource({type:'agent/delivery-source',version:1,kind:'code',...binding},()=>{try{issuer.assertAdmissionCurrent();return recipientCurrent()}catch{return false}})},
+                        captureSource(binding:Readonly<import('@i-harness/core-tools/model-origin').CodeSourceBinding>,recipientCurrent:()=>boolean){if(this!==issuer||!registered||captured||!preparedBinding||!isStrictFactData(binding)||canonicalJsonData(binding)!==preparedBinding||binding.recipientSessionId!==domain.sessionId||binding.callSeq!==expected.callEventSeq||binding.sourceNamespace!=='code'||binding.delivery!=='tool')throw TypeError('Original Code source binding required');issuer.assertAdmissionCurrent();captured=true;return member.action!.captureCodeDeliverySource({type:'agent/delivery-source',version:1,kind:'code',...binding},()=>{try{member.captured(expected);return recipientCurrent()}catch{return false}})},
                     });return issuer;
                 } });
             return permit;
@@ -141,7 +142,7 @@ export function createManagedModelInvocation(origin: Origin, action: ManagedActi
     const readInterval=<T>(operation:()=>T):T=>guard&&Object.getOwnPropertyDescriptor(origin.domain.owner,'assertReady')?.value===guard?runOriginalCurrentnessRead(guard,operation):operation()
     const opaque=<T>(operation:()=>T):T=>guard?runOpaqueCurrentnessRead(guard,operation):operation()
     const retainedProofs = new Set<MemberProof>();
-    const expire = (member: MemberProof) => { member.schedule=member.check = () => { throw TypeError('Private model member released'); }; member.action = undefined; retainedProofs.delete(member); };
+    const expire = (member: MemberProof) => { member.captured=member.schedule=member.check = () => { throw TypeError('Private model member released'); }; member.action = undefined; retainedProofs.delete(member); };
     const current = () => {
         if (!active)
             throw TypeError('Private model invocation expired');
@@ -214,6 +215,7 @@ export function createManagedModelInvocation(origin: Origin, action: ManagedActi
                 opaque(()=>source.assertHeld());
             });
             const check=(expected:ManagedModelOriginExpectation)=>readInterval(()=>{current();schedule(expected)});
+            const captured=(expected:ManagedModelOriginExpectation)=>readInterval(()=>{assertManagedActionLifetimeCurrent(origin.domain,action);schedule(expected)});
             const retainedInput=input!,retainedAccepted=record.accepted,retainedCall=witness
             const retainTeam=(expected:ManagedModelOriginExpectation):import('@i-harness/core-tools/model-origin').OriginalTeamBirthPermit=>{
                 check(expected);const inputEvents=read(retainedInput),acceptedEvents=read(retainedAccepted),callEvents=read(retainedCall),names=['bindingValidation','authorityValidation','approvalValidation'] as const,fields=names.map(name=>Object.getOwnPropertyDescriptor(expected.prepared,name)),callBytes=opaque(()=>canonicalJsonData(expected.args)),pins:ReturnType<typeof retainAcknowledgedExecutionMembers>[]=[]
@@ -227,7 +229,7 @@ export function createManagedModelInvocation(origin: Origin, action: ManagedActi
                 const assertCurrent=()=>{if(retired||closed)throw TypeError('Original Team birth permit retired');origin.domain.assertCurrent();action.signal.throwIfAborted();assertHeld();for(let index=0;index<fields.length;index++){const field=fields[index];if(field&&'value'in field&&field.value!==undefined){if(typeof field.value!=='function')throw TypeError('Original Team validation unavailable');const valid=opaque(()=>Reflect.apply(field.value,expected.prepared,[]));if(index===0?!valid:valid===false)throw TypeError('Original Team validation unavailable')}}}
                 const original:import('@i-harness/core-tools/model-origin').OriginalTeamBirthPermit=Object.freeze({source:completion,assertCurrent(){if(this!==original)throw TypeError('Original Team birth permit required');assertCurrent()},assertHeld(){if(this!==original)throw TypeError('Original Team birth permit required');assertHeld()},async waitResult(){if(this!==original||retired||closed)throw TypeError('Original Team birth permit required');await resultBarrier;assertHeld()},async waitCurrent(){if(this!==original||retired||closed)throw TypeError('Original Team birth permit required');const wait=getManagedExecutionAdmissionWait(origin.domain,action,action.signal);if(wait)await wait;assertCurrent()},async close(){if(this!==original)throw TypeError('Original Team birth permit required');if(closed)return;if(closing)return closing;retired=true;done.resolve();const pending=(async()=>{await completion.close();for(const pin of pins)pin.release();closed=true})();closing=pending;void pending.finally(()=>{if(closing===pending)closing=undefined}).catch(()=>{});return pending}});return original
             }
-            const proof = Object.freeze({}), member = { origin, check, schedule, retainTeam, action, taken: false };
+            const proof = Object.freeze({}), member = { origin, check, captured, schedule, retainTeam, action, taken: false };
             proofs.set(proof, member);
             retainedProofs.add(member);
             record.proofs.add(member);

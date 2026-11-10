@@ -1,6 +1,6 @@
 import { reduceContext, captureContextPayload, type ReductionRunOptions, type ReductionResult, type ContextSnapshot } from '@i-harness/context-engine';
 import { previewRestoredConversationCandidate } from '@i-harness/core-session/internal/restoration';
-import { assertManagedActionCurrent, readManagedActionMembers } from '@i-harness/core-session/internal/execution';
+import { assertManagedActionCurrent, assertManagedActionLifetimeCurrent, readManagedActionMembers } from '@i-harness/core-session/internal/execution';
 import type { ManagedAction, FactOutcome, SettlementFacts } from '@i-harness/core-session';
 import { resolveCompactSpec } from '@i-harness/compaction';
 import { prepareModelRequest, mapModelRequest, isGenerationError } from '@i-harness/llm-seam';
@@ -35,8 +35,12 @@ export function createManagedReduction(host: ManagedAgentHost, context: ReturnTy
             let sequence: Awaited<ReturnType<typeof beginSoftSequence>> | undefined, published = false;
             const selectedPolicy = (snapshot: ContextSnapshot) => { const selected = resolveCompactSpec(config, snapshot.surface.binding?.providerId, snapshot.surface.binding?.modelId), facts = reductionPolicyFacts(selected, snapshot.surface, context.retainedCandidate().model, context.budgetConfig?.reserveRatio); return { model: selected.summarizationModel, key: projectionFingerprint(facts), facts }; };
             const actual = () => { const value = context.retainedCandidate(); retain(value.instructions); return value; };
-            const assertCurrent = () => context.current(actual());
-            const captureReduction = action.captureContextReduction?.bind(action);
+            const assertCurrent = () => context.capturedCurrent(actual());
+            const originalCapture = action.captureContextReduction?.bind(action);
+            const captureReduction: typeof originalCapture = originalCapture && ((...args) => {
+                assertManagedActionCurrent(host.domain, action);
+                return originalCapture(...args);
+            });
             if (!captureReduction)
                 return { ...unchanged(), outcome: 'blocked' as const, blockedReason: 'publication-unavailable' as const };
             if (options.reason === 'auto') {
@@ -59,7 +63,8 @@ export function createManagedReduction(host: ManagedAgentHost, context: ReturnTy
                 if (!(host.autoCompactionEnabled?.() ?? resolved.auto) || !over || !allowed)
                     return { ...unchanged(), outcome: pressure.kind === 'known' && pressure.targetReady ? 'ready' as const : 'unchanged' as const };
                 const sequenceSource = initial;
-                sequence = await beginSoftSequence({ captureSoftReduction: action.captureSoftReduction.bind(action), registerFactSource: register, softTerminalInstalled: () => published }, { type: 'context/soft-reduction', version: 1, op: 'start', ownerSessionId: host.domain.sessionId, sequenceId: randomUUID(), ...work, humanTurns: progress.humanTurns, acceptedExchanges: progress.acceptedExchanges }, () => context.current(sequenceSource));
+                assertManagedActionCurrent(host.domain, action);
+                sequence = await beginSoftSequence({ captureSoftReduction: action.captureSoftReduction.bind(action), registerFactSource: register, softTerminalInstalled: () => published }, { type: 'context/soft-reduction', version: 1, op: 'start', ownerSessionId: host.domain.sessionId, sequenceId: randomUUID(), ...work, humanTurns: progress.humanTurns, acceptedExchanges: progress.acceptedExchanges }, () => context.capturedCurrent(sequenceSource));
                 const refreshed = await context.capture(action);
                 if (!sameRequestCandidate(initial, refreshed)) {
                     await sequence.settle('canceled');
@@ -67,7 +72,7 @@ export function createManagedReduction(host: ManagedAgentHost, context: ReturnTy
                 }
                 initial = refreshed;
             }
-            const ports = createReductionBridge({ signal: options.signal, sessionId: host.domain.sessionId, requestContext: host.requestContext, registerFactSource: register, captureContextReduction: captureReduction, assertFactOpen: () => assertManagedActionCurrent(host.domain, action), async previewReduction(rewrites, previewOptions) {
+            const ports = createReductionBridge({ signal: options.signal, sessionId: host.domain.sessionId, requestContext: host.requestContext, registerFactSource: register, captureContextReduction: captureReduction, assertFactOpen: () => assertManagedActionLifetimeCurrent(host.domain, action), async previewReduction(rewrites, previewOptions) {
                     const held = context.retainedCandidate(), candidate = await previewRestoredConversationCandidate(context.archive, rewrites, { ...previewOptions, capturePayload: value => captureContextPayload(value), assertCurrent() {
                             if (!context.current(held))
                                 throw Object.assign(Error('CONTEXT_INPUT_STALE'), { code: 'CONTEXT_INPUT_STALE' });
@@ -94,6 +99,7 @@ export function createManagedReduction(host: ManagedAgentHost, context: ReturnTy
                     throw TypeError('Original summary generation required');
                 assertExecutionGeneration(host.execution, owner);
                 const control = generationRequestLease(owner.control('summary', () => {
+                    assertManagedActionCurrent(host.domain, action);
                     assertExecutionGeneration(host.execution, owner);
                     if (!selection.current())
                         throw Object.assign(Error('CONTEXT_INPUT_STALE'), { code: 'CONTEXT_INPUT_STALE' });

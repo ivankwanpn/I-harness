@@ -291,7 +291,9 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
             check();
             return !resident || resident.revision !== revision;
         },
-        async prepare(): Promise<PreparedConversationArchive> {
+        // The held execution owner may supply its operation-local dependency
+        // reader. The public archive facade never forwards an incoming reader.
+        async prepare(readEvent?: (ordinal: number) => Promise<SessionEventView>): Promise<PreparedConversationArchive> {
             check();
             const expected = revision, current = () => {
                 check();
@@ -301,7 +303,7 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
             if (!resident || resident.revision !== revision) {
                 let settleStarted = false;
                 try {
-                    const payload = await hydratePreparation(owned, current);
+                    const payload = await hydratePreparation(owned, current, undefined, readEvent);
                     settleStarted = true;
                     await owned.source.settle();
                     current();
@@ -399,7 +401,7 @@ type PreparedPayload = {
     coordinates: ReturnType<Candidate['sources']['read']>;
     state: object;
 };
-async function hydratePreparation(owned: Candidate, current: () => void, prospective?:{history:ReturnType<Candidate['index']['history']>;coordinates:ReturnType<Candidate['sources']['read']>;prune:ReturnType<Candidate['prune']['read']>;read:(index:number)=>Promise<SessionEventView>}): Promise<PreparedPayload> {
+async function hydratePreparation(owned: Candidate, current: () => void, prospective?:{history:ReturnType<Candidate['index']['history']>;coordinates:ReturnType<Candidate['sources']['read']>;prune:ReturnType<Candidate['prune']['read']>;read:(index:number)=>Promise<SessionEventView>}, readEvent?: (ordinal:number)=>Promise<SessionEventView>): Promise<PreparedPayload> {
     current();
     const history = prospective?.history??owned.index.history(), facts = owned.index.resultFacts(), coordinates = prospective?.coordinates??owned.sources.read(), pruneView = prospective?.prune??owned.prune.read();
     const wanted = new Set<number>(), callIds = new Set<string>();
@@ -426,7 +428,7 @@ async function hydratePreparation(owned: Candidate, current: () => void, prospec
     const prunedCalls = selectPruneDependencies(pruneView, callIds);
     const read = async (index: number) => {
         current();
-        const event = await (prospective?prospective.read(index):owned.source.readEvent(index));
+        const event = await (prospective?prospective.read(index):readEvent?readEvent(index):owned.source.readEvent(index));
         current();
         return event;
     };

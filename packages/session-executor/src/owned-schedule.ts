@@ -22,8 +22,13 @@ export function mountOwnedSchedule(options:{execution:ManagedExecutionAttachment
   async deliver(delivery) {
    const action = execution.owner.beginAction()
    try {
-    const admission = getManagedExecutionAdmissionWait(domain, action, action.signal)
-    if (admission) await admission
+     // A readiness notification can precede another admitted dependency.
+     // Recheck before the single scheduled capture; never retry issued facts.
+    for (;;) {
+     const admission = getManagedExecutionAdmissionWait(domain, action, action.signal)
+     if (!admission) break
+     await admission
+    }
     const first = delivery.due[0]!.record
     const single = delivery.due.length === 1
     const outcome = await action.facts.inputs.scheduled(delivery.dispatchEvents, {

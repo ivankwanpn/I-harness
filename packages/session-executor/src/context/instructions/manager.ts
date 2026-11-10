@@ -118,7 +118,14 @@ export function createMainInstructionManager(options: { session?: SessionView; d
         const preparedView = view
         try { await options.publish(signal, () => preparedView.retain()) }
         catch (error) { text = previousText; throw error }
-        if (options.environment.policy.current().generation !== policy.generation || authority().identity !== scope.identity || view.service.snapshot().fingerprint !== snapshot.fingerprint || view.service.snapshot().reliability !== 'ready') throw unavailable()
+        if (closed || !options.available() || options.environment.policy.current().generation !== policy.generation || authority().identity !== scope.identity) throw unavailable()
+        const afterPublication = view.service.snapshot()
+        if (afterPublication.fingerprint !== snapshot.fingerprint || afterPublication.reliability !== 'ready') {
+          if (view.service.canReobserve?.(snapshot) === true) {
+            throw Object.assign(unavailable(), { code: 'CONTEXT_INPUT_REBUILD' })
+          }
+          throw unavailable()
+        }
         const previous = active
         active = view; key = nextKey
         token = Object.freeze({ kind: 'instruction-request', version: 1 })

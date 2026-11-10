@@ -644,6 +644,13 @@ it('owned schedule dispatches an original timer input through the managed servic
   await service.closeSession('main')
   const events=(await backend.read('main')).events;const dispatch=events.find(event=>event.type==='schedule/change'&&event.operation==='dispatch')
   expect(dispatch).toBeDefined();expect(events[dispatch!.seq!+1]).toMatchObject({type:'agent/input/admitted',intent:'system',provenance:{producer:'session.schedule'}});expect(notifications).toBeGreaterThan(0)
+  const scheduled=events.filter(event=>event.type==='agent/input/admitted'&&event.provenance?.producer==='session.schedule')
+  expect(events.filter(event=>event.type==='schedule/change'&&event.operation==='dispatch')).toHaveLength(1)
+  expect(scheduled).toHaveLength(1)
+  const scheduledInput=scheduled[0]
+  if(scheduledInput?.type!=='agent/input/admitted')throw Error('Scheduled input missing')
+  expect(events.filter(event=>event.type==='agent/input/promoted'&&event.inputId===scheduledInput.inputId)).toHaveLength(1)
+  expect(server.requests.filter(request=>hasReminder(request.body))).toHaveLength(1)
  }finally{off();await service.close();await coordinator.close();await server.close()}
 },75000)
 

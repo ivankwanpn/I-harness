@@ -43,7 +43,19 @@ function enterOriginalCode(mount:CodeModeMount,exec:ToolExec):PreparedCodeBodyCl
     assertAdmissionCurrent(){if(this!==checked)throw Error('Foreign Code issuer');current();issuer.assertAdmissionCurrent()},
     async prepareLaunch(cellId:string,sourceId:string){if(this!==checked)throw Error('Foreign Code issuer');current();const prepared=await issuer.prepareLaunch(cellId,sourceId);current();return prepared},
     registerCompletion(drain:()=>Promise<void>){if(this!==checked)throw Error('Foreign Code issuer');current();return issuer.registerCompletion(drain)},
-    captureSource(binding:Readonly<CodeSourceBinding>,recipientCurrent:()=>boolean){if(this!==checked)throw Error('Foreign Code issuer');current();return issuer.captureSource(binding,()=>{try{current();return recipientCurrent()}catch{return false}})},
+    captureSource(binding:Readonly<CodeSourceBinding>,recipientCurrent:()=>boolean){
+     if(this!==checked)throw Error('Foreign Code issuer')
+     current()
+     return issuer.captureSource(binding,()=>{
+      try {
+       // This is revalidation of the original captured source inside its own
+       // staged write. Fresh body admission remains strict above; the original
+       // issuer's predicate retains its exact binding, generation and fence.
+       currentMount();claim.source.assertHeld()
+       return recipientCurrent()
+      } catch { return false }
+     })
+    },
    });return checked
   },
  });return wrapped

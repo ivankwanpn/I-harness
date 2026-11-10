@@ -27,11 +27,12 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
     const metadata = () => binding()?.contextMetadata ?? (hasMetadataOverride ? metadataOverride : typeof host.contextMetadata === 'function' ? host.contextMetadata() : host.contextMetadata);
     const surface = () => { const inherited = binding(), bindingMetadata = metadata(); return { systemPrompt: typeof host.systemPrompt === 'function' ? host.systemPrompt() : host.systemPrompt, tools: host.modelToolSchemas?.() ?? host.tools.schemas(), reasoningEffort: inherited ? inherited.reasoningEffort : host.reasoningEffort, maxOutputTokens: inherited ? inherited.maxOutputTokens : config.maxOutputTokens, contextWindow: inherited ? inherited.contextWindow : bindingMetadata?.contextWindow ?? config.budget?.contextWindow ?? config.compact?.contextWindow, binding: bindingMetadata, budgetBinding: inherited ? inherited.budgetBinding : hasBudgetOverride ? budgetOverride : typeof host.budgetBinding === 'function' ? host.budgetBinding() : host.budgetBinding }; };
     const selected = () => ({ model: host.model, bindingIdentity: host.modelBindingIdentity?.(), executionIdentity: binding()?.executionIdentity ?? host.executionIdentity?.() ?? host.model.executionIdentity });
-    const current = (evidence: RequestEvidence) => {
+    const current = (evidence: RequestEvidence, admitNewWork = true) => {
         try {
             if (!active || active.evidence !== evidence)
                 return false;
-            host.domain.assertCurrent();
+            if (admitNewWork) host.domain.assertCurrent();
+            else host.execution.observe().assertCurrent();
             active.lease.assertCurrent();
             host.hooks.assertCurrent(active.hooks);
             const now = selected();
@@ -41,7 +42,8 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
                 return false;
             active.lease.assertCurrent();
             host.hooks.assertCurrent(active.hooks);
-            host.domain.assertCurrent();
+            if (admitNewWork) host.domain.assertCurrent();
+            else host.execution.observe().assertCurrent();
             return true;
         }
         catch {
@@ -72,6 +74,7 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
     validate();
     return {
         execution, budget, metadata, current,
+        capturedCurrent: (evidence: RequestEvidence) => current(evidence, false),
         retainedCandidate() {
             if (!active)
                 throw TypeError('Original context preparation unavailable');

@@ -17,7 +17,21 @@ export interface InstructionObservationLease { update(interests: readonly Instru
 export interface InstructionObservationPort { subscribe(listener: (event: InstructionObservationEvent) => void): InstructionObservationLease }
 export interface ApplicableInstructionProof { readonly kind: 'applicable-instruction-proof' }
 export interface OwnedInstructionWrite { readonly kind: 'owned-instruction-write' }
-export interface InstructionService { prepare(targets: readonly InstructionTarget[]): Promise<InstructionSnapshot>; snapshot(): InstructionSnapshot; proveApplicable(issued: InstructionSnapshot, targets: readonly InstructionTarget[]): ApplicableInstructionProof; assertApplicable(proof: ApplicableInstructionProof, own?: OwnedInstructionWrite): void; beginOwnedWrite(proof: ApplicableInstructionProof, paths: readonly string[]): OwnedInstructionWrite; settleOwnedWrite(own: OwnedInstructionWrite): void; relation(candidatePath: string, target: InstructionTarget): 'governs' | 'independent' | 'unknown'; invalidate(paths?: readonly string[]): void; subscribe(listener: () => void): () => void; close(): Promise<void> }
+export interface InstructionService {
+  prepare(targets: readonly InstructionTarget[]): Promise<InstructionSnapshot>
+  snapshot(): InstructionSnapshot
+  /** Genuine known invalidation of this owner's snapshot; grants no authority.
+   * Missing support preserves the caller's conservative refusal. */
+  canReobserve?(snapshot: InstructionSnapshot): boolean
+  proveApplicable(issued: InstructionSnapshot, targets: readonly InstructionTarget[]): ApplicableInstructionProof
+  assertApplicable(proof: ApplicableInstructionProof, own?: OwnedInstructionWrite): void
+  beginOwnedWrite(proof: ApplicableInstructionProof, paths: readonly string[]): OwnedInstructionWrite
+  settleOwnedWrite(own: OwnedInstructionWrite): void
+  relation(candidatePath: string, target: InstructionTarget): 'governs' | 'independent' | 'unknown'
+  invalidate(paths?: readonly string[]): void
+  subscribe(listener: () => void): () => void
+  close(): Promise<void>
+}
 export interface InstructionServiceOptions { readonly scope: InstructionScope; readonly observation: InstructionObservationPort; readonly beginPending?: (paths: readonly string[]) => { readonly id: string; settle(): void } }
 export class InstructionConfigurationError extends Error { readonly code = 'INSTRUCTIONS_INVALID_CONFIG'; constructor(message: string) { super(message); this.name = 'InstructionConfigurationError' } }
 // Internal signal shared by content and metadata readers; the service owns reporting.

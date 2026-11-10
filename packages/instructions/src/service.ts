@@ -235,6 +235,14 @@ export function createInstructionService(options: InstructionServiceOptions): In
       } catch (error) { return Promise.reject(error) }
     },
     snapshot: () => current,
+    canReobserve(snapshot) {
+      const witness = witnesses.get(snapshot)
+      if (!witness || closed || disabled || !healthy || !state.available || state.mappingPaths?.length || cleanupFailures.length) return false
+      if (witness.health !== healthEpoch || !snapshot.complete || snapshot.reliability !== 'ready' || !needsBuild) return false
+      if (!lastDiscovery || lastDiscovery.targets.some(target => !target.complete || !target.membership)) return false
+      const changed = (now: ReadonlyMap<string, number>, before: ReadonlyMap<string, number>) => [...now].some(([id, epoch]) => epoch !== (before.get(id) ?? 0))
+      return changed(externalEpoch, witness.external) || changed(markerEpoch, witness.markers) || changed(pendingEpoch.epochs, witness.pending)
+    },
     proveApplicable(issued, values) {
       if (closed || !Array.isArray(values) || !values.length) throw new Error('Instruction proof unavailable')
       if (disabled) {

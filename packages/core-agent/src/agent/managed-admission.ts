@@ -7,7 +7,7 @@ import type { createManagedAgentContext } from './managed-context.ts';
 import type { createManagedReduction } from './context-reduction/managed.ts';
 import { createRecovery, type RecoveryAdmissionState } from './recovery.ts';
 import { assertCurrentRepresentable } from './current-representability.ts';
-import { stalePreparedInput } from './admission.ts';
+import { stalePreparedInput, isRequestContextRebuild } from './admission.ts';
 import type { CandidateExecutionState } from './execution.ts';
 import type { createStepInput } from './step-input.ts';
 import { generationRequestLease } from './generation-request-lease.ts';
@@ -27,7 +27,12 @@ export function createManagedAdmission(host: ManagedAgentHost, context: ReturnTy
                     await wait;
                 }
                 assertManagedActionCurrent(host.domain, action);
-                await host.requestContext?.reconcile(signal);
+                try { await host.requestContext?.reconcile(signal); }
+                catch (error) {
+                    if (!isRequestContextRebuild(error)) throw error;
+                    stale();
+                    continue;
+                }
                 let captured = await context.capture(action, signal);
                 if (host.requestContext && !host.requestContext.current(captured.instructions)) {
                     stale();

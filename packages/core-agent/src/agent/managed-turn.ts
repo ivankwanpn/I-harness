@@ -1,7 +1,7 @@
 import type { PluginContext } from '@i-harness/core-plugin';
 import { randomUUID } from 'node:crypto';
 import { committedFactSeqs, SYSTEM_INPUT_PLUGIN, type ImageInput, type SessionEventView, type FactOutcome, type GenerationOrigin, type CapturedActionFact } from '@i-harness/core-session';
-import { getManagedExecutionAdmissionWait, assertManagedActionCurrent, readManagedActionMembers, publishManagedExecutionTransient } from '@i-harness/core-session/internal/execution';
+import { getManagedExecutionAdmissionWait, assertManagedActionCurrent, assertManagedActionLifetimeCurrent, readManagedActionMembers, publishManagedExecutionTransient } from '@i-harness/core-session/internal/execution';
 import { assertExecutionGeneration } from '../../../session-executor/src/lifecycle/generation-actions.ts';
 import { receivedExecutionInputsFor } from '../../../session-executor/src/lifecycle/execution-inputs.ts';
 import { modelFailureFacts, type LLMStreamEvent } from '@i-harness/llm-seam';
@@ -130,9 +130,10 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
             }
             if (host.execution.observe().semanticsStartSeq() === undefined)
                 await run.admit(action.captureLifecycle!({ type: 'conversation/semantics', version: 1, mode: 'accepted-exchange-v1' }));
+            assertManagedActionCurrent(host.domain, action);
             const input = await run.admit(action.captureInputPromotion({ kind: 'input-start', promoted: { type: 'agent/input/promoted', version: 1, inputId }, turn: { type: 'turn/start' }, message: { type: 'user/message', text: message, ...admission.provenance ? { provenance: { ...admission.provenance } } : {}, input: { inputId, intent: admission.intent, ...admission.provenance ? { provenance: { ...admission.provenance } } : {}, ...admission.synthetic ? { synthetic: structuredClone(admission.synthetic) } : {} }, ...admission.images?.length ? { imageInputId: inputId } : {}, ...admission.intent === 'system' ? { source: { kind: 'plugin', plugin: SYSTEM_INPUT_PLUGIN } } : {} }, ...options?.preparation ? { preparation: options.preparation } : {} }, () => {
                 try {
-                    assertManagedActionCurrent(host.domain, action);
+                    assertManagedActionLifetimeCurrent(host.domain, action);
                     assertGeneration(run);
                     return true;
                 }
@@ -154,11 +155,32 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
                 steps++;
                 if (host.maxTurns !== undefined && steps > host.maxTurns)
                     throw Error(`maxTurns exceeded: ${host.maxTurns}`);
-                await host.stepInputs?.claimAtStepBoundary(action.facts.inputs, run.preparation ? input => run.preparation!.prepare(input, generation) : undefined, (promoted, text, preparation) => promoteInput({ captureInputPromotion: action.captureInputPromotion.bind(action), registerFactSource: run.register, facts: action.facts }, { kind: 'steer-claim', promoted, message: text, ...preparation ? { preparation } : {} }, () => { assertManagedActionCurrent(host.domain, action); assertGeneration(run); }, undefined, preparation && run.preparation ? () => run.preparation!.cancelUnpromoted(preparation) : undefined));
+                await host.stepInputs?.claimAtStepBoundary(
+                    action.facts.inputs,
+                    run.preparation ? input => run.preparation!.prepare(input, generation) : undefined,
+                    (promoted, text, preparation) => {
+                        assertManagedActionCurrent(host.domain, action);
+                        return promoteInput(
+                            { captureInputPromotion: action.captureInputPromotion.bind(action), registerFactSource: run.register, facts: action.facts },
+                            { kind: 'steer-claim', promoted, message: text, ...preparation ? { preparation } : {} },
+                            () => { assertManagedActionLifetimeCurrent(host.domain, action); assertGeneration(run); },
+                            undefined,
+                            preparation && run.preparation ? () => run.preparation!.cancelUnpromoted(preparation) : undefined,
+                        );
+                    },
+                );
                 let startWitness = await run.admit(action.captureLifecycle!({ type: 'step/start', actionId: generation.actionId, attemptId: randomUUID() }));
                 openStepBoundary(lifecycle);
                 const hookSurface = host.hooks.capture();
                 await host.hooks.emit('agent/pre-step', { task: message, domain: host.domain, sessionId: host.domain.sessionId, signal, promptSubmission: first }, hookSurface);
+                // A concurrent schedule/admission may own native preparation
+                // after this awaited hook. Join its original readiness edge;
+                // retain the strict currentness check immediately afterwards.
+                for (;;) {
+                    const wait = getManagedExecutionAdmissionWait(host.domain, action, generation.signal);
+                    if (!wait) break;
+                    await wait;
+                }
                 assertManagedActionCurrent(host.domain, action);
                 const hookContext=host.hooks.drainContext(host.domain,hookSurface);
                 assertManagedActionCurrent(host.domain,action);

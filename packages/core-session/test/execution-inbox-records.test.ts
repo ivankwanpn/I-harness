@@ -1,5 +1,5 @@
 import {expect,it,vi} from 'vitest'
-import {restoreManagedExecutionState,createManagedExecutionDomain,assertManagedExecDeliveryCurrent,assertManagedCodeDeliveryCurrent,subscribeManagedExecutionReadiness,getManagedExecutionAdmissionWait} from '../src/managed/execution-state.ts'
+import {restoreManagedExecutionState,createManagedExecutionDomain,assertManagedExecDeliveryCurrent,assertManagedCodeDeliveryCurrent,assertManagedCodeDeliveryLifetimeCurrent,assertManagedExecDeliveryLifetimeCurrent,subscribeManagedExecutionReadiness,getManagedExecutionAdmissionWait} from '../src/managed/execution-state.ts'
 import {createOwnerDeliveryControl} from '../src/managed/delivery-control.ts'
 import type {SessionEventView} from '../src/managed/types.ts'
 import {createNondurableFactOwner} from '../src/managed/nondurable.ts'
@@ -127,12 +127,15 @@ it('checks the original live delivery fence even when a fresh observation still 
  const events:SessionEventView[]=[{type:'agent/input/admitted',version:1,inputId:'human',text:'x',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'},seq:0},{type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:'inbox',generationId:'g',originInputSeq:0,seq:1}]
  const f=await fixture({events}),domain=createManagedExecutionDomain(f.state.identity,f.owner,{}),binding={recipientSessionId:'inbox',generationId:'g',sourceId:'exec',callSeq:0,delivery:'tool' as const}
  assertManagedExecDeliveryCurrent(domain,binding)
+ assertManagedExecDeliveryLifetimeCurrent(domain,binding)
+ expect(()=>assertManagedExecDeliveryLifetimeCurrent(domain,{...binding,generationId:'foreign'})).toThrow()
  expect(()=>assertManagedExecDeliveryCurrent(domain,{...binding,generationId:'foreign'})).toThrow()
  expect(()=>assertManagedExecDeliveryCurrent(domain,{...binding,recipientSessionId:'foreign'})).toThrow()
  let invoked=false;const forged=Object.defineProperty({...binding},'sourceId',{get(){invoked=true;return 'exec'}})
  expect(()=>assertManagedExecDeliveryCurrent(domain,forged)).toThrow();expect(invoked).toBe(false)
  const release=f.deliveryControl.port.revoke();expect(f.state.observe().delivery.activeGeneration()?.generationId).toBe('g')
  expect(()=>assertManagedExecDeliveryCurrent(domain,binding)).toThrow();expect(()=>assertManagedExecDeliveryCurrent({...domain},binding)).toThrow()
+ expect(()=>assertManagedExecDeliveryLifetimeCurrent(domain,binding)).toThrow();expect(()=>assertManagedExecDeliveryLifetimeCurrent({...domain},binding)).toThrow()
  release();expect(()=>assertManagedExecDeliveryCurrent(domain,binding)).toThrow();f.state.stopNewWork();expect(()=>assertManagedExecDeliveryCurrent(domain,binding)).toThrow()
  await f.state.close()
 })
@@ -140,8 +143,11 @@ it('checks the original live delivery fence even when a fresh observation still 
 it('checks the same original live fence for a closed Code binding',async()=>{
  const events:SessionEventView[]=[{type:'agent/input/admitted',version:1,inputId:'human',text:'x',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'},seq:0},{type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:'inbox',generationId:'g',originInputSeq:0,seq:1}]
  const f=await fixture({events}),domain=createManagedExecutionDomain(f.state.identity,f.owner,{}),binding={recipientSessionId:'inbox',generationId:'g',sourceId:'source',callSeq:0,cellId:'cell',delivery:'tool' as const}
+ assertManagedCodeDeliveryLifetimeCurrent(domain,binding)
+ expect(()=>assertManagedCodeDeliveryLifetimeCurrent({...domain},binding)).toThrow()
+ f.state.readinessChanged(true);expect(()=>assertManagedCodeDeliveryLifetimeCurrent(domain,binding)).toThrow();f.state.readinessChanged(false)
  assertManagedCodeDeliveryCurrent(domain,binding);expect(()=>assertManagedCodeDeliveryCurrent({...domain},binding)).toThrow();expect(()=>assertManagedCodeDeliveryCurrent(domain,{...binding,recipientSessionId:'foreign'})).toThrow()
- const release=f.deliveryControl.port.revoke();expect(f.state.observe().delivery.activeGeneration()?.generationId).toBe('g');expect(()=>assertManagedCodeDeliveryCurrent(domain,binding)).toThrow();release();expect(()=>assertManagedCodeDeliveryCurrent(domain,binding)).toThrow();await f.state.close()
+ const release=f.deliveryControl.port.revoke();expect(f.state.observe().delivery.activeGeneration()?.generationId).toBe('g');expect(()=>assertManagedCodeDeliveryCurrent(domain,binding)).toThrow();expect(()=>assertManagedCodeDeliveryLifetimeCurrent(domain,binding)).toThrow();release();expect(()=>assertManagedCodeDeliveryCurrent(domain,binding)).toThrow();await f.state.close()
 })
 
 it('keeps nondurable guarded metadata captures single-use across their own mutation',async()=>{

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { randomUUID } from 'node:crypto'
 import { canonicalJsonData, committedFactSeqs, deliveryInputId,FactRecoveryRequiredError, isStrictFactData, SYSTEM_INPUT_PLUGIN,
   type AdmittedInput, type PendingInput, type SessionEvent, type InputFacts, type ProducerFactOutcome, type CapturedSettlementFact } from '@i-harness/core-session'
-import { isManagedExecutionOwner,isManagedExecutionDomain,assertManagedExecDeliveryCurrent,assertManagedCodeDeliveryCurrent,assertManagedWorkflowDeliveryCurrent,readManagedSourceCodeEvidence,readManagedSourceTaskEvidence,readManagedSourceTaskCandidate,inspectOriginalTeamDelivery,authorizeOriginalTeamDeliveryOpen,refreshOriginalTeamDelivery,originalTeamDeliveryInputId,createOriginalTeamDeliveryReceipt,createOriginalTeamDeliveryArchiveReceipt,createOriginalTeamSuppressedReceipt,type OriginalTeamDeliveryEvidence,type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution'
+import { isManagedExecutionOwner,isManagedExecutionDomain,assertManagedExecDeliveryLifetimeCurrent,assertManagedCodeDeliveryLifetimeCurrent,assertManagedWorkflowDeliveryLifetimeCurrent,readManagedSourceCodeEvidence,readManagedSourceTaskEvidence,readManagedSourceTaskCandidate,inspectOriginalTeamDelivery,authorizeOriginalTeamDeliveryOpen,refreshOriginalTeamDelivery,originalTeamDeliveryInputId,createOriginalTeamDeliveryReceipt,createOriginalTeamDeliveryArchiveReceipt,createOriginalTeamSuppressedReceipt,type OriginalTeamDeliveryEvidence,type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution'
 import {isManagedExecutionAttachment,type ManagedExecutionAttachment} from '../../../session-persistence/src/execution-internal.ts'
 import { copyConversationData } from '../../../core-session/src/conversation/render.ts'
 import {eligibleCodeTerminal,codeTerminalRef} from '../../../core-session/src/events/code-delivery.ts'
@@ -87,6 +87,25 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
       flights.set(fact,flight);void flight.then(()=>flights.delete(fact),()=>flights.delete(fact));return flight
     }
     const current=()=>{domain.assertCurrent();if(retired)throw Error('Original recipient retired')}
+    // Original captured facts retain their own source authorization. Their
+    // predicates inspect existing committed state, without reopening admission.
+    const capturedCurrent=()=>{
+      if(retired)throw Error('Original recipient retired')
+      execution.observe().assertCurrent()
+    }
+    const captureDeliveryAdmission:typeof source.captureDeliveryAdmission=(...args)=>{
+      current()
+      return source.captureDeliveryAdmission(...args)
+    }
+    const captureDeliveryOpen:typeof source.captureDeliveryOpen=(...args)=>{
+      current()
+      return source.captureDeliveryOpen(...args)
+    }
+    const captureTaskDeliveryOpen:NonNullable<typeof source.captureTaskDeliveryOpen>=(...args)=>{
+      current()
+      if(!source.captureTaskDeliveryOpen)throw new FactRecoveryRequiredError()
+      return source.captureTaskDeliveryOpen(...args)
+    }
     const settleReceived=async()=>{
       if(opening){const pending=opening;await settleCapture(pending);if(opening===pending)opening=undefined}
       // An earlier admission on this same source may own the pending native
@@ -102,8 +121,8 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
         let observation=execution.observe(),existing=await observation.inbox.admitted(inputId);observation.assertCurrent();if(existing)return createOriginalTeamDeliveryArchiveReceipt(domain,evidence,existing)
         if((observation.delivery.lastFenceSeq()??-1)>=read.queuedSeq)return createOriginalTeamSuppressedReceipt(domain,evidence,observation)
         let generation=observation.delivery.activeGeneration()
-        if(!generation){const human=await observation.delivery.ownHuman();observation.assertCurrent();if(!human)throw new FactRecoveryRequiredError();const capturedObservation=observation,open=source.captureDeliveryOpen({type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:domain.sessionId,generationId:randomUUID(),originInputSeq:human.seq!},()=>{try{current();inspectOriginalTeamDelivery(domain,evidence);capturedObservation.assertCurrent();return true}catch{return false}});opening=open;teamOpens.set(evidence,open);if(!await settleCapture(open)){teamOpens.delete(evidence);if(opening===open)opening=undefined;throw new FactRecoveryRequiredError()}const outcome=await open.observe();if(outcome.kind!=='committed')throw new FactRecoveryRequiredError();await authorizeOriginalTeamDeliveryOpen(domain,evidence,source,open,outcome);teamOpens.delete(evidence);if(opening===open)opening=undefined;observation=execution.observe();generation=observation.delivery.activeGeneration();if(!generation)throw new FactRecoveryRequiredError()}
-        let fact=admissions.get(inputId);if(!fact){if(!source.captureTeamAdmission)throw new FactRecoveryRequiredError();fact=source.captureTeamAdmission(domain,evidence,generation.generationId);admissions.set(inputId,fact);teamCaptures.set(evidence,{inputId,fact})}
+        if(!generation){const human=await observation.delivery.ownHuman();observation.assertCurrent();if(!human)throw new FactRecoveryRequiredError();const capturedObservation=observation,open=captureDeliveryOpen({type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:domain.sessionId,generationId:randomUUID(),originInputSeq:human.seq!},()=>{try{capturedCurrent();inspectOriginalTeamDelivery(domain,evidence);capturedObservation.assertCurrent();return true}catch{return false}});opening=open;teamOpens.set(evidence,open);if(!await settleCapture(open)){teamOpens.delete(evidence);if(opening===open)opening=undefined;throw new FactRecoveryRequiredError()}const outcome=await open.observe();if(outcome.kind!=='committed')throw new FactRecoveryRequiredError();await authorizeOriginalTeamDeliveryOpen(domain,evidence,source,open,outcome);teamOpens.delete(evidence);if(opening===open)opening=undefined;observation=execution.observe();generation=observation.delivery.activeGeneration();if(!generation)throw new FactRecoveryRequiredError()}
+        let fact=admissions.get(inputId);if(!fact){if(!source.captureTeamAdmission)throw new FactRecoveryRequiredError();current();fact=source.captureTeamAdmission(domain,evidence,generation.generationId);admissions.set(inputId,fact);teamCaptures.set(evidence,{inputId,fact})}
         if(!await settleCapture(fact)){admissions.delete(inputId);teamCaptures.delete(evidence);throw new FactRecoveryRequiredError()}const outcome=await fact.observe();if(outcome.kind!=='committed')throw new FactRecoveryRequiredError();const receipt=createOriginalTeamDeliveryReceipt(domain,evidence,source,fact,outcome);admissions.delete(inputId);teamCaptures.delete(evidence);return receipt})();teamFlights.set(evidence,flight);void flight.finally(()=>{if(teamFlights.get(evidence)===flight)teamFlights.delete(evidence)}).catch(()=>{});return flight
       },
       taskEvidence(namespace:string,taskId:string){if(this!==adapter)throw TypeError('Original Task recipient required');current();const evidence=readManagedSourceTaskCandidate(execution.identity,source,namespace,taskId);if(!evidence)return;const original=readManagedSourceTaskEvidence(execution.identity,source,evidence);if(!original)return;return {evidence,expectedInputId:deliveryInputId(original.key)}},
@@ -120,7 +139,7 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
         if(!generation){const human=await observed.delivery.ownHuman();observed.assertCurrent();if(!human){if((observed.delivery.lastFenceSeq()??-1)>=0)throw new FactRecoveryRequiredError();return {kind:'unavailable',reason:'no-own-human-origin'}}
           if(opening){const pending=opening;if(!await settleCapture(pending))throw new FactRecoveryRequiredError();if(opening===pending)opening=undefined;return adapter.prepareTaskLaunch(input)}
           if(!source.captureTaskDeliveryOpen)throw new FactRecoveryRequiredError()
-          const capturedObservation=observed,open=source.captureTaskDeliveryOpen({type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:domain.sessionId,generationId:randomUUID(),originInputSeq:human.seq!},()=>{try{current();capturedObservation.assertCurrent();return true}catch{return false}},{recipientSessionId:domain.sessionId,sourceNamespace:input.namespace,sourceId:input.taskId,callSeq:input.callSeq})
+          const capturedObservation=observed,open=captureTaskDeliveryOpen({type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:domain.sessionId,generationId:randomUUID(),originInputSeq:human.seq!},()=>{try{capturedCurrent();capturedObservation.assertCurrent();return true}catch{return false}},{recipientSessionId:domain.sessionId,sourceNamespace:input.namespace,sourceId:input.taskId,callSeq:input.callSeq})
           opening=open;if(!await settleCapture(open))throw new FactRecoveryRequiredError();if(opening===open)opening=undefined;current();return open.preparation()
         }
         current();return {kind:'bound',binding:{recipientSessionId:domain.sessionId,generationId:generation.generationId,sourceNamespace:input.namespace,sourceId:input.taskId,callSeq:input.callSeq}}
@@ -132,10 +151,10 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
         await adapter.settle();const original=readManagedSourceTaskEvidence(execution.identity,source,evidence);if(!original)throw new FactRecoveryRequiredError()
         if(original.receipt)return {inputId:original.receipt.event.inputId,disposition:original.receipt.disposition,durability:'durable'}
         current();const {source:binding,key}=original,inputId=deliveryInputId(key)
-        const eligible=()=>{try{current();const next=readManagedSourceTaskEvidence(execution.identity,source,evidence);return !!next&&!next.receipt&&next.source.seq===binding.seq&&execution.observe().delivery.activeGeneration()?.generationId===binding.generationId}catch{return false}}
+        const eligible=()=>{try{capturedCurrent();const next=readManagedSourceTaskEvidence(execution.identity,source,evidence);return !!next&&!next.receipt&&next.source.seq===binding.seq&&execution.observe().delivery.activeGeneration()?.generationId===binding.generationId}catch{return false}}
         if(!eligible())throw new FactRecoveryRequiredError()
         let fact=admissions.get(inputId)
-        if(!fact){fact=source.captureDeliveryAdmission({type:'agent/delivery-received',version:1,key,sourceSeq:evidence.sourceSeq,terminalSeq:evidence.terminalSeq,inputId},{type:'agent/input/admitted',version:1,inputId,text:presentation.text,delivery:'steer',intent:'system',provenance:{kind:'child-report',authority:'observation',scope:'turn',producer:'session.delivery.subagent'},synthetic:{description:presentation.description,scope:'turn',display:presentation.display}},eligible);admissions.set(inputId,fact)}
+        if(!fact){fact=captureDeliveryAdmission({type:'agent/delivery-received',version:1,key,sourceSeq:evidence.sourceSeq,terminalSeq:evidence.terminalSeq,inputId},{type:'agent/input/admitted',version:1,inputId,text:presentation.text,delivery:'steer',intent:'system',provenance:{kind:'child-report',authority:'observation',scope:'turn',producer:'session.delivery.subagent'},synthetic:{description:presentation.description,scope:'turn',display:presentation.display}},eligible);admissions.set(inputId,fact)}
         if(!await settleCapture(fact))throw new FactRecoveryRequiredError();admissions.delete(inputId)
         const receipt=readManagedSourceTaskEvidence(execution.identity,source,evidence)?.receipt;if(!receipt)throw new FactRecoveryRequiredError()
         return {inputId:receipt.event.inputId,disposition:receipt.disposition,durability:'durable'}
@@ -152,13 +171,13 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
         if(!generation){const human=await observed.delivery.ownHuman();observed.assertCurrent();if(!human){if((observed.delivery.lastFenceSeq()??-1)>=0)throw new FactRecoveryRequiredError();return {kind:'unavailable',reason:'no-own-human-origin'}}
           if(opening){const pending=opening;if(!await settleCapture(pending))throw new FactRecoveryRequiredError();if(opening===pending)opening=undefined;return adapter.prepareCodeLaunch(captured)}
           const generationId=randomUUID(),capturedObservation=observed
-          opening=source.captureDeliveryOpen({type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:domain.sessionId,generationId,originInputSeq:human.seq!},()=>{try{current();capturedObservation.assertCurrent();return true}catch{return false}})
+          opening=captureDeliveryOpen({type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:domain.sessionId,generationId,originInputSeq:human.seq!},()=>{try{capturedCurrent();capturedObservation.assertCurrent();return true}catch{return false}})
           if(!await settleCapture(opening))throw new FactRecoveryRequiredError();opening=undefined;current();generation=execution.observe().delivery.activeGeneration()
         }
         if(!generation)throw new FactRecoveryRequiredError()
         const binding=Object.freeze({recipientSessionId:domain.sessionId,generationId:generation.generationId,sourceNamespace:'code' as const,sourceId:captured.sourceId,callSeq:captured.callSeq,cellId:captured.cellId,delivery:'tool' as const})
-        const isCurrent=()=>{try{current();assertManagedCodeDeliveryCurrent(domain,{recipientSessionId:binding.recipientSessionId,generationId:binding.generationId,sourceId:binding.sourceId,callSeq:binding.callSeq,cellId:binding.cellId,delivery:binding.delivery});return true}catch{return false}}
-        if(!isCurrent())throw new FactRecoveryRequiredError()
+        const isCurrent=()=>{try{capturedCurrent();assertManagedCodeDeliveryLifetimeCurrent(domain,{recipientSessionId:binding.recipientSessionId,generationId:binding.generationId,sourceId:binding.sourceId,callSeq:binding.callSeq,cellId:binding.cellId,delivery:binding.delivery});return true}catch{return false}}
+        current();if(!isCurrent())throw new FactRecoveryRequiredError()
         return {kind:'bound',binding,isCurrent}
       },
       async prepareWorkflowLaunch(input:{sessionId:string;callId:string;callSeq:number;sourceId:string}):Promise<PrivateWorkflowPreparation>{
@@ -172,13 +191,13 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
         if(!generation){const human=await observed.delivery.ownHuman();observed.assertCurrent();if(!human){if((observed.delivery.lastFenceSeq()??-1)>=0)throw new FactRecoveryRequiredError();return {kind:'unavailable',reason:'no-own-human-origin'}}
           if(opening){const pending=opening;if(!await settleCapture(pending))throw new FactRecoveryRequiredError();if(opening===pending)opening=undefined;return adapter.prepareWorkflowLaunch(captured)}
           const generationId=randomUUID(),capturedObservation=observed
-          opening=source.captureDeliveryOpen({type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:domain.sessionId,generationId,originInputSeq:human.seq!},()=>{try{current();capturedObservation.assertCurrent();return true}catch{return false}})
+          opening=captureDeliveryOpen({type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:domain.sessionId,generationId,originInputSeq:human.seq!},()=>{try{capturedCurrent();capturedObservation.assertCurrent();return true}catch{return false}})
           if(!await settleCapture(opening))throw new FactRecoveryRequiredError();opening=undefined;current();generation=execution.observe().delivery.activeGeneration()
         }
         if(!generation)throw new FactRecoveryRequiredError()
         const binding=Object.freeze({recipientSessionId:domain.sessionId,generationId:generation.generationId,sourceNamespace:'workflow' as const,sourceId:captured.sourceId,callSeq:captured.callSeq,delivery:'tool' as const})
-        const isCurrent=()=>{try{current();assertManagedWorkflowDeliveryCurrent(domain,{recipientSessionId:binding.recipientSessionId,generationId:binding.generationId,sourceId:binding.sourceId,callSeq:binding.callSeq,delivery:binding.delivery});return true}catch{return false}}
-        if(!isCurrent())throw new FactRecoveryRequiredError();return {kind:'bound',binding,isCurrent}
+        const isCurrent=()=>{try{capturedCurrent();assertManagedWorkflowDeliveryLifetimeCurrent(domain,{recipientSessionId:binding.recipientSessionId,generationId:binding.generationId,sourceId:binding.sourceId,callSeq:binding.callSeq,delivery:binding.delivery});return true}catch{return false}}
+        current();if(!isCurrent())throw new FactRecoveryRequiredError();return {kind:'bound',binding,isCurrent}
       },
       async prepareExecLaunch(input:{sessionId:string;callId:string;callSeq:number;sourceId:string}):Promise<PrivateExecPreparation>{
         current();if(input.sessionId!==domain.sessionId)throw TypeError('Original recipient identity required')
@@ -190,13 +209,13 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
         if(!generation){const human=await observed.delivery.ownHuman();observed.assertCurrent();if(!human){if((observed.delivery.lastFenceSeq()??-1)>=0)throw new FactRecoveryRequiredError();return {kind:'unavailable' as const,reason:'no-own-human-origin' as const}}
           if(opening){const pending=opening;if(!await settleCapture(pending))throw new FactRecoveryRequiredError();if(opening===pending)opening=undefined;return adapter.prepareExecLaunch(input)}
           const generationId=randomUUID(),capturedObservation=observed
-          opening=source.captureDeliveryOpen({type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:domain.sessionId,generationId,originInputSeq:human.seq!},()=>{try{current();capturedObservation.assertCurrent();return true}catch{return false}})
+          opening=captureDeliveryOpen({type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:domain.sessionId,generationId,originInputSeq:human.seq!},()=>{try{capturedCurrent();capturedObservation.assertCurrent();return true}catch{return false}})
           if(!await settleCapture(opening))throw new FactRecoveryRequiredError();opening=undefined;current();generation=execution.observe().delivery.activeGeneration()
         }
         if(!generation)throw new FactRecoveryRequiredError()
         const binding={recipientSessionId:domain.sessionId,generationId:generation.generationId,sourceNamespace:'exec' as const,sourceId:input.sourceId,callSeq:input.callSeq}
-        const isCurrent=()=>{try{current();assertManagedExecDeliveryCurrent(domain,{recipientSessionId:binding.recipientSessionId,generationId:binding.generationId,sourceId:binding.sourceId,callSeq:binding.callSeq,delivery:'tool'});return true}catch{return false}}
-        if(!isCurrent())throw new FactRecoveryRequiredError()
+        const isCurrent=()=>{try{capturedCurrent();assertManagedExecDeliveryLifetimeCurrent(domain,{recipientSessionId:binding.recipientSessionId,generationId:binding.generationId,sourceId:binding.sourceId,callSeq:binding.callSeq,delivery:'tool'});return true}catch{return false}}
+        current();if(!isCurrent())throw new FactRecoveryRequiredError()
         return {kind:'bound' as const,binding,isCurrent}
       },
       requestClose(reason:'user-stop'|'rewind'){
@@ -230,8 +249,8 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
           if(execution.observe().delivery.receipt(key))continue
           let fact=admissions.get(inputId)
           if(!fact){const metadata={instanceId:terminal.instanceId,execution:terminal.execution,exitCode:terminal.exitCode,timedOut:terminal.timedOut,frames:terminal.dependency},text=`<exec_result>\n${JSON.stringify(metadata)}\nRetained frame reference only. Read through the current authorized result-read tools; reads may be unavailable.\n</exec_result>`
-            const eligible=()=>{try{current();assertManagedExecDeliveryCurrent(domain,{recipientSessionId:domain.sessionId,generationId:binding.generationId,sourceId:binding.sourceId,callSeq:binding.callSeq,delivery:binding.delivery});return execution.observe().delivery.execPending().some(value=>value.source.seq===binding.seq&&value.terminal.seq===terminal.seq)}catch{return false}}
-            fact=source.captureDeliveryAdmission({type:'agent/delivery-received',version:1,key,sourceSeq:binding.seq!,terminalSeq:terminal.seq!,inputId},{type:'agent/input/admitted',version:1,inputId,text,delivery:'steer',intent:'system',provenance:{kind:'child-report',authority:'observation',scope:'turn',producer:'session.delivery.exec'},synthetic:{description:`Exec ${binding.sourceId} ${terminal.execution.outcome}`,scope:'turn',display:{kind:'task',title:`Exec ${terminal.execution.outcome}`,body:text}}},eligible);admissions.set(inputId,fact)
+            const eligible=()=>{try{capturedCurrent();assertManagedExecDeliveryLifetimeCurrent(domain,{recipientSessionId:domain.sessionId,generationId:binding.generationId,sourceId:binding.sourceId,callSeq:binding.callSeq,delivery:binding.delivery});return execution.observe().delivery.execPending().some(value=>value.source.seq===binding.seq&&value.terminal.seq===terminal.seq)}catch{return false}}
+            fact=captureDeliveryAdmission({type:'agent/delivery-received',version:1,key,sourceSeq:binding.seq!,terminalSeq:terminal.seq!,inputId},{type:'agent/input/admitted',version:1,inputId,text,delivery:'steer',intent:'system',provenance:{kind:'child-report',authority:'observation',scope:'turn',producer:'session.delivery.exec'},synthetic:{description:`Exec ${binding.sourceId} ${terminal.execution.outcome}`,scope:'turn',display:{kind:'task',title:`Exec ${terminal.execution.outcome}`,body:text}}},eligible);admissions.set(inputId,fact)
           }
           if(!await settleCapture(fact))throw new FactRecoveryRequiredError();admissions.delete(inputId)
         }catch(cause){failures.push(cause)}
@@ -251,8 +270,8 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
         let fact=admissions.get(inputId)
         if(!fact){const text=`<code_result>\n${JSON.stringify({cellId:binding.cellId,execution:terminal.execution,ref,header:terminal.output.header,footer:terminal.output.footer})}\nReference only. Read using the authorized context_output_read result reader.\n</code_result>`
           if(Buffer.byteLength(text,'utf8')>8192)throw new FactRecoveryRequiredError()
-          const eligible=()=>{try{current();assertManagedCodeDeliveryCurrent(domain,{recipientSessionId:binding.recipientSessionId,generationId:binding.generationId,sourceId:binding.sourceId,callSeq:binding.callSeq,cellId:binding.cellId,delivery:'tool'});return execution.observe().delivery.codePending().some(value=>value.source.seq===binding.seq&&value.terminal.seq===terminal.seq)}catch{return false}}
-          fact=source.captureDeliveryAdmission({type:'agent/delivery-received',version:1,key,sourceSeq:captured.sourceSeq,terminalSeq:captured.terminalSeq,inputId},{type:'agent/input/admitted',version:1,inputId,text,delivery:'steer',intent:'system',provenance:{kind:'child-report',authority:'observation',scope:'turn',producer:'session.delivery.code'},synthetic:{description:`Code ${terminal.execution.outcome}`,scope:'turn',display:{kind:'task',title:`Code ${terminal.execution.outcome}`,body:text}}},eligible);admissions.set(inputId,fact)
+          const eligible=()=>{try{capturedCurrent();assertManagedCodeDeliveryLifetimeCurrent(domain,{recipientSessionId:binding.recipientSessionId,generationId:binding.generationId,sourceId:binding.sourceId,callSeq:binding.callSeq,cellId:binding.cellId,delivery:'tool'});return execution.observe().delivery.codePending().some(value=>value.source.seq===binding.seq&&value.terminal.seq===terminal.seq)}catch{return false}}
+          fact=captureDeliveryAdmission({type:'agent/delivery-received',version:1,key,sourceSeq:captured.sourceSeq,terminalSeq:captured.terminalSeq,inputId},{type:'agent/input/admitted',version:1,inputId,text,delivery:'steer',intent:'system',provenance:{kind:'child-report',authority:'observation',scope:'turn',producer:'session.delivery.code'},synthetic:{description:`Code ${terminal.execution.outcome}`,scope:'turn',display:{kind:'task',title:`Code ${terminal.execution.outcome}`,body:text}}},eligible);admissions.set(inputId,fact)
         }
         if(!await settleCapture(fact))throw new FactRecoveryRequiredError();admissions.delete(inputId)
         const receipt=execution.observe().delivery.receipt(key);if(!receipt)throw new FactRecoveryRequiredError()
@@ -267,8 +286,8 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
           if(execution.observe().delivery.receipt(key))continue
           let fact=admissions.get(inputId)
           if(!fact){const text=`<workflow_result>\n${JSON.stringify({invocationId:binding.sourceId,execution:terminal.execution,ref})}\nReference only. Read using the authorized context_output_read result reader.\n</workflow_result>`
-            const eligible=()=>{try{current();assertManagedWorkflowDeliveryCurrent(domain,{recipientSessionId:binding.recipientSessionId,generationId:binding.generationId,sourceId:binding.sourceId,callSeq:binding.callSeq,delivery:'tool'});return execution.observe().delivery.workflowPending().some(value=>value.source.seq===binding.seq&&value.terminal.seq===terminal.seq)}catch{return false}}
-            fact=source.captureDeliveryAdmission({type:'agent/delivery-received',version:1,key,sourceSeq:binding.seq!,terminalSeq:terminal.seq!,inputId},{type:'agent/input/admitted',version:1,inputId,text,delivery:'steer',intent:'system',provenance:{kind:'child-report',authority:'observation',scope:'turn',producer:'session.delivery.workflow'},synthetic:{description:`Workflow ${terminal.execution.outcome}`,scope:'turn',display:{kind:'task',title:`Workflow ${terminal.execution.outcome}`,body:text}}},eligible);admissions.set(inputId,fact)
+            const eligible=()=>{try{capturedCurrent();assertManagedWorkflowDeliveryLifetimeCurrent(domain,{recipientSessionId:binding.recipientSessionId,generationId:binding.generationId,sourceId:binding.sourceId,callSeq:binding.callSeq,delivery:'tool'});return execution.observe().delivery.workflowPending().some(value=>value.source.seq===binding.seq&&value.terminal.seq===terminal.seq)}catch{return false}}
+            fact=captureDeliveryAdmission({type:'agent/delivery-received',version:1,key,sourceSeq:binding.seq!,terminalSeq:terminal.seq!,inputId},{type:'agent/input/admitted',version:1,inputId,text,delivery:'steer',intent:'system',provenance:{kind:'child-report',authority:'observation',scope:'turn',producer:'session.delivery.workflow'},synthetic:{description:`Workflow ${terminal.execution.outcome}`,scope:'turn',display:{kind:'task',title:`Workflow ${terminal.execution.outcome}`,body:text}}},eligible);admissions.set(inputId,fact)
           }
           if(!await settleCapture(fact))throw new FactRecoveryRequiredError();admissions.delete(inputId)
         }catch(cause){failures.push(cause)}

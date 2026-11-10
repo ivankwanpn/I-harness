@@ -6,6 +6,14 @@ import type { AgentContext } from "./context.ts"
 import type { createStepInput } from "./step-input.ts"
 import type { createRecovery, RecoveryAdmissionState } from "./recovery.ts"
 import { assertCurrentRepresentable } from './current-representability.ts'
+import { types } from 'node:util'
+
+/** Only a known source invalidation before physical issue consumes this budget. */
+export function isRequestContextRebuild(error: unknown): boolean {
+  if (!error || typeof error !== 'object' || types.isProxy(error)) return false
+  const code = Object.getOwnPropertyDescriptor(error, 'code')
+  return !!code && 'value' in code && code.value === 'CONTEXT_INPUT_REBUILD'
+}
 
 export function stalePreparedInput(): Error { return Object.assign(new Error("Model-visible input remained unstable during prepared admission"), { code: "CONTEXT_INPUT_STALE" }) }
 /** Hooks/inbox claims belong to the logical step. Rebuilds only prepare its current surface. */
@@ -18,7 +26,12 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
     while (true) {
       deps.assertFactOpen?.()
       abort?.throwIfAborted()
-      await deps.requestContext?.reconcile(abort)
+      try { await deps.requestContext?.reconcile(abort) }
+      catch (error) {
+        if (!isRequestContextRebuild(error)) throw error
+        if (++attempts.staleRebuilds > 3) throw stalePreparedInput()
+        continue
+      }
       context.refreshBinding()
       const captured = context.captureCandidate()
       if (deps.requestContext && !deps.requestContext.current(captured.instructions)) { if (++attempts.staleRebuilds > 3) throw stalePreparedInput(); continue }
