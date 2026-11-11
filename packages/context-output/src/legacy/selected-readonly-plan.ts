@@ -1,4 +1,4 @@
-import { resolve } from 'node:path'
+import { resolve, basename } from 'node:path'
 import { open, opendir, lstat } from 'node:fs/promises'
 import { freezeJsonData } from '@i-harness/core-session'
 import { ownedPath, pendingPath, readExact } from '../artifact/io.ts'
@@ -34,14 +34,21 @@ async function bytes(store: ContextStore, root: string, path: string, budget: nu
   try { await store.retireLegacyFile(handle) } catch (failure) { failures.push(failure) }
   failuresTogether(failures, 'Original metadata read and close failed'); guard(); return result
 }
-async function noPending(path: string, expected: Buffer, guard: () => void): Promise<void> {
+/** A confirmed final may retain its original transaction's exact prefix. This
+ * read never finishes or removes that transaction, and grants no authority. */
+async function matchingPending(store: ContextStore, root: string, path: string, expected: Buffer, guard: () => void): Promise<string | undefined> {
+  const pending = pendingPath(path, expected)
   guard()
-  try { await lstat(pendingPath(path, expected)) }
+  try { await lstat(pending) }
   catch (failure) { if ((failure as NodeJS.ErrnoException).code === 'ENOENT') { guard(); return }; throw failure }
-  throw Error('Original metadata is incomplete')
+  guard()
+  const prefix = await bytes(store, root, pending, expected.length, guard)
+  if (!prefix.equals(expected.subarray(0, prefix.length))) throw Error('Original pending metadata conflict')
+  guard(); return basename(pending)
 }
 async function exact(store: ContextStore, root: string, path: string, expected: Buffer, guard: () => void): Promise<void> {
-  await bytes(store, root, path, expected.length, guard, expected); await noPending(path, expected, guard); guard()
+  await bytes(store, root, path, expected.length, guard, expected)
+  await matchingPending(store, root, path, expected, guard); guard()
 }
 async function inventory(store: ContextStore, folder: string, limit: number, guard: () => void): Promise<Set<string>> {
   guard(); await ownedPath(store.directory, folder); guard()
@@ -58,8 +65,12 @@ async function inventory(store: ContextStore, folder: string, limit: number, gua
   failuresTogether(failures, 'Original inventory and close failed'); guard(); return names
 }
 async function controlInventory(store: ContextStore, plan: OriginalSelectedPlan, guard: () => void): Promise<void> {
-  const names = await inventory(store, plan.directory, 6, guard)
+  const names = await inventory(store, plan.directory, 9, guard)
   for (const expected of ['binding.json', 'plan.json', 'applied.json', 'pages', 'revoke.0', 'revoke.1']) if (!names.delete(expected)) throw Error('Original control inventory conflict')
+  for (const [name, expected] of [['binding.json', plan.bindingBytes], ['plan.json', plan.planBytes], ['applied.json', plan.appliedBytes]] as const) {
+    const pending = await matchingPending(store, store.directory, resolve(plan.directory, name), expected, guard)
+    if (pending && !names.delete(pending)) throw Error('Original pending control inventory changed')
+  }
   if (names.size) throw Error('Original control inventory conflict')
 }
 export async function assertSelectedGrant(store: ContextStore, plan: OriginalSelectedPlan, guard: () => void): Promise<void> {
@@ -88,7 +99,7 @@ export async function readSelectedPlan(store: ContextStore, observation: LegacyR
 /** One complete streaming pass: bounded inventories, one decoded page per ref,
  * one resident leaf and the existing bounded directory frontier. */
 export async function* walkSelectedPages(store: ContextStore, plan: OriginalSelectedPlan, guard: () => void): AsyncGenerator<LegacyRow> {
-  const { root, directory } = plan, folder = resolve(directory, 'pages'), limit = root.pages ? (root.pages.level + 1) * root.observationCount : 0
+  const { root, directory } = plan, folder = resolve(directory, 'pages'), limit = root.pages ? 2 * (root.pages.level + 1) * root.observationCount : 0
   if (!Number.isSafeInteger(limit) || root.pages && root.pages.level > 53) throw Error('Original graph exceeds limit')
   await controlInventory(store, plan, guard)
   const names = await inventory(store, folder, limit, guard), remaining = new Set(names)
@@ -99,7 +110,8 @@ export async function* walkSelectedPages(store: ContextStore, plan: OriginalSele
     const raw = await bytes(store, directory, path, 65536, guard), page = checkPage(JSON.parse(raw.toString('utf8')), root.binding,undefined,root.version); guard()
     const expected = Buffer.from(JSON.stringify(page))
     if (!raw.equals(expected) || recordHash('page', page,root.version) !== ref.digest || ref.firstRow !== count) throw Error('Original page conflict')
-    await noPending(path, expected, guard)
+    const pending = await matchingPending(store, directory, path, expected, guard)
+    if (pending && !remaining.delete(pending)) throw Error('Original pending page inventory changed')
     if (page.kind === 'legacy-fork-leaf') {
       if (ref.level !== 0 || page.firstRow !== ref.firstRow || page.rows.length !== ref.rows) throw Error('Original leaf conflict')
       for (const row of page.rows) {

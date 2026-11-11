@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Dir } from 'node:fs'
 import { mkdir, readFile, readdir, rename, rm, writeFile, open } from 'node:fs/promises'
-import { resolve, dirname } from 'node:path'
+import { resolve, dirname, basename } from 'node:path'
 import { LegacyIndexLifecycle, type IndexUse, type RebuildSink, type PendingCaptureIndex } from './legacy/index-lifecycle.ts'
 import type { LegacyUseGate, LegacyUseLease } from './legacy/use-gate.ts'
 import { checkAbort, lexicalChunks } from './bytes.ts'
@@ -14,7 +14,7 @@ import { physicalBytes } from './artifact/quota.ts'
 import { OwnerLedger, readLedger, exists } from './legacy/owner-ledger.ts'
 import { commitment, same, checkRoot, checkPage, recordHash, appliedFor, canonicalRecord } from './legacy/fork-codec.ts'
 import { expiredTuple, expiryBase, terminalSlots, revokedTuple, readSlots, describeSlotFunding, fundSlotsInBatch } from './legacy/fork-disposition.ts'
-import { boundedJson, ownedPath, confirmAtomicJson, inspectImmutable } from './artifact/io.ts'
+import { boundedJson, ownedPath, confirmAtomicJson, inspectImmutable, pendingPath } from './artifact/io.ts'
 import { walkPages } from './legacy/fork-pages.ts'
 import { rowCommitment, transferDirectory } from './legacy/observed-read.ts'
 import { LegacyFundingBatchOwner, fundingPass, describeApplicationFunding, fundApplicationInBatch, sum, type FundingBatchContext, type FundingBatchScope } from './legacy/funding-batch.ts'
@@ -552,7 +552,7 @@ export class ContextStore {
       ] as const) {
         if (passive) {
           const state = await inspectImmutable(this.directory, resolve(directory, path), Buffer.from(JSON.stringify(value)), this.retireLegacyFile)
-          if (!state.final || state.pending) throw Error('Original legacy transfer incomplete')
+          if (!state.final) throw Error('Original legacy transfer incomplete')
         } else if ((await confirmAtomicJson(this.directory, resolve(directory, path), value, this.retireLegacyFile)).kind !== 'confirmed') throw Error('Original legacy transfer unconfirmed')
         guard()
       }
@@ -576,8 +576,12 @@ export class ContextStore {
       if (!names.delete(name)) throw Error('Original page inventory conflict')
       await ownedPath(directory, path); guard()
       const page = checkPage(await boundedJson(path, 65536, store.retireLegacyFile), root.binding, undefined, root.version); guard()
-      const state = await inspectImmutable(directory, path, Buffer.from(JSON.stringify(page)), store.retireLegacyFile); guard()
-      if (!state.final || state.pending || recordHash('page', page, root.version) !== ref.digest || ref.firstRow !== count) throw Error('Original page conflict')
+      const expected = Buffer.from(JSON.stringify(page))
+      const state = await inspectImmutable(directory, path, expected, store.retireLegacyFile); guard()
+      if (!state.final || recordHash('page', page, root.version) !== ref.digest || ref.firstRow !== count) throw Error('Original page conflict')
+      // Publication may have lost its link reply after the exact final became
+      // durable. Its validated pending prefix is retained, never a second grant.
+      if (state.pending && !names.delete(basename(pendingPath(path, expected)))) throw Error('Original pending page inventory changed')
       if (page.kind === 'legacy-fork-leaf') {
         if (ref.level !== 0 || page.firstRow !== ref.firstRow || page.rows.length !== ref.rows) throw Error('Original leaf conflict')
         for (const row of page.rows) { count++; guard(); yield row }

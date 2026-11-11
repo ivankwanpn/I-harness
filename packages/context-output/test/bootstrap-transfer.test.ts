@@ -16,6 +16,7 @@ import * as originalService from '../src/service.ts'
 import { EMPTY_SEMANTIC_DEPENDENCY_DIGEST } from '@i-harness/core-session'
 import * as locking from '@i-harness/fs-lock'
 import { structureEvidence } from './structure-evidence.ts'
+import { ContextStore } from '../src/store.ts'
 
 const controls = vi.hoisted(() => ({ reads: [] as string[], cutPath: '', cut: '', afterRead: undefined as undefined | ((path: string) => void), afterReaddir: undefined as undefined | ((path: string) => void), mutations: 0, consume:false,directClose:false,requireRead:false,openFault:'',paths:new Map<object,string>(),closeMode:'r+',closeCounts:new Map<object,number>(), primary:undefined as unknown, failClose: false, falsey: false, failed: [] as import('node:fs/promises').FileHandle[], pending: undefined as Promise<void>|undefined, entered: undefined as (()=>void)|undefined }))
 vi.mock('node:fs/promises', async original => {
@@ -662,6 +663,44 @@ it('joins pending passive close and service cleanup without confirmation or sour
  const verification=f.service.reconcileSeedDependencies(scope,f.request).then(result=>{confirmed=result.kind==='confirmed';return result});await entered.promise;const closing=f.service.close().then(()=>{closed=true});await Promise.resolve();expect(confirmed).toBe(false);expect(closed).toBe(false);leave.resolve();expect((await verification).kind).toBe('blocked');await closing;expect(f.sourceCalls()).toBe(calls);expect(controls.mutations).toBe(writes)
  }finally{leave.resolve();controls.pending=undefined;controls.entered=undefined;await f.service.close()}
 })
+
+it.each(['never-acknowledged', 'target-revoked', 'target-revision', 'changed-request', 'copied-scope'] as const)('closing does not turn %s into original acknowledged transfer authority', async mode => {
+  const f = await fixture(), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let configuring: Promise<unknown> | undefined, closing: Promise<void> | undefined
+  const configure = ContextStore.prototype.configureDiskBudget
+  let held: { mockRestore(): void } | undefined
+  try {
+    const original = f.service.registerSeedDependencyTransfer(f.access)
+    expect((await f.service.confirmSeedDependencies(original, f.request, () => true)).kind).toBe('confirmed')
+    const scope = mode === 'never-acknowledged' ? f.service.registerSeedDependencyTransfer(f.access) : mode === 'copied-scope' ? { ...original } : original
+    // The existing legacy configure turn provides a genuine earlier owner gate.
+    // This managed-artifact fixture starts with legacy Context Mode disabled.
+    await f.service.configure({ enabled: true })
+    const legacy = await f.service.capture({ sessionId: 'legacy', callId: 'close-gate', label: 'gate', text: 'gate', complete: true })
+    if (!legacy) throw Error('Original legacy store required for the configure gate')
+    held = vi.spyOn(ContextStore.prototype, 'configureDiskBudget').mockImplementation(async function(this: ContextStore, ...args) {
+      entered.resolve(); await release.promise; return configure.apply(this, args)
+    })
+    configuring = f.service.configure({ maxDiskBytes: f.service.status().config.maxDiskBytes + 1024 * 1024 })
+    await Promise.race([
+      entered.promise,
+      configuring.then(() => { throw Error('Original configure settled without entering its native budget gate') }),
+    ])
+    closing = f.service.close()
+    if (mode === 'target-revoked') f.revokeTarget()
+    if (mode === 'target-revision') f.setRevision('foreign revision')
+    const request = mode === 'changed-request' ? { ...f.request, manifestDigest: 'f'.repeat(64) } : f.request
+    const sourceCalls = f.sourceCalls(), writes = controls.mutations
+    const reconciliation = f.service.reconcileSeedDependencies(scope, request)
+    release.resolve()
+    expect((await reconciliation).kind).toBe('blocked')
+    expect(f.sourceCalls()).toBe(sourceCalls); expect(controls.mutations).toBe(writes)
+    await configuring; await closing
+  } finally {
+    release.resolve(); held?.mockRestore()
+    await Promise.allSettled([configuring, closing]); await f.service.close()
+  }
+}, 15_000)
 
 it('preserves falsey partial-open and close failures independently on original integrity handles',async()=>{
  const f=await fixture(),io=createArtifactQualificationIO();try{controls.openFault=resolve(f.directory(f.catalog),'body');controls.primary=0;controls.cutPath=resolve(f.directory(f.catalog),'index');controls.closeMode='r';controls.failClose=true;controls.falsey=true

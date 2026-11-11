@@ -1057,19 +1057,18 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       assertCurrent() { captureOriginalColdObservation(coordinator, cold) },
       localVisible() { throw Error('Cold legacy source lookup unavailable') }, anchorVisible() { throw Error('Cold legacy source lookup unavailable') },
     })
-    const withRead = <T>(work: (current: ContextStore) => Promise<T>) => run(undefined, async signal => {
-      await gate.exclusive(signal, async lease => {
-        gate.assertLease(lease, 'exclusive'); assertOpen()
-        const current = candidate ?? (candidate = new ContextStore(options.root, workspaceId, owner, gate.assertLease, revokeSelectedAuthorities, revokeResumedAuthorities))
-        if (acquisitionStore && acquisitionStore !== current) throw Error('Original cold metadata store changed')
-        acquisitionStore = current; await current.resume(lease, config.maxDiskBytes, signal)
-      })
-      return gate.shared(signal, async lease => {
-        gate.assertLease(lease); assertOpen(); const current = store ?? candidate
-        if (!current || acquisitionStore && acquisitionStore !== current) throw Error('Original cold metadata store changed')
-        acquisitionStore = current; historicalSelectedReaders.add(selected); return work(current)
-      })
-    })
+    // This finite proof reads actual committed metadata, never the mutable
+    // legacy maps or SQLite index. It needs no writer lifetime to resume.
+    const withRead = <T>(work: (current: ContextStore) => Promise<T>) => run(undefined, signal => gate.shared(signal, async lease => {
+      gate.assertLease(lease); assertOpen(); checkAbort(signal)
+      const current = store ?? candidate ?? (candidate = new ContextStore(options.root, workspaceId, owner, gate.assertLease, revokeSelectedAuthorities, revokeResumedAuthorities))
+      if (acquisitionStore && acquisitionStore !== current) throw Error('Original cold metadata store changed')
+      acquisitionStore = current; historicalSelectedReaders.add(selected)
+      const value = await work(current)
+      gate.assertLease(lease); assertOpen(); checkAbort(signal)
+      if ((store ?? candidate) !== current) throw Error('Original cold metadata store changed')
+      return value
+    }))
     const settle = () => gate.exclusive(undefined, async lease => {
       gate.assertLease(lease, 'exclusive'); const original = acquisitionStore
       if (!original) return
@@ -1093,10 +1092,16 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     const outstanding=selectedAcquisitionDebts.values().next().value
     if(outstanding)throw outstanding.failure
     let acquisitionStore:ContextStore|undefined
-    const withRead=<T>(work:(current:ContextStore)=>Promise<T>)=>run(undefined,async signal=>{
-      await gate.exclusive(signal,async lease=>{gate.assertLease(lease,'exclusive');assertOpen();const current=store??candidate??(candidate=new ContextStore(options.root,workspaceId,owner,gate.assertLease,revokeSelectedAuthorities,revokeResumedAuthorities));await current.resume(lease,config.maxDiskBytes,signal)})
-      return gate.shared(signal,async lease=>{gate.assertLease(lease);assertOpen();const current=store??candidate;if(!current)throw Error('Original metadata store unavailable');if(acquisitionStore&&acquisitionStore!==current)throw Error('Original metadata store changed');acquisitionStore=current;return work(current)})
-    })
+    const withRead = <T>(work: (current: ContextStore) => Promise<T>) => run(undefined, signal => gate.shared(signal, async lease => {
+      gate.assertLease(lease); assertOpen(); checkAbort(signal)
+      const current = store ?? candidate ?? (candidate = new ContextStore(options.root, workspaceId, owner, gate.assertLease, revokeSelectedAuthorities, revokeResumedAuthorities))
+      if (acquisitionStore && acquisitionStore !== current) throw Error('Original metadata store changed')
+      acquisitionStore = current
+      const value = await work(current)
+      gate.assertLease(lease); assertOpen(); checkAbort(signal)
+      if ((store ?? candidate) !== current) throw Error('Original metadata store changed')
+      return value
+    }))
     let selected!:SelectedMetadataRecord
     const settle=(original:ContextStore,stillOwed:()=>boolean=()=>true)=>gate.exclusive(undefined,async lease=>{gate.assertLease(lease,'exclusive');if(!stillOwed())return;if(closedSelectedStore===original){acknowledgeSelectedAcquisitions(original);return}if((store??candidate)!==original)throw Error('Original metadata store changed');await original.joinLegacyFiles();acknowledgeSelectedAcquisitions(original)})
     let originalReader:SelectedMetadataOwner

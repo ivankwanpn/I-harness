@@ -28,7 +28,7 @@ import { fundSlots, revokedTuple } from '../src/legacy/fork-disposition.ts'
 import { legacyFixture } from './legacy-fork-fixture.ts'
 const directory = (f: Awaited<ReturnType<typeof legacyFixture>>) => join(f.root, 'context-output', createHash('sha256').update('workspace').digest('hex'), 'legacy-fork-v1', recordHash('binding', f.request.invocation))
 
-it.each([5, 101])('qualifies %s real duplicate observations with only three graph passes and linear canonical work', async rows => {
+for (const rows of [5, 101]) it(`qualifies ${rows} real duplicate observations with only three graph passes and linear canonical work`, async () => {
   const f = await legacyFixture({ observations: rows }); let canonical: MockInstance<ContextStore['canonicalRef']> | undefined
   try {
     expect((await f.run()).kind).toBe('ready'); const observation = await f.observation(), pages = (await readdir(join(directory(f), 'pages'))).length
@@ -43,8 +43,12 @@ it.each([5, 101])('qualifies %s real duplicate observations with only three grap
     expect({ pages: io.pages, inventories: io.inventories, canonical: canonical.mock.calls.length }).toEqual(before)
     expect([io.sync, io.bodies, io.writes]).toEqual([0, 0, 0]); io.enabled = false; await owner.close()
   } finally { io.enabled = false; canonical?.mockRestore(); await f.close() }
-}, 15000)
+// The 101-row case includes a real writer publication (~9s) before its three
+// reader passes; complete quiet execution and cleanup measured 20.53s.
+}, rows === 101 ? 30000 : 15000)
 
+// Each native case publishes a genuine B2 plan before reading or injecting a
+// fault; complete quiet bodies and cleanup measured 4.38–7.02s.
 it('expires both retained assertions after complete enumeration and never revives reader A', async () => {
   const f = await legacyFixture(); let clock: ReturnType<typeof vi.spyOn> | undefined
   try {
@@ -53,7 +57,7 @@ it('expires both retained assertions after complete enumeration and never revive
     clock = vi.spyOn(Date, 'now').mockReturnValue(f.visible.expiresAt + 1); expect(() => owner.reader.assertCurrent()).toThrow(); expect(() => owner.assertCurrent()).toThrow()
     clock.mockRestore(); clock = undefined; expect(() => owner.assertCurrent()).toThrow(); await owner.close()
   } finally { clock?.mockRestore(); await f.close() }
-})
+}, 15000)
 
 it('refuses an otherwise self-consistent original plan with a false distinct reference count', async () => {
   const f = await legacyFixture({ observations: 2 })
@@ -66,7 +70,7 @@ it('refuses an otherwise self-consistent original plan with a false distinct ref
       await expect(acquireSelectedMetadata(f.service(), await f.observation())).rejects.toThrow()
     } finally { await Promise.all(paths.map((path, i) => writeFile(path, saved[i]!))) }
   } finally { await f.close() }
-})
+}, 15000)
 
 it('latches source revocation before an unrelated clear sweeps its expired canonical authority', async () => {
   const f = await legacyFixture(); let clock: ReturnType<typeof vi.spyOn> | undefined
@@ -75,7 +79,7 @@ it('latches source revocation before an unrelated clear sweeps its expired canon
     clock = vi.spyOn(Date, 'now').mockReturnValue(f.visible.expiresAt + 1); await f.service().clear('unrelated')
     clock.mockRestore(); clock = undefined; expect(() => owner.assertCurrent()).toThrow(); await owner.close()
   } finally { clock?.mockRestore(); await f.close() }
-})
+}, 15000)
 
 it('uses a loaded original leaf snapshot but refuses its changed bytes at final qualification', async () => {
   const f = await legacyFixture({ observations: 3 })
@@ -87,7 +91,7 @@ it('uses a loaded original leaf snapshot but refuses its changed bytes at final 
       await expect(iterator.next()).rejects.toThrow(); expect(() => owner.assertCurrent()).toThrow()
     } finally { await writeFile(path, saved); await owner.close() }
   } finally { await f.close() }
-})
+}, 15000)
 
 it.each(['foreign.pending', '0-0.json.foreign.pending'])('refuses inserted page inventory entry %s before EOF qualification', async name => {
   const f = await legacyFixture({ observations: 2 })
@@ -97,7 +101,7 @@ it.each(['foreign.pending', '0-0.json.foreign.pending'])('refuses inserted page 
     try { expect((await iterator.next()).done).toBe(false); await expect(iterator.next()).rejects.toThrow() }
     finally { await unlink(path); await owner.close() }
   } finally { await f.close() }
-})
+}, 15000)
 
 it('rechecks an earlier emitted canonical owner during final qualification', async () => {
   const f = await legacyFixture({ distinct: 2 })
@@ -108,7 +112,7 @@ it('rechecks an earlier emitted canonical owner during final qualification', asy
       expect((await iterator.next()).done).toBe(false); await expect(iterator.next()).rejects.toThrow('membership')
     } finally { await writeFile(path, saved); await owner.close() }
   } finally { await f.close() }
-})
+}, 15000)
 
 it('early return closes the original iterator without final scanning or success qualification', async () => {
   const f = await legacyFixture({ observations: 5 }); const canonical = vi.spyOn(ContextStore.prototype, 'canonicalRef')
@@ -117,7 +121,7 @@ it('early return closes the original iterator without final scanning or success 
     expect((await iterator.next()).done).toBe(false); const calls = canonical.mock.calls.length; await iterator.return!(); await iterator.return!()
     expect(canonical.mock.calls.length).toBe(calls); expect(calls).toBe(6); expect(() => owner.assertCurrent()).toThrow(); await expect(iterator.next()).rejects.toThrow(); await owner.close()
   } finally { canonical.mockRestore(); await f.close() }
-})
+}, 15000)
 
 it('keeps the same original directory and store after acquisition cleanup and service close fail', async () => {
   const f = await legacyFixture()
@@ -127,7 +131,7 @@ it('keeps the same original directory and store after acquisition cleanup and se
     await expect(f.service().close()).rejects.toThrow(); expect(io.directoryAttempts.length).toBe(3)
     const original = io.directoryAttempts[0]; await f.service().close(); expect(io.directoryAttempts.length).toBe(4); expect(io.directoryAttempts.every(handle => handle === original)).toBe(true)
   } finally { io.failDirectoryClose = 0; io.directory = undefined; await f.close() }
-})
+}, 15000)
 
 it('cannot return qualified EOF while the original final inventory close has debt', async () => {
   const f = await legacyFixture()
@@ -137,7 +141,7 @@ it('cannot return qualified EOF while the original final inventory close has deb
     await expect(iterator.next()).rejects.toThrow('directory close debt'); expect(() => owner.assertCurrent()).toThrow()
     await owner.close(); expect(io.directoryAttempts.length).toBe(2); expect(io.directoryAttempts[0]).toBe(io.directoryAttempts[1])
   } finally { io.failDirectoryClose = 0; io.directory = undefined; await f.close() }
-})
+}, 15000)
 
 it('refuses a changed original root between yields without adopting a replacement plan', async () => {
   const f = await legacyFixture({ observations: 2 })
@@ -146,7 +150,7 @@ it('refuses a changed original root between yields without adopting a replacemen
     try { expect((await iterator.next()).done).toBe(false); await writeFile(path, '{}'); await expect(iterator.next()).rejects.toThrow(); await writeFile(path, saved); expect(() => owner.assertCurrent()).toThrow() }
     finally { await writeFile(path, saved); await owner.close() }
   } finally { await f.close() }
-})
+}, 15000)
 
 it('refuses genuine managed source revocation between emitted rows', async () => {
   const f = await legacyFixture({ observations: 2 })
@@ -154,7 +158,7 @@ it('refuses genuine managed source revocation between emitted rows', async () =>
     expect((await f.run()).kind).toBe('ready'); const owner = await acquireSelectedMetadata(f.service(), await f.observation()), iterator = owner.reader.legacy()[Symbol.asyncIterator]()
     expect((await iterator.next()).done).toBe(false); (await f.coordinator().openManagedDocument('target')).revokeNewWork(); expect(() => owner.assertCurrent()).toThrow(); await expect(iterator.next()).rejects.toThrow(); await owner.close()
   } finally { await f.close() }
-})
+}, 15000)
 
 it('refuses inconsistent commitments for a repeated ref without deduplicating valid observations', async () => {
   const f = await legacyFixture({ observations: 2 })
@@ -167,4 +171,4 @@ it('refuses inconsistent commitments for a repeated ref without deduplicating va
       await expect(acquireSelectedMetadata(f.service(), await f.observation())).rejects.toThrow('Inconsistent original reference commitment')
     } finally { await Promise.all(paths.map((path, i) => writeFile(path, saved[i]!))) }
   } finally { await f.close() }
-})
+}, 15000)

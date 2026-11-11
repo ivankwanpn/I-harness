@@ -16,7 +16,7 @@ import { captureHost, captureRequest, captureTarget, TransferBlocked, type SeedD
 import { canonicalCompare, createTransferClosure } from './transfer-closure.ts'
 export type { SeedDependencyHostAccess, SeedDependencyTransferBinding, SeedDependencyTransferScope } from './transfer-codec.ts'
 
-interface Registration { passiveOnly?: boolean; io:ArtifactQualificationIO; access: SeedDependencyHostAccess; request?: string; target?: string; revoked: boolean; checking?:boolean; publications?: Map<string, { value: string; original: ReturnType<typeof createAtomicJsonPublication> }> }
+interface Registration { passiveOnly?: boolean; activeAcknowledged?: true; io:ArtifactQualificationIO; access: SeedDependencyHostAccess; request?: string; target?: string; revoked: boolean; checking?:boolean; publications?: Map<string, { value: string; original: ReturnType<typeof createAtomicJsonPublication> }> }
 export interface ColdManagedQualification { qualify(): Promise<void>; sealWhileActive(): void; settle(): Promise<void>; assertSettledCurrent(): void; revoke(): void; close(): Promise<void> }
 interface SourceRelation { ref: ManagedArtifactRef; viaCatalog?: ManagedArtifactRef }
 interface Publication { path: string; value: ArtifactPin | TransferMembership | { version: 1; sessionId: string; revision: string; pinId: string }; relations: Set<SourceRelation> }
@@ -58,15 +58,19 @@ export function createSeedDependencyTransfer(deps: {
       held.request ??= encoded
       if (caller !== undefined && typeof caller !== 'function') throw new TransferBlocked('conflict')
     } catch (cause) { return Promise.resolve({ kind: 'blocked', reason: cause instanceof TransferBlocked ? cause.reason : 'conflict' }) }
-    return deps.mutate(async () => {
+    // A genuine active ACK retains this original operation's settlement window,
+    // not permission to qualify a new passive scope after close starts.
+    const retainedReconciliation = caller === undefined && registration.activeAcknowledged === true && !registration.passiveOnly
+    const qualificationUnavailable = () => qualificationClosing && !retainedReconciliation
+    return deps.mutate<BootstrapDependencyOutcome>(async () => {
       const { access } = registration, binding = access.binding, passive = caller === undefined
       let targetSourceId: string
       const check = () => {
-        if(passive&&qualificationClosing)throw new TransferBlocked('unavailable')
+        if(passive&&qualificationUnavailable())throw new TransferBlocked('unavailable')
         if (!deps.available(binding.targetSessionId) || !deps.available(binding.targetDocumentId)) throw new TransferBlocked('unavailable')
         if (registration.revoked) throw new TransferBlocked('policy')
         if('kind' in access){
-          if(qualificationClosing)throw new TransferBlocked('unavailable')
+          if(qualificationUnavailable())throw new TransferBlocked('unavailable')
           if(registration.checking){registration.revoked=true;throw new TransferBlocked('policy')}
           registration.checking=true
           try{
@@ -76,7 +80,7 @@ export function createSeedDependencyTransfer(deps: {
               const observed=access.observeCurrent(passive?'passive':'active'),target=captureTarget(observed)
               if(registration.target!==undefined&&registration.target!==target)throw Error('target revision changed')
               registration.target??=target;targetSourceId=observed.source.sourceId
-              if(qualificationClosing||registration.revoked||!deps.available(binding.targetSessionId)||!deps.available(binding.targetDocumentId)||!passive&&!deps.available(binding.sourceSessionId))throw Error('transfer retired')
+              if(qualificationUnavailable()||registration.revoked||!deps.available(binding.targetSessionId)||!deps.available(binding.targetDocumentId)||!passive&&!deps.available(binding.sourceSessionId))throw Error('transfer retired')
             }catch{registration.revoked=true;throw new TransferBlocked('policy')}
           }finally{registration.checking=false}
           return
@@ -238,7 +242,12 @@ export function createSeedDependencyTransfer(deps: {
       } catch (cause) {
         return { kind: 'blocked', reason: cause instanceof TransferBlocked ? cause.reason : (cause as NodeJS.ErrnoException | null | undefined)?.code === 'ENOENT' ? 'unavailable' : 'unknown' }
       } finally {retireEmptyQualification(registration.io)}
-    }, retain)
+    }, retain).then(outcome => {
+      // The mutation promise includes native workspace-release acknowledgment.
+      // A callback result alone cannot certify an uncertain release.
+      if (caller !== undefined && outcome.kind === 'confirmed') registration.activeAcknowledged = true
+      return outcome
+    })
   }
   function acquireColdManagedQualification(access: SeedDependencyHostAccess, input: BootstrapDependencyRequest, expectedClosure: string): ColdManagedQualification {
     if (qualificationClosing || !/^[a-f0-9]{64}$/.test(expectedClosure)) throw Error('Cold managed qualification unavailable')
