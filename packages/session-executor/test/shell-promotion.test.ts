@@ -123,7 +123,8 @@ describe("human steering of the real foreground shell capture", () => {
 function toolResult(session: SessionAssembly["session"], name: string): ToolResultOutput {
   const event = session.events.filter((e) => e.type === "tool/result" && e.name === name).at(-1)
   expect(event, `the model must receive a tool/result for ${name}`).toBeDefined()
-  return (event as { output?: ToolResultOutput }).output ?? {}
+  if (event?.type !== "tool/result" || event.envelope?.retention.kind !== "inline") throw new Error("Expected actual inline shell result")
+  return event.envelope.retention.value as ToolResultOutput
 }
 
 async function mountAssembly(

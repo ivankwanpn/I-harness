@@ -18,10 +18,14 @@ import { rmWorkspaceSync } from './helpers.ts'
 
 it.each(['todo', 'plan', 'runtime', 'schedule', 'title'] as const)('publishes %s through its actual producer only after the managed receipt', async producer => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-producer-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let armed = false
+  const backend = createJsonlBackend(root, { wrapOwnedBatch: original => async (...args) => {
+    if (armed) { entered.resolve(); await release.promise }
+    return original(...args)
+  } }), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), actual = backend.appendOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => { entered.resolve(); await release.promise; return actual(...args) }
+  armed = true
   const runtime = createRuntimeContext(document.view as any, createRuntimeContextSource(document))
   runtime.registerSection('test', () => 'current source')
   try {
@@ -33,7 +37,7 @@ it.each(['todo', 'plan', 'runtime', 'schedule', 'title'] as const)('publishes %s
             : applyTitle(document.view as any, 'Committed title', 'user', [], document.metadata)
     const settled = Promise.resolve(work)
     // A producer rejection also surfaces promptly rather than hanging on the gate.
-    await Promise.race([entered.promise, settled])
+    await Promise.race([entered.promise, settled.then(() => { throw new Error('Producer completed before original receipt hold') })])
     expect(document.view.events).toEqual([])
     release.resolve(); await settled
     const expected = producer === 'todo' ? ['todo/write'] : producer === 'plan' ? ['plan/mode', 'user/message'] : producer === 'runtime' ? ['runtime/context'] : producer === 'schedule' ? ['schedule/change'] : ['session/title']
@@ -47,7 +51,16 @@ it.each(['todo', 'plan', 'runtime', 'schedule', 'title'] as const)('publishes %s
 it('gates actual assembly Agent visibility on the runtime receipt and deduplicates later admissions', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-runtime-assembly-'))
   await writeFile(join(root, 'AGENTS.md'), 'CONTROLLED_ASSEMBLY_INSTRUCTION')
-  const backend = createJsonlBackend(join(root, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let runtimeWrites = 0, otherWrites = 0, settled = false, armed = false
+  const backend = createJsonlBackend(join(root, 'sessions'), { wrapOwnedBatch: original => async (...args) => {
+    if (armed) {
+      const runtime = decodeFactBatch(args[3].bytes).events.filter(event => event.type === 'runtime/context')
+      if (runtime.length) { runtimeWrites += runtime.length; entered.resolve(); await release.promise }
+      else otherWrites++
+    }
+    return original(...args)
+  } }), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create()
   const bodies: { messages: { role: string; content: unknown }[] }[] = []
   const server = createServer(async (request, response) => {
@@ -61,14 +74,7 @@ it('gates actual assembly Agent visibility on the runtime receipt and deduplicat
   const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: id, codeMode: { mode: 'off' }, sandbox: 'read-only',
     model: createOpenAICompatibleClient({ model: 'fixture', apiKey: 'owned-loopback', baseUrl: 'http://127.0.0.1:' + address.port }),
   })
-  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), append = backend.appendOwnedBatch!
-  let runtimeWrites = 0, otherWrites = 0, settled = false
-  backend.appendOwnedBatch = async (...args) => {
-    const runtime = decodeFactBatch(args[3].bytes).events.filter(event => event.type === 'runtime/context')
-    if (runtime.length) { runtimeWrites += runtime.length; entered.resolve(); await release.promise }
-    else otherWrites++
-    return append(...args)
-  }
+  armed = true
   const run = assembly.agent.run('runtime snapshot', AbortSignal.timeout(10000)).then(result => { settled = true; return result })
   void run.catch(() => {})
   try {
@@ -105,16 +111,15 @@ it('gates actual assembly Agent visibility on the runtime receipt and deduplicat
 
 it('invalidates runtime dedupe knowledge after unknown so a reconciled newer snapshot cannot hide a return to old text', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-runtime-unknown-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
-  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  const append = backend.appendOwnedBatch!
-  let writes = 0, unknown: BatchKey | undefined, text = 'A'
-  backend.appendOwnedBatch = async (...args) => {
-    writes++
-    const outcome = await append(...args)
-    if (writes === 2) { unknown = args[3].key; return { kind: 'unknown', key: unknown } }
+  let writes = 0, unknown: BatchKey | undefined, text = 'A', armed = false
+  const backend = createJsonlBackend(root, { wrapOwnedBatch: original => async (...args) => {
+    if (armed) writes++
+    const outcome = await original(...args)
+    if (armed && writes === 2) { unknown = args[3].key; return { kind: 'unknown', key: unknown } }
     return outcome
-  }
+  } }), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
+  armed = true
   const runtime = createRuntimeContext(document.view, createRuntimeContextSource(document))
   runtime.registerSection('state', () => text)
   try {
@@ -132,23 +137,23 @@ it('invalidates runtime dedupe knowledge after unknown so a reconciled newer sna
 
 it('shares one pending runtime snapshot across overlapping render calls until its original receipt', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-runtime-overlap-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let writes = 0, firstSettled = false, secondSettled = false, armed = false
+  const backend = createJsonlBackend(root, { wrapOwnedBatch: original => async (...args) => {
+    if (armed) { writes++; entered.resolve(); await release.promise }
+    return original(...args)
+  } }), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), append = backend.appendOwnedBatch!
-  let writes = 0, firstSettled = false, secondSettled = false
-  backend.appendOwnedBatch = async (...args) => {
-    writes++
-    entered.resolve()
-    await release.promise
-    return append(...args)
-  }
+  armed = true
   const runtime = createRuntimeContext(document.view, createRuntimeContextSource(document))
   let text = 'one immutable snapshot'
   runtime.registerSection('held', () => text)
   const first = runtime.render().then(() => { firstSettled = true })
-  await entered.promise
-  const second = runtime.render().then(() => { secondSettled = true })
+  void first.catch(() => {})
+  let second: Promise<void> | undefined
   try {
+    await Promise.race([entered.promise, first.then(() => { throw new Error('Runtime completed before original receipt hold') })])
+    second = runtime.render().then(() => { secondSettled = true })
     expect([firstSettled, secondSettled]).toEqual([false, false])
     expect(document.view.events).toEqual([])
     expect(writes).toBe(1)

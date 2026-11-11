@@ -49,7 +49,8 @@ function modelCallingWrite(target: string) {
 function denialFrom(session: Session): SandboxDenial {
   const result = session.events.find((e) => e.type === "tool/result")
   expect(result).toBeDefined()
-  const output = (result as { output?: { error?: string } }).output
+  if (result?.type !== "tool/result" || result.envelope?.retention.kind !== "inline") throw new Error("Expected actual inline fs result")
+  const output = result.envelope.retention.value as { error?: string }
   expect(output?.error).toBeTypeOf("string")
   return JSON.parse(output!.error!) as SandboxDenial
 }

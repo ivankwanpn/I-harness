@@ -3,6 +3,7 @@
 // tool's `pwd` printed the vitest cwd, the PTY spawned in the vitest cwd and
 // `glob` with no path searched the vitest cwd — while the fs tools resolved
 // against the workspace.
+import type { SessionEvent } from "@i-harness/core-session"
 import { createContext } from "@i-harness/core-plugin"
 import { describe, expect, it, vi } from "vitest"
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
@@ -52,10 +53,15 @@ async function rgAvailable(): Promise<boolean> {
   try { await resolveRgPath(); return true } catch { return false }
 }
 
-type ToolResultEvent = { type: "tool/result"; callId: string; name: string; output: unknown }
+type ToolResultEvent = Extract<SessionEvent, { type: "tool/result" }>
 
 function toolResults(assembly: Awaited<ReturnType<typeof createSessionAssembly>>): ToolResultEvent[] {
   return assembly.session.events.filter((e): e is ToolResultEvent => e.type === "tool/result")
+}
+
+function inlineResult(result: ToolResultEvent | undefined): unknown {
+  if (result?.envelope?.retention.kind !== "inline") throw new Error("Expected actual inline workspace tool result")
+  return result.envelope.retention.value
 }
 
 describe("D1: assembly tools run in the assembly workspace", () => {
@@ -83,7 +89,7 @@ describe("D1: assembly tools run in the assembly workspace", () => {
     try {
       await assembly.agent.run("go")
       const result = toolResults(assembly).find((r) => r.name === "bash")!
-      const output = result.output as { stdout?: string; exitCode?: number }
+      const output = inlineResult(result) as { stdout?: string; exitCode?: number }
       expect(output.exitCode).toBe(0)
       expect(fwd((output.stdout ?? "").trim())).toBe(fwd(workspace))
     } finally {
@@ -107,7 +113,7 @@ describe("D1: assembly tools run in the assembly workspace", () => {
     try {
       await assembly.agent.run("go")
       const result = toolResults(assembly).find((r) => r.name === "bash")!
-      const jobId = (result.output as { job_id?: string }).job_id!
+      const jobId = (inlineResult(result) as { job_id?: string }).job_id!
       const exec = assembly.ctx.services.get<ExecService>("exec/service")
       await waitFor(() => exec.getOutput(jobId).status !== "running")
       const job = exec.getOutput(jobId)
@@ -135,7 +141,7 @@ describe("D1: assembly tools run in the assembly workspace", () => {
     try {
       await assembly.agent.run("go")
       const result = toolResults(assembly).find((r) => r.name === "pwsh")!
-      const output = result.output as { stdout?: string; exitCode?: number }
+      const output = inlineResult(result) as { stdout?: string; exitCode?: number }
       expect(output.exitCode).toBe(0)
       expect(fwd((output.stdout ?? "").trim())).toBe(fwd(workspace))
     } finally {
@@ -165,7 +171,7 @@ describe("D1: assembly tools run in the assembly workspace", () => {
     try {
       await assembly.agent.run("go")
       const result = toolResults(assembly).find((r) => r.name === "terminal_open")!
-      const id = (result.output as { id: string }).id
+      const id = (inlineResult(result) as { id: string }).id
       const terminals = assembly.ctx.services.get<TerminalService>("terminal/service")
       await waitFor(() => stripAnsi(terminals.read(id, { sessionId: "s1" }).data).trim().length > 0)
       const data = stripAnsi(terminals.read(id, { sessionId: "s1" }).data)
@@ -206,7 +212,7 @@ describe("D1: assembly tools run in the assembly workspace", () => {
     try {
       await assembly.agent.run("go")
       const result = toolResults(assembly).find((r) => r.name === "workflow_run")!
-      const output = result.output as { output?: string; status?: string }
+      const output = inlineResult(result) as { output?: string; status?: string }
       expect(output.status).toBe("completed")
       expect(fwd(output.output ?? "")).toContain(fwd(workspace))
     } finally {
@@ -232,7 +238,7 @@ describe("D1: assembly tools run in the assembly workspace", () => {
     try {
       await assembly.agent.run("go")
       const result = toolResults(assembly).find((r) => r.name === "glob")!
-      const output = result.output as { matches?: string[]; error?: string }
+      const output = inlineResult(result) as { matches?: string[]; error?: string }
       expect(output.error).toBeUndefined()
       expect(output.matches).toContain("marker.txt")
     } finally {

@@ -92,7 +92,9 @@ describe("sandbox policy is resolved per call", () => {
         (e) => e.type === "tool/result" && JSON.stringify(e).includes("FS_SANDBOX_DENIED"),
       )
       expect(denials.length).toBe(1)
-      const output = (denials[0] as { output?: { error?: string } }).output
+      const result = denials[0]
+      if (result?.type !== "tool/result" || result.envelope?.retention.kind !== "inline") throw new Error("Expected actual inline sandbox denial")
+      const output = result.envelope.retention.value as { error?: string }
       const denial = JSON.parse(output!.error!) as SandboxDenial
       expect(denial.code).toBe("SANDBOX_DENIED")
       expect(denial.surface).toBe("fs")

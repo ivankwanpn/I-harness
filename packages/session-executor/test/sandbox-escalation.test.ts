@@ -52,7 +52,8 @@ async function runTurn(assembly: Awaited<ReturnType<typeof createSessionAssembly
 function denialFrom(session: Session): SandboxDenial {
   const result = session.events.filter((e) => e.type === "tool/result").at(-1)
   expect(result, "the model must receive a tool result").toBeDefined()
-  const output = (result as { output?: { error?: string; denial?: SandboxDenial } }).output
+  if (result?.type !== "tool/result" || result.envelope?.retention.kind !== "inline") throw new Error("Expected actual inline sandbox result")
+  const output = result.envelope.retention.value as { error?: string; denial?: SandboxDenial }
   if (output?.denial !== undefined) return output.denial
   expect(output?.error).toBeTypeOf("string")
   return JSON.parse(output!.error!) as SandboxDenial

@@ -63,7 +63,8 @@ describe("the assembly hands the shell a per-call policy", () => {
       await expect(runTurn(assembly)).resolves.toBeUndefined()
       const result = session.events.find((e) => e.type === "tool/result" && e.name === toolName)
       expect(result, "the model must receive the refusal as a tool result").toBeDefined()
-      const output = (result as { output?: { stderr?: string; exitCode?: number } }).output
+      if (result?.type !== "tool/result" || result.envelope?.retention.kind !== "inline") throw new Error("Expected actual inline shell result")
+      const output = result.envelope.retention.value as { stderr?: string; exitCode?: number }
       if (process.platform === "win32") {
         // A qualified shell reaches the real filesystem denial. Its native
         // stderr is distinct from the structured failure to initialize MSYS.

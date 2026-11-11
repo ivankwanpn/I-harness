@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { append, createSession } from "@i-harness/core-session"
+import { append, createSession, type SessionEvent } from "@i-harness/core-session"
 import type { SandboxDenial, SandboxMode } from "@i-harness/sandbox"
 import type { TerminalService } from "@i-harness/terminal"
 import { createSessionAssembly, type SessionAssembly } from "../src/assembly.ts"
@@ -28,7 +28,7 @@ import { rmWorkspaceSync } from "./helpers.ts"
  * tests observe can only be the sandbox rule.
  */
 
-type ToolResultEvent = { type: "tool/result"; callId: string; name: string; output: unknown }
+type ToolResultEvent = Extract<SessionEvent, { type: "tool/result" }>
 
 function toolResults(assembly: SessionAssembly): ToolResultEvent[] {
   return assembly.session.events.filter((e): e is ToolResultEvent => e.type === "tool/result")
@@ -44,11 +44,16 @@ function modelCallingTerminalOpen() {
   ]
 }
 
-/** The refusal as the model receives it, read off the tool/result output. */
+function inlineResult(result: ToolResultEvent | undefined): unknown {
+  if (result?.envelope?.retention.kind !== "inline") throw new Error("Expected actual inline terminal result")
+  return result.envelope.retention.value
+}
+
+/** The refusal as the model receives it, read off the inline tool/result envelope. */
 function terminalResult(assembly: SessionAssembly): { code?: string; error?: string; denial?: SandboxDenial } {
   const result = toolResults(assembly).find((r) => r.name === "terminal_open")
   expect(result, "the model must receive a tool/result for terminal_open").toBeDefined()
-  return result!.output as { code?: string; error?: string; denial?: SandboxDenial }
+  return inlineResult(result) as { code?: string; error?: string; denial?: SandboxDenial }
 }
 
 describe("the assembly hands the terminal a per-call policy", () => {
@@ -159,7 +164,7 @@ describe("the assembly hands the terminal a per-call policy", () => {
       await assembly.agent.run("retry with the mode the denial named")
       const results = toolResults(assembly).filter((r) => r.name === "terminal_open")
       expect(results, "the retry must produce a second tool/result").toHaveLength(2)
-      opened = (results[1]!.output as { id?: string }).id
+      opened = (inlineResult(results[1]) as { id?: string }).id
       expect(opened, `the advised retry to "${advised}" must open the PTY, not refuse again`).toBeDefined()
       // A real PTY, in the service the assembly registered.
       expect(terminals.list().map((v) => v.id)).toContain(opened)
@@ -192,7 +197,7 @@ describe("the assembly hands the terminal a per-call policy", () => {
     try {
       await assembly.agent.run("go")
       const result = toolResults(assembly).find((r) => r.name === "terminal_open")
-      opened = (result?.output as { id?: string } | undefined)?.id
+      opened = (inlineResult(result) as { id?: string }).id
       expect(opened, "terminal_open must have reached the service").toBeDefined()
       // A real PTY was started, so it must also really exist.
       expect(terminals.list().map((v) => v.id)).toContain(opened)
