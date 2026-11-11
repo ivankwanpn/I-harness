@@ -1,7 +1,6 @@
 import { open } from 'node:fs/promises'
 import type { HeldTaskDocumentScope, TaskDocumentWrite, TaskWriteOutcome } from './task-document-types.ts'
-import type {HeldTeamBirthScope} from './team-birth-scope.ts'
-type OriginalAuxScope=HeldTaskDocumentScope|HeldTeamBirthScope
+type OriginalAuxScope=HeldTaskDocumentScope
 
 type ScopeOwner = { captureIssued(): (() => void) | undefined; assertOriginal(): void }
 type Producer = { canReconcile():boolean;reconcile(): Promise<TaskWriteOutcome>; retireUnissued(): Promise<TaskWriteOutcome> }
@@ -17,7 +16,6 @@ export function associateTaskWriteScope(scope: HeldTaskDocumentScope, owner: Sco
   if (scopes.has(scope)) throw new TypeError('Task scope already associated')
   scopes.set(scope, owner)
 }
-export function associateTeamBirthWriteScope(scope:HeldTeamBirthScope,owner:ScopeOwner):void{if(scopes.has(scope))throw TypeError('Team binding scope already associated');scopes.set(scope,owner)}
 
 /** Only the original JSONL constructor retains this stage token. */
 export function createOriginalTaskNativeStage(scope: OriginalAuxScope, available: () => Promise<void>, check: () => void): object {

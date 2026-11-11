@@ -49,10 +49,7 @@ export function registerEventType(type: string): void {
 export const isKnownEventType = (type: string): boolean =>
   KNOWN_EVENT_TYPES.has(type) || extraEventTypes.has(type)
 
-// M19: register the 4 team/* session event types at module init so a plain
-// session-persistence load accepts them standalone (no agent-team import —
-// core-session would be the cycle, and this package must not depend on
-// agent-team either).
+// Historical Team event names remain readable in existing session archives.
 registerEventType("team/member")
 registerEventType("team/task")
 registerEventType("team/message/queued")

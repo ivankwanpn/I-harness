@@ -88,7 +88,7 @@ export function resultExecution(call: PreparedCall): ResultExecution {
   const { outcome, dispatch } = execution.get(call.exec) ?? { outcome: 'unknown', dispatch: 'unknown' }
   return { outcome, dispatch }
 }
-export function dispatchResultReturned(exec: ToolExec): void {
+export function settleUndeclaredDispatch(exec: ToolExec, outcome: ResultExecution['outcome']): void {
   const value = execution.get(exec)
-  if (value && !value.declared) declareToolResultOutcome(exec, 'succeeded')
+  if (value && !value.declared) declareToolResultOutcome(exec, outcome)
 }

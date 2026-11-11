@@ -5,8 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
 import { createSession, createNondurableFactOwner, decodeFactBatch, type BatchKey } from '@i-harness/core-session'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
-import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
+import { createSessionCoordinator, createControlledJsonlBackend as createJsonlBackend, ownedControls } from '../../session-persistence/test/helpers/composed.ts'
 import { createContext } from '@i-harness/core-plugin'
 import { createToolRegistry } from '@i-harness/core-tools'
 import { createAgent } from '@i-harness/core-agent'
@@ -308,14 +307,14 @@ it('an original failed pin release keeps the exact manager resource and does not
 
 it('unknown managed publication retains its original capture/pin and runtime-before-manager dependency until acknowledgment', async () => {
   const f = await fixture(), backend = createJsonlBackend(join(f.cwd, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
+  const controls = ownedControls(backend), append = controls.originalAppend, reconcile = controls.originalReconcile
   let key: BatchKey | undefined, acknowledged = false, publications = 0
-  backend.appendOwnedBatch = async (...args) => {
+  controls.append = async (...args) => {
     const result = await append(...args)
     if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'runtime/context')) { key = args[3].key; publications++; return { kind: 'unknown', key } }
     return result
   }
-  backend.reconcileOwnedBatch = (...args) => !acknowledged && key?.batchId === args[3].key.batchId ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : reconcile(...args)
+  controls.reconcile = (...args) => !acknowledged && key?.batchId === args[3].key.batchId ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : reconcile(...args)
   try {
     const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
     const lease = f.host.create({ session: document.view, factOwner: document, lifetime: { available: () => true } })

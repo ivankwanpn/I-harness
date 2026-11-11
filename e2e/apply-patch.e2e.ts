@@ -1,7 +1,7 @@
 // e2e/apply-patch.e2e.ts — M25 §2.1: the REAL apply_patch tool (M21 patch engine)
 // mutating REAL workspace files, driven through the real runHeadless pipeline.
 //
-// Tool-driving goes through runHeadless + mockScript (see team.e2e.ts for the
+// Tool-driving goes through runHeadless + mockScript (see cli.e2e.ts for the
 // mock-injection ruling: the spawned CLI cannot receive a tool-calling mock —
 // mockScript is host-only — so the cassette is injected at the same seam the
 // CLI's main() uses; everything else in the pipeline is real).
@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest"
 import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { runHeadless } from "../apps/cli/src/run.ts"
+import { inlineToolOutput } from '../apps/cli/test/inline-tool-output.ts'
 import { makeWorkspace, removeWorkspace } from "./helpers.ts"
 
 interface PatchResultEvent {
@@ -18,8 +19,8 @@ interface PatchResultEvent {
 }
 
 function findPatchResult(result: NonNullable<Awaited<ReturnType<typeof runHeadless>>["session"]>): PatchResultEvent["output"] {
-  const event = result.events.find((e) => e.type === "tool/result" && e.name === "apply_patch") as PatchResultEvent | undefined
-  return event?.output
+  const event = result.events.find((e) => e.type === "tool/result" && e.name === "apply_patch")
+  return inlineToolOutput<PatchResultEvent['output']>(event)
 }
 
 describe("e2e apply_patch", () => {

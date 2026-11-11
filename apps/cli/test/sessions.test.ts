@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { append, createSession, CURRENT_FORMAT_VERSION } from "@i-harness/core-session"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createReadOnlySessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import {
   formatAge,
@@ -69,7 +69,7 @@ describe("listStoredSessions", () => {
     const root = storeRoot()
     await seed(root, "sess-old", 1, "the old one")
     await seed(root, "sess-new", 2)
-    const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: false } })
+    const coordinator = createReadOnlySessionCoordinator(createJsonlBackend(root))
     try {
       const rows = await listStoredSessions(coordinator, root)
       expect(rows.map((r) => r.id).sort()).toEqual(["sess-new", "sess-old"])
@@ -88,7 +88,7 @@ describe("listStoredSessions", () => {
     const root = storeRoot()
     await seed(root, "good", 1)
     writeFileSync(join(root, "broken.jsonl"), "{not json}\n", "utf8")
-    const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: false } })
+    const coordinator = createReadOnlySessionCoordinator(createJsonlBackend(root))
     try {
       const rows = await listStoredSessions(coordinator, root)
       expect(rows.map((r) => r.id)).toContain("good")
@@ -103,7 +103,7 @@ describe("listStoredSessions", () => {
   it("an empty (never-used) store lists nothing — and says so", async () => {
     const root = storeRoot()
     mkdirSync(root, { recursive: true })
-    const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: false } })
+    const coordinator = createReadOnlySessionCoordinator(createJsonlBackend(root))
     try {
       expect(await listStoredSessions(coordinator, root)).toEqual([])
     } finally {
@@ -230,7 +230,7 @@ describe("runSessionsCommand", () => {
 describe("sessions — the durable run-end record (M3 §3.4)", () => {
   it("list renders ok / failed / — and the transcript renders the run-end line", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ih-sessions-run-end-"))
-    const backend = createJsonlBackend(dir), coordinator = createSessionCoordinator(backend, {})
+    const backend = createJsonlBackend(dir), coordinator = createReadOnlySessionCoordinator(backend)
     try {
       const ok = {id:'ok'}, failed = {id:'failed'}, older = {id:'older'}
       for(const {id} of [ok,failed,older])await backend.create(id,{sessionId:id,formatVersion:CURRENT_FORMAT_VERSION,createdAt:new Date().toISOString()})
@@ -270,7 +270,7 @@ describe("sessions — the durable run-end record (M3 §3.4)", () => {
     // the failed batch so close() drains both. The reader's contract is
     // **last wins** — the later record is the exit that actually happened.
     const dir = mkdtempSync(join(tmpdir(), "ih-sessions-run-end-twice-"))
-    const backend = createJsonlBackend(dir), coordinator = createSessionCoordinator(backend, {})
+    const backend = createJsonlBackend(dir), coordinator = createReadOnlySessionCoordinator(backend)
     try {
       const id='twice';await backend.create(id,{sessionId:id,formatVersion:CURRENT_FORMAT_VERSION,createdAt:new Date().toISOString()})
       const log = createSession()

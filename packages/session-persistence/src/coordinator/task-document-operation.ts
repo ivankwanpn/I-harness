@@ -1,3 +1,4 @@
+import type {SettlementFacts,ProducerFactOutcome} from '@i-harness/core-session'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { types } from 'node:util'
 import {bindOriginalCurrentnessMethod,runOriginalCurrentnessRead,runOpaqueCurrentnessRead} from '../../../core-session/src/managed/currentness-guards.ts'
@@ -13,6 +14,8 @@ import { captureTaskSnapshot } from './task-document-snapshot.ts'
 import type { TaskDocumentWrite, TaskWriteOutcome } from './task-document-types.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
 
+type TaskSource=SettlementFacts<ProducerFactOutcome>
+
 type Parent = { id: string; assertCurrent(): void; assertOriginal?():void; assertTaskV3Parent?(): void; joinIssuedWriter?():Promise<void>;acquireWriter?():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>> }
 /**
  * S-06: one task-document size limit shared by the staging, observation and
@@ -21,7 +24,7 @@ type Parent = { id: string; assertCurrent(): void; assertOriginal?():void; asser
  * gap; raising it silently would only move the failure to a later layer.
  */
 export const TASK_DOCUMENT_MAX_BYTES = 64 * 1024 * 1024
-export type TaskDocumentConfiguration = { captureParent(document: ManagedExecutionOwner): Parent; captureRequiredParent?(document:ManagedExecutionOwner,source:import('@i-harness/core-session').SettlementFacts):Parent; validator: { validate(value: unknown): void }; open: OpenTaskDocumentSession }
+export type TaskDocumentConfiguration = { captureParent(document: ManagedExecutionOwner): Parent; captureRequiredParent?(document:ManagedExecutionOwner,source:TaskSource):Parent; validator: { validate(value: unknown): void }; open: OpenTaskDocumentSession }
 export interface TaskDocumentReadHandoff { consume(): void; abandon(): void }
 type Operation = { assertCapturedWriteRecovery():void; ordinarySaveOpen():boolean; retirementAcknowledged(ack:import('./task-document-types.ts').TaskDocumentAck):boolean; retirementDisposition(): 'unissued'|'issued'|undefined; observe(): Promise<TaskObservation>; confirm(witness: TaskDocumentWitness): Promise<Confirmation>; retryConfirmation(witness: TaskDocumentWitness): Promise<Confirmation>; prepareReadHandoff(witness: TaskDocumentWitness): TaskDocumentReadHandoff; stageWrite(witness: TaskDocumentWitness, snapshot: unknown): TaskDocumentWrite; assertHandoff(): void; close(): Promise<void>; retryClose(): Promise<void> }
 type MethodContext = { record: object; owner: object; ownership: Ownership; id: string; key: string; parent?: MethodContext }
@@ -66,9 +69,9 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
   const records = new Set<{ readKey?:string; finite(): Promise<void>; close(): Promise<void>; retryClose(): Promise<void> }>()
   const fail = () => { throw new Error('TASK_DOCUMENT_CONFLICT') }
   function parent(this: unknown, document: ManagedExecutionOwner) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = captureParent(document), token = Object.freeze({}); parents.set(token, captured); const field = captured && !types.isProxy(captured) && Object.getOwnPropertyDescriptor(captured, 'assertTaskV3Parent'); if (field && 'value' in field && typeof field.value === 'function' && !types.isProxy(field.value)) parentEligibility.set(token, method(captured, 'assertTaskV3Parent')!); return token }
-  type Required={pin:Awaited<ReturnType<Ownership['pinOwnership']>>;ticket:ReturnType<typeof admission.registerRequiredTaskObligation>;source:import('@i-harness/core-session').SettlementFacts;cleanup():Promise<void>}
+  type Required={pin:Awaited<ReturnType<Ownership['pinOwnership']>>;ticket:ReturnType<typeof admission.registerRequiredTaskObligation>;source:TaskSource;cleanup():Promise<void>}
   const requiredParents=new WeakMap<object,Required>()
-  async function requiredParent(this:unknown,document:ManagedExecutionOwner,source:import('@i-harness/core-session').SettlementFacts) {
+  async function requiredParent(this:unknown,document:ManagedExecutionOwner,source:TaskSource) {
     if(this!==operations||!captureRequiredParent)throw new TypeError('Required task owner unavailable');const captured=captureRequiredParent(document,source),token=Object.freeze({}),originalCheck=method(captured,'assertOriginal')!;
     let pin:Required['pin']|undefined,released=false,acquiring:Promise<void>|undefined;
     const acquisitions:import('./ownership.ts').OwnershipCleanup[]=[];

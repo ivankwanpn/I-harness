@@ -57,7 +57,7 @@ export function useWorkflow(bridge: DesktopBridge, workspaceId: string, sessionI
       if (params?.sessionId !== sessionId) return
       const type = params.event?.type
       if (event.method === "desktop/workflow/changed" || event.method === "session/status"
-        || event.method === "session/event" && (type === "goal/change" || type === "plan/mode" || type === "job/status" || type === "tool/result" || typeof type === "string" && type.startsWith("team/"))) refresh.schedule()
+        || event.method === "session/event" && (type === "goal/change" || type === "plan/mode" || type === "job/status" || type === "tool/result")) refresh.schedule()
     })
     void read().catch((reason) => { if (active.current) setError(message(reason)) })
     return () => { refresh.dispose(); unsubscribe(); if (scheduler.current === refresh) scheduler.current = undefined }

@@ -2,7 +2,6 @@ import {createLegacyReadVisibility,exportConversationSeed,freezeJsonData,type Se
 import {captureManagedHistoryCut,assertManagedHistoryCut} from '@i-harness/core-session/internal/bootstrap'
 import {compileSemanticSeed,type ChildHistory} from '@i-harness/session-persistence'
 import {assertOriginalTaskCaller,type OriginalTaskCaller} from '@i-harness/core-tools/internal/task-caller'
-import {assertOriginalManagedTeamBirth,type OriginalManagedTeamBirthAuthority} from '@i-harness/core-tools/internal/team-caller'
 import {reserveManagedTaskHistory} from '@i-harness/core-session/internal/execution'
 
 export interface OriginalTaskChildHistory {readonly kind:'original-task-child-history'}
@@ -48,14 +47,6 @@ export function captureTaskChildHistory(caller:OriginalTaskCaller):OriginalTaskC
   const capability=Object.freeze({kind:'original-task-child-history' as const})
   histories.set(capability,{view,owner,parentSessionId,count:view.events.length,hasDependencies:exported.seed.artifacts.length>0,hasLegacy,inheritedLegacyUnknown:view.header?.semanticSeed!==undefined,history,seed,assertCurrent})
   return capability
-}
-/** The original Team leaf captures its own source prefix after provisioning ACK. */
-export function captureTeamChildHistory(caller:OriginalManagedTeamBirthAuthority,provisioning:import('@i-harness/core-session/internal/execution').OriginalTeamProvisioning):OriginalTaskChildHistory|undefined{
- assertOriginalManagedTeamBirth(caller,provisioning);const args=caller.call.args as {context?:unknown;fork_turns?:unknown};if((args.context??'fresh')==='fresh')return
- if(args.context!=='fork')throw Error('Original Team context unavailable')
- const turns=parseTaskHistorySelection(args.fork_turns===undefined?'all':args.fork_turns);if(turns==='none')return
- const selection=turns==='all'?{kind:'all' as const}:{kind:'last-turns' as const,count:turns},parentSessionId=caller.identity.parentSessionId,reservation=reserveManagedTaskHistory(caller.context.domain,caller.source),capability=Object.freeze({kind:'original-task-child-history' as const})
- managedHistories.set(capability,{parentSessionId,domain:caller.context.domain,reservation,selection,history:freezeJsonData({selection,source:{kind:'session' as const,sessionId:parentSessionId}})});return capability
 }
 export function inspectTaskChildHistory(capability:OriginalTaskChildHistory,parentSessionId:string) {
   const managed=managedHistories.get(capability)

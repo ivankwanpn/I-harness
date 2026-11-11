@@ -17,14 +17,14 @@ it.each(['second-first', 'last-first', 'concurrent', 'multiple-event-groups'] as
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const action = document.beginAction(), source = document.registerReceivedInputSource(async () => {})
-  const counts = mode === 'multiple-event-groups' ? [2, 1, 3] : [1, 1, 1]
-  const facts = counts.map((count, index) => mode === 'multiple-event-groups'
-    ? action.captureTeamTransaction(Array.from({ length: count }, (_, offset) => ({ type: 'team/member' as const, version: 1 as const, teamId: 't', member: { id: `${index}-${offset}`, name: `${index}-${offset}`, description: '', provider: 'fixture', context: 'fresh' as const, phase: 'active' as const } })))
-    : source.captureAdmitted({ type: 'agent/input/admitted', version: 1, inputId: String(index), text: String(index), delivery: 'queue', intent: 'user' }))
+  const counts = mode === 'multiple-event-groups' ? [2, 1, 2] : [1, 1, 1]
+  const facts = counts.map((count, index) => count === 2
+    ? action.capturePlanProposal!('original proposal ' + index)
+    : mode === 'multiple-event-groups' ? action.captureMetadata!({ type: 'session/title', title: 'one original metadata group', messageSeqs: [], source: 'user' }) : source.captureAdmitted({ type: 'agent/input/admitted', version: 1, inputId: String(index), text: String(index), delivery: 'queue', intent: 'user' }))
   const expected = counts.map((count, index) => Array.from({ length: count }, (_, offset) => counts.slice(0, index).reduce((sum, value) => sum + value, 0) + offset))
   try {
     const outcomes = await Promise.all(facts.map(fact => fact.admit()))
-    expect(outcomes.every(outcome => outcome.kind === 'unknown')).toBe(true)
+    expect(outcomes.map(outcome => outcome.kind), JSON.stringify(outcomes)).toEqual(['unknown', 'unknown', 'unknown'])
     expect(outcomes).toEqual([outcomes[0], outcomes[0], outcomes[0]])
     const order = mode === 'second-first' ? [1, 0, 2] : [2, 1, 0]
     const recovered = mode === 'concurrent' ? await Promise.all(order.map(index => facts[index]!.reconcile())) : []

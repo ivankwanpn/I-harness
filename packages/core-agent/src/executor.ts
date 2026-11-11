@@ -5,7 +5,7 @@ import type { AgentResult } from "./index.ts"
 import type { AgentInputOptions } from "./agent/types.ts"
 import type {ManagedAgent,ManagedAgentInputOptions} from './agent/managed-types.ts'
 import type {ManagedExecutionAttachment} from '../../session-persistence/src/execution-internal.ts'
-import {receivedExecutionInputsFor} from '../../session-executor/src/lifecycle/execution-inputs.ts'
+import {receivedExecutionInputsFor} from './lifecycle/execution-inputs.ts'
 import {assertManagedAgentCurrent} from './agent/managed-create.ts'
 import {savingFailure} from './agent/saving-failure.ts'
 

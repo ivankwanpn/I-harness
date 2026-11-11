@@ -1,4 +1,4 @@
-import { receivedInputsFor } from '../../../session-executor/src/lifecycle/received-inputs.ts'
+import { receivedInputsFor } from '../lifecycle/received-inputs.ts'
 import { canonicalJsonData, isStrictFactData, committedFactSeqs, isOwnedSettlementSource } from '@i-harness/core-session'
 import type { ModelOriginState } from './model-origin.ts'
 import type { ModelOriginExpectation } from '@i-harness/core-tools/model-origin'
@@ -145,8 +145,10 @@ export function takeModelMember(origin:ModelOriginState,proof:object,expected:Mo
     check();if(issued)throw new Error('Exec source issuer already taken');issued=true
     const action=member!.state.invocation.action
     if(origin.factOwner.view!==origin.view||origin.factOwner.ownsAction?.(action)===false)throw new Error('Original model action required')
-    let captured=false,registered=false
+    const createIssuer=():import('@i-harness/core-tools/model-origin').OriginalExecSourceIssuer=>{
+    let captured=false,registered=false,closed=false,renewed=false
     const issuer:import('@i-harness/core-tools/model-origin').OriginalExecSourceIssuer=Object.freeze({
+      nextAttempt(){if(this!==issuer||!captured||!closed||renewed)throw Error('Original closed Exec attempt required');check();renewed=true;return createIssuer()},
       assertAdmissionCurrent(){if(this!==issuer)throw new Error('Foreign Exec issuer receiver');check()},
       captureSource(binding:import('@i-harness/core-tools/model-origin').ExecSourceBinding,recipientCurrent:()=>boolean){
         if(this!==issuer)throw new Error('Foreign Exec issuer receiver');check()
@@ -154,9 +156,11 @@ export function takeModelMember(origin:ModelOriginState,proof:object,expected:Mo
         captured=true
         return action.captureExecDeliverySource({type:'agent/delivery-source',version:1,kind:'exec',recipientSessionId:binding.recipientSessionId,generationId:binding.generationId,sourceNamespace:'exec',sourceId:binding.sourceId,callSeq:binding.callSeq,delivery:binding.delivery},()=>{try{check();return recipientCurrent()}catch{return false}})
       },
-      registerCompletion(drain:()=>Promise<void>){if(this!==issuer)throw new Error('Foreign Exec issuer receiver');check();if(registered)throw new Error('Exec completion already registered');registered=true;return action.registerSettlementSource(drain)},
+      registerCompletion(drain:()=>Promise<void>){if(this!==issuer)throw new Error('Foreign Exec issuer receiver');check();if(registered)throw new Error('Exec completion already registered');registered=true;const source=action.registerSettlementSource(drain),close=source.close;source.close=async function(){if(this!==source)throw Error('Original Exec source receiver required');await close.call(source);closed=true};return source},
     })
     return issuer
+    }
+    return createIssuer()
   },takeCodeSourceIssuer(){
     if(this!==permit)throw new Error('Foreign model permit receiver')
     check();if(codeIssued)throw new Error('Code source issuer already taken');codeIssued=true

@@ -13,7 +13,7 @@ function sameImmutableHeader(live: Record<string, unknown>, staged: Record<strin
   return true
 }
 import { lstat, open, readFile, readdir, rename, mkdir, type FileHandle } from 'node:fs/promises'
-import { basename, dirname,join } from 'node:path'
+import { basename, dirname } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { BigIntStats } from 'node:fs'
 import { AsyncLocalStorage } from 'node:async_hooks'
@@ -26,7 +26,7 @@ import { createBootstrapCaptureIO, type BootstrapCaptureIO } from './bootstrap-c
 import { createPublicationOwner, type PublicationOwner } from './publication.ts'
 import { bootstrapPaths, bootstrapNamespace, bootstrapPathsForRoute, lookupBootstrapStage, ordinaryStageIO } from './bootstrap-stage.ts'
 export { bootstrapPaths } from './bootstrap-stage.ts'
-import { captureBootstrapRoute, routeInvocation,parseOwnedCaptureReservation,routeForReservation, type BootstrapRoute, type BootstrapRouteBackend, type BootstrapReadState } from '@i-harness/session-persistence'
+import { captureBootstrapRoute, routeInvocation, type BootstrapRoute, type BootstrapRouteBackend, type BootstrapReadState } from '@i-harness/session-persistence'
 import { preserveBootstrapBirth } from './fact-journal.ts'
 import { resolveSelectedBirth } from './selected-birth.ts'
 import { lookupSelectedBootstrapStage } from './selected-bootstrap-stage.ts'
@@ -205,20 +205,7 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
       return {route:selected.route,stage:selected.stage,stageBytes:selected.exactBytes,digest:createHash('sha256').update(raw).digest('hex')}
     })
   }
-  const bootstrapRoutes:BootstrapRouteBackend={readState,readCapture:capture.readCapture,reserveCapture:capture.reserveCapture,settleTeamDiscovery(id,owner){return settleTrackedHeaderIO(id,owner)},async discoverTeamChild(id,owner){
-    trackHeaderOwner(id,owner)
-    return trackHeaderFlight(id,owner,async()=>{
-      scope(id,owner);await assertNotDeleted('session',id);const path=filePath(id),names=await bootstrapNamespace(path);scope(id,owner)
-      const stages=names.filter(name=>name.endsWith('.stage'));if(!stages.length)return {kind:names.length?'unavailable' as const:'absent' as const};if(stages.length!==1)return {kind:'conflict' as const}
-      const bytes=await ownedRead(join(dirname(path),stages[0]!),id,owner,262144);scope(id,owner);if(!bytes)return {kind:'unavailable' as const}
-      let route:BootstrapRoute
-      try{let reservation;try{reservation=parseOwnedCaptureReservation(bytes)}catch{reservation=parseBootstrapHeaderStage(bytes).captureReservation}if(!reservation)return {kind:'conflict' as const};route=routeForReservation(reservation)}catch{return {kind:'unavailable' as const}}
-      if(route.protocol!=='child-v1'||route.request.core.caller.kind!=='team'||route.request.invocation.targetSessionId!==id||basename(bootstrapPathsForRoute(path,route).stage)!==stages[0])return {kind:'conflict' as const}
-      const io={namespace:()=>bootstrapNamespace(path),read:(artifact:string,limit:number)=>ownedRead(artifact,id,owner,limit),assertCurrent:()=>scope(id,owner)},found=await lookupBootstrapStage(path,{kind:'route',route},io)
-      if(found.kind==='reserved'||found.kind==='full'){if(hasTrackedHeaderDebt(id,owner))throw Error('Bootstrap tracked read cleanup unresolved');return {kind:found.kind==='reserved'?'reserved' as const:'materialized' as const,request:route.request}}
-      return {kind:found.kind==='conflict'?'conflict' as const:'unavailable' as const}
-    })
-  },async resolveBirth(id){
+  const bootstrapRoutes:BootstrapRouteBackend={readState,readCapture:capture.readCapture,reserveCapture:capture.reserveCapture,async resolveBirth(id){
     await assertNotDeleted('session',id)
     const path=filePath(id),raw=await optional(path);if(!raw)return
     const end=raw.indexOf(10),meta=parseHeader(raw.subarray(0,end).toString('utf8'))

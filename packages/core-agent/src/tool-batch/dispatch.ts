@@ -88,7 +88,7 @@ export function createStartCall(session: BatchSource, tools: ToolRegistry, batch
         if (isPolicyRefusal(err)) cancellation.stopForRefusal(err)
         else if (!opts.signal?.aborted) {
           records.setSlot(index, { name: call.name, callId: call.callId, synthetic: true,
-            execution: { outcome: 'failed', dispatch: 'dispatched' },
+            execution: { outcome: resultExecution(prepared).outcome === 'unknown' ? 'unknown' : 'failed', dispatch: 'dispatched' },
             output: { error: err instanceof Error ? err.message : String(err), code: TOOL_FAILED } })
         }
         try {

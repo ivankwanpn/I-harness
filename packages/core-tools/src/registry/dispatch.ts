@@ -1,10 +1,11 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { PreparedCall, Tool, ToolDispatchMetadata, ToolRegistry } from "../types.ts"
+import { isPolicyRefusal } from '../types.ts'
 import { beginRetainedDispatch } from './retained-outcome.ts'
-import { dispatchResultStarted, dispatchResultReturned, declareToolResultOutcome,recordDispatchedToolResult } from './result-finalization.ts'
+import { dispatchResultStarted, settleUndeclaredDispatch,recordDispatchedToolResult } from './result-finalization.ts'
 import { withToolResultProducer } from './result-dependencies.ts'
 import { assertNativeInstructions, isInstructionReplan, runInstructionBody } from '../instructions.ts'
-import {preparedExecutionHooks,assertPreparedInvocationCurrent,getPreparedInvocationAdmissionWait} from './prepared-body.ts'
+import {preparedExecutionHooks,assertPreparedInvocationCurrent,getPreparedInvocationAdmissionWait,preparePreparedRetry} from './prepared-body.ts'
 
 export function createDispatcher(ctx: PluginContext, getTool: (name: string) => Tool | undefined, getRegistry: () => ToolRegistry, invokePrepared: (prepared: PreparedCall) => Promise<unknown>): ToolRegistry["dispatch"] {
   // M13 dispatch stage — the ONLY overlapping stage: runs the around-seam
@@ -35,15 +36,16 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
     validatePrepared(prepared)
     hooks?.channel.assertCurrent(hooks.surface)
     const retained = beginRetainedDispatch(prepared)
+    let dispatchOpen=true
+    let retryFlight: Promise<{ kind: 'result'; value: unknown } | { kind: 'unavailable' }> | undefined
     let bodyReturned=false
+    let retainedBody=retained?.body
+    let bodyFlight: Promise<unknown> | undefined
     try {
     const cascade:PluginContext['cascade']=hooks?(event,input,final)=>hooks.channel.cascade(event as 'tools/execute',input,final,hooks.surface):ctx.cascade.bind(ctx)
-    const output = await cascade(
-      "tools/execute",
-      { name: prepared.call.name, args: prepared.call.args, exec: prepared.exec, tool: prepared.tool,
-        registry: getRegistry(), bindingGeneration: prepared.bindingGeneration, validateBinding: prepared.bindingValidation,
-        ...(prepared.commandDialect !== undefined ? { commandDialect: prepared.commandDialect } : {}) } satisfies ToolDispatchMetadata,
-      async () => {
+    const invokeAttempt = () => {
+      const attemptBody = retainedBody
+      const running = (async () => {
         // Hooks may await before next(). No await is allowed between this final
         // authority check and invoking the body whose binding was validated.
         for(;;){const wait=getPreparedInvocationAdmissionWait(prepared);if(!wait)break;await wait}
@@ -56,21 +58,45 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
           throw Object.assign(new Error(error instanceof Error ? error.message : String(error), { cause: error }), { policyRefusal: true as const })
         }
         dispatchResultStarted(prepared.exec)
+        attemptBody?.observed()
         const result = await withToolResultProducer(prepared.exec, () => runInstructionBody(prepared.exec, () => invokePrepared(prepared)))
-        dispatchResultReturned(prepared.exec)
+        settleUndeclaredDispatch(prepared.exec, 'succeeded')
         bodyReturned=true
-        retained?.body.observed(); retained?.body.ready(result)
+        attemptBody?.observed(); attemptBody?.ready(result)
         return result
-      },
-    )
+      })()
+      bodyFlight = running
+      return running
+    }
+    const retryAttempt = (): Promise<{ kind: 'result'; value: unknown } | { kind: 'unavailable' }> => {
+      if (!dispatchOpen) return Promise.reject(new Error('Original dispatch is closed'))
+      if (retryFlight) return retryFlight
+      const flight = Promise.resolve().then(async () => {
+        if (!dispatchOpen) throw new Error('Original dispatch is closed')
+        const previousBody = bodyFlight
+        bodyReturned=false
+        retainedBody=retained?.nextBody()
+        if (!await preparePreparedRetry(prepared, previousBody, () => { bodyReturned=false; validatePrepared(prepared) })) return { kind: 'unavailable' } as const
+        if (!dispatchOpen) throw new Error('Original dispatch is closed')
+        return { kind: 'result', value: await cascade('tools/execute', metadata, invokeAttempt) } as const
+      })
+      retryFlight = flight
+      void flight.then(() => { if (retryFlight === flight) retryFlight = undefined }, () => { if (retryFlight === flight) retryFlight = undefined })
+      return flight
+    }
+    const metadata = { name: prepared.call.name, args: prepared.call.args, exec: prepared.exec, tool: prepared.tool,
+        retryAttempt, registry: getRegistry(), bindingGeneration: prepared.bindingGeneration, validateBinding: prepared.bindingValidation,
+        ...(prepared.commandDialect !== undefined ? { commandDialect: prepared.commandDialect } : {}) } satisfies ToolDispatchMetadata
+
+    const output = await cascade('tools/execute', metadata, invokeAttempt)
     recordDispatchedToolResult(prepared,output)
     retained?.success()
     return output
     } catch (error) {
       // The actual throw site owns failure; payload fields never do.
-      if(!hooks||!bodyReturned)try { declareToolResultOutcome(prepared.exec, prepared.exec.abortSignal?.aborted ? 'unknown' : 'failed') } catch { /* Authority gate may precede actual dispatch. */ }
+      if ((!hooks || !bodyReturned) && !isPolicyRefusal(error)) try { settleUndeclaredDispatch(prepared.exec, prepared.exec.abortSignal?.aborted ? 'unknown' : 'failed') } catch { /* Authority gate may precede actual dispatch. */ }
       throw retained?.failure(error) ?? error
-    }
+    } finally { dispatchOpen=false }
   }
 
   return dispatch

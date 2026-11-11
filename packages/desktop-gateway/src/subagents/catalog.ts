@@ -3,7 +3,6 @@ import { currentTaskFormat } from './catalog-provenance.ts'
 import type { SessionCoordinator, SessionMeta } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 import { derivePlanMode, type SessionView as Session, type SessionEventView as SessionEvent } from "@i-harness/core-session"
-import { foldTeam, teamLedger } from "@i-harness/agent-team"
 import { taskDocKey, childResultPreview } from "@i-harness/subagent"
 import type { SubagentScope } from "./scope.ts"
 import { object, records, jobRecords, status, errorText, MAX_LINEAGE, CONTROL_REASON, PLAN_REASON, type AgentRecord, type DesktopSubagentCatalog, type DesktopSubagentRow } from "./types.ts"
@@ -73,8 +72,19 @@ export function createSubagentCatalog(coordinator: SessionCoordinator, service: 
         const ownerAuthority = scopedOwner ? authority(parentId, ownerId, [scopedOwner.meta, ...scopedOwner.chain.slice(1).map(id => metas.get(id)!)]) : undefined
         const ownerSession = await snapshot(ownerId, liveChild(ownerId, ownerAuthority))
         ownerSessions.set(ownerId, ownerSession)
-        const team = foldTeam(teamLedger(ownerSession)).state
-        for (const member of team.members.values()) if (member.sessionId) hints.set(member.sessionId, { currentFormat: hints.get(member.sessionId)?.currentFormat, sessionId: member.sessionId, path: `lead/${member.name}`, roleName: "teammate", label: member.name, status: member.phase === "failed" ? "error" : "unavailable", ...(member.error ? { error: member.error } : {}) })
+        // Historical Team rows are display-only; fork seeds never own source children.
+        const header = ownerSession.header
+        const fork = !!(header?.parentSession && header.origin !== 'subagent' && header.origin !== 'approval-review')
+        const events = fork ? ownerSession.events.slice(header?.seedLength ?? ownerSession.events.length) : ownerSession.events
+        const members = new Map<string, Extract<import('@i-harness/core-session').SessionEvent, { type: 'team/member' }>['member']>()
+        for (const event of events) if (event.type === 'team/member') {
+          const member = event.member
+          if (!member || typeof member.name !== 'string' || !member.name || !['provisioning','active','failed'].includes(member.phase)
+            || member.sessionId !== undefined && typeof member.sessionId !== 'string'
+            || member.error !== undefined && typeof member.error !== 'string') throw new Error('Invalid historical Team member')
+          members.set(member.name, member)
+        }
+        for (const member of members.values()) if (member.sessionId) hints.set(member.sessionId, { currentFormat: hints.get(member.sessionId)?.currentFormat, sessionId: member.sessionId, path: `lead/${member.name}`, roleName: "teammate", label: member.name, status: member.phase === "failed" ? "error" : "unavailable", ...(member.error ? { error: member.error } : {}) })
       } catch (error) { invalidOwners.add(ownerId); errors.push({ sessionId: ownerId === parentId ? undefined : ownerId, message: errorText(error) }) }
       try { runtimes.set(ownerId, live(ownerId)) }
       catch (error) { errors.push({ sessionId: ownerId === parentId ? undefined : ownerId, message: errorText(error) }) }
@@ -131,7 +141,7 @@ export function createSubagentCatalog(coordinator: SessionCoordinator, service: 
       const isLive = Boolean(liveEntry && !unavailable && runtime && service.liveAssembly(runtime.ownerId) === runtime.runtime?.assembly)
       const team = entry?.path?.startsWith("lead/") === true
       const tools = runtime?.runtime?.assembly.tools
-      const canControl = isLive && entry?.status !== "killed" && !parentMeta.archived
+      const canControl = !team && isLive && entry?.status !== "killed" && !parentMeta.archived
       const rootSession = runtimes.get(parentId)?.assembly.session ?? ownerSessions.get(parentId)
       const plan = Boolean((rootSession && derivePlanMode(rootSession).active) || (runtime?.runtime && derivePlanMode(runtime.runtime.assembly.session).active))
       const preview = retained ? childResultPreview({ ...(finalText !== undefined ? { resultText: finalText } : {}), ...((unavailable ?? currentError) !== undefined ? { error: unavailable ?? currentError } : {}) }) : undefined
@@ -143,9 +153,9 @@ export function createSubagentCatalog(coordinator: SessionCoordinator, service: 
         ...(finalText !== undefined ? { finalText: retained ? preview?.resultText : finalText.slice(0, 16_384) } : {}),
         ...((unavailable ?? currentError) ? { error: retained ? preview?.error : unavailable ?? currentError } : {}),
         ...(!canControl || plan ? { controlReason: parentMeta.archived ? "The parent conversation is archived." : plan ? PLAN_REASON : CONTROL_REASON } : {}),
-        canFollowup: Boolean(canControl && !plan && tools?.get(team ? "team_followup_task" : "followup_task")),
-        canMessage: Boolean(canControl && !plan && tools?.get(team ? "team_send_message" : "send_message")),
-        canInterrupt: Boolean(canControl && liveEntry?.status === "running" && tools?.get(team ? "team_interrupt_agent" : "interrupt_agent")),
+        canFollowup: Boolean(canControl && !plan && tools?.get("followup_task")),
+        canMessage: Boolean(canControl && !plan && tools?.get("send_message")),
+        canInterrupt: Boolean(canControl && liveEntry?.status === "running" && tools?.get("interrupt_agent")),
         canClose: Boolean(canControl && tools?.get("close_agent")),
       })
     }

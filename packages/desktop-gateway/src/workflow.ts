@@ -1,11 +1,10 @@
-import { createHash, randomUUID } from "node:crypto"
+import type { Tool } from '@i-harness/core-tools'
+import { createHash } from "node:crypto"
 import { committedFactSeqs, metadataFactsFor, derivePlanMode, type SessionView as Session, type GoalOperation, type MetadataFact } from "@i-harness/core-session"
 import { actionMetadataFacts } from '@i-harness/session-executor'
 import { applyGoalMutation, foldGoal, type GoalView, type GoalMutationRequest } from "@i-harness/goal"
 import { enterPlanMode } from "@i-harness/plan-mode"
 import { foldJobs, projectJobsDoc, type JobView } from "@i-harness/jobs"
-import { foldTeam, teamLedger, type TeamMemberSnapshot, type TeamTaskSnapshot } from "@i-harness/agent-team"
-import { validateJsonSchemaValue, type JsonSchemaNode, type Tool } from "@i-harness/core-tools"
 import type { GuardianReviewRecord } from "@i-harness/guard-approval"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
@@ -16,23 +15,19 @@ export interface DesktopWorkflowView {
   goalRun?: { running: boolean; error?: string }
   plan: { active: boolean; proposal?: string }
   jobs: (JobView & { live: boolean; canCancel: boolean })[]
-  team: { enabled: boolean; members: TeamMemberSnapshot[]; tasks: TeamTaskSnapshot[] }
   reviews: GuardianReviewRecord[]
 }
 export interface ManagedWorkflowUi {
  readonly goal:ReturnType<typeof createManagedGoalUi>
  assertCurrent():void
- details():Promise<Pick<DesktopWorkflowView,'jobs'|'team'>>
+ details():Promise<Pick<DesktopWorkflowView,'jobs'>>
  lastStepSince(ordinal:number):Promise<{refused?:boolean;empty?:boolean}|undefined>
- teamCommand(tool:string,args:Record<string,unknown>):Promise<void>
 }
 export type WorkflowCommand =
   | { action: "goal"; operation: GoalOperation; request: GoalMutationRequest; start?: boolean }
   | { action: "plan"; enabled: boolean; proposal?: string }
-  | { action: "team"; tool: "spawn_teammate" | "send_message" | "followup_task" | "interrupt_agent" | "team_task_create" | "team_task_update"; args: Record<string, unknown> }
   | { action: "job/cancel"; id: string }
 
-const TEAM_TOOLS = new Set(["spawn_teammate", "send_message", "followup_task", "interrupt_agent", "team_task_create", "team_task_update"])
 const GOAL_OPERATIONS = new Set(["create", "edit", "pause", "resume", "complete", "clear"])
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid workflow command")
@@ -45,7 +40,6 @@ function text(value: unknown, max = 4096): string {
 
 /** Scope and state remain owned by the existing session/domain registries. */
 export function createDesktopWorkflow(coordinator: SessionCoordinator, service: SessionService, options: {
-  teamEnabled?: boolean
   reviews?: (sessionId: string) => Promise<GuardianReviewRecord[]>
   onChanged?: (sessionId: string) => void
   onRunningChanged?: (sessionId: string, running: boolean, error?: string) => void
@@ -64,11 +58,10 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
   }
   async function read(id: string): Promise<DesktopWorkflowView> {
     const managed=options.managed?.(id)
-    if(managed){const selected=managed.goal.read(),{goal,plan}=selected,details=await managed.details();managed.assertCurrent();selected.assertCurrent();const savedFailure=await coordinator.getDocument(goalDoc(id)) as {goalId?:string;error?:string}|undefined;managed.assertCurrent();const last=goalFailures.get(id)??savedFailure,running=Boolean(goalRuns.get(id)&&!goalRuns.get(id)!.controller.signal.aborted),reviews=await options.reviews?.(id)??[];managed.assertCurrent();selected.assertCurrent();return {goal,plan,jobs:details.jobs,team:details.team,reviews,goalRun:{running,...!running&&last?.goalId===goal?.id&&last?.error?{error:last.error.slice(0,2000)}:{}}}}
+    if(managed){const selected=managed.goal.read(),{goal,plan}=selected,details=await managed.details();managed.assertCurrent();selected.assertCurrent();const savedFailure=await coordinator.getDocument(goalDoc(id)) as {goalId?:string;error?:string}|undefined;managed.assertCurrent();const last=goalFailures.get(id)??savedFailure,running=Boolean(goalRuns.get(id)&&!goalRuns.get(id)!.controller.signal.aborted),reviews=await options.reviews?.(id)??[];managed.assertCurrent();selected.assertCurrent();return {goal,plan,jobs:details.jobs,reviews,goalRun:{running,...!running&&last?.goalId===goal?.id&&last?.error?{error:last.error.slice(0,2000)}:{}}}}
     const session = await sessionFor(id)
     const jobs = new Map([...projectJobsDoc(await coordinator.getDocument(id)), ...foldJobs(session.events)].map((job) => [job.jobId, job]))
     const live = service.tasks(id)
-    const team = foldTeam(teamLedger(session)).state
     const goal = foldGoal(session.events)
     const savedFailure = await coordinator.getDocument(goalDoc(id)) as { goalId?: string; error?: string } | undefined
     const last = goalFailures.get(id) ?? savedFailure
@@ -76,7 +69,6 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
     return {
       goal, goalRun: { running: goalRunning, ...(!goalRunning && last?.goalId === goal?.id && last?.error ? { error: last.error.slice(0, 2000) } : {}) }, plan: derivePlanMode(session),
       jobs: [...jobs.values()].slice(-200).map((job) => { const task = live.find((row) => row.id === job.jobId); return { ...job, live: Boolean(task), canCancel: task?.canCancel === true } }),
-      team: { enabled: options.teamEnabled === true, members: [...team.members.values()], tasks: [...team.tasks.values()].filter((task) => task.status !== "deleted") },
       reviews: await options.reviews?.(id) ?? [],
     }
   }
@@ -139,6 +131,7 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
   async function mutate(id: string, value: unknown): Promise<DesktopWorkflowView> {
     if (closed) throw new Error("Workflow closed")
     const command = object(value)
+    if (!['goal', 'plan', 'job/cancel'].includes(String(command.action))) throw new Error('Unknown workflow command')
     const managed=options.managed?.(id)??await options.managedForMutation?.(id)
     if(managed){
       let startGoalValue:Readonly<GoalView>|undefined
@@ -155,8 +148,6 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
       }else if(command.action==='plan'){
         if(typeof command.enabled!=='boolean')throw Error('Invalid Plan mode flag');if(service.queueState(id).running||service.queueState(id).queued)throw Error('Wait for the current turn before changing Plan Mode');if(command.proposal!==undefined)text(command.proposal)
         await managed.goal.setPlan(command.enabled,command.proposal as string|undefined)
-      }else if(command.action==='team'){
-        if(!options.teamEnabled||!TEAM_TOOLS.has(String(command.tool)))throw Error('Team action unavailable');if(managed.goal.read().plan.active)throw Error('Leave Plan Mode before changing team state');const args=object(command.args);if(JSON.stringify(args).length>65536)throw Error('Team request too large');await managed.teamCommand(String(command.tool),args)
       }else if(command.action==='job/cancel')service.cancelTask(id,text(command.id,256));else throw Error('Unknown workflow command')
       options.onChanged?.(id);const view=await read(id);if(startGoalValue){startGoal(id,startGoalValue.objective,startGoalValue.id);return {...view,goalRun:{running:true}}}return view
     }
@@ -185,20 +176,6 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
       if (command.proposal !== undefined) text(command.proposal)
       if (command.enabled && command.proposal) await enterPlanMode(session, command.proposal as string,assembly.metadataFacts)
       else committedFactSeqs(await metadataFactsFor(session,assembly.metadataFacts).admit({ type: "plan/mode", mode: command.enabled ? "on" : "off" }))
-      await coordinator.flush(id)
-    } else if (command.action === "team") {
-      if (!options.teamEnabled || !TEAM_TOOLS.has(String(command.tool))) throw new Error("Team action unavailable")
-      if (derivePlanMode(session).active) throw new Error("Leave Plan Mode before changing team state")
-      const args = object(command.args)
-      if (JSON.stringify(args).length > 65536) throw new Error("Team request too large")
-      const registry = assembly.tools
-      const tool = registry.get(`team_${String(command.tool)}`) ?? registry.get(String(command.tool))
-      if (!tool) throw new Error("Team tool unavailable")
-      const invalid = validateJsonSchemaValue(tool.inputSchema as JsonSchemaNode, args)
-      if (invalid.length) throw new Error(`Invalid team arguments: ${invalid[0]}`)
-      // This fixed-vocabulary UI operation is an explicit human action. Child
-      // execution still uses its normal sandbox and per-tool approval policy.
-      await tool.execute(args, { sessionId: id, callId: `desktop-${randomUUID()}` })
       await coordinator.flush(id)
     } else if (command.action === "job/cancel") {
       service.cancelTask(id, text(command.id, 256))

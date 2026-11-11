@@ -2,7 +2,7 @@ import { appendStandalone as append } from "./helpers.ts"
 import { afterEach, expect, it, vi } from "vitest"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { observeModelClient, type LLMRequest, type ModelClient } from "@i-harness/llm-seam"
+import { type LLMRequest, type ModelClient } from "@i-harness/llm-seam"
 import { controlledModel } from "./controlled-model.ts"
 import { createSessionAssembly, type SessionProjectContext } from "../src/assembly.ts"
 import { createSessionService } from "../src/service.ts"
@@ -190,26 +190,6 @@ it("the selected shell receives current project roots and refuses removed cwd an
     expect(readFileSync(allowed, "utf8")).toBe("updated")
   } finally { await assembly.dispose() }
 }, 30_000)
-
-it("a teammate receives the same live project context as its parent", async () => {
-  const { root, a, b } = fixture()
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
-  await coordinator.create({ sessionId: "team-parent" })
-  const requests: LLMRequest[] = []
-  const cassette = createMockClient([
-    { role: "assistant", toolCalls: [{ name: "spawn_teammate", args: { name: "helper", description: "project worker", prompt: "read project folders" } }] },
-    { role: "assistant", text: "done" }, { role: "assistant", text: "done" },
-  ])
-  const model = observeModelClient(cassette, { start(request) { requests.push(request) }, finish() {} })
-  const assembly = await createSessionAssembly({ workspace: a, sessionId: "team-parent", coordinator, model, modelPolicy: "test-mock", approveAll: true, team: {}, projectContext: () => ({ id: "p", name: "Teammate Project", roots: [a, b], primaryRoot: a }) })
-  try {
-    await assembly.agent.run("delegate project work")
-    await waitFor(() => requests.some((request) => request.systemPrompt.includes("You are a teammate in an agent team.")))
-    const child = requests.find((request) => request.systemPrompt.includes("You are a teammate in an agent team."))!
-    expect(child.systemPrompt).toContain("Teammate Project")
-    expect(child.systemPrompt).toContain(JSON.stringify(b))
-  } finally { await assembly.dispose(); await coordinator.close() }
-})
 
 it("allows a project write outside the rewind folder and discloses that restore cannot capture it", async () => {
   const { root, a, b } = fixture()

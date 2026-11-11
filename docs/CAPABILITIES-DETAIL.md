@@ -10,14 +10,14 @@
 >
 > 驗證原則：不憑記憶。腳本層驗證見 §12（抽查清單 + 抽查方法）。
 
-**導航**：§一 工具註冊表（schema 級）｜§二 事件詞彙｜§三 引擎/機制｜§四 服務面（host/sdk/acp）｜§五 子代理/團隊｜§六 生態/配置｜§七 模型面｜§八 持久化｜§九 沙箱/安全｜§十 TUI 層（**已移除**）｜§十一 已知缺口與差異｜§十二 驗證記錄。
+**導航**：§一 工具註冊表（schema 級）｜§二 事件詞彙｜§三 引擎/機制｜§四 服務面（host/sdk/acp）｜§五 子代理｜§六 生態/配置｜§七 模型面｜§八 持久化｜§九 沙箱/安全｜§十 TUI 層（**已移除**）｜§十一 已知缺口與差異｜§十二 驗證記錄。
 **涵蓋深度對照**：Capabilities-overview 每行正文於此一節內擴展為 2-5 小節；未見於概覽者（E-region 細節、事件生產者、工具實現對照；**TUI 全鏈一項已隨 M65 移除**）為新增。
 
 **頭數字速查**（全部於下文有出處）：
 
 | 項 | 數字 |
 |---|---|
-| 組裝點掛載的工具（條件外） | 41 命名工具 + websearch/資源/lsp/mcp 依配置 ⇒ 約 45 起跳；subagent 模式 13 / team 模式 10 替換同名 4 |
+| 組裝點掛載的工具（條件外） | 41 命名工具 + websearch/資源/lsp/mcp 依配置 ⇒ 約 45 起跳；subagent 提供 13 個工具 |
 | deferred（原生） | glob、grep（+MCP 當 directTools 非空） |
 | hidden | 機制存在、無生產使用者 |
 | SessionEvent | **37 種**（相異 `type` 字面；成員行亦 37） |
@@ -79,7 +79,6 @@
 | 15 | workflow_run + workflow_list | 永遠 | `registerWorkflow`（:1050） |
 | 16 | subagent 13 工具 | 永遠 | `registerSubagent`（:1060） |
 | 17 | guardian 審查子代理（自身為 agent 而非工具） | 有 guardian 配置 | `registerGuardian`（:1125） |
-| 18 | agent-team 10 工具（替換同名 subagent 工具） | 有 team 配置 | `mountAgentTeams`（:1164） |
 | 19 | exit_plan_mode | planMode | `ensurePlanModeTool`（:1310） |
 
 **▶ M80 更正（原句量到為假）**：`todo_write`（packages/todo）與 `read_image`（packages/attachment；「read-image 系」這串出自 `docs/roadmap/2026-08-31-roadmap-B-tools.md:7`——概覽 `docs/CAPABILITIES.md` 對 `read-image` 是 0 命中）**均已掛載**——`session-executor/src/assembly.ts:833`（`createTodoTool`）／`:834`（`createReadImageTool`），M40 落地，imports 於同檔 `:21`／`:22`。本行原文斷言兩者都沒有掛載點（且稱「整份 assembly 沒有 createTodoTool / 任何 image 讀取工具」）——那是**量到為假**的宣稱。事件投影仍在（`deriveTodoList` 取最後一筆 `todo/write`，`packages/todo/src/index.ts:67`），但**它沒有生產消費者**——`git grep deriveTodoList -- 'apps/**' 'packages/**'` 在今天與 M65 前（`4ea5b5d^`）都只回該包與它的測試。原文「TUI todo 面板讀的是事件投影」不假，可是面板讀的**不是它**：TUI 自己把 `todo/write` 映成 todo 列（`packages/tui/src/backend/embedded.ts:274` → `views/todo-pane.ts`，隨該包於 M65 刪除）。現行 CLI 組合的 agent **可以**呼叫 `todo_write`。見 §11。
@@ -193,10 +192,6 @@
 | get_task_output | `task_ids*`(1..20),`wait?`,`timeout_ms?`(clamp 100..600000) | durable task 輸出；**擁有限制**：非本 registry id 與未知 id 同錯誤（R-D6 無神諭姿態） | ✓ |
 | stop_task | `task_id*`,`reason?` | 整棵取消樹（cancelTree 單一 doc 寫入 + 中止 + quiescence await） | ✗ |
 
-**agent-team 10 工具（packages/agent-team/src/tools.ts:47-131）**（team 模式替換 4 個同名子代理工具——send_message/followup_task/wait_agent/interrupt_agent cache 衝突時**以 team 版替換、unmount 還原**，scheduler.ts:424-435）：
-
-`spawn_teammate`(Lead 限定：name*/description*/prompt*/context?:fresh|fork, fork_turns?)、`list_members`、`send_message`(quiet)、`followup_task`(wakeup)、`wait_agent`（noProgress 語義：無其他 member running/provisioning 即立即 noProgress，tools.ts:79-94）、`interrupt_agent`(Lead)、`team_task_create`(subject*/description*/blocked_by/write_scopes)、`team_task_list`(status/owner/ready/cursor/limit)、`team_task_get`、`team_task_update`(task_id*/expected_revision*/action:*claim|release|edit|set_dependencies|complete|reopen|reassign|delete)。
-
 **LSP（packages/lsp/src/tools.ts:41-150）**：`lsp`（operation enum：goToDefinition/findReferences/hover/documentSymbol/workspaceSymbol/callHierarchy/incomingCalls/outgoingCalls——**六面路由單工具**）+ `lsp_diagnostics`（檔案 + 選用游標行/精準字元過濾）；皆 readOnly + concurrencySafe；檔案副檔名不符掛載 server → `LSP_NO_SERVER_FOR_FILE`。
 
 **MCP（packages/mcp-client）** —— `syncTools`（bridge.ts:43-102）兩階段：先抓（listTools cursor 分頁，**>100 頁 fail-loud**）再換代（dispose 舊代 → register 新代；衝突 → 回滾；初次同步衝突**傳播 fail-closed**，:90-100）：
@@ -225,7 +220,6 @@
 | exit_plan_mode | packages/plan-mode/src/index.ts | `ensurePlanModeTool` |
 | session_search/lineage | packages/session-query/src/tools.ts | `createSessionQueryTools` |
 | spawn_agent…stop_task (13) | packages/subagent/src/tools.ts | `registerSubagent` |
-| spawn_teammate…team_task_update (10) | packages/agent-team/src/tools.ts | `mountAgentTeams` |
 | lsp/lsp_diagnostics | packages/lsp/src/tools.ts | `mountLspClient` |
 | mcp__server__tool + 資源三工具 | packages/mcp-client/src/bridge.ts / resources.ts | `mountMcpClient` |
 | workflow_run/workflow_list | packages/workflow/src/tool.ts | `registerWorkflow` |
@@ -293,7 +287,7 @@
 
 通用：所有 append 賦 `seq=session.events.length`（index.ts:260）；整 union 掛 `& {ignorable?:true}`（:117）；未知型別無 ignorable → 載入 fail-closed（session-persistence/index.ts:339-347）。
 
-**事件生產者對照**（誰 append 什麼——疑難排查向）：turn/step/user/assistant/tool 家族 → core-agent 循環；`compaction/*` → compaction 引擎；`sandbox/mode` → **`session-executor/src/assembly.ts:583`（建構期；M1 Phase B Task 1 `34c746e6`）**（2026-09-15 **兩次**更正：本行原寫「sandbox-policy（session-mode.ts）」——它只**讀**；其後我改成「沒有生產者」，而那句在 Phase B 裝上第一個生產者之後也失效。**現在有生產者，但只在建構期記錄起始模式**，「session 中途被收緊」仍不可達——見 `docs/superpowers/specs/2026-09-14-backend-permission-sandbox-design.md` §7 第 4 條與 `docs/handoff/2026-09-15-m1-phase-b-handoff.md`）；`todo/write` → todo 工具（**已掛載**：`createTodoTool`，`session-executor/src/assembly.ts:833`；append 於 `packages/todo/src/index.ts:56`）；`goal/change` → goal；`job/status` → subagent persist.ts（`jobStatusEvents:true` 才鏡像進 live session）；`schedule/change` → schedule 寫入面 + driver dispatch；`agent/input/*` → Inbox（admit/promote/cancel；claimAtStepBoundary 另寫 user/message）；`session/title` → session-title；`plan/mode` → plan-mode（進入時另行 append user/message proposal）；`subagent/start|end` → spawn_agent / settle；`reasoning` → llm 層（C-region port）；`command/run|done` → **今天沒有生產者**（型別與 `registerEventType` 仍在：`core-session/src/index.ts:125-126`、`session-persistence/src/index.ts:221-222`；唯一的寫入者 `appendCommandEvents` 隨 `apps/cli/src/web.ts` 於 M65 刪除——`git grep appendCommandEvents -- 'apps/**' 'packages/**'` 零命中（`git ls-files apps/cli/src/web.ts` = 0，M80 重量），今天僅存的 append 在測試（`core-session/test/events.test.ts:8-9`））；`team/*` → agent-team 事務層；`subagent/inbox` → send/followup 工具。
+**事件生產者對照**（誰 append 什麼——疑難排查向）：turn/step/user/assistant/tool 家族 → core-agent 循環；`compaction/*` → compaction 引擎；`sandbox/mode` → **`session-executor/src/assembly.ts:583`（建構期；M1 Phase B Task 1 `34c746e6`）**（2026-09-15 **兩次**更正：本行原寫「sandbox-policy（session-mode.ts）」——它只**讀**；其後我改成「沒有生產者」，而那句在 Phase B 裝上第一個生產者之後也失效。**現在有生產者，但只在建構期記錄起始模式**，「session 中途被收緊」仍不可達——見 `docs/superpowers/specs/2026-09-14-backend-permission-sandbox-design.md` §7 第 4 條與 `docs/handoff/2026-09-15-m1-phase-b-handoff.md`）；`todo/write` → todo 工具（**已掛載**：`createTodoTool`，`session-executor/src/assembly.ts:833`；append 於 `packages/todo/src/index.ts:56`）；`goal/change` → goal；`job/status` → subagent persist.ts（`jobStatusEvents:true` 才鏡像進 live session）；`schedule/change` → schedule 寫入面 + driver dispatch；`agent/input/*` → Inbox（admit/promote/cancel；claimAtStepBoundary 另寫 user/message）；`session/title` → session-title；`plan/mode` → plan-mode（進入時另行 append user/message proposal）；`subagent/start|end` → spawn_agent / settle；`reasoning` → llm 層（C-region port）；`command/run|done` → **今天沒有生產者**（型別與 `registerEventType` 仍在：`core-session/src/index.ts:125-126`、`session-persistence/src/index.ts:221-222`；唯一的寫入者 `appendCommandEvents` 隨 `apps/cli/src/web.ts` 於 M65 刪除——`git grep appendCommandEvents -- 'apps/**' 'packages/**'` 零命中（`git ls-files apps/cli/src/web.ts` = 0，M80 重量），今天僅存的 append 在測試（`core-session/test/events.test.ts:8-9`））；`team/*` → 舊版會話的歷史資料，相容讀取與搜尋；`subagent/inbox` → send/followup 工具。
 
 `deriveMessages`（`packages/core-session/src/index.ts:489`；**▶ 2026-09-24 更正：原引的 `:306-393` 是漂掉的行號——引符號不引行號**）是唯一投影：shadowed（summary/reset）先行、tool block 依 step/end flush、prune substitute 應用（`…(pruned N bytes)…`）；FTS 檢索文本 `deriveSearchText`（同檔 `:662`）。影像：每訊息 ≤20 張、合併 ≤200 MiB、base64 正規形（`MAX_IMAGES_PER_MESSAGE` ＝ 20，`packages/core-session/src/index.ts:362`；`MAX_IMAGE_BYTES_PER_MESSAGE` ＝ 200 MiB，同檔 `:363` —— **▶ 2026-09-24 更正：原引的 `:268-299` 是漂掉的行號**）。
 
@@ -478,9 +472,8 @@ HMAC cookie（`hmacSecret` ≥32 字符，違者 throw，:40）、launch token�
 | subagent/end | outcome 與 record 現值一致（CAS 後再 append，tools.ts:145-160） |
 | cancelTree | 單一 doc 寫入（terminalize 整棵 + 排 enqueue 通知），再中斷 live 表子樹 + followupChain quiescence（tools.ts:512-531） |
 - **job 三層**：subagent JobRegistry（packages/subagent/src/jobs.ts：`JobStatus=running|completed|killed|error`；registerJob（重複持久化 id throw）/updateJob（終態僅可重開 running）/read（unknown throw）/list(owner)/wait（10ms 輪詢）/kill→`cancellation-requested|already-finished` 於終態、unknown throw，jobs.ts:17-113）> exec service（`bash-*` 背景）> workflow job store（`workflow-*`）；durable snapshot 文件（persist.ts:286，`{formatVersion:1, jobs, agentTable, roles}`）；jobs 檢視面（packages/jobs：foldJobs last-wins、projectJobsDoc 外部/損壞文件 → [] + warn、`JobKillUnknownJobError` → host 409）。
-- **roster/mailbox/task-board**（packages/agent-team）：CAS（expectedRevision）、write-scope（`writeScopes` 正規化：尾 "/" 剝除、絕對/父路徑 reject；重疊偵測 `s === t || s.startsWith(t+"/") || t.startsWith(s+"/")` → 任務檢視帶 `writeScopeWarnings`，task-board.ts:9-17, 49-55）、mailbox 送達＝`team/message/queued`+`delivered`、activity 等待（waitForChange + noProgress 短路面）、**transact CAS 引擎（transact.ts:10-43：fn 純讀——對 CLONE 讀取、逐候選驗證後寫狀態與 events，Ruling 10 契約）**。
 - **ParentInputAdmission**（assembly.ts:197-206）：task 完成 → parent session inject（`{tier:"inject", scope:"turn"}`），lane 不存在時維持 outbox pending（fail-closed）、後由 ready-chain/恢復排空。
-- **resume 冷啟動**：restoreState 同步重建 agent 表 → 鏡像重載每兒童 durable log（`restoreMirrorsAndSweep`）→ `sweepPendingInbox`（僅 waiting 條目、重建失敗保守跳過，tools.ts:669-687）；`ensureResidentAgent` 惰性重建（M23/M24a）供 followup 與 team 喚醒兩共用。
+- **resume 冷啟動**：restoreState 同步重建 agent 表 → 鏡像重載每兒童 durable log（`restoreMirrorsAndSweep`）→ `sweepPendingInbox`（僅 waiting 條目、重建失敗保守跳過，tools.ts:669-687）；`ensureResidentAgent` 惰性重建供一般子代理的續作使用。
 
 ---
 

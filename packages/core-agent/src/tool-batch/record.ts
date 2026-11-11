@@ -1,8 +1,7 @@
-import {acknowledgeTeamResult} from './team-result-barrier.ts'
 import type { PluginContext } from "@i-harness/core-plugin"
 import { committedFactSeqs, FactRecoveryRequiredError } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
-import { isOriginalResultFinalization, isOriginalSyntheticResultFinalization, resultExecution,retainedFinalizedToolResult,releaseFinalizedToolResult,TOOL_ABORTED_BEFORE_DISPATCH } from '@i-harness/core-tools'
+import { isOriginalResultFinalization, isOriginalSyntheticResultFinalization, resultExecution,retainedFinalizedToolResult,releaseFinalizedToolResult,TOOL_ABORTED_BEFORE_DISPATCH,TOOL_FAILED } from '@i-harness/core-tools'
 import type { BatchCall, BatchSlot, ExecuteToolCallsOptions } from "./types.ts"
 import type { BatchCancellation } from "./cancel.ts"
 import {isManagedBatchSource,type BatchSource} from './managed-source.ts'
@@ -84,7 +83,7 @@ export function createBatchRecords(ctx: PluginContext, session: BatchSource, too
       throw error
     }
     slot.recorded = true
-    if(!('synthetic'in slot)){acknowledgeTeamResult(slot.prepared);releaseFinalizedToolResult(slot.prepared)}
+    if(!('synthetic'in slot))releaseFinalizedToolResult(slot.prepared)
     while (slots[committed]?.recorded) committed++
     if ('synthetic' in slot) {
       if (slot.projected?.kind === 'revoked') throw slot.projected.cause
@@ -97,11 +96,20 @@ export function createBatchRecords(ctx: PluginContext, session: BatchSource, too
   const schedule = (work: () => Promise<void>) => { const next = serial.then(work).catch(error => { cancellation().disqualify(); throw error }); serial = next.catch(() => {}); return next }
   return {
     prepared(index:number,call:import('@i-harness/core-tools').PreparedCall){preparedCalls.set(index,call)},
-    cancelNeverDispatched(){
+    cancelNeverDispatched(reason?:unknown){
       if(!isManagedBatchSource(session))return
       for(const [index,call]of batch.entries())if(!slots[index]){
         const prepared=preparedCalls.get(index)
-        if(prepared&&resultExecution(prepared).dispatch!=='not-dispatched'){opts.requireFactRecovery?.();continue}
+        if(prepared){
+          const execution=resultExecution(prepared)
+          if(execution.dispatch!=='not-dispatched'){
+            // A retry can be refused after the preceding attempt settled.
+            // Preserve that original known execution without reusing its data.
+            if(execution.dispatch==='dispatched'&&(execution.outcome==='failed'||execution.outcome==='canceled')) slots[index]={name:call.name,callId:call.callId,synthetic:true,execution,output:{error:reason instanceof Error?reason.message:'Tool call stopped after its settled execution',code:TOOL_FAILED}}
+            else opts.requireFactRecovery?.()
+            continue
+          }
+        }
         const output={code:TOOL_ABORTED_BEFORE_DISPATCH,error:'Original tool call was refused before dispatch'}
         // This is the original batch's required cancellation, matching the
         // unstarted owner: it has no guest result/projection authority.

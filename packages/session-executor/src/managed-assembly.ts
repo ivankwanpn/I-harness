@@ -100,7 +100,6 @@ export interface OwnedDefaultSurface {
  prepareInput(text:string):Promise<string>
  reconcileAuthority():Promise<void>
  prepareModelSurface?(signal:AbortSignal):Promise<void>
- activateAfterTaskReady?():Promise<void>
 }
 export type ManagedRegistryFactory=(original:ManagedRegistryConstruction)=>void|OwnedDefaultSurface|Promise<void|OwnedDefaultSurface>
 type ResolvedManagedModel=Pick<ManagedExecutionRuntimeOptions,'model'|'contextWindow'|'maxOutputTokens'|'reasoningEffort'|'budgetBinding'|'contextMetadata'>

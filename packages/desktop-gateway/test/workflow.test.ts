@@ -9,7 +9,6 @@ import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { applyGoalMutation, foldGoal } from "@i-harness/goal"
 import { append, createSession, metadataFactsFor, committedFactSeqs } from '@i-harness/core-session'
 import { createDurableSessionLoader, createSessionService } from "@i-harness/session-executor"
-import { forkSession } from "@i-harness/session-persistence"
 import { createDesktopWorkflow, createDesktopGoalTools, createDesktopOwnedGoalTools } from "../src/workflow.ts"
 
 it('owned goal tools preserve revision checks and commit the original goal fact',async()=>{
@@ -90,28 +89,6 @@ it("contains background recovery persistence failures and reports them to the UI
     expect((await workflow.read("s")).goalRun?.error).toContain("disk unavailable")
   } finally { warn.mockRestore(); await workflow.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
-it("forks a team conversation into an independent team while the source stays mounted", async () => {
-  const root = await mkdtemp(join(tmpdir(), "ih-team-fork-"))
-  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } }, taskDocumentStorageContract)
-  await coordinator.create({ sessionId: "source" })
-  const service = createSessionService({ workspace: root, modelPolicy: "test-mock", coordinator, sessionFor: createDurableSessionLoader(coordinator), team: {}, concurrentSessionTeams: true })
-  const workflow = createDesktopWorkflow(coordinator, service, { teamEnabled: true })
-  try {
-    const source = await service.assemblyFor("source")
-    expect(source.tools.get("send_message")).toBeDefined()
-    expect(source.tools.get("team_send_message")).toBeDefined()
-    const action=source.factOwner.beginAction()
-    await action.facts.inputs.start(undefined,{type:'user/message',text:'source team work'})
-    await workflow.mutate("source", { action: "team", tool: "team_task_create", args: { subject: "Source task", description: "keep in source" } })
-    await action.facts.agent.lifecycle({type:'turn/end'});action.finish()
-    await coordinator.flush("source")
-    const fork = await forkSession(coordinator, "source")
-    expect((await workflow.read(fork.sessionId)).team.tasks).toEqual([])
-    await workflow.mutate(fork.sessionId, { action: "team", tool: "team_task_create", args: { subject: "Fork task", description: "independent" } })
-    expect((await workflow.read("source")).team.tasks.map((row) => row.subject)).toEqual(["Source task"])
-    expect((await workflow.read(fork.sessionId)).team.tasks.map((row) => row.subject)).toEqual(["Fork task"])
-  } finally { await workflow.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
-})
 it("restarts a paused Goal while the old aborted provider request is still settling", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-goal-resume-"))
   const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } }, taskDocumentStorageContract)
@@ -140,4 +117,12 @@ it("restarts a paused Goal while the old aborted provider request is still settl
     expect(calls).toBe(3)
     expect(states).toEqual([true, true, false])
   } finally { release(); await workflow.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it('refuses removed Team commands before resolving a runtime', async () => {
+ const activate=vi.fn(async()=>{throw Error('must not activate')})
+ const workflow=createDesktopWorkflow({} as never,{} as never,{managedForMutation:activate})
+ await expect(workflow.mutate('saved',{action:'team',tool:'spawn_teammate',args:{}})).rejects.toThrow('Unknown workflow command')
+ expect(activate).not.toHaveBeenCalled()
+ await workflow.close()
 })

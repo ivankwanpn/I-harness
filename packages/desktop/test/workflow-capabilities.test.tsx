@@ -6,7 +6,7 @@ import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 
 afterEach(() => { cleanup(); localStorage.clear(); useUiStore.setState({ surface: "conversation", reviewOpen: false, locale: "zh-TW" }) })
 function fixture() {
-  const request = vi.fn(async (input: any) => input.kind === "desktop/session/workflow/read" ? { goal: null, plan: { active: false }, team: { enabled: true, members: [], tasks: [] }, jobs: [], reviews: [] } : input.kind === "desktop/plugins/commands" ? [] : undefined)
+  const request = vi.fn(async (input: any) => input.kind === "desktop/session/workflow/read" ? { goal: null, plan: { active: false }, jobs: [], reviews: [] } : input.kind === "desktop/plugins/commands" ? [] : undefined)
   const props = { bridge: { request, onEvent: () => () => {} }, workspaces: [{ id: "workflow", label: "Fixture", path: "D:/fixture" }], selectedWorkspaceId: "workflow", selectedSessionId: "parent",
     onSelectWorkspace() {}, onSelectSession() {}, conversation: { rows: [], canSend: true, running: false, pending: [], onPrompt: vi.fn(async () => {}), onCancel() {}, onCancelTask() {}, onCancelQueue() {}, onReply: async () => {} } }
   return { request, props }
@@ -36,4 +36,17 @@ it("unmounts an open workflow when capability disappears and retains an unavaila
   expect(screen.getByText("目前工作區後端未提供此功能。").getAttribute("role")).toBe("status")
   expect(screen.queryByRole("tab", { name: "工作流程" })).toBeNull()
   expect(request.mock.calls.filter(([input]) => input.kind.startsWith("desktop/session/workflow/"))).toHaveLength(calls)
+})
+
+it('does not expose Team through supported workflow tools or slash commands', async () => {
+ const {props}=fixture()
+ render(<Workbench {...props} capabilities={{'desktop-workflow':['1']}} />)
+ fireEvent.click(screen.getByRole('button',{name:'工作台工具'}))
+ expect(screen.queryByRole('button',{name:'Team'})).toBeNull()
+ fireEvent.click(screen.getByRole('button',{name:'Goal / Plan'}))
+ await screen.findByRole('textbox',{name:'目標內容'})
+ expect(screen.queryByRole('tab',{name:'團隊'})).toBeNull()
+ fireEvent.change(screen.getByRole('textbox',{name:'提示'}),{target:{value:'/'}})
+ await screen.findByRole('option',{name:/\/goal/})
+ expect(screen.queryByRole('option',{name:/\/team/})).toBeNull()
 })

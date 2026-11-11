@@ -3,6 +3,8 @@ import type { PreparedCall, ToolRegistry } from './types.ts'
 export interface ModelOriginExpectation { readonly registry: ToolRegistry; readonly prepared: PreparedCall; readonly view: SessionView; readonly source: SettlementFacts<ProducerFactOutcome>; readonly callId: string; readonly callEventSeq: number; readonly name: string; readonly args: unknown }
 export interface ExecSourceBinding { recipientSessionId: string; generationId: string; sourceNamespace: 'exec'; sourceId: string; callSeq: number; delivery: 'tool' | 'parent' }
 export interface OriginalExecSourceIssuer {
+  /** A distinct source is available only after this original source closed. */
+  nextAttempt?(): OriginalExecSourceIssuer
   assertAdmissionCurrent(): void
   captureSource(binding: Readonly<ExecSourceBinding>, recipientCurrent: () => boolean): import('@i-harness/core-session').CapturedActionFact<ProducerFactOutcome>
   registerCompletion(drain: () => Promise<void>): SettlementFacts<ProducerFactOutcome>
@@ -21,8 +23,7 @@ export interface OriginalWorkflowSourceIssuer {
  captureSource(binding:Readonly<WorkflowSourceBinding>,recipientCurrent:()=>boolean):import('@i-harness/core-session').CapturedActionFact<ProducerFactOutcome>
  registerCompletion(drain:()=>Promise<void>):SettlementFacts<ProducerFactOutcome>
 }
-export interface OriginalTeamBirthPermit {readonly source:SettlementFacts<import('@i-harness/core-session').FactOutcome>;assertCurrent():void;assertHeld():void;waitResult():Promise<void>;waitCurrent():Promise<void>;close():Promise<void>}
-export interface OriginalModelMemberPermit { assertCurrent(): void; takeExecSourceIssuer?(): OriginalExecSourceIssuer; takeCodeSourceIssuer?(): OriginalCodeSourceIssuer | undefined; takeWorkflowSourceIssuer?(): OriginalWorkflowSourceIssuer | undefined;retainTeamBirth?():OriginalTeamBirthPermit }
+export interface OriginalModelMemberPermit { assertCurrent(): void; takeExecSourceIssuer?(): OriginalExecSourceIssuer; takeCodeSourceIssuer?(): OriginalCodeSourceIssuer | undefined; takeWorkflowSourceIssuer?(): OriginalWorkflowSourceIssuer | undefined }
 export interface OriginalManagedModelMemberPermit extends OriginalModelMemberPermit {getAdmissionWait(signal:AbortSignal):Promise<void>|undefined}
 export interface ConstructorModelOriginVerifier { take(proof: object, expected: ModelOriginExpectation): OriginalModelMemberPermit }
 export interface ManagedModelOriginExpectation extends Omit<ModelOriginExpectation,'view'> {readonly domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain}

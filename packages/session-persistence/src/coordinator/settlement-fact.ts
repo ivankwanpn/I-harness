@@ -52,7 +52,7 @@ export function retainSettlementCapture(capture: ReturnType<typeof captureFactGr
       // latest is populated only by native status/admit/reconcile. A fresh
       // retryAbsent fallback is not an observed disposition to retire.
       observeIssued(outcome)
-      if (neverIssuedStale && !everIssued && outcome === latest && outcome.kind === 'not-issued' && outcome.code === 'FACT_PRECONDITION_STALE' && capture.kind === 'captured' && (capture.group.kind === 'delivery-admission' || capture.group.kind === 'team-input-admission' || capture.group.kind === 'delivery-generation' && capture.group.event.op === 'open' || capture.group.kind === 'delivery' && capture.group.event.type === 'agent/delivery-handoff' && (capture.group.event.kind === 'code'||capture.group.event.kind === 'workflow'))) {
+      if (neverIssuedStale && !everIssued && outcome === latest && outcome.kind === 'not-issued' && outcome.code === 'FACT_PRECONDITION_STALE' && capture.kind === 'captured' && (capture.group.kind === 'delivery-admission' || capture.group.kind === 'delivery-generation' && capture.group.event.op === 'open' || capture.group.kind === 'delivery' && capture.group.event.type === 'agent/delivery-handoff' && (capture.group.event.kind === 'code'||capture.group.event.kind === 'workflow'))) {
         retired=Object.freeze(outcome);neverIssuedStale()
       }
       if (retirement && outcome === latest && capture.kind === 'captured' && capture.group.kind === 'input-cancellation' && outcome.kind === 'not-issued' && outcome.code === 'FACT_INVALID_GROUP' && retirement.accepts(outcome as InvalidNotIssued)) {

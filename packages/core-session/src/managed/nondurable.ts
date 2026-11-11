@@ -178,10 +178,6 @@ export function createNondurableFactOwner(session: Session): FactOwner<Nondurabl
           }
           return { admit: settle, reconcile: settle, observe: retained.observe }
         },
-        captureTeamTransaction(events) {
-          const retained = captureMemoryFact(session, { kind: 'team-transaction', events }, assertOpen)
-          return { admit: retained.admit, reconcile: retained.reconcile, observe: retained.observe }
-        },
         captureSubagentStart(event,binding) {
           let strict = false
           try { strict = isStrictFactData(event) && event.type === 'subagent/start' } catch { /* Actual start DTO only. */ }

@@ -45,7 +45,7 @@ export function createCommitOwnershipPorts(root: string, documents: CapabilityDo
   const ownership = createOwnership(backend as never, { lock: { enabled: true, lockRoot: capabilityRoot } })
   const observations = createBindingObservations(backend as never, ownership)
   const admission = observations.createResultRevocationAdmission(ownership)
-  return { ownership, observations, admission, capabilityRoot }
+  return { ownership, observations, admission, capabilityRoot, documents: Object.freeze({ ...documents }) }
 }
 
 export type CommitTaskOptions = {

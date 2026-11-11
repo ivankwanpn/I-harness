@@ -83,12 +83,6 @@ import type { Telemetry } from "@i-harness/telemetry"
 // be another place to edit one enum. Erased at build time, no runtime edge.
 import type { SettingsProviderProtocol } from "@i-harness/settings"
 import { mountLspClient, type LspMountHandle, type LspServerConfig } from "@i-harness/lsp"
-import {
-  mountAgentTeams,
-  type TeamDeps,
-  type TeamMountHandle,
-  type TeamConfig,
-} from "@i-harness/agent-team"
 import { checkWrite, createSandboxPolicy, renderPolicyContext } from "@i-harness/sandbox-policy"
 import type { AuthorityState, SandboxMode, BackendProbe } from "@i-harness/sandbox"
 import { createApprovalEscalationApprover, denialFor, type ApprovalPrompt } from "@i-harness/sandbox"
@@ -158,7 +152,7 @@ export interface AssemblyOptions {
   /** Constructor opt-in passive evidence only; no shipping activation. */
   passiveGeneration?: import('@i-harness/llm-seam/internal/passive-observation').OriginalPassiveObserver
   residentActivation?: ResidentActivationController
-  /** Retain the original partial assembly's cleanup before Team construction. */
+  /** Retain the original partial assembly's cleanup before surface construction. */
   retainConstructionCleanup?: (cleanup: () => Promise<void>) => void
   instructionEnvironment?: InstructionEnvironment
   instructionSettingsPath?: string
@@ -216,7 +210,7 @@ export interface AssemblyOptions {
   pluginMcp?: McpServerConfig[] // per-server containment; pluginMcpResults reports
   // Plugin-contributed subagent roles, registered into the SAME RoleRegistry the
   // builtin roles seed into. Placement is load-bearing twice, and NOT for the
-  // reason it first looks like: guardian/team hold the same registry object, so
+  // reason it first looks like: guardian and subagents hold the same registry object, so
   // they read a late registration fine. What matters is registerSubagent itself
   // — it restores the snapshot's roles first, then swaps in the persistence
   // wrapper. Registering after it means a plugin role is PERSISTED (a role
@@ -227,8 +221,6 @@ export interface AssemblyOptions {
   pluginAgentsEphemeral?: boolean
   lsp?: LspServerConfig[] // M18: LSP servers to mount
   skills?: { extraDirs?: string[]; globalDir?: string } // plugin overlay and host-confirmed global skill roots
-  team?: Partial<TeamConfig> // M19: mount the agent-team domain
-  concurrentSessionTeams?: boolean
   agentShell?: () => ResolvedAgentShell
   additionalSystemPrompt?: (session: Session) => string
   /** Granted plugin startup context, read at each main/child model request. */
@@ -468,7 +460,7 @@ export interface SessionAssembly {
    * rewindStoreRoot (with a sessionId) AND the journal is not bound to another
    * workspace (M54 G3 mismatch → rewind stays off, "not enabled"). */
   rewind?: RewindAssemblyHandle
-  /** Best-effort teardown: reverse-order unmount of mcp/lsp/teams/skills/
+  /** Best-effort teardown: reverse-order unmount of mcp/lsp/skills/
    * workflow, terminal dispose, win32 ACL sandbox dispose. NEVER closes the
    * coordinator or the telemetry stream — the owner owns those. Never throws. */
   dispose(): Promise<void>
@@ -548,7 +540,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // R-B1: ONE stable handle, ONE mutable target. The SIX holders that follow it
   // — the agent's deps, the compaction engine (its construction-time copy and its
   // own read are ONE consumer), the subagent tools, the guardian's INHERITED
-  // model, the team scheduler, and auto-title (which reads `assembly.model`
+  // model and auto-title (which reads `assembly.model`
   // itself) — all get the handle: one assignment, and none of them has to be told.
   // Changing the TYPE instead (`model: () => ModelClient`) would have reached the
   // same goal while touching 56 sites (measured — raw `createAgent(` occurrences
@@ -1203,7 +1195,6 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   const mcpHandles: McpMountHandle[] = []
   let pluginCapabilities: ReturnType<typeof createPluginCapabilities> | undefined
   const lspHandles: LspMountHandle[] = []
-  const teamHandles: TeamMountHandle[] = []
   let flushSubagentPersistence: (() => Promise<void>) | undefined
   let disposeSubagents: (() => Promise<void>) | undefined
   let childObservation: ReturnType<typeof createChildObservation> | undefined
@@ -1295,7 +1286,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // asked for mid-connect returns without draining. This handler's job is the
     // attempt; the cadence is the supervisor's.
     // Registered after BOTH MCP loops; `mcpHandles` is typed McpMountHandle[],
-    // so the lsp/team handles (separate arrays) are never asked these questions.
+    // so the lsp handles (separate arrays) are never asked these questions.
     ctx.on("agent/pre-step", async () => {
       for (const mcpHandle of [...mcpHandles]) {
         if (!mcpHandle.catalogDirty()) continue
@@ -1313,7 +1304,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     }
     workflowMount = registerWorkflow(ctx, tools, { workspace: opts.workspace, exec: execService, steps: createScopedWorkflowExec(assemblyExecPair, opts.workspace, sandboxPolicyNow), ...(opts.sessionId !== undefined ? { owner: opts.sessionId } : {}) })
     // ONE resolver for every role-carrying spawn in this assembly: the subagent
-    // tools, the approval guardian and team teammates all hand their role's
+    // tools, the approval guardian and subagents all hand their role's
     // selection to the host's provider plane — the same runtime call the
     // session's own binding made. The fallback names the selection the host
     // asked about, so a missing wiring is heard at the first such spawn.
@@ -1338,7 +1329,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       resolveModel: resolveRoleModel,
       // The gate travels with the resolver it gates, into THIS chain:
       // RegisterSubagentOptions → SubagentToolDeps → spawnChild. The guardian
-      // and team call sites below are handed the same two options — a site that
+      // and child call sites below are handed the same two options — a site that
       // got the resolver without them would resolve nothing and inherit,
       // silently. Both are omitted when the host passed neither: an unset
       // switch is OFF, never "enabled by omission".
@@ -1519,59 +1510,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           : {}),
       })
     }
-    // Await BEFORE mounting agent teams (recoverRoot delivers queued team
-    // messages to entry.session — mirrors must be live first).
     await subagent.ready
-    if (opts.team !== undefined) {
-      await mountAgentTeams(ctx, tools, {
-        retainMount: handle => { teamHandles.push(handle) },
-        ...(opts.parentNotify ? { parentNotify: opts.parentNotify } : {}),
-        allowConcurrentTeams: opts.concurrentSessionTeams,
-        preserveSubagentTools: opts.concurrentSessionTeams,
-        parentSession: session, factOwner,
-        parentRegistry: tools,
-        subagents: {
-          results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
-          createInstructionContext: childInstructionHost.create, retainInitialSetup: subagent.retainInitialSetup,
-          reportPolicy: SHIPPING_REPORT_POLICY,
-          generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
-          retainResults: subagent.retainResults,
-          codeMode, codeModeFactory,
-          ...(opts.projectContext || opts.contextOutput || opts.hookContext || wslShell ? { inheritedSystemContext } : {}),
-          table: subagent.table,
-          jobs: subagent.jobs,
-          roles: subagent.roles,
-          agents: subagent.agents,
-          exec: execService,
-          resolveModel: resolveRoleModel,
-          // The gate travels with the resolver it gates — same rule, same two
-          // options as the other spawn sites above.
-          ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
-      ...(opts.roleToolsFor !== undefined ? { roleToolsFor: opts.roleToolsFor } : {}),
-          ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
-          ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
-          // M73: the session's numbers ride the same subagents branch as the
-          // role-model fields above (agent-team mirrors SpawnOptions field by
-          // field) — a teammate that inherits runs on the session's own model
-          // and must carry its window and cap.
-          get contextWindow() { return opts.contextWindow },
-          get budgetBinding() { return opts.budgetBinding },
-          get contextMetadata() { return opts.contextMetadata },
-          summaryFactory, inheritedBindingForStep: () => ({ identity: currentModel, executionIdentity: currentModel.executionIdentity, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
-          get reasoningEffort() { return currentReasoningEffort },
-          get maxOutputTokens() { return opts.maxOutputTokens },
-          childSessions:
-            opts.coordinator !== undefined && opts.sessionId !== undefined
-              ? { coordinator: opts.coordinator, parentSessionId: opts.sessionId }
-              : undefined,
-          ensureResident: subagent.ensureResident,
-          followupGeneration: subagent.followupGeneration,
-          followupActivation: subagent.followupActivation,
-          captureFollowupGeneration: subagent.captureFollowupGeneration,
-        },
-        parentModel: model,
-      } satisfies TeamDeps, opts.team)
-    }
 
     // M49 Task 14 (spec §11): the base system prompt is the I-harness-owned
     // DEFAULT_AGENT_PRESET (readable source in @i-harness/preset) when the
@@ -1726,7 +1665,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // what keeps them paired is this description. The handle above keeps its
       // identity, so every handle-reachable holder that captured it — the agent's
       // deps, the compaction engine, the subagent tools, the guardian's INHERITED
-      // model, the team scheduler, auto-title (the six of the R-B1 note above)
+      // model, auto-title (the six of the R-B1 note above)
       // — follows a `setModel` without being told.
       setModel: (client) => { currentModel = client },
       setModelBinding: (binding, compact) => {
@@ -1761,7 +1700,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       setReasoningEffort: (effort) => { currentReasoningEffort = effort },
       ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}),
       inbox,
-      drainParentNotifications: async ordinaryOnly => { await subagent.drainParentNotifications(); if (!ordinaryOnly) for (const handle of teamHandles) await handle.drainLeadMessages?.() },
+      drainParentNotifications: async () => { await subagent.drainParentNotifications() },
       settleParentDeliverySources: () => subagent.settleParentDeliverySources(),
       settleParentDeliveryJournalDebt: () => subagent.settleParentDeliveryJournalDebt(),
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
@@ -1922,8 +1861,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     rewindSubscription = undefined
     await phase('rewind', () => rewindDrain)
     // Unmount in REVERSE mount order (last-mounted unmounts first), best-effort:
-    // Every original Team handle remains retained until its own cleanup acknowledges.
-    const mounts = [...mcpHandles, ...lspHandles, ...teamHandles]
+    const mounts = [...mcpHandles, ...lspHandles]
     for (const handle of mounts.reverse()) {
       let close = mountCloses.get(handle)
       if (!close) { close = handle.unmount.bind(handle); mountCloses.set(handle, close) }

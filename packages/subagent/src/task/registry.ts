@@ -1,4 +1,7 @@
-import {associateRequiredTaskRegistry,installRequiredTaskData,isInstalledRequiredTaskData,type RequiredTaskSettlement} from './required-settlement.ts'
+import {committedFactSeqs,type ProducerFactOutcome,type CapturedSettlementFact,type SettlementFacts} from '@i-harness/core-session'
+import {readManagedTaskResult,readManagedSourceTaskDelivery} from '@i-harness/core-session/internal/execution'
+import {canonicalJsonData} from '@i-harness/core-session'
+import {associateRequiredTaskRegistry,prepareOriginalTaskDataReplacement,isInstalledRequiredTaskData,releaseOriginalTaskData,type RequiredTaskSettlement,type TaskNotificationProgress,type NotificationTaskAccess} from './required-settlement.ts'
 import {types as nativeTypes} from 'node:util'
 import {callOriginalCurrentnessMethod,propagateOriginalCurrentnessReader,runOpaqueCurrentnessRead} from '../../../core-session/src/managed/currentness-guards.ts'
 import { observeColdExecutionWrites } from '../../../session-persistence/src/coordinator/cold-execution-writes.ts'
@@ -43,7 +46,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   let coldBindings: ReadonlySet<string> = new Set()
   function assertReady() {
     if (currentState.phase !== 'ready') throw Object.assign(new Error('Task registry ' + currentState.phase, { cause: currentState.failure?.cause }), { code: 'TASK_REGISTRY_UNAVAILABLE' })
-    if (ownedTask) {if(launchGuard)callOriginalCurrentnessMethod(launchGuard,ownedTask.operations,'assertParentSession',[ownedTask.parent,taskStateId()!]);else ownedTask.operations.assertParentSession(ownedTask.parent, opts.stateId!)}
+    if (ownedTask) {if(!isInstalledRequiredTaskData(ownedTask.operations,opts.stateId!,installedData))throw Error('Original Task registry data replaced');if(launchGuard)callOriginalCurrentnessMethod(launchGuard,ownedTask.operations,'assertParentSession',[ownedTask.parent,taskStateId()!]);else ownedTask.operations.assertParentSession(ownedTask.parent, opts.stateId!)}
   }
   const resultOwner = opts.results ? new TaskResultOwner(opts.results) : undefined
   const listeners = new Map<string, Set<(record: Readonly<TaskRecord>) => void>>()
@@ -63,21 +66,19 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   }
   const maxConcurrency = opts.maxConcurrency ?? Infinity
   const requiredSaveAuthorities=new WeakMap<object,{parent:object;capture:()=>TaskProtocolDocument;beforeIssue:()=>Promise<void>}>()
-  const persistence = new TaskPersistence(opts.coordinator, opts.stateId, Boolean(opts.reportPolicy), snapshot, ownedTask,authority=>{const original=requiredSaveAuthorities.get(authority);if(!original)throw Error('Original required Task capture unavailable');return original})
-  // D-01 step 2: dual-write a durable job record next to the existing sources.
-  // Best-effort until step 3 makes it authoritative; a failure must not block
-  // the task path (D-08).
+  const persistence = new TaskPersistence(opts.coordinator, opts.stateId, Boolean(opts.reportPolicy), snapshot, ownedTask,authority=>{const original=requiredSaveAuthorities.get(authority);if(!original)throw Error('Original required Task capture unavailable');return original},assertReady)
+  // Only legacy, unowned registries retain their old auxiliary journals.
+  // The native Task document already owns complete records, outbox and ACKs.
   let jobWrite: Promise<void> = Promise.resolve()
   let intentWrite: Promise<void> = Promise.resolve()
-  const documentIntents = opts.coordinator?.storageRoot && opts.stateId
+  const documentIntents = !ownedTask && opts.coordinator?.storageRoot && opts.stateId
     ? createDocumentIntentStore(join(opts.coordinator.storageRoot, "jobs", opts.stateId + ".write-intents.jsonl"))
     : undefined
-  const jobRecords = opts.coordinator?.storageRoot && opts.stateId
+  const jobRecords = !ownedTask && opts.coordinator?.storageRoot && opts.stateId
     ? createJobRecordStore(join(opts.coordinator.storageRoot, "jobs", `${opts.stateId}.jobs.jsonl`))
     : undefined
-  // D-01 final: the job record is the durable task fact, the document is a
-  // projection. Neither write may block the task path (D-08), but a failed job
-  // record must be reported by the flush instead of vanishing.
+  // Legacy import/diagnostic history remains readable. It never becomes a
+  // second native execution authority or an owned Task save prerequisite.
   const jobRecordFailures: unknown[] = []
   const recordJob = (task: TaskRecord, status: TaskStatus, extra: { terminal?: { at: number; reason?: string } } = {}): void => {
     if (!jobRecords) return
@@ -98,27 +99,27 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   type RetentionIdentity={revision:string|undefined;fingerprint:string}
   const acknowledgedRetention = new WeakMap<TaskRecord, RetentionIdentity>()
   const capturedRetention = new WeakMap<TaskRecord, RetentionIdentity>()
-  const retentionIdentity=(task:TaskRecord):RetentionIdentity=>({revision:task.result?.revision,fingerprint:JSON.stringify(captureTaskSnapshot(task.result??null))})
+  const retentionIdentity=(task:TaskRecord):RetentionIdentity=>({revision:task.result?.revision,fingerprint:canonicalJsonData(terminalData(task,true))})
   const sameRetention=(identity:RetentionIdentity,task:TaskRecord)=>identity.revision===task.result?.revision&&identity.fingerprint===retentionIdentity(task).fingerprint
-  const terminalData=(task:Readonly<TaskRecord>,nativeOnly=false)=>{const data:Record<string,unknown>=Object.create(null);for(const[key,field]of Object.entries(Object.getOwnPropertyDescriptors(task))){if(!field.enumerable||nativeOnly&&(key==='retention'||key==='retentionError'))continue;if(!('value'in field))throw Error('Original Task data accessor changed');Object.defineProperty(data,key,{value:field.value,enumerable:true})};return data}
+  const terminalData=(task:Readonly<TaskRecord>,nativeOnly=false)=>{const data:Record<string,unknown>=Object.create(null);for(const[key,field]of Object.entries(Object.getOwnPropertyDescriptors(task))){if(!field.enumerable||key==='projectionWarning'||nativeOnly&&(key==='retention'||key==='retentionError'||key==='publication'||key==='savedObservation'))continue;if(!('value'in field))throw Error('Original Task data accessor changed');Object.defineProperty(data,key,{value:field.value,enumerable:true})};return data}
   const captureTerminal=(task:Readonly<TaskRecord>)=>captureTaskSnapshot(terminalData(task)) as Readonly<TaskRecord>
   const terminalFingerprint=(task:Readonly<TaskRecord>)=>JSON.stringify(captureTaskSnapshot(terminalData(task,true)))
   const retentionPrerequisites=new WeakMap<TaskRecord,()=>Promise<void>>()
   const retentionFlights = new WeakMap<TaskRecord, Promise<void>>()
-  // D-08: remember document-write failures so an admission drain can report
-  // them without failing the task path (job records remain durable).
+  // Legacy mirrors retain their own diagnostic failures. Native save debt
+  // belongs to TaskPersistence and clears only with its original outcome.
   const persistenceFailures: unknown[] = []
   const save = async () => {
     assertReady()
-    // D-07: the pending intent is durable before the write is attempted; a
-    // settled record is appended only after success, so a crash leaves evidence.
-    const intentId = randomUUID()
-    if (documentIntents) intentWrite = intentWrite.then(() => documentIntents.pending(intentId)).catch(() => {})
+    // Preserve the legacy forensic journal without duplicating the native
+    // Task document's canonical result, outbox or acknowledgment.
+    const intentId = documentIntents ? randomUUID() : undefined
+    if (documentIntents) intentWrite = intentWrite.then(() => documentIntents.pending(intentId!)).catch(() => {})
     try {
       await persistence.save()
-      if (documentIntents) intentWrite = intentWrite.then(() => documentIntents.settled(intentId)).catch(() => {})
+      if (documentIntents) intentWrite = intentWrite.then(() => documentIntents.settled(intentId!)).catch(() => {})
     } catch (error) {
-      if (persistenceFailures.length < 16) persistenceFailures.push(error)
+      if (!ownedTask && persistenceFailures.length < 16) persistenceFailures.push(error)
       throw error
     }
   }
@@ -130,10 +131,10 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     if (currentState.version === 1 && opts.results) currentState.version = 2
     return {
       formatVersion: currentState.version,
-      tasks: [...currentState.records.values()].map(({ modelLabel, ...task }) => ({
-        ...task,
-        ...(modelLabel !== undefined ? { modelLabel } : {}),
-      })),
+      tasks: [...currentState.records.values()].map(({ modelLabel, ...task }) => {
+        delete task.projectionWarning
+        return { ...task, ...(modelLabel !== undefined ? { modelLabel } : {}) }
+      }),
       notifications: currentState.notifications.snapshot(),
     }
   }
@@ -277,11 +278,28 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     const owned = ownedTask!
     try {
       if (!isOwnedTaskContext(owned) || owned.coordinator !== opts.coordinator || owned.stateId !== opts.stateId) throw new Error('Original task owner unavailable')
+      const replacement = await prepareOriginalTaskDataReplacement(owned.operations,opts.stateId!,installedData)
       operation = await owned.operations.begin(owned.parent, { signal: controller.signal })
       const observed = await operation.observe()
       if (observed.kind !== 'present') throw new Error('Owned task document is absent')
       const staged = stageTaskRestore(observed.value as TaskProtocolDocument, Boolean(opts.reportPolicy), resultOwner?.available?.() === true)
       if (staged.version === 3) owned.operations.assertTaskV3Parent(owned.parent, opts.stateId!)
+      // This candidate is trusted only after the original protected native read
+      // is confirmed, its IO closes and the handoff below is consumed. Imported
+      // V1/V2 rows and unproved physical outcomes keep conservative recovery.
+      const canonicalTerminals:TaskRecord[]=[]
+      if(staged.version===3){
+        for(const original of (observed.value as TaskProtocolDocument).tasks){
+          const execution=original.result?.kind==='retained'?original.result.envelope.execution:undefined
+          const expected=original.outcome==='completed'?'succeeded':original.outcome==='error'?'failed':original.outcome==='cancelled'?'canceled':undefined
+          if(original.parentSessionId!==owned.stateId||original.legacyFormatVersion||!expected||execution?.outcome!==expected||execution.dispatch==='unknown'||execution.dispatch==='dispatched'&&!original.childBirth)continue
+          const task=staged.records.get(original.id)!
+          const savedObservation={status:original.status,outcome:original.outcome!,execution:{...execution}}
+          task.status=original.status;task.outcome=original.outcome;task.result=structuredClone(original.result)
+          task.publication='unqualified';task.savedObservation=savedObservation
+          canonicalTerminals.push(task)
+        }
+      }
       const readyState: State = { records: staged.records, notifications: staged.notifications, version: staged.version, phase: 'ready' }
       const stagedColdBindings = new Set(staged.version === 3 ? [...staged.records.values()].filter(task => task.childBirth).flatMap(task => [task.childBirth!.request.invocation.targetSessionId, 'task:' + task.id]) : [])
       const confirmed = await operation.confirm(observed.witness)
@@ -291,11 +309,13 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       await operation.close(); resourcesClosed = true
       if (currentState.phase !== 'pending' || controller.signal.aborted) throw new Error('Original task load retired')
       if (staged.version === 3) owned.operations.assertTaskV3Parent(owned.parent, opts.stateId!)
+      replacement.assertCurrent()
       // No callback, allocation, validation or await between consume and swap.
       handoff.consume()
       currentState = readyState
-      installRequiredTaskData(owned.operations,opts.stateId!,installedData)
+      replacement.install(async()=>{retireOwnedLoad();await registry.closeOwnedLoad()})
       coldBindings = stagedColdBindings
+      for(const task of canonicalTerminals)acknowledgedRetention.set(task,retentionIdentity(task))
       for (const task of currentState.records.values()) publish(task)
     } catch (cause) {
       if (!operation) beginCleanup = owned.operations.cleanupFor(cause)
@@ -312,12 +332,40 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     if (currentState.phase !== 'poisoned') currentState = { ...currentState, phase: 'retired' }
     controller.abort(); handoff?.abandon()
   }
+  let ownerClose:Promise<void>|undefined
+  function closeOwnedLoad(accepted?:Promise<void>):Promise<void>{
+    if(ownerClose)return ownerClose
+    launchPort?.retireAll(new Error('Original slot owner closed'))
+    stopObserving?.();stopObserving=undefined
+    const flight=(async()=>{
+      const errors:unknown[]=[]
+      await ready.catch(()=>{})
+      // Release old snapshot consumers before producer/notification joins:
+      // those producers may have queued their saves behind a held consumer.
+      const consumers=persistence.retireConsumers()
+      void consumers.catch(()=>{})
+      try{await cleanupLoad()}catch(error){errors.push(error)}
+      try{await launchPort?.close()}catch(error){errors.push(error)}
+      for(const source of new Set([...requiredTasks.values()].map(entry=>entry.source)))try{await source.close()}catch(error){errors.push(error)}
+      if(accepted){
+        try{await accepted}catch(error){errors.push(error)}
+        retireOwnedLoad()
+      }
+      try{await consumers}catch(error){errors.push(error)}
+      try{await persistence.flush()}catch(error){errors.push(error)}
+      if(errors.length)throw new AggregateError(errors,'Original Task owner cleanup unresolved')
+      if(ownedTask&&currentState.phase==='retired')releaseOriginalTaskData(ownedTask.operations,opts.stateId!,installedData)
+    })()
+    ownerClose=flight
+    void flight.catch(()=>{if(ownerClose===flight)ownerClose=undefined})
+    return flight
+  }
   const liveAccepted=new WeakSet<TaskRecord>()
   const registry: TaskRegistry = {
     ready,
     assertReady,
     retireOwnedLoad,
-    async closeOwnedLoad() { launchPort?.retireAll(new Error('Original slot owner closed'));stopObserving?.();stopObserving=undefined;await ready.catch(() => {}); await cleanupLoad(); await launchPort?.close(); await persistence.retireConsumers(); await persistence.flush() },
+    closeOwnedLoad:()=>closeOwnedLoad(),
     bindForegroundHandoff(taskId) {
       assertReady()
       const task = currentState.records.get(taskId)
@@ -413,7 +461,6 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       if (task.projectionWarning === warning) return false
       if (warning === undefined) delete task.projectionWarning
       else task.projectionWarning = warning
-      void save().catch(() => {})
       publish(task)
       return true
     },
@@ -489,14 +536,133 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       return error === undefined ? { ok: true } : { ok: false, error }
     },
   }
-  const requiredTasks=new WeakSet<TaskRecord>()
+  const publicationRepairs=new Map<TaskRecord,{source:SettlementFacts<ProducerFactOutcome>;fact:CapturedSettlementFact<ProducerFactOutcome>}>()
+  async function recoverCanonicalPublications(namespace:string):Promise<void>{
+    for(const entry of [...requiredTasks.values()])if(entry.notification)await entry.notification()
+    // Reconcile already-issued original work before any fresh-read admission:
+    // its own unknown outcome deliberately fences ordinary currentness.
+    for(const [task,repair]of publicationRepairs){
+      committedFactSeqs(await repair.fact.reconcile())
+      await repair.source.close()
+      publicationRepairs.delete(task);requiredTasks.delete(task)
+    }
+    assertReady()
+    if(!opts.launchContext||!('kind'in opts.launchContext))return
+    const domain=opts.launchContext.domain
+    for(const task of currentState.records.values()){
+      if(task.delivery!=='parent'||task.publication!=='unqualified'||!coldBindings.has('task:'+task.id))continue
+      const acknowledged=acknowledgedRetention.get(task)
+      const outcome=task.outcome
+      if(!acknowledged||!sameRetention(acknowledged,task)||task.result?.kind!=='retained'||!task.childBirth||
+        outcome!=='completed'&&outcome!=='error'&&outcome!=='cancelled')continue
+      let repair=publicationRepairs.get(task)
+      if(!repair){
+        const cleanup=requiredTasks.get(task);if(cleanup){await cleanup.source.close();requiredTasks.delete(task)}
+        const existing=await readManagedTaskResult(domain,task.id)
+        assertReady()
+        if(existing){if(!await qualifyManagedTaskPublication(task,domain))throw Error('Canonical Task publication conflicts with parent result');publish(task);continue}
+        const action=domain.owner.beginAction()
+        let fact:CapturedSettlementFact<ProducerFactOutcome>|undefined
+        const source=action.registerSettlementSource(async()=>{if(fact)committedFactSeqs(await fact.reconcile())})
+        action.finish();requiredTasks.set(task,{source})
+        try{
+          const binding=readManagedSourceTaskDelivery(domain.identity,source,namespace,task.id)
+          if(!binding||binding.kind!=='subagent'||binding.recipientSessionId!==task.parentSessionId||binding.callSeq!==task.callEventSeq)throw Error('Original canonical Task delivery binding unavailable')
+          if(!sameRetention(acknowledged,task))throw Error('Original canonical Task changed before publication')
+          fact=source.delivery.capture({
+            type:'subagent/end',version:1,taskId:task.id,outcome,
+            envelope:task.result.envelope,resultRevision:task.result.revision,
+            ...(task.resultText!==undefined?{resultText:task.resultText}:{}),
+            ...(task.error!==undefined?{error:task.error}:{}),
+          })
+          repair={source,fact};publicationRepairs.set(task,repair);requiredTasks.set(task,{source})
+        }catch(error){try{await source.close();requiredTasks.delete(task)}catch(cleanup){throw new AggregateError([error,cleanup],'Canonical Task publication validation and cleanup failed')}throw error}
+      }
+      committedFactSeqs(await repair.fact.reconcile())
+      await repair.source.close()
+      publicationRepairs.delete(task);requiredTasks.delete(task)
+      if(!await qualifyManagedTaskPublication(task,domain))throw Error('Canonical Task publication was not observed after acknowledgment')
+      publish(task)
+    }
+  }
+  const requiredTasks=new Map<object,{source:SettlementFacts<ProducerFactOutcome>;notification?:()=>Promise<void>}>()
+  function canonicalChildren(query?:{sessionId:string;taskId?:string}):readonly Readonly<TaskRecord>[] {
+    assertReady()
+    if(!ownedTask)return []
+    const candidates=query?[query.taskId?currentState.records.get(query.taskId):currentState.records.getByChildSession(query.sessionId)]:[...currentState.records.values()]
+    return candidates.filter((task):task is TaskRecord=>{
+      const ack=task&&acknowledgedRetention.get(task)
+      return !!task&&task.parentSessionId===ownedTask.stateId&&!!ack&&sameRetention(ack,task)&&!!task.childBirth&&!!task.childSessionId&&
+        (!query||task.childSessionId===query.sessionId)&&task.outcome!==undefined&&task.outcome!=='recovery-required'
+    })
+  }
+  async function captureNotificationProgress():Promise<TaskNotificationProgress|undefined>{
+    if(!ownedTask)return undefined
+    assertReady()
+    const records=currentState.records,notifications=currentState.notifications,key=Object.freeze({})
+    const publicationReady=Promise.withResolvers<void>()
+    const action=ownedTask.document.beginAction()
+    let parent:object|undefined,save:import('./persistence.ts').OwnedTaskSave|undefined
+    let attempted=false,saved=false,released=false,closing:Promise<void>|undefined
+    let initialCleanup:ReturnType<typeof ownedTask.operations.cleanupFor>
+    const check=()=>{
+      if(released||!parent||currentState.records!==records||currentState.notifications!==notifications||
+        currentState.phase==='poisoned'||!isInstalledRequiredTaskData(ownedTask.operations,opts.stateId!,installedData))throw Error('Original Task notification owner changed')
+      source.assertHeld()
+      ownedTask.operations.assertOriginalRequiredParent(parent,opts.stateId!)
+    }
+    const settleSave=async()=>{
+      if(!save||saved)return
+      if(attempted)await save.retry();else{attempted=true;await save.done}
+      await ownedTask.operations.joinRequiredWriter(parent!);check()
+      save.assertHandoff();save.release();saved=true
+    }
+    const source=action.registerSettlementSource(async()=>{
+      await publicationReady.promise
+      if(initialCleanup){await initialCleanup.retry();initialCleanup=undefined}
+      await settleSave()
+      if(parent&&!released){await ownedTask.operations.releaseRequiredParent(parent);released=true}
+    })
+    const parentReady=ownedTask.operations.requiredParent(ownedTask.document,source).then(original=>{parent=original;action.finish();return original})
+    const close=()=>{
+      if(closing)return closing
+      publicationReady.resolve()
+      const pending=source.close().then(()=>{requiredTasks.delete(key)})
+      closing=pending
+      void pending.catch(()=>{if(closing===pending)closing=undefined})
+      return pending
+    }
+    requiredTasks.set(key,{source,notification:close})
+    const tasks:NotificationTaskAccess={
+      get(id){check();return records.get(id)},
+      notifications(){check();return notifications.list()},
+      updateNotification(id,patch){check();if(save)throw Error('Original notification progress already captured');return notifications.update(id,patch)},
+      async retainResult(id){check();await retainResultOnce(id);check()},
+      async save(){
+        check()
+        if(!save){
+          const authority=Object.freeze({})
+          requiredSaveAuthorities.set(authority,{parent:parentReady,capture:()=>{check();return snapshotData()},beforeIssue:async()=>{check()}})
+          save=persistence.captureRequiredSave(authority)
+        }
+        await settleSave()
+      },
+    }
+    try{await parentReady;check();return Object.freeze({tasks:Object.freeze(tasks),close})}
+    catch(cause){
+      initialCleanup=ownedTask.operations.cleanupFor(cause)
+      action.finish()
+      try{await close()}catch(cleanup){throw new AggregateError([cause,cleanup],'Original notification admission cleanup failed')}
+      throw cause
+    }
+  }
   associateRequiredTaskRegistry(registry,async(task,source,producer)=>{
     if(!ownedTask)return undefined
     assertReady();if(task.parentSessionId!==opts.stateId||!liveAccepted.has(task)||currentState.records.get(task.id)!==task||task.outcome!==undefined||requiredTasks.has(task))throw Error('Original required Task unavailable')
-    requiredTasks.add(task)
+    requiredTasks.set(task,{source})
     const records=currentState.records,notifications=currentState.notifications
     let parent:object|undefined
-    const readyParent=ownedTask.operations.requiredParent(ownedTask.document,source as import('@i-harness/core-session').SettlementFacts).then(original=>{parent=original;return original})
+    const readyParent=ownedTask.operations.requiredParent(ownedTask.document,source).then(original=>{parent=original;return original})
     const checkData=()=>{if(!isInstalledRequiredTaskData(ownedTask.operations,opts.stateId!,installedData)||currentState.records!==records||currentState.notifications!==notifications||currentState.phase==='poisoned'||records.get(task.id)!==task)throw Error('Original required Task incarnation replaced');source.assertHeld()}
     const joinWriter=async()=>{const original=await readyParent;checkData();await ownedTask.operations.joinRequiredWriter(original);checkData()};
     const checkOriginal=()=>{checkData();if(!parent)throw Error('Original required parent pending');ownedTask.operations.assertOriginalRequiredParent(parent,opts.stateId!)};
@@ -561,10 +727,10 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       acknowledgmentRecovery(cause:unknown){if(this!==result)throw Error('Invalid required Task receiver');return save&&capturedTaskAcknowledgmentFailure(save,cause)},
       async waitProjectionCurrent(){if(this!==result||!consumed||released)throw Error('Original Task projection unavailable');await joinWriter();result.assertProjectionCurrent()},
       assertProjectionCurrent(){if(this!==result||!consumed||released)throw Error('Original Task projection unavailable');check();if(saveIdentity&&!sameRetention(saveIdentity,task)||sealedTerminal&&terminalFingerprint(sealedTerminal)!==terminalFingerprint(task))throw Error('Original Task projection changed')},
-      async release(){if(this!==result)throw Error('Invalid required Task receiver');if(!consumed)throw Error('Original required Task acknowledgment unavailable');if(!released){await ownedTask.operations.releaseRequiredParent(parent!);released=true;requiredTerminalRoutes.delete(task);requiredClaimRoutes.delete(task)}}
+      async release(){if(this!==result)throw Error('Invalid required Task receiver');if(!consumed)throw Error('Original required Task acknowledgment unavailable');if(!released){await ownedTask.operations.releaseRequiredParent(parent!);released=true;requiredTerminalRoutes.delete(task);requiredClaimRoutes.delete(task);requiredTasks.delete(task)}}
     })
     try{await readyParent;check();return result}catch(error){requiredTerminalRoutes.delete(task);requiredClaimRoutes.delete(task);throw error}
-  })
+  },{recover:recoverCanonicalPublications,closeAfter:closeOwnedLoad,notification:captureNotificationProgress,children:canonicalChildren})
   if (ownedTask && opts.launchContext) {
    const launchHooks:Parameters<typeof createTaskLaunchPort>[2]={
     beforeResultIssue(record,before){assertReady();if(currentState.records.get(record.id)!==record)throw Error('Original task replaced');retentionPrerequisites.set(record,before)},

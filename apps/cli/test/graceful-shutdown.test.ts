@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
-import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
+import { createControlledJsonlBackend as createJsonlBackend, ownedControls } from "../../../packages/session-persistence/test/helpers/composed.ts"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import { failureReport, runHeadless, HeadlessCleanupError } from "../src/run.ts"
 import { decodeFactBatch, type BatchKey } from '@i-harness/core-session'
@@ -101,16 +101,16 @@ describe("graceful shutdown — an interrupted run unwinds instead of being kill
     const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
     await coordinator.create({ sessionId: 's-abort-receipt' })
     const controller = new AbortController(), gated = gatedModel()
-    const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
+    const append = ownedControls(backend).originalAppend, reconcile = ownedControls(backend).originalReconcile
     let key: BatchKey | undefined, blocked = true, writes = 0, sends = 0
-    backend.appendOwnedBatch = async (...args) => {
+    ownedControls(backend).append = async (...args) => {
       const outcome = await append(...args)
       if (!key && controller.signal.aborted && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'step/failed' || event.type === 'step/end')) {
         key = args[3].key; writes++; return { kind: 'unknown', key }
       }
       return outcome
     }
-    backend.reconcileOwnedBatch = async (...args) => blocked && key ? { kind: 'unknown', key } : reconcile(...args)
+    ownedControls(backend).reconcile = async (...args) => blocked && key?.batchId === args[3].key.batchId ? { kind: 'unknown', key: args[3].key } : reconcile(...args)
     const running = runHeadless('Owned interrupted journal action', {
       workspace: root, sessionId: 's-abort-receipt', coordinator, signal: controller.signal,
       model: controlledModel(request => ({ async *stream(request) { sends++; yield* gated.model.stream(request) } } as import('@i-harness/llm-seam').ModelClient).stream(request)),

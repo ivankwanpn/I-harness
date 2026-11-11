@@ -7,13 +7,20 @@ the ownership service. This keeps the original option getter order. Acquisition
 retry/deadline options remain lazy reads inside each lease acquisition. Backend
 methods remain calls on the live backend object, including reads after awaits.
 
-Current-format durable mutation uses the storage package's native task-transition
-composition. The raw `createSessionCoordinator` factory supports structural
-snapshot reads and refuses current-format creation, append, repairing load and
-owned load with `TASK_TRANSITION_UNSUPPORTED` when that composition is absent.
-Production JSONL hosts use the existing composed constructor. Storage algorithm
-unit tests can instantiate their underlying ownership, mutation and load modules,
-while integration tests use the native composition.
+Current-format durable mutation uses the backend constructor's native ownership
+and task-transition composition. The public `createSessionCoordinator(backend)`
+selects that immutable, constructor-owned factory. JSONL supplies it directly;
+`asSessionCoordinator(createJsonlCommitCoordinator(...))` supplies the commit-log
+facade with the same canonical Task codec by default. Callers no longer need a
+private Task validator to create, load or run a current-format session.
+
+Use `createReadOnlySessionCoordinator(backend)` for list, profile, snapshot and
+document reads without adoption or mutation. Its frozen read facet works while
+another coordinator owns the writer and preserves supported legacy files. A
+backend without the native factory cannot advertise a writable coordinator;
+explicit `lock: { enabled: false }` is rejected for writable construction and
+should use the read facet instead. Storage algorithm unit tests may still
+instantiate the underlying internal modules with their precise capabilities.
 
 | Module | Responsibility and state authority |
 | --- | --- |
@@ -36,8 +43,8 @@ the three load algorithms stay together so their differing contracts are visible
 
 ## Ownership and operation ordering
 
-Locking defaults to disabled. When enabled, create, append, metadata mutation,
-adoption and write-behind writes use the session ownership lease. Enqueue remains
+Public writable construction enables the native session ownership lease for
+create, append, metadata mutation, adoption and write-behind writes. Enqueue remains
 synchronous and acquires ownership only in its later write callback. Concurrent
 acquisition shares one promise; a repair that observes an already held or
 in-flight acquire never releases that other path's lease. A genuinely borrowed
@@ -46,7 +53,32 @@ lease is released around repairing `load`; successful `loadOwned` retains it.
 Session mutations and repairing loads share the same per-session operation
 chain. Each gate resolves in `finally`, so a failure does not poison the next
 operation. Other sessions remain independent. Documents use their own chain and
-borrow `doc:<key>` leases; list, profile and document reads acquire no lease.
+borrow `doc:<key>` leases. JSONL list, profile and document reads use the original
+read owner. Commit-log readers hold shared snapshot-retention leases, allowing
+the session writer to continue while protecting the reader's sidecars.
+
+## Legacy generation handoff
+
+The JSONL commit adapter acquires the same original session artifact lease as a
+normal JSONL writer. It holds that lease across the legacy read and atomic
+commit-generation publication, then releases it through the existing ownership
+cleanup. A second migrator reselects the published generation while it owns the
+legacy lease. Publication leaves the old physical bytes intact; subsequent
+legacy native/public session writes refuse the superseded namespace. Historical
+structural reads and legacy document read-through remain available.
+
+The commit facade supports new targets and exact replay of a stored birth.
+Replacing an existing empty header is explicitly not issued as unsupported;
+nonempty target collisions are refused. This check runs under the same original
+legacy exclusion, and neither path shadows the old artifact.
+
+A generic legacy port that supplies only read/list is still readable, but cannot
+promise an exclusive migration and therefore refuses a first write with
+`LEGACY_MIGRATION_UNSUPPORTED`. The original JSONL adapter supplies the supported
+migration scope. Cooperating writers must use the same configured lock root;
+uncooperative old binaries that bypass this ownership protocol are outside this
+handoff contract. No reread window or in-place overwrite is used as a substitute
+for ownership.
 
 ## The three load contracts
 
@@ -68,56 +100,14 @@ its write-behind only after success. It then drains the current document chain,
 joins the session operation chain, acquires ownership, commits the backend
 tombstone and releases ownership in `finally`. Deleted documents cannot reopen.
 
-Close flushes every current write-behind with `allSettled`, cancels automatic
-waits, drains documents, drains the current session operation gates, attempts
-every held lease release (including synchronous throws), and clears held leases.
-It aggregates exactly the original flush failures. Write-behinds remain available
-after close, including retained failed batches for a later enqueue/flush retry.
+Native coordinator close fences fresh public IO immediately and joins accepted
+operations before backend-owned cleanup releases their resources. Original Task
+and revocation continuations keep their own private callbacks during cleanup;
+a fully closed coordinator cannot start IO again. Ownership status remains a
+memory observation after close, and repeated close can finish retained cleanup.
+A callback cannot await the close that is joining that same callback; an
+external close still waits for the accepted operation.
 
-`putDocument` reports ordinary write/lease failures and rejects the caller.
-`putDocumentStrict` propagates its failure directly. The document chain survives
-both failures, so a later write can retry. An injected reporter that throws
-rejects the reporting call with that error. Close drains the recovered document
-chain. Durable callers must await their own operation result.
-
-## Verification entry points
-
-Run the following suites sequentially from the repository root. Windows
-ownership tests use real locks in controlled temporary directories; crash
-acceptance tests use local temporary logs and child processes.
-
-```powershell
-pnpm --filter @i-harness/session-persistence exec vitest run --maxWorkers=2 --minWorkers=1
-pnpm --filter @i-harness/session-persistence typecheck
-pnpm --filter @i-harness/session-executor exec vitest run test/service.test.ts --maxWorkers=2 --minWorkers=1
-pnpm --filter @i-harness/session-executor typecheck
-pnpm --filter @i-harness/session-persistence-jsonl exec vitest run test/delete-owned.test.ts test/meta.test.ts --maxWorkers=2 --minWorkers=1
-pnpm --filter @i-harness/session-persistence-jsonl typecheck
-node scripts/audit/check-reachability.mjs --self-test
-node scripts/audit/check-reachability.mjs --gate
-```
-
-`coordinator-order.test.ts` pins late registry updates, initialization getters,
-late backend method reads and receivers, and reporter exceptions with a surviving
-document chain. `ownership.test.ts` covers repair/append serialization, real
-lease conflicts, shared acquisition, adoption/borrow behavior and release.
-`persistence.test.ts` covers format refusal, event filtering, batching failure
-and document writes; `load-gate-coverage.test.ts` reads the authoritative
-`format/registry.ts`. JSONL deletion/meta tests cover the durable store boundary.
-
-The current durable header is version 3, with identity migrations from versions 1
-and 2. Complete reads validate history before any backend repair; shape-only batch
-preflight permits references into an earlier durable batch. The writer stages those
-references against one derived prefix index and commits metadata after storage
-accepts the append. An uncertain append invalidates the index and the next attempt
-rereads actual records, recognizing an already durable identical prefix. Existing
-write-behind owns retry retention and scheduling.
-
-Fenced semantic recovery appends truthful results and closers at new coordinates,
-including closed accepted tails. It never shifts defined references. JSONL preserves
-committed raw lines through fenced repair and preserves unknown metadata/body bytes
-through header upgrade. Snapshot remains read-only. Batch seed transformation
-restores a sliced-away fence before explicit observations and rejects partial
-accepted bundles before child creation; the isolated legacy remapper rejects
-explicit acceptance/fence records. Metadata validation is incremental; backend
-full-file reads and atomic replacement I/O remain CX1/R6 work.
+This intentionally replaces the former post-close metadata/enqueue behavior.
+Standalone write-behind instances still retain their own failed batches for
+explicit retry; that does not reopen a retired coordinator.

@@ -2,7 +2,8 @@ import { assertOriginalExecPair, createWorkflowStepFactory } from '@i-harness/ex
 export function createScopedWorkflowExec(pair: Parameters<typeof createWorkflowStepFactory>[0], cwd: string, policy: () => SandboxExecutionPolicy | undefined) {
   return createWorkflowStepFactory(pair, command => ({ ...command, cwd: command.cwd ?? cwd, sandbox: command.sandbox ?? policy() }))
 }
-import { bindPreparedShellLeaf } from '@i-harness/core-tools'
+import { bindPreparedShellLeaf, declareToolResultOutcome } from '@i-harness/core-tools'
+import { isNondurableSession } from '@i-harness/core-session'
 import { createExecDeliveryOwner,createPrivateExecDeliveryOwner } from './lifecycle/exec-delivery-owner.ts'
 import {isOriginalPrivateExecRecipient} from './lifecycle/execution-inputs.ts'
 import type { ExecCommand, ExecResult, ExecService, ExecStreamRunOptions, PromotedRun } from "@i-harness/exec"
@@ -56,21 +57,25 @@ function createScopedReservation(pair:ReturnType<typeof import('@i-harness/exec/
       if(used)throw new Error('Direct Shell run already consumed');used=true
       claim.assertCurrent();claim.consume()
       const issuer=claim.takeExecSourceIssuer()
-      if(!issuer)throw new Error('Original model Exec issuer required')
+      if (!issuer && (config.kind === 'private' || 'kind' in claim.context || !isNondurableSession(claim.context.view))) {
+        throw new Error('Original model Exec issuer required')
+      }
       const reservation=pair.port.reserve(),instanceId=pair.port.instanceId(reservation)
       let owner:ReturnType<typeof createExecDeliveryOwner>|undefined,installed=false,started=false
       try{
-        if(config.kind==='private'){
+        claim.retainRetryCleanup(() => pair.port.retireAttempt(reservation))
+        if(issuer && config.kind==='private'){
           if(!('kind'in claim.context)||claim.context.domain!==config.domain)throw new Error('Original private Shell domain required')
           owner=createPrivateExecDeliveryOwner(issuer,{sessionId:claim.context.sessionId,callId:claim.exec.callId!,callSeq:claim.exec.callEventSeq!,sourceId:instanceId},mode==='background'?'parent':'tool',config.recipient,config.execution,config.domain)
-        }else{
+        }else if(issuer && config.kind==='public'){
           if('kind'in claim.context)throw new Error('Original public Shell owner required')
           owner=createExecDeliveryOwner(issuer,{view:claim.context.view,sessionId:claim.context.sessionId??claim.exec.sessionId!,callId:claim.exec.callId!,callSeq:claim.exec.callEventSeq!,sourceId:instanceId},mode==='background'?'parent':'tool',config.prepare)
         }
-        pair.port.attachDelivery(reservation,owner);installed=true
+        if(owner){pair.port.attachDelivery(reservation,owner);installed=true}
         const scoped=commandFor(command)
-        claim.assertCurrent();issuer.assertAdmissionCurrent()
+        claim.assertCurrent();issuer?.assertAdmissionCurrent()
         started=true
+        declareToolResultOutcome(claim.exec, 'unknown')
         return await pair.port.start(reservation,scoped,mode,options)
       }catch(cause){
         if(!started)try{
@@ -96,7 +101,7 @@ function createScopedReservation(pair:ReturnType<typeof import('@i-harness/exec/
     const directEntry=Object.freeze({enter(exec:import('@i-harness/core-tools').ToolExec){
       if(this!==directEntry)throw new Error('Foreign direct entry receiver')
       const claim=entry.enter(exec)
-      if(!claim||!claim.hasExecSourceIssuer())return
+      if(!claim)return
       const original=context?directContexts.get(claim.context.context):claimRun
       if(!original)throw new Error('Original scoped Exec context unavailable')
       return original(claim)

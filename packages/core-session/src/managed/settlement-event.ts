@@ -5,7 +5,7 @@ import { validContextEvent } from '../events/context.ts'
 import { validDeliveryEvent } from '../events/delivery.ts'
 
 export type SettlementEventKind = 'recovery' | 'tool-result' | 'code' | 'delivery' | 'rewind' | 'retention' | 'lifecycle' | 'usage' | 'assistant-audit'
-const delivery = new Set(['subagent/end', 'subagent/inbox', 'job/status', 'team/member', 'team/task', 'team/message/queued', 'team/message/delivered', 'exec/end', 'code/end', 'workflow/end', 'agent/delivery-handoff'])
+const delivery = new Set(['subagent/end', 'subagent/inbox', 'job/status', 'exec/end', 'code/end', 'workflow/end', 'agent/delivery-handoff'])
 const lifecycle = new Set(['step/end', 'turn/end', 'step/failed', 'reasoning'])
 const terminal = new Set(['completed', 'failed', 'terminated', 'interrupted'])
 

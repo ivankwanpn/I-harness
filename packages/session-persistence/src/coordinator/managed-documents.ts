@@ -183,7 +183,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       const check = () => { if (documents.get(id) !== entry || entry.document !== document || entry.revoked || entry.bootstrap || resolved.get(id) !== document) throw new FactRecoveryRequiredError() }
       return captureManagedProcessRead(document, ownership, documentKeys, check)
     },
-    captureRequiredParent(owner:import('@i-harness/core-session/internal/execution').ManagedExecutionOwner,source:import('@i-harness/core-session').SettlementFacts) {
+    captureRequiredParent(owner:import('@i-harness/core-session/internal/execution').ManagedExecutionOwner,source:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>) {
       const association=documentEntries.get(owner);if(!association)throw new FactRecoveryRequiredError();const{id,entry}=association,document=entry.document;if(!document||document!==owner)throw new FactRecoveryRequiredError();
       if(entry.revoked||documents.get(id)!==entry||entry.document!==document||!transitions||entry.headerUnknown)throw new FactRecoveryRequiredError();
       const original=captureManagedRequiredParent(document,ownership,source);

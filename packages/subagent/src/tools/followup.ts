@@ -61,6 +61,8 @@ export function createResumeTool(deps: SubagentToolDeps): Tool {
     execute: async (args, exec) => {
       const existing = deps.table.get(args.target)
       if (!existing) throw new Error(`unknown subagent: ${args.target}`)
+      // Loading historical metadata never revives a removed Team worker.
+      await childFactOwner(existing,deps.childSessions?.coordinator)
       if (existing.status === "running") throw new Error(`subagent already running: ${args.target}`)
       if (existing.sessionId && deps.agents.get(existing.sessionId)) {
         // already resident (e.g. a waiting child) → just re-drive pending inbox
@@ -69,7 +71,7 @@ export function createResumeTool(deps: SubagentToolDeps): Tool {
         return { resumed: true }
       }
       // M23 (Minor 4): the rebuild body moved into ensureResidentAgent so the
-      // wakeup paths (driveFollowups / agent-team deliver gate) can lazily
+      // wakeup paths (serialized followup delivery) can lazily
       // rebuild a fresh-registry (post-resume) resident agent too. As an
       // explicit tool call, resume_agent still ERRORS on an unrebuildable
       // target instead of tolerating the false return like the wakeup paths.

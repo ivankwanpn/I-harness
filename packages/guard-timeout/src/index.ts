@@ -1,3 +1,4 @@
+import { onExecutionCascade } from '@i-harness/core-plugin'
 import type { Plugin, PluginContext } from "@i-harness/core-plugin"
 import { TOOL_TIMEOUT, hasRetainedToolBody, type ToolExec } from "@i-harness/core-tools"
 
@@ -17,7 +18,7 @@ export function createTimeoutGuard(_ctx: PluginContext): Plugin {
   return {
     name: "guard-timeout",
     mount(ctx: PluginContext): void {
-      ctx.onCascade("tools/execute", async (dispatch, next) => {
+      onExecutionCascade(ctx, "tools/execute", async (dispatch, next) => {
         const d = dispatch as {
           name: string
           args: unknown

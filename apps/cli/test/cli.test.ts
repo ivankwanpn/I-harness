@@ -1,7 +1,8 @@
 import { controlledModel } from '../../../packages/session-executor/test/controlled-model.ts'
+import { inlineToolOutput } from './inline-tool-output.ts'
 import { prepareTextFixture, checkpointOfLength } from '../../../packages/compaction/test/fixtures/checkpoint.ts'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
-import { existsSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest"
+import { existsSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSync } from "node:fs"
 import { writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -14,14 +15,14 @@ import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createApprovalPolicy } from "@i-harness/guard-approval"
 import { registerApprovalAnswerer } from "@i-harness/interaction"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createSessionCoordinator, createReadOnlySessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createFileBackedSessionQuery, closeSessionQueries } from "@i-harness/session-query"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import type { CompactionConfig } from "@i-harness/compaction"
 import type { RetryConfig } from "@i-harness/guard-retry"
 import { resolveShell, type ShellRetentionOptions } from "@i-harness/shell"
-import { createSession, append, deriveMessages } from "@i-harness/core-session"
+import { createSession, append, deriveMessages, subscribe } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import { probeBwrap } from "@i-harness/sandbox-local"
 import type { ExecService } from "@i-harness/exec"
@@ -148,32 +149,13 @@ vi.mock("@i-harness/exec", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@i-harness/exec")>()
   return {
     ...actual,
-    registerExec: (...args: Parameters<typeof actual.registerExec>) => {
-      const service = actual.registerExec(...args)
-      mountedExecServices.list.push(service)
-      return service
+    registerExecWithReservation: (...args: Parameters<typeof actual.registerExecWithReservation>) => {
+      const pair = actual.registerExecWithReservation(...args)
+      mountedExecServices.list.push(pair.service)
+      return pair
     },
   }
 })
-
-// Poll a read until it returns a defined value (bounded). The subagent
-// persistence wrappers save fire-and-forget (M6), so document reads need to
-// wait for eventual durability. A read that throws (e.g. JSON.parse on a file
-// caught mid-write) is treated as "not ready yet" and retried.
-async function pollUntil<T>(fn: () => Promise<T | undefined>, timeoutMs = 5000): Promise<T | undefined> {
-  const deadline = Date.now() + timeoutMs
-  let last: T | undefined
-  while (Date.now() < deadline) {
-    try {
-      last = await fn()
-    } catch {
-      last = undefined
-    }
-    if (last !== undefined) return last
-    await new Promise((r) => setTimeout(r, 20))
-  }
-  return last
-}
 
 describe("headless CLI (M2)", () => {
   let dir: string
@@ -338,10 +320,11 @@ describe("headless CLI (M2)", () => {
           ],
         })
         expect(result.exitCode, result.error).toBe(0)
-        const resultEvent = result.session!.events.find((e) => e.type === "tool/result") as { output: { hits: { sessionId: string; eventType: string; snippet: string }[] } } | undefined
+        const resultEvent = result.session!.events.find((e) => e.type === "tool/result")
         expect(resultEvent).toBeDefined()
-        expect(resultEvent!.output, JSON.stringify(resultEvent!.output)).toHaveProperty('hits')
-        const hits = resultEvent!.output.hits
+        const output = inlineToolOutput<{ hits: { sessionId: string; eventType: string; snippet: string }[] }>(resultEvent)
+        expect(output).toHaveProperty('hits')
+        const hits = output.hits
         // M70 CHANGED THIS EXPECTATION, deliberately and in the strict
         // direction. The search is a durable reader (reconcile-on-search over
         // the jsonl store), and this run's own `tool/call` event — the one whose
@@ -368,7 +351,7 @@ describe("headless CLI (M2)", () => {
     it("lineage shows the parent/child structure", async () => {
       const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       await coordinator.create({ sessionId: "parent" })
-      await coordinator.create({ sessionId: "child", parentSession: "parent", delegationDepth: 1, origin: "subagent" })
+      await coordinator.create({ sessionId: "child", parentSession: "parent", seedLength: 0, delegationDepth: 1, origin: "subagent" })
       const sessionQuery = createFileBackedSessionQuery({ storeRoot: dir })
       try {
         const result = await runHeadless("lineage", {
@@ -383,10 +366,11 @@ describe("headless CLI (M2)", () => {
           ],
         })
         expect(result.exitCode, result.error).toBe(0)
-        const resultEvent = result.session!.events.find((e) => e.type === "tool/result") as { output: { nodes: { sessionId: string; parentSession?: string }[] } } | undefined
+        const resultEvent = result.session!.events.find((e) => e.type === "tool/result")
         expect(resultEvent).toBeDefined()
-        expect(resultEvent!.output, JSON.stringify(resultEvent!.output)).toHaveProperty('nodes')
-        const nodes = resultEvent!.output.nodes
+        const output = inlineToolOutput<{ nodes: { sessionId: string; parentSession?: string }[] }>(resultEvent)
+        expect(output).toHaveProperty('nodes')
+        const nodes = output.nodes
         expect(nodes.map((n) => n.sessionId)).toEqual(["child"])
         expect(nodes[0]!.parentSession).toBe("parent")
       } finally {
@@ -407,7 +391,10 @@ describe("headless CLI (M2)", () => {
       expect(result.error).toBeUndefined()
       expect(result.finalText).toBe("ok")
       expect(result.session!.events.filter(event => event.type === "tool/result")).toMatchObject([
-        { name: "session_search", isError: true, output: { error: "unknown tool: session_search", code: "TOOL_FAILED" } },
+        { name: "session_search", envelope: {
+          execution: { outcome: 'failed', dispatch: 'not-dispatched' },
+          retention: { kind: 'inline', value: { error: "unknown tool: session_search", code: "TOOL_FAILED" } },
+        } },
       ])
       expect(result.session!.events.filter(event => event.type === "tool/dispatch")).toEqual([])
       // The tool remains unmounted. A lookup error is an ordered per-call answer
@@ -622,11 +609,11 @@ describe("headless CLI M24b skills + workflow mount", () => {
       expect(result.exitCode, result.error).toBe(0)
       // The tool RESULTS are observable on the session log — the search found
       // the sample skill and skill_get returned its usable body.
-      const results = result.session!.events.filter((e) => e.type === "tool/result") as { name: string; output: unknown }[]
+      const results = result.session!.events.filter((e) => e.type === "tool/result")
       const search = results.find((e) => e.name === "skill_search")
-      expect(JSON.stringify(search?.output)).toContain("alpha")
+      expect(JSON.stringify(inlineToolOutput(search))).toContain("alpha")
       const get = results.find((e) => e.name === "skill_get")
-      expect(JSON.stringify(get?.output)).toContain("scripts/rebuild.sh")
+      expect(JSON.stringify(inlineToolOutput(get))).toContain("scripts/rebuild.sh")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -659,16 +646,17 @@ describe("headless CLI M24b skills + workflow mount", () => {
         ],
       })
       expect(result.exitCode, result.error).toBe(0)
-      const results = result.session!.events.filter((e) => e.type === "tool/result") as { name: string; output: unknown }[]
+      const results = result.session!.events.filter((e) => e.type === "tool/result")
       // workflow_run returned the single-job id for the run.
       const run = results.find((e) => e.name === "workflow_run")
-      expect(JSON.stringify(run?.output)).toContain("workflow-1")
+      expect(JSON.stringify(inlineToolOutput(run))).toContain("workflow-1")
       // job_output collected it: step stdout + progress line + final status.
       const out = results.find((e) => e.name === "job_output")
-      const outJson = JSON.stringify(out?.output)
+      const output = inlineToolOutput<{ status: string }>(out)
+      const outJson = JSON.stringify(output)
       expect(outJson).toContain("wf hello from step")
       expect(outJson).toContain("[step 1/1 greet] ok")
-      expect((out!.output as { status: string }).status).toBe("completed")
+      expect(output.status).toBe("completed")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -785,7 +773,7 @@ describe("headless CLI persistence (M4)", () => {
       // Seed the lineage header through the coordinator's create meta (the
       // coordinator rebuilds session.header from it on load — same path the
       // main resume uses).
-      const { id } = await coordinator.create({ parentSession: "main-0", delegationDepth: 0, origin: "subagent" })
+      const { id } = await coordinator.create({ parentSession: "main-0", seedLength: 0, delegationDepth: 0, origin: "subagent" })
       await coordinator.append(id, [
         { type: "turn/start" },
         { type: "user/message", text: "old question" },
@@ -836,7 +824,7 @@ describe("headless CLI persistence (M4)", () => {
       try {
         const code = await main(["node", "i-harness", "run", "hello", "--session-dir", dir])
         expect(code).toBe(0)
-        const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"))
+        const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl") && !f.endsWith(".doc.jsonl"))
         expect(files).toHaveLength(1)
       } finally {
         log.mockRestore()
@@ -860,7 +848,7 @@ describe("headless CLI persistence (M5, M29: JSONL only)", () => {
         coordinator,
       })
       expect(result.exitCode, result.error).toBe(0)
-      const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"))
+      const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl") && !f.endsWith(".doc.jsonl"))
       expect(files).toHaveLength(1)
       // M29: the sqlite persistence artifact no longer exists anywhere
       expect(existsSync(join(dir, "sessions.db"))).toBe(false)
@@ -914,7 +902,7 @@ describe("headless CLI persistence (M5, M29: JSONL only)", () => {
       try {
         const code = await main(["node", "i-harness", "run", "hello", "--session-dir", dir])
         expect(code).toBe(0)
-        const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"))
+        const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl") && !f.endsWith(".doc.jsonl"))
         expect(files).toHaveLength(1)
         expect(existsSync(join(dir, "sessions.db"))).toBe(false)
       } finally {
@@ -932,7 +920,7 @@ describe("headless CLI persistence (M5, M29: JSONL only)", () => {
       try {
         const code = await main(["node", "i-harness", "run", "hello", "--session-dir", dir])
         expect(code).toBe(0)
-        const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"))
+        const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl") && !f.endsWith(".doc.jsonl"))
         expect(files).toHaveLength(1)
       } finally {
         log.mockRestore()
@@ -943,6 +931,27 @@ describe("headless CLI persistence (M5, M29: JSONL only)", () => {
   })
 })
 
+async function readClosedHeadlessRun<T>(dir:string,read:(coordinator:ReturnType<typeof createReadOnlySessionCoordinator>)=>Promise<T>):Promise<T>{
+  const cold=createReadOnlySessionCoordinator(createJsonlBackend(dir))
+  try{return await read(cold)}finally{await cold.close()}
+}
+type HeadlessTaskDocument=import('@i-harness/subagent').TaskProtocolDocument
+async function waitForOwnedChildTurns(coordinator:ReturnType<typeof createSessionCoordinator>,id:string,count:number):Promise<void>{
+  const document=await coordinator.openManagedDocument(id),view=document.view
+  const ready=()=>view.events.filter(event=>event.type==='turn/end'&&(event.seq??-1)>=(view.header?.seedLength??0)).length>=count
+  if(ready())return
+  await new Promise<void>(resolve=>{const off=subscribe(view,()=>{if(ready()){off();resolve()}})})
+}
+async function waitForHeadlessGate(gate:Promise<void>,signal?:AbortSignal):Promise<void>{
+  if(!signal)return gate
+  signal.throwIfAborted()
+  await new Promise<void>((resolve,reject)=>{
+    const aborted=()=>reject(signal.reason)
+    signal.addEventListener('abort',aborted,{once:true})
+    void gate.then(()=>{signal.removeEventListener('abort',aborted);resolve()},error=>{signal.removeEventListener('abort',aborted);reject(error)})
+  })
+}
+
 describe("headless CLI subagent state persistence (M6)", () => {
   it("persists subagent state via the coordinator document API on a run", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m6-"))
@@ -950,6 +959,8 @@ describe("headless CLI subagent state persistence (M6)", () => {
     const coordinator = createSessionCoordinator(createJsonlBackend(dir), { reportBackgroundFailure: failures, lock: { enabled: true } })
     try {
       const { id } = await coordinator.create()
+      const parentDocument=await coordinator.openManagedDocument(id),ended=Promise.withResolvers<void>()
+      const off=subscribe(parentDocument.view,event=>{if(event.type==='subagent/end')ended.resolve()})
       // Deterministic spawn driver: a SHARED mock cassette would be consumed by
       // the spawned child (destructive-cassette race, M3-C), exhausting the main
       // agent's next stream. A fresh model client yields the spawn tool call
@@ -963,6 +974,7 @@ describe("headless CLI subagent state persistence (M6)", () => {
             yield { type: "end" }
             return
           }
+          if(_request.sessionId===id)await ended.promise
           yield { type: "text/chunk", text: "done" }
           yield { type: "end" }
         },
@@ -975,15 +987,21 @@ describe("headless CLI subagent state persistence (M6)", () => {
         model: spawnModel,
       })
       expect(result.exitCode, result.error).toBe(0)
-      // The completed run owns the shutdown barrier: both registry snapshots
-      // and the nested task/notification save queue must already be durable.
-      const state = await coordinator.getDocument(id) as { jobs: { status: string }[] }
-      expect(state).toBeDefined()
-      expect(state.jobs.length).toBeGreaterThan(0)
-      expect(state.jobs.every((job) => job.status !== "running")).toBe(true)
-      const tasks = await coordinator.getDocument(`task-${id}`) as { tasks: { outcome?: string }[]; notifications: { status: string }[] }
-      expect(tasks.tasks.every((task) => task.outcome === "completed")).toBe(true)
-      expect(tasks.notifications).toEqual([expect.objectContaining({ status: "woken" })])
+      off()
+      // runHeadless owns close. Cold readback proves the native Task/result
+      // queue is durable without requiring its redundant jobs cache to exist.
+      await readClosedHeadlessRun(dir,async cold=>{
+        const tasks=await cold.getDocument(`task-${id}`) as HeadlessTaskDocument
+        expect(tasks.tasks).toHaveLength(1)
+        expect(tasks.tasks[0]).toMatchObject({outcome:'completed',description:'helper'})
+        expect(tasks.tasks[0]?.childSessionId).toBe(tasks.tasks[0]?.childBirth?.request.invocation.targetSessionId)
+        const state=await cold.getDocument(id) as {jobs:{label:string}[]}|undefined
+        expect(state?.jobs.some(job=>job.label==='helper')??false).toBe(false)
+        const parent=await cold.snapshot(id)
+        expect(parent.session.events.filter(event=>event.type==='subagent/end')).toHaveLength(1)
+        expect(parent.session.events.filter(event=>event.type==='agent/delivery-source'||event.type==='agent/delivery-received')).toHaveLength(0)
+        expect(tasks.notifications).toEqual([expect.objectContaining({status:'pending'})])
+      })
       expect(failures).not.toHaveBeenCalled()
     } finally {
       await coordinator.close()
@@ -1007,6 +1025,8 @@ describe("headless CLI subagent state persistence (M6)", () => {
         agentTable: [],
         roles: [{ name: "custom", description: "d", systemPrompt: "custom prompt", tools: ["read"] }],
       })
+      const parentDocument=await coordinator.openManagedDocument(id),ended=Promise.withResolvers<void>()
+      const off=subscribe(parentDocument.view,event=>{if(event.type==='subagent/end')ended.resolve()})
       // Deterministic resume driver: first stream yields a spawn with the
       // restored custom role; every later stream (child + main agent) is text.
       // If restoreState skipped the custom role, spawn_agent throws
@@ -1020,6 +1040,7 @@ describe("headless CLI subagent state persistence (M6)", () => {
             yield { type: "end" }
             return
           }
+          if(_request.sessionId===id)await ended.promise
           yield { type: "text/chunk", text: "continued" }
           yield { type: "end" }
         },
@@ -1032,19 +1053,14 @@ describe("headless CLI subagent state persistence (M6)", () => {
         model: resumeModel,
       })
       expect(result.exitCode, result.error).toBe(0)
-      // The spawn's terminal save snapshots the full restored state: the
-      // restored job (label "old") AND the new spawn (label "helper", only
-      // possible if the restored custom role was effective). Poll until both.
-      const state = await pollUntil(async () => {
-        const doc = await coordinator.getDocument(id)
-        if (!doc) return undefined
-        const labels = (doc as { jobs: { label: string; status: string }[] }).jobs.map((j) => j.label)
-        const allSettled = (doc as { jobs: { status: string }[] }).jobs.every((j) => j.status !== "running")
-        if (!allSettled) return undefined
-        return labels.includes("old") && labels.includes("helper") ? doc : undefined
+      off()
+      await readClosedHeadlessRun(dir,async cold=>{
+        const state=await cold.getDocument(id) as {jobs:{label:string;status:string}[];roles:{name:string}[]}
+        expect(state.jobs).toEqual(expect.arrayContaining([expect.objectContaining({label:'old',status:'completed'})]))
+        expect(state.roles.map(role=>role.name)).toContain('custom')
+        const tasks=await cold.getDocument(`task-${id}`) as HeadlessTaskDocument
+        expect(tasks.tasks).toEqual([expect.objectContaining({description:'helper',agent:'custom',outcome:'completed'})])
       })
-      expect(state).toBeDefined()
-      expect((state as { roles: { name: string }[] }).roles.map((r) => r.name)).toContain("custom")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -1075,11 +1091,13 @@ describe("headless CLI durable child sessions (M8)", () => {
         workspace: dir, approveAll: true, sessionId: id, coordinator, model: spawnModel,
       })
       expect(result.exitCode, result.error).toBe(0)
-      const childIds = (await coordinator.list()).filter((sid) => sid.startsWith("child-"))
-      expect(childIds.length).toBe(1)
-      const { session } = await coordinator.load(childIds[0]!)
-      expect(session.header).toMatchObject({ origin: "subagent", parentSession: id })
-      expect(session.events.length).toBeGreaterThan(0)
+      await readClosedHeadlessRun(dir,async cold=>{
+        const childIds=(await cold.list()).filter(sid=>sid.startsWith('child-'))
+        expect(childIds).toHaveLength(1)
+        const {session}=await cold.snapshot(childIds[0]!)
+        expect(session.header).toMatchObject({origin:'subagent',parentSession:id})
+        expect(session.events.length).toBeGreaterThan(0)
+      })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -1105,7 +1123,7 @@ describe("headless CLI durable child sessions (M8)", () => {
       } as import('@i-harness/llm-seam').ModelClient).stream(request))
       const first = await runHeadless("delegate", { workspace: dir, approveAll: true, sessionId: id, coordinator, model: spawnModel })
       expect(first.exitCode).toBe(0)
-      const childId = (await coordinator.list()).find((sid) => sid.startsWith("child-"))
+      const childId = await readClosedHeadlessRun(dir,async cold=>(await cold.list()).find(sid=>sid.startsWith('child-')))
       expect(childId).toBeDefined()
       // Resumed run: first stream sends a message to the restored child (which
       // only works if the resume-load loop installed the live mirror session),
@@ -1123,15 +1141,18 @@ describe("headless CLI durable child sessions (M8)", () => {
           yield { type: "end" }
         },
       } as import('@i-harness/llm-seam').ModelClient).stream(request))
-      const second = await runHeadless("continue", { workspace: dir, approveAll: true, resumeSessionId: id, coordinator, model: resumeModel })
+      const resumedCoordinator=createSessionCoordinator(createJsonlBackend(dir),{lock:{enabled:true}})
+      const second = await runHeadless("continue", { workspace: dir, approveAll: true, resumeSessionId: id, coordinator:resumedCoordinator, model: resumeModel })
       expect(second.exitCode, second.error).toBe(0)
+      const sent=second.session?.events.find(event=>event.type==='tool/result'&&event.name==='send_message')
+      expect(sent?.type==='tool/result'?sent.envelope?.execution.outcome:undefined,JSON.stringify(sent)).toBe('succeeded')
       // The restored child's mirror session received the durable inbox event.
-      const reloaded = await coordinator.load(childId!)
-      expect(reloaded.session.events.some((e) => e.type === "subagent/inbox" && e.message === "ping")).toBe(true)
-      // The post-resume registry snapshot still carries the child sessionId link.
-      const after = await coordinator.getDocument(id)
-      const agents = (after as { agentTable: { path: string; sessionId?: string }[] }).agentTable
-      expect(agents.find((a) => a.path === "root/helper")?.sessionId).toBe(childId)
+      await readClosedHeadlessRun(dir,async cold=>{
+        const reloaded=await cold.snapshot(childId!)
+        expect(reloaded.session.events.some(e=>e.type==='subagent/inbox'&&e.message==='ping')).toBe(true)
+        const tasks=await cold.getDocument(`task-${id}`) as HeadlessTaskDocument
+        expect(tasks.tasks.find(task=>task.agentPath==='root/helper')?.childSessionId).toBe(childId)
+      })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -1165,28 +1186,104 @@ describe("headless CLI durable child sessions (M8)", () => {
       } as import('@i-harness/llm-seam').ModelClient).stream(request))
       const result = await runHeadless("delegate", { workspace: dir, approveAll: true, sessionId: id, coordinator, model })
       expect(result.exitCode, result.error).toBe(0)
-      const childId = (await coordinator.list()).find((sid) => sid.startsWith("child-"))
-      expect(childId).toBeDefined()
-      const { session } = await coordinator.load(childId!)
-      const inbox = session.events.filter((e) => e.type === "subagent/inbox")
-      expect(inbox.map((e) => e.message)).toEqual(["ping"])
+      await readClosedHeadlessRun(dir,async cold=>{
+        const childId=(await cold.list()).find(sid=>sid.startsWith('child-'))
+        expect(childId).toBeDefined()
+        const {session}=await cold.snapshot(childId!)
+        expect(session.events.filter(e=>e.type==='subagent/inbox').map(e=>e.message)).toEqual(['ping'])
+      })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   }, 20_000)
 })
 
+describe("headless CLI cold Task child identity (M8)",()=>{
+  it('keeps an explicitly closed Task conversation removed after cold resume',async()=>{
+    const dir=mkdtempSync(join(tmpdir(),'i-harness-m8-closed-')),coordinator=createSessionCoordinator(createJsonlBackend(dir),{lock:{enabled:true}})
+    try{
+      const {id}=await coordinator.create(),document=await coordinator.openManagedDocument(id),ended=Promise.withResolvers<void>()
+      const off=subscribe(document.view,event=>{if(event.type==='subagent/end')ended.resolve()})
+      let parentCalls=0
+      const initial=controlledModel(async function*(request){if(request.sessionId===id&&parentCalls++===0)yield{type:'tool_call',call:{name:'spawn_agent',args:{task_name:'helper',message:'original',fork_turns:'none'}}};else{if(request.sessionId===id)await ended.promise;yield{type:'text/chunk',text:'done'}};yield{type:'end'}})
+      expect((await runHeadless('delegate',{workspace:dir,approveAll:true,sessionId:id,coordinator,model:initial})).exitCode).toBe(0);off()
+      const task=await readClosedHeadlessRun(dir,async cold=>(await cold.getDocument(`task-${id}`) as HeadlessTaskDocument).tasks[0]!)
+      const command=async(name:string)=>{
+        let calls=0
+        const owner=createSessionCoordinator(createJsonlBackend(dir),{lock:{enabled:true}}),model=controlledModel(async function*(){if(calls++===0)yield{type:'tool_call',call:{name,args:{target:'root/helper'}}};else yield{type:'text/chunk',text:'done'};yield{type:'end'}})
+        return runHeadless('manage',{workspace:dir,approveAll:true,resumeSessionId:id,coordinator:owner,model})
+      }
+      const closed=await command('close_agent');expect(closed.exitCode,closed.error).toBe(0)
+      await readClosedHeadlessRun(dir,async cold=>{
+        const cache=await cold.getDocument(id) as {agentTable:{path:string}[];jobs:unknown[]}
+        expect(cache.agentTable.some(row=>row.path==='root/helper')).toBe(false)
+        expect(cache.jobs).toEqual(expect.arrayContaining([expect.objectContaining({id:task.jobId,taskId:task.id,agentPath:task.agentPath,sessionId:task.childSessionId})]))
+      })
+      const resumed=await command('resume_agent');expect(resumed.exitCode,resumed.error).toBe(0)
+      const reply=resumed.session?.events.find(event=>event.type==='tool/result'&&event.name==='resume_agent')
+      expect(reply?.type==='tool/result'?reply.envelope?.execution.outcome:undefined,JSON.stringify(reply)).toBe('failed')
+      await readClosedHeadlessRun(dir,async cold=>{const {session}=await cold.snapshot(task.childSessionId!);expect(session.events.filter(event=>event.type==='turn/start')).toHaveLength(1)})
+    }finally{await coordinator.close();rmSync(dir,{recursive:true,force:true})}
+  },30000)
+  it('refuses a recreated child instead of giving it the original Task conversation',async()=>{
+    const dir=mkdtempSync(join(tmpdir(),'i-harness-m8-recreated-'))
+    const coordinator=createSessionCoordinator(createJsonlBackend(dir),{lock:{enabled:true}})
+    try{
+      const {id}=await coordinator.create();let parentCalls=0,childCalls=0
+      const model=controlledModel(async function*(request){
+        if(request.sessionId!==id){childCalls++;yield{type:'text/chunk',text:'original child'};yield{type:'end'};return}
+        if(parentCalls++===0)yield{type:'tool_call',call:{name:'spawn_agent',args:{task_name:'helper',message:'original work',fork_turns:'none'}}}
+        else yield{type:'text/chunk',text:'done'}
+        yield{type:'end'}
+      })
+      expect((await runHeadless('delegate',{workspace:dir,approveAll:true,sessionId:id,coordinator,model})).exitCode).toBe(0)
+      const task=await readClosedHeadlessRun(dir,async cold=>(await cold.getDocument(`task-${id}`) as HeadlessTaskDocument).tasks[0]!)
+      const child=task.childSessionId!;expect(child).toBeDefined();expect(childCalls).toBeGreaterThan(0)
+      const originalChildCalls=childCalls
+      const other=mkdtempSync(join(tmpdir(),'i-harness-m8-other-'))
+      let replacementBytes:Buffer|undefined
+      try{
+        const replacement=createSessionCoordinator(createJsonlBackend(other),{lock:{enabled:true}})
+        try{await replacement.create({sessionId:id});await replacement.create({sessionId:child,parentSession:id,origin:'subagent',subagentProtocolVersion:1,seedLength:0})}finally{await replacement.close()}
+        // Replace closed, fixture-owned files with a valid unrelated session.
+        // No permanent-deletion marker or product recreation API is bypassed.
+        replacementBytes=readFileSync(join(other,child+'.jsonl'))
+        copyFileSync(join(other,child+'.jsonl'),join(dir,child+'.jsonl'))
+        copyFileSync(join(other,`task-${child}.doc.jsonl`),join(dir,`task-${child}.doc.jsonl`))
+      }finally{rmSync(other,{recursive:true,force:true})}
+      let calls=0
+      const resumed=createSessionCoordinator(createJsonlBackend(dir),{lock:{enabled:true}})
+      const next=controlledModel(async function*(){if(calls++===0)yield{type:'tool_call',call:{name:'send_message',args:{target:'root/helper',message:'must not enter the new child'}}};else yield{type:'text/chunk',text:'done'};yield{type:'end'}})
+      const result=await runHeadless('continue',{workspace:dir,approveAll:true,resumeSessionId:id,coordinator:resumed,model:next})
+      expect(result.exitCode,result.error).toBe(0)
+      const sent=result.session?.events.find(event=>event.type==='tool/result'&&event.name==='send_message')
+      expect(sent?.type==='tool/result'?sent.envelope?.execution.outcome:undefined).toBe('failed')
+      // The old store's retained birth reservation must not adopt the unrelated
+      // replacement. Its actual new file remains byte-for-byte untouched.
+      expect(readFileSync(join(dir,child+'.jsonl'))).toEqual(replacementBytes)
+      await readClosedHeadlessRun(dir,async cold=>{await expect(cold.snapshot(child)).rejects.toThrow(/Bootstrap reservation requires its original owner|unavailable|conflict/i)})
+      expect(childCalls).toBe(originalChildCalls)
+    }finally{await coordinator.close();rmSync(dir,{recursive:true,force:true})}
+  },20000)
+})
+
 describe("headless CLI multi-turn subagents (M9)", () => {
   it("followup_task drives a second turn on the child's durable session", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m9-"))
+    const abort=new AbortController();onTestFinished(()=>abort.abort())
     try {
       const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
+      const followupDone=Promise.withResolvers<void>();void followupDone.promise.catch(()=>{})
+      let watching=false
       // Route by owner; a background child's first request may race the parent.
       let calls = 0
       const model: ModelClient = controlledModel(request => ({
         async *stream(_request: LLMRequest) {
-          if (_request.sessionId !== id) { yield { type: "text/chunk", text: "child done" }; yield { type: "end" }; return }
+          if (_request.sessionId !== id) {
+            if(!watching&&_request.sessionId){watching=true;void waitForOwnedChildTurns(coordinator,_request.sessionId,2).then(followupDone.resolve,followupDone.reject)}
+            yield { type: "text/chunk", text: "child done" }; yield { type: "end" }; return
+          }
           const n = calls++
           if (n === 0) {
             yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "do it", task_name: "helper", fork_turns: "none" } } }
@@ -1198,19 +1295,20 @@ describe("headless CLI multi-turn subagents (M9)", () => {
             yield { type: "end" }
             return
           }
+          await waitForHeadlessGate(followupDone.promise,_request.signal)
           yield { type: "text/chunk", text: "ok" }
           yield { type: "end" }
         },
       } as import('@i-harness/llm-seam').ModelClient).stream(request))
-      const result = await runHeadless("delegate", { workspace: dir, approveAll: true, sessionId: id, coordinator, model })
+      const result = await runHeadless("delegate", { workspace: dir, approveAll: true, sessionId: id, coordinator, model,signal:abort.signal })
       expect(result.exitCode, result.error).toBe(0)
-      const childId = (await coordinator.list()).find((sid) => sid.startsWith("child-"))
-      expect(childId).toBeDefined()
-      const { session } = await coordinator.load(childId!)
-      // Two turns (initial + followup): two user messages, no fork seed.
-      const userMessages = session.events.filter((e) => e.type === "user/message")
-      expect(userMessages.map((e) => e.text)).toEqual(["do it", "again"])
-      expect(session.events.filter((e) => e.type === "turn/start")).toHaveLength(2)
+      await readClosedHeadlessRun(dir,async cold=>{
+        const childId=(await cold.list()).find(sid=>sid.startsWith('child-'))
+        expect(childId).toBeDefined()
+        const {session}=await cold.snapshot(childId!)
+        expect(session.events.filter(e=>e.type==='user/message').map(e=>e.text)).toEqual(['do it','again'])
+        expect(session.events.filter(e=>e.type==='turn/start')).toHaveLength(2)
+      })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -1218,14 +1316,20 @@ describe("headless CLI multi-turn subagents (M9)", () => {
 
   it("resume_agent cold-resumes a child and continues the conversation", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m9-"))
+    const abort=new AbortController();onTestFinished(()=>abort.abort())
     try {
       const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
+      const firstFollowupDone=Promise.withResolvers<void>();void firstFollowupDone.promise.catch(()=>{})
+      let firstWatching=false
       // Run 1: spawn (fork none) + followup → child log has 2 turns.
       let calls = 0
       const run1Model: ModelClient = controlledModel(request => ({
         async *stream(_request: LLMRequest) {
-          if (_request.sessionId !== id) { yield { type: "text/chunk", text: "child done" }; yield { type: "end" }; return }
+          if (_request.sessionId !== id) {
+            if(!firstWatching&&_request.sessionId){firstWatching=true;void waitForOwnedChildTurns(coordinator,_request.sessionId,2).then(firstFollowupDone.resolve,firstFollowupDone.reject)}
+            yield { type: "text/chunk", text: "child done" }; yield { type: "end" }; return
+          }
           const n = calls++
           if (n === 0) {
             yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "do it", task_name: "helper", fork_turns: "none" } } }
@@ -1237,19 +1341,26 @@ describe("headless CLI multi-turn subagents (M9)", () => {
             yield { type: "end" }
             return
           }
+          await waitForHeadlessGate(firstFollowupDone.promise,_request.signal)
           yield { type: "text/chunk", text: "ok" }
           yield { type: "end" }
         },
       } as import('@i-harness/llm-seam').ModelClient).stream(request))
-      const first = await runHeadless("delegate", { workspace: dir, approveAll: true, sessionId: id, coordinator, model: run1Model })
+      const first = await runHeadless("delegate", { workspace: dir, approveAll: true, sessionId: id, coordinator, model: run1Model,signal:abort.signal })
       expect(first.exitCode).toBe(0)
-      const childId = (await coordinator.list()).find((sid) => sid.startsWith("child-"))
+      const childId = await readClosedHeadlessRun(dir,async cold=>(await cold.list()).find(sid=>sid.startsWith('child-')))
       expect(childId).toBeDefined()
       // Run 2: resume → resume_agent then followup_task → child log gains a 3rd turn.
+      const resumedCoordinator=createSessionCoordinator(createJsonlBackend(dir),{lock:{enabled:true}})
+      const thirdTurnDone=Promise.withResolvers<void>();void thirdTurnDone.promise.catch(()=>{})
+      let thirdWatching=false
       let resumeCalls = 0
       const run2Model: ModelClient = controlledModel(request => ({
         async *stream(_request: LLMRequest) {
-          if (_request.sessionId !== id) { yield { type: "text/chunk", text: "child done" }; yield { type: "end" }; return }
+          if (_request.sessionId !== id) {
+            if(!thirdWatching&&_request.sessionId){thirdWatching=true;void waitForOwnedChildTurns(resumedCoordinator,_request.sessionId,3).then(thirdTurnDone.resolve,thirdTurnDone.reject)}
+            yield { type: "text/chunk", text: "child done" }; yield { type: "end" }; return
+          }
           const n = resumeCalls++
           if (n === 0) {
             yield { type: "tool_call", call: { name: "resume_agent", args: { target: "root/helper" } } }
@@ -1261,21 +1372,18 @@ describe("headless CLI multi-turn subagents (M9)", () => {
             yield { type: "end" }
             return
           }
+          await waitForHeadlessGate(thirdTurnDone.promise,_request.signal)
           yield { type: "text/chunk", text: "ok" }
           yield { type: "end" }
         },
       } as import('@i-harness/llm-seam').ModelClient).stream(request))
-      const second = await runHeadless("continue", { workspace: dir, approveAll: true, resumeSessionId: id, coordinator, model: run2Model })
+      const second = await runHeadless("continue", { workspace: dir, approveAll: true, resumeSessionId: id, coordinator:resumedCoordinator, model: run2Model,signal:abort.signal })
       expect(second.exitCode, second.error).toBe(0)
-      // The followup "third" turn is driven in the background (serialization
-      // chain is NOT awaited by runHeadless), so wait for the third user
-      // message durably before asserting the exact conversation.
-      const childMsgs = await pollUntil(async () => {
-        const { session: s } = await coordinator.load(childId!)
-        const msgs = s.events.filter((e) => e.type === "user/message")
-        return msgs.length >= 3 ? msgs : undefined
+      await readClosedHeadlessRun(dir,async cold=>{
+        const {session}=await cold.snapshot(childId!)
+        expect(session.events.filter(e=>e.type==='user/message').map(e=>e.text)).toEqual(['do it','again','third'])
+        expect(session.events.filter(e=>e.type==='turn/start')).toHaveLength(3)
       })
-      expect(childMsgs?.map((e) => e.text)).toEqual(["do it", "again", "third"])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -1311,12 +1419,10 @@ describe("headless CLI M10a guards (timeout + repeat-reminder)", () => {
       expect(elapsed).toBeLessThan(10_000)
       expect(result.exitCode, result.error).toBe(0)
       expect(result.finalText).toBe("done")
-      // the session's tool/result carries the substituted output with the
-      // TOOL_TIMEOUT marker at the TOP level of `output` (registry wraps the
-      // guard's substituted value in { name, output })
+      // The current envelope retains the guard's substituted timeout payload.
       const shellResult = result.session?.events.find((e) => e.type === "tool/result" && e.name === shell)
       expect(shellResult).toBeDefined()
-      const output = (shellResult as { output: { code?: string; error?: string } }).output
+      const output = inlineToolOutput<{ code?: string; error?: string }>(shellResult)
       expect(output.code).toBe("TOOL_TIMEOUT")
       expect(output.error).toContain("timed out after 300ms")
     } finally {
@@ -1386,28 +1492,28 @@ describe("headless CLI W10 foreground promotion", () => {
       })
       expect(result.exitCode, result.error).toBe(0)
       const toolResults = result.session?.events.filter((e) => e.type === "tool/result") ?? []
-      const shellResult = toolResults.find((e) => e.name === shell) as { output: { job_id?: string; promoted?: boolean; ran_foreground_ms?: number; code?: string } } | undefined
+      const shellResult = toolResults.find((e) => e.name === shell)
       expect(shellResult).toBeDefined()
+      const output = inlineToolOutput<{ job_id?: string; promoted?: boolean; ran_foreground_ms?: number; code?: string }>(shellResult)
       // Promoted — announced as a promotion, not as the model's own background
       // choice and not as the timeout death.
-      expect(shellResult!.output.promoted).toBe(true)
-      expect(shellResult!.output.ran_foreground_ms).toBeGreaterThanOrEqual(300)
-      expect(shellResult!.output.job_id).toMatch(/^bash-\d+$/)
-      jobId = shellResult!.output.job_id
-      expect(shellResult!.output.code).toBeUndefined()
+      expect(output.promoted).toBe(true)
+      expect(output.ran_foreground_ms).toBeGreaterThanOrEqual(300)
+      expect(output.job_id).toMatch(/^bash-\d+$/)
+      jobId = output.job_id
+      expect(output.code).toBeUndefined()
       // The job surface the model reads agrees: the promoted command is a live
       // bash job while the run is still going.
-      const jobList = toolResults.find((e) => e.name === "job_list") as { output: { jobs: { id: string; kind: string; status: string }[] } } | undefined
+      const jobList = toolResults.find((e) => e.name === "job_list")
       expect(jobList).toBeDefined()
-      expect(jobList!.output.jobs.some((j) => j.kind === "bash" && j.status === "running")).toBe(true)
+      expect(inlineToolOutput<{ jobs: { id: string; kind: string; status: string }[] }>(jobList).jobs.some((j) => j.kind === "bash" && j.status === "running")).toBe(true)
       // Promotion survives the foreground tool call. Assembly shutdown owns and
       // drains that same process before runHeadless returns.
       writeFileSync(release, "go")
       const exec = mountedExecServices.list[servicesBefore]!
-      const closed = await pollUntil(async () => {
-        const job = exec.getOutput(jobId!)
-        return job.status === "running" ? undefined : job
-      }, 10_000)
+      const closed = exec.listJobs().find(job => job.id === jobId)
+      expect(closed).toBeDefined()
+      expect(closed?.status).not.toBe('running')
       expect(closed?.exitCode).not.toBe(0)
       expect(closed?.settlement).toMatchObject({ kind: "settled", treeEmpty: true, ioSettled: true, resourcesReleased: true })
       expect(existsSync(donePath)).toBe(false)
@@ -1417,7 +1523,7 @@ describe("headless CLI W10 foreground promotion", () => {
       if (jobId && existsSync(dir)) {
         writeFileSync(release, "go")
         const exec = mountedExecServices.list[servicesBefore]!
-        await pollUntil(async () => exec.getOutput(jobId!).status === "running" ? undefined : true, 10_000)
+        await exec.dispose()
       }
       rmSync(dir, { recursive: true, force: true })
     }
@@ -1463,16 +1569,18 @@ describe("headless CLI M12 retry + retention", () => {
       ],
     })
     expect(result.exitCode, result.error).toBe(0)
-    const resultEvent = result.session!.events.find((e) => e.type === "tool/result") as { output: { stdout?: string; code?: string } } | undefined
+    const resultEvent = result.session!.events.find((e) => e.type === "tool/result")
     expect(resultEvent).toBeDefined()
+    const output = inlineToolOutput<{ stdout?: string; code?: string }>(resultEvent)
     // The command ran at least once (the guard file exists), and the final
     // tool/result is the successful RETRY, not the TOOL_TIMEOUT marker the
     // first (sleeping) attempt produced. Without M12 retry wiring, output.code
     // stays "TOOL_TIMEOUT" and this discriminates the feature from
     // behavior-unchanged.
     expect(existsSync(flag)).toBe(true)
-    expect(resultEvent!.output.code).toBeUndefined()
-    expect(resultEvent!.output.stdout ?? "").not.toContain("timed out")
+    expect(output).toMatchObject({ stdout: expect.any(String) })
+    expect(output.code).toBeUndefined()
+    expect(output.stdout ?? "").not.toContain("timed out")
     // M72 (load flake): the run now spends `shellTimeoutMs` on the first attempt
     // by design, so vitest's 5s default is not a budget this test can fit in.
   }, 60_000)
@@ -1490,9 +1598,10 @@ describe("headless CLI M12 retry + retention", () => {
       ],
     })
     expect(result.exitCode, result.error).toBe(0)
-    const resultEvent = result.session!.events.find((e) => e.type === "tool/result") as { output: { stdout: string; truncated?: unknown } } | undefined
-    expect(resultEvent!.output.stdout.length).toBeLessThanOrEqual(100)
-    expect(resultEvent!.output.truncated).toBeDefined()
+    const resultEvent = result.session!.events.find((e) => e.type === "tool/result")
+    const output = inlineToolOutput<{ stdout: string; truncated?: unknown }>(resultEvent)
+    expect(output.stdout.length).toBeLessThanOrEqual(100)
+    expect(output.truncated).toBeDefined()
   })
 
   it("no retry/shellRetention → existing behavior (regression)", async () => {
@@ -1523,7 +1632,7 @@ describe("headless CLI M13 parallel tool calls", () => {
       const reads = result.session!.events.filter((e) => e.type === "tool/result" && e.name === "read")
       expect(reads).toHaveLength(2)
       for (const ev of reads) {
-        expect((ev as { output: { content: string } }).output.content).toBe("alpha")
+        expect(inlineToolOutput<{ content: string }>(ev).content).toBe("alpha")
       }
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -1730,7 +1839,7 @@ describe("M16 CLI sandbox wiring", () => {
       })
       expect(result.exitCode, result.error).toBe(0) // the tool failed, but the harness run completes
       const bashResult = result.session?.events.find((e) => e.type === "tool/result" && e.name === "bash")
-      const output = (bashResult as { output: { stdout?: string; stderr?: string; error?: string; exitCode?: number } } | undefined)?.output
+      const output = inlineToolOutput<{ stdout?: string; stderr?: string; error?: string; exitCode?: number }>(bashResult)
       // The deny observable: the confined command exited nonzero (the write was
       // refused), and the bwrap deny marker is present on the tool stderr (same
       // marker the bwrap.e2e asserts).
@@ -1775,11 +1884,10 @@ describe("M16 CLI sandbox wiring", () => {
       // workspace cwd → the confined command never ran, yet the run completed).
       // The runner-failure signatures must be absent; the confined shell may
       // still legitimately fail on this host, so no success is required.
-      const bash = result.session?.events.find((e) => e.type === "tool/result" && e.name === "bash") as
-        | { output: { exitCode?: number; stdout?: string; stderr?: string } }
-        | undefined
+      const bash = result.session?.events.find((e) => e.type === "tool/result" && e.name === "bash")
       expect(bash).toBeDefined()
-      const bashText = `${bash?.output.stdout ?? ""}\n${bash?.output.stderr ?? ""}`
+      const output = inlineToolOutput<{ exitCode?: number; stdout?: string; stderr?: string }>(bash)
+      const bashText = `${output.stdout ?? ""}\n${output.stderr ?? ""}`
       expect(bashText).not.toContain("ERR_MODULE_NOT_FOUND")
       expect(bashText).not.toContain("windows-acl-run: ")
     } finally {
@@ -1847,7 +1955,7 @@ describe("M17 CLI mcp integration", () => {
       expect(result.finalText).toBe("done")
       const echo = result.session!.events.find((e) => e.type === "tool/result" && e.name === "mcp__fake__echo")
       expect(echo).toBeDefined()
-      expect(JSON.stringify((echo as { output: unknown }).output)).toContain("ok:hello mcp")
+      expect(JSON.stringify(inlineToolOutput(echo))).toContain("ok:hello mcp")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -1998,7 +2106,7 @@ describe("M18 CLI lsp integration", () => {
       const lsp = result.session!.events.find((e) => e.type === "tool/result" && e.name === "lsp")
       expect(lsp).toBeDefined()
       // range start 0:3 → 1:4; end 0:7 → 1:8 (1-based render), path relative to workspace
-      expect(JSON.stringify((lsp as { output: unknown }).output)).toContain("a.ts:1:4-1:8")
+      expect(JSON.stringify(inlineToolOutput(lsp))).toContain("a.ts:1:4-1:8")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -2028,75 +2136,35 @@ describe("M18 CLI lsp integration", () => {
   }, 30_000)
 })
 
-describe("M19 CLI team integration", () => {
-  // Real end-to-end: runHeadless mounts the agent-team domain (mountAgentTeams
-  // from Task 10) with a coordinator so teammates get durable child-<uuid>
-  // sessions. The mock model (SHARED with the child) calls spawn_teammate; the
-  // roster → realSpawnChild bridge → subagent spawnChild creates a REAL child
-  // agent that runs its own (mock-model) turn — the happy-path real spawn that
-  // Task 10's lifecycle test only stubbed. Route the shared client by durable
-  // owner so background scheduling does not consume another agent's reply.
-  // RED phase: HeadlessOptions.team is unknown → spawn_teammate never mounts
-  // → the call fails with "unknown tool" → exitCode 1.
-  it("runHeadless mounts team tools and the agent can use spawn_teammate", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "i-harness-m19-"))
+describe("CLI subagent tool surface", () => {
+  it("offers ordinary subagent tools and refuses the removed Team entry", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-subagent-surface-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
-      const { id } = await coordinator.create()
-      let parentRequests = 0
-      const result = await runHeadless("use the team", {
+      const result = await runHeadless("list available agents", {
         workspace: dir,
         approveAll: true,
-        team: {},
-        sessionId: id,
-        coordinator,
-        model: controlledModel(request => ({ async *stream(request) {
-          if (request.sessionId !== id) yield { type: "text/chunk", text: "child done" }
-          else if (++parentRequests === 1) yield { type: "tool_call", call: { name: "spawn_teammate", args: { name: "helper", description: "d", prompt: "do the work" } } }
-          else yield { type: "text/chunk", text: "done" }
-          yield { type: "end" }
-        } } as import('@i-harness/llm-seam').ModelClient).stream(request)),
+        mockScript: [
+          { role: "assistant", toolCalls: [
+            { name: "list_agents", args: {} },
+            { name: "spawn_teammate", args: { name: "removed", description: "removed", prompt: "removed" } },
+          ] },
+          { role: "assistant", text: "done" },
+        ],
       })
       expect(result.exitCode, result.error).toBe(0)
-      expect(result.finalText).toBe("done")
-      const spawn = result.session!.events.find((e) => e.type === "tool/result" && e.name === "spawn_teammate")
-      expect(spawn).toBeDefined()
-      expect(JSON.stringify((spawn as { output: unknown }).output)).toContain("helper")
-      // The spawned teammate is a REAL durable child session (lineage header).
-      const childIds = (await coordinator.list()).filter((sid) => sid.startsWith("child-"))
-      expect(childIds.length).toBe(1)
-      // Drain the trailing fire-and-forget subagent-state save (triggered by
-      // the team unmount's table.remove right after close()) before rmSync —
-      // otherwise the temp dir vanishes under the pending putDocument rename
-      // and the background-failure reporter spams stderr ENOENT noise.
-      await coordinator.close()
+      const results = result.session!.events.filter(event => event.type === "tool/result")
+      expect(results.find(event => event.name === "list_agents")).toMatchObject({
+        envelope: { execution: { outcome: "succeeded", dispatch: "dispatched" } },
+      })
+      expect(results.find(event => event.name === "spawn_teammate")).toMatchObject({
+        envelope: { execution: { outcome: "failed", dispatch: "not-dispatched" } },
+      })
+      expect(result.session!.events.filter(event => event.type.startsWith("team/"))).toEqual([])
+      expect(result.session!.events.filter(event => event.type === "tool/dispatch")).toHaveLength(1)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  }, 30_000)
-
-  // Unmount observable: the agent-team reservation (one team per run lives in
-  // a module-level set) dies only in runHeadless's finally. A second run with
-  // team mounted must mount cleanly; if the first run leaked the mount, run 2
-  // throws "only one team per run" → exitCode 1. (RED phase: no wiring → the
-  // team never mounts and both runs trivially succeed — this test only
-  // discriminates once wiring exists.)
-  it("unmounts the team after the run (team reservation released)", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "i-harness-m19-"))
-    try {
-      const first = await runHeadless("one", {
-        workspace: dir, approveAll: true, team: {}, mockScript: [{ role: "assistant", text: "ok" }],
-      })
-      expect(first.exitCode).toBe(0)
-      const second = await runHeadless("two", {
-        workspace: dir, approveAll: true, team: {}, mockScript: [{ role: "assistant", text: "ok" }],
-      })
-      expect(second.exitCode, second.error).toBe(0)
-      expect(second.error).toBeUndefined()
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  }, 30_000)
+  })
 })
 
 describe("M23 CLI session ownership lock wiring", () => {

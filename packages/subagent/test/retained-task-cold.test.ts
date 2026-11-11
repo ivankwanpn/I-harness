@@ -41,11 +41,15 @@ it.each([false, true])('qualifies a cold version2 task only through its original
     const reopened = await coordinator.openManagedDocument('parent')
     const cold = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, results })
     cold.restore(await coordinator.getDocument(taskDocKey('parent')) as TaskProtocolDocument)
-    await (cold as any).qualifyRestoredResults?.()
+    await cold.qualifyRestoredResults()
     expect(cold.get(task.id)?.outcome).toBe(committed ? 'completed' : 'recovery-required')
     const drain = createNotificationDrain({ tasks: cold, reportPolicy: SHIPPING_REPORT_POLICY, admit: { admit: async () => { admissions++ }, wake() { wakes++ } } })
     await drain.drain()
-    expect(admissions).toBe(committed ? 1 : 0); expect(wakes).toBe(committed ? 1 : 0)
+    // A legacy result observation qualifies the body, not a delivery source.
+    // This fixture has no original dispatched call/generation binding, so the
+    // legacy admission callback must never receive notification authority.
+    expect(admissions).toBe(0); expect(wakes).toBe(0)
+    expect(cold.notifications()[0]?.status).toBe('pending')
     const page = await cold.readResult(task.id, {})
     expect(JSON.parse(page.data.text)).toEqual({ resultText: 'retained original bytes', error: '' })
     expect(reopened.view.events.filter(event => event.type === 'subagent/end')).toHaveLength(committed ? 1 : 0)

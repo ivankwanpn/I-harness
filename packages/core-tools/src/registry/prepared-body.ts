@@ -1,13 +1,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { types } from 'node:util'
-import { canonicalJsonData,freezeJsonData, isManagedFactOwner, isNondurableFactOwner, isOwnedSettlementSource, type FactOwner, type SessionView, type SettlementFacts, type ProducerFactOutcome } from '@i-harness/core-session'
+import { canonicalJsonData, isManagedFactOwner, isNondurableFactOwner, isOwnedSettlementSource, type FactOwner, type SessionView, type SettlementFacts, type ProducerFactOutcome } from '@i-harness/core-session'
 import type { PluginContext } from '@i-harness/core-plugin'
 import type {ExecutionHookChannel} from '@i-harness/core-plugin'
 import type { PreparedCall, Tool, ToolExec, ToolRegistry } from '../types.ts'
 import { assertResultPrepared } from './result-finalization.ts'
 import {registerToolInvocation} from './invocation-domain.ts'
 import {isManagedExecutionDomain,isManagedExecutionSource,readManagedAcknowledgedMembers,readManagedActionSourceMembers,readManagedSourceCodeDelivery,getManagedExecutionAdmissionWait,assertManagedActionLifetimeCurrent,assertManagedWorkflowDeliveryCurrent,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
-import {assertOriginalTeamProvisioningOwner,assertOriginalTeamProvisioningCandidateOwner,assertOriginalTeamProvisioningOwnerWitness,assertOriginalTeamProvisioningHeld,type OriginalTeamProvisioningOwner,type OriginalTeamProvisioningCandidate,type OriginalTeamProvisioning} from '@i-harness/core-session/internal/execution'
 import {runOriginalCurrentnessRead,runOpaqueCurrentnessRead} from '../../../core-session/src/managed/currentness-guards.ts'
 
 function managedReadGuard(domain:ManagedExecutionDomain|undefined):(()=>void)|undefined{if(!domain)return;const field=Object.getOwnPropertyDescriptor(domain.owner,'assertReady');return field&&'value'in field&&typeof field.value==='function'&&!types.isProxy(field.value)?field.value as ()=>void:undefined}
@@ -27,6 +26,7 @@ export interface PreparedShellBodyClaim extends Omit<PreparedBodyClaim,'context'
   readonly context: ToolExecutionOwnerConfiguration
   takeExecSourceIssuer(): import('../model-origin.ts').OriginalExecSourceIssuer | undefined
   hasExecSourceIssuer(): boolean
+  retainRetryCleanup(cleanup: () => Promise<void>): void
 }
 const own = (value: object, key: PropertyKey): unknown => {
   const field = Object.getOwnPropertyDescriptor(value, key)
@@ -47,7 +47,7 @@ export function captureExecutionOwnerContext(ctx: PluginContext, value: unknown)
   return Object.freeze({ view,factOwner,context:ctx,...sessionId !== undefined ? {sessionId:sessionId as string} : {} })
 }
 const identityFields = ['session','sessionId','callId','callEventSeq','resultConsumer','modelGeneration'] as const
-type Body = { registry: ToolRegistry; prepared: PreparedCall; tool: Tool; leaf: Tool['execute']; exec: ToolExec; call: PreparedCall['call']; context?: ToolExecutionOwnerContext; managed?:ManagedToolExecutionOwnerContext;hooks?:PreparedExecutionHooks;foreignContext: boolean; source?: SettlementFacts<ProducerFactOutcome>; view?: SessionView; snapshots: Map<string,PropertyDescriptor | undefined>; validations: Pick<PreparedCall,'bindingValidation'|'authorityValidation'|'approvalValidation'>; signal?: AbortSignal; admissionSignal?:AbortSignal; claimed: boolean; permit?: { assertCurrent(): void; assertIdentity():void; getAdmissionWait?(signal:AbortSignal):Promise<void>|undefined }; codeInvocation?: { assertCurrent():void;getAdmissionWait(signal:AbortSignal):Promise<void>|undefined;takeExecSourceIssuer?():import('../model-origin.ts').OriginalExecSourceIssuer;takeWorkflowSourceIssuer?():import('../model-origin.ts').OriginalWorkflowSourceIssuer }; attaching?: boolean; entered?: boolean }
+type Body = { registry: ToolRegistry; prepared: PreparedCall; tool: Tool; leaf: Tool['execute']; exec: ToolExec; call: PreparedCall['call']; context?: ToolExecutionOwnerContext; managed?:ManagedToolExecutionOwnerContext;hooks?:PreparedExecutionHooks;foreignContext: boolean; source?: SettlementFacts<ProducerFactOutcome>; view?: SessionView; snapshots: Map<string,PropertyDescriptor | undefined>; validations: Pick<PreparedCall,'bindingValidation'|'authorityValidation'|'approvalValidation'>; signal?: AbortSignal; admissionSignal?:AbortSignal; claimed: boolean; permit?: { assertCurrent(): void; assertIdentity():void; getAdmissionWait?(signal:AbortSignal):Promise<void>|undefined }; codeInvocation?: { assertCurrent():void;getAdmissionWait(signal:AbortSignal):Promise<void>|undefined;takeExecSourceIssuer?():import('../model-origin.ts').OriginalExecSourceIssuer;takeWorkflowSourceIssuer?():import('../model-origin.ts').OriginalWorkflowSourceIssuer }; attaching?: boolean; entered?: boolean; completed?: boolean; running?: Promise<unknown>; retryCleanup?: () => Promise<void>; execIssuer?: import('../model-origin.ts').OriginalExecSourceIssuer }
 type Frame = { body: Body; parent?: Frame; active: boolean; signal?: AbortSignal; domain?: object }
 const records = new WeakMap<PreparedCall, Body>(), byExec = new WeakMap<ToolExec, Body>(), active = new AsyncLocalStorage<Frame>()
 const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype,'aborted')!.get!
@@ -120,7 +120,7 @@ export function attachPreparedModelOrigin(prepared: PreparedCall, registry: impo
     if(body.managed&&(!field||!('value'in field)||!field.enumerable||typeof field.value!=='function'||types.isProxy(field.value)||types.isAsyncFunction(field.value)))throw Error('Original private admission scheduler required')
     const getAdmissionWait=field&&'value'in field?field.value as (signal:AbortSignal)=>Promise<void>|undefined:undefined
     opaqueBody(body,assertCurrent)
-    body.permit = Object.freeze({assertCurrent,assertIdentity,...getAdmissionWait?{getAdmissionWait(signal:AbortSignal){if(Object.getOwnPropertyDescriptor(permit,'getAdmissionWait')?.value!==getAdmissionWait)throw Error('Original private admission scheduler changed');const wait=Reflect.apply(getAdmissionWait,permit,[signal]);if(wait!==undefined&&!types.isPromise(wait))throw Error('Original private admission wait required');return wait}}:{},...permit.takeExecSourceIssuer?{takeExecSourceIssuer:permit.takeExecSourceIssuer.bind(permit)}:{},...permit.takeCodeSourceIssuer?{takeCodeSourceIssuer:permit.takeCodeSourceIssuer.bind(permit)}:{},...permit.takeWorkflowSourceIssuer?{takeWorkflowSourceIssuer:permit.takeWorkflowSourceIssuer.bind(permit)}:{},...permit.retainTeamBirth?{retainTeamBirth:permit.retainTeamBirth.bind(permit)}:{}})
+    body.permit = Object.freeze({assertCurrent,assertIdentity,...getAdmissionWait?{getAdmissionWait(signal:AbortSignal){if(Object.getOwnPropertyDescriptor(permit,'getAdmissionWait')?.value!==getAdmissionWait)throw Error('Original private admission scheduler changed');const wait=Reflect.apply(getAdmissionWait,permit,[signal]);if(wait!==undefined&&!types.isPromise(wait))throw Error('Original private admission wait required');return wait}}:{},...permit.takeExecSourceIssuer?{takeExecSourceIssuer:permit.takeExecSourceIssuer.bind(permit)}:{},...permit.takeCodeSourceIssuer?{takeCodeSourceIssuer:permit.takeCodeSourceIssuer.bind(permit)}:{},...permit.takeWorkflowSourceIssuer?{takeWorkflowSourceIssuer:permit.takeWorkflowSourceIssuer.bind(permit)}:{}})
   } finally { body.attaching = false }
 }
 export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['execute'], configured: ToolExecutionOwnerConfiguration | undefined, signal: AbortSignal | undefined, registry: ToolRegistry,hooks?:PreparedExecutionHooks): () => Promise<unknown> {
@@ -148,8 +148,31 @@ export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['ex
     body.entered = true
     const frame:Frame={body,parent:body.permit||body.codeInvocation ? undefined : active.getStore(),active:true,signal:own(body.exec,'abortSignal') as AbortSignal | undefined,
       domain:body.managed?.domain.owner??(body.view && body.source && isOwnedSettlementSource(body.view,body.source)?body.view:undefined)}
-    return active.run(frame,async()=>{try{return await leaf.call(body.tool,body.call.args as never,body.exec)}finally{frame.active=false}})
+    body.completed = false
+    const running = active.run(frame,async()=>{try{return await leaf.call(body.tool,body.call.args as never,body.exec)}finally{frame.active=false;body.completed=true}})
+    body.running = running
+    return running
   }
+}
+/** Only the original dispatcher advances a completed attempt. Native Shell
+ * cleanup must acknowledge the original delivery source before renewal. */
+export async function preparePreparedRetry(prepared: PreparedCall, previousBody: Promise<unknown> | undefined, assertAdmission: () => void): Promise<boolean> {
+  const body = records.get(prepared)
+  if (!body || !body.entered) return false
+  if (body.retryCleanup) await body.retryCleanup()
+  else if (!body.completed) return false
+  await body.running?.catch(() => {})
+  await previousBody?.catch(() => {})
+  assertAdmission()
+  check(body)
+  if (body.claimed && body.execIssuer) {
+    if (!body.execIssuer.nextAttempt) return false
+    body.execIssuer = body.execIssuer.nextAttempt()
+  } else if (body.claimed && !body.retryCleanup) return false
+  body.claimed = false
+  body.entered = false
+  body.retryCleanup = undefined
+  return true
 }
 export function preparedExecutionOwnerContext(prepared: PreparedCall): ToolExecutionOwnerContext | undefined {
   const body=records.get(prepared);if(!body)throw new Error('Foreign prepared execution')
@@ -183,10 +206,12 @@ export function bindPreparedShellLeaf(tool: Tool, leaf: Tool['execute']) {
     const claim:PreparedShellBodyClaim=Object.freeze({ context,source:body.source,exec:body.exec,
       assertCurrent(){if(this!==claim)throw new Error('Foreign body claim receiver');check(body,frame)},
       consume(){if(this!==claim)throw new Error('Foreign body claim receiver');check(body,frame);if(consumed)throw new Error('Prepared Shell body already consumed');consumed=true},
+      retainRetryCleanup(cleanup:()=>Promise<void>){if(this!==claim)throw Error('Foreign body claim receiver');check(body,frame);if(body.retryCleanup)throw Error('Original retry cleanup already retained');body.retryCleanup=cleanup},
       takeExecSourceIssuer(){
         if(this!==claim)throw new Error('Foreign body claim receiver');check(body,frame)
         if(!consumed)throw new Error('Consume original Shell claim first')
-        const original=opaqueBody(body,()=>((body.permit as import('../model-origin.ts').OriginalModelMemberPermit|undefined)??body.codeInvocation)?.takeExecSourceIssuer?.())
+        const original=body.execIssuer??opaqueBody(body,()=>((body.permit as import('../model-origin.ts').OriginalModelMemberPermit|undefined)??body.codeInvocation)?.takeExecSourceIssuer?.())
+        body.execIssuer=original
         if(!original)return
         const issuer:import('../model-origin.ts').OriginalExecSourceIssuer=Object.freeze({
           assertAdmissionCurrent(){if(this!==issuer)throw new Error('Foreign Body issuer receiver');check(body,frame);original.assertAdmissionCurrent()},
@@ -270,12 +295,13 @@ export function claimPreparedCodeInvocation(registration:CodeRegistrationWitness
       const actual=readManagedActionSourceMembers(domain,action,source,capture,outcome)
       if(actual.length!==1||actual[0]!==event)throw Error('Original nested Code call changed')
      };const getAdmissionWait=(signal:AbortSignal)=>{if(revoked||!original.current())throw Error('Original Code cell retired');boundSource!.assertHeld();action.assertOpen();source.assertHeld();const actual=readManagedActionSourceMembers(domain,action,source,capture,outcome);if(actual.length!==1||actual[0]!==event)throw Error('Original nested Code call changed');return getManagedExecutionAdmissionWait(domain,action as import('@i-harness/core-session').ManagedAction<import('@i-harness/core-session').FactOutcome>,signal)};currentNested();let issued=false
-     const takeExecSourceIssuer=()=>{if(issued||!['shell','bash','pwsh'].includes(event.name))throw Error('Original nested Shell issuer required');currentNested();issued=true;let registered=false,captured=false
+     const takeExecSourceIssuer=()=>{if(issued||!['shell','bash','pwsh'].includes(event.name))throw Error('Original nested Shell issuer required');currentNested();issued=true;const createIssuer=():import('../model-origin.ts').OriginalExecSourceIssuer=>{let registered=false,captured=false,closed=false,renewed=false
       const issuer:import('../model-origin.ts').OriginalExecSourceIssuer=Object.freeze({
+       nextAttempt(){if(this!==issuer||!captured||!closed||renewed)throw Error('Original closed nested Exec attempt required');currentNested();renewed=true;return createIssuer()},
        assertAdmissionCurrent(){if(this!==issuer)throw TypeError('Original nested Exec issuer receiver required');currentNested()},
-       registerCompletion(drain:()=>Promise<void>){if(this!==issuer||registered)throw TypeError('Original nested Exec completion required');currentNested();registered=true;return action.registerSettlementSource(drain)},
+       registerCompletion(drain:()=>Promise<void>){if(this!==issuer||registered)throw TypeError('Original nested Exec completion required');currentNested();registered=true;const result=action.registerSettlementSource(drain),close=result.close;result.close=async function(){if(this!==result)throw Error('Original nested Exec source receiver required');await close.call(result);closed=true};return result},
        captureSource(binding:Readonly<import('../model-origin.ts').ExecSourceBinding>,recipientCurrent:()=>boolean){if(this!==issuer||!registered||captured||binding.recipientSessionId!==domain.sessionId||binding.callSeq!==event.seq||binding.sourceNamespace!=='exec')throw TypeError('Original nested Exec binding required');currentNested();captured=true;return action.captureExecDeliverySource({type:'agent/delivery-source',version:1,kind:'exec',...binding},()=>{try{currentNested(true);return recipientCurrent()}catch{return false}})},
-      });return issuer}
+      });return issuer};return createIssuer()}
      const takeWorkflowSourceIssuer=()=>{if(issued||event.name!=='workflow_run')throw Error('Original nested Workflow issuer required');currentNested();issued=true;let registered=false,captured=false,preparing=false,preparedBinding:string|undefined
       const issuer:import('../model-origin.ts').OriginalWorkflowSourceIssuer=Object.freeze({
        assertAdmissionCurrent(){if(this!==issuer)throw TypeError('Original nested Workflow issuer receiver required');currentNested()},
@@ -334,58 +360,6 @@ export function bindPreparedTaskLaunchLeaf(tool: Tool, leaf: Tool['execute']) {
   });taskCallers.set(claim,{body,frame});return claim
  }});return entry
 }
-
-export interface OriginalManagedTeamCaller extends Omit<PreparedBodyClaim,'context'> {
- readonly context:ManagedToolExecutionOwnerContext
- readonly call:Readonly<PreparedCall['call']>
- readonly identity:Readonly<{parentSessionId:string;callEventSeq:number;toolCallId:string}>
-}
-const teamCallers=new WeakMap<object,OriginalTeamProvisioningOwner>()
-const teamCandidates=new WeakMap<object,OriginalManagedTeamCaller>()
-type TeamBirthRecord={caller:OriginalManagedTeamCaller;witness:OriginalTeamProvisioning;owner:OriginalTeamProvisioningOwner;permit:import('../model-origin.ts').OriginalTeamBirthPermit;closed:boolean;bound?:string}
-const teamBirths=new WeakMap<object,TeamBirthRecord>()
-export interface OriginalManagedTeamBirthAuthority {readonly context:ManagedToolExecutionOwnerContext;readonly call:Readonly<PreparedCall['call']>;readonly identity:OriginalManagedTeamCaller['identity'];readonly source:SettlementFacts<import('@i-harness/core-session').FactOutcome>;readonly signal?:AbortSignal;assertCurrent():void;assertHeld():void;waitResult():Promise<void>;waitCurrent():Promise<void>;close():Promise<void>}
-export function assertOriginalManagedTeamCaller(caller:OriginalManagedTeamCaller):void{if(!teamCallers.has(caller))throw TypeError('Original managed Team caller required');caller.assertCurrent()}
-export function bindOriginalTeamProvisioningCandidate(caller:OriginalManagedTeamCaller,candidate:OriginalTeamProvisioningCandidate):void{assertOriginalManagedTeamCaller(caller);if(teamCandidates.has(candidate))throw TypeError('Original Team candidate already bound');assertOriginalTeamProvisioningCandidateOwner(teamCallers.get(caller)!,candidate);teamCandidates.set(candidate,caller)}
-export function assertOriginalTeamCallerProvisioning(caller:OriginalManagedTeamCaller,witness:OriginalTeamProvisioning):void{assertOriginalManagedTeamCaller(caller);const owner=teamCallers.get(caller)!,candidate=assertOriginalTeamProvisioningOwnerWitness(owner,witness);if(teamCandidates.get(candidate)!==caller)throw TypeError('Foreign Team caller provisioning')}
-export function assertOriginalManagedTeamBirth(authority:OriginalManagedTeamBirthAuthority,witness:OriginalTeamProvisioning):void{const original=teamBirths.get(authority);if(!original||original.closed||original.witness!==witness)throw TypeError('Original Team birth authority required');authority.assertCurrent()}
-export function assertOriginalManagedTeamBirthHeld(authority:OriginalManagedTeamBirthAuthority,witness:OriginalTeamProvisioning):void{const original=teamBirths.get(authority);if(!original||original.closed||original.witness!==witness)throw TypeError('Original held Team birth required');authority.assertHeld()}
-/** One retained birth can bind exactly one captured request and payload. */
-export function bindOriginalTeamBirthCapture(authority:OriginalManagedTeamBirthAuthority,witness:OriginalTeamProvisioning,request:unknown,payload:unknown):void{assertOriginalManagedTeamBirth(authority,witness);const original=teamBirths.get(authority)!;if(original.bound!==undefined)throw TypeError('Original Team birth capture already bound');original.bound=canonicalJsonData({request,payload})}
-export function assertOriginalTeamBirthCapture(authority:OriginalManagedTeamBirthAuthority,witness:OriginalTeamProvisioning,request:unknown,payload:unknown):void{assertOriginalManagedTeamBirth(authority,witness);const original=teamBirths.get(authority)!;if(original.bound===undefined||original.bound!==canonicalJsonData({request,payload}))throw TypeError('Original Team birth capture changed')}
-/** One original model member delegates only this Team birth before frame exit. */
-export function retainOriginalManagedTeamBirth(caller:OriginalManagedTeamCaller,witness:OriginalTeamProvisioning):OriginalManagedTeamBirthAuthority{
- assertOriginalTeamCallerProvisioning(caller,witness);const body=byExec.get(caller.exec),frame=active.getStore();if(!body||!frame?.active||frame.body!==body||body.managed!==caller.context||!body.permit||body.codeInvocation)throw TypeError('Original Team model birth member required')
- const permit=body.permit as import('../model-origin.ts').OriginalModelMemberPermit;if(!permit.retainTeamBirth)throw TypeError('Original Team birth issuer unavailable')
- const owner=teamCallers.get(caller)!,call=opaqueBody(body,()=>freezeJsonData(JSON.parse(canonicalJsonData(caller.call)))) as Readonly<PreparedCall['call']>;caller.consume();const retained=opaqueBody(body,()=>permit.retainTeamBirth!());let closed=false,closing:Promise<void>|undefined
- const authority:OriginalManagedTeamBirthAuthority=Object.freeze({context:caller.context,call,identity:caller.identity,source:retained.source,...caller.exec.abortSignal?{signal:caller.exec.abortSignal}:{},assertCurrent(){if(this!==authority||closed)throw TypeError('Original Team birth authority unavailable');retained.assertCurrent();const candidate=assertOriginalTeamProvisioningOwnerWitness(owner,witness);if(teamCandidates.get(candidate)!==caller)throw TypeError('Original Team birth candidate changed')},assertHeld(){if(this!==authority||closed)throw TypeError('Original held Team birth unavailable');retained.assertHeld();const candidate=assertOriginalTeamProvisioningHeld(owner,witness);if(teamCandidates.get(candidate)!==caller)throw TypeError('Original Team birth candidate changed')},async waitResult(){if(this!==authority||closed)throw TypeError('Original Team birth authority unavailable');try{caller.assertCurrent();authority.assertHeld();return}catch{}await retained.waitResult();authority.assertHeld()},async waitCurrent(){if(this!==authority||closed)throw TypeError('Original Team birth authority unavailable');await retained.waitCurrent();authority.assertCurrent()},async close(){if(this!==authority)throw TypeError('Original Team birth authority required');if(closed)return;if(closing)return closing;const pending=retained.close().then(()=>{closed=true;const record=teamBirths.get(authority);if(record)record.closed=true});closing=pending;void pending.finally(()=>{if(closing===pending)closing=undefined}).catch(()=>{});return pending}})
- teamBirths.set(authority,{caller,witness,owner,permit:retained,closed:false});return authority
-}
-/** The original registered Team leaf alone may capture its active private body. */
-export function bindPreparedTeamLaunchLeaf(tool:Tool,leaf:Tool['execute'],owner:OriginalTeamProvisioningOwner){
- const entry=Object.freeze({enter(exec:ToolExec):OriginalManagedTeamCaller|undefined{
-  if(this!==entry)throw TypeError('Foreign Team leaf receiver')
-  const body=byExec.get(exec),frame=active.getStore()
-  if(!body){if(frame?.active)throw Error('Foreign prepared exec');return}
-  if(!frame?.active||frame.body!==body||body.tool!==tool||body.leaf!==leaf||body.call.name!=='spawn_teammate')throw Error('Not the original prepared Team body')
-  check(body,frame);if(body.foreignContext||body.claimed)throw Error('Original Team body unavailable')
-  const context=body.managed;if(!context||!body.source||frame.domain!==context.domain.owner)return;assertOriginalTeamProvisioningOwner(context.domain,owner)
-  if(!body.permit&&!body.codeInvocation||body.permit&&body.codeInvocation)throw Error('Original private Team invocation required')
-  const id=own(exec,'sessionId'),seq=own(exec,'callEventSeq'),callId=own(exec,'callId')
-  if(id!==context.sessionId||!Number.isSafeInteger(seq)||(seq as number)<0||typeof callId!=='string'||!callId)throw Error('Original Team call identity unavailable')
-  const identity=Object.freeze({parentSessionId:context.sessionId,callEventSeq:seq as number,toolCallId:callId});body.claimed=true;let consumed=false
-  const claim:OriginalManagedTeamCaller=Object.freeze({context,source:body.source,exec,call:body.call,identity,
-   assertCurrent(){if(this!==claim||active.getStore()!==frame)throw TypeError('Foreign Team caller');check(body,frame)},
-   consume(){if(this!==claim)throw TypeError('Foreign Team caller');check(body,frame);if(consumed)throw Error('Team caller consumed');consumed=true},
-  });teamCallers.set(claim,owner);return claim
- }});return entry
-}
-
-
-
-
-
-
 
 export interface OriginalManagedWorkflowCaller extends Omit<PreparedBodyClaim,'context'> {
  readonly context:ManagedToolExecutionOwnerContext

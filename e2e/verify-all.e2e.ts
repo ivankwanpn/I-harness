@@ -15,11 +15,17 @@ it("verify:all reports dependent projects after an earlier project fails and ret
     const target = join(root, path); await mkdir(dirname(target), { recursive: true }); await writeFile(target, content)
   }
   try {
-    await put("package.json", JSON.stringify({ name: "verification-fixture", private: true, scripts: { e2e: "node e2e.mjs" } }))
+    await put("package.json", JSON.stringify({ name: "verification-fixture", private: true, scripts: {
+      e2e: "node e2e.mjs", typecheck: "pnpm -r --no-bail --no-sort typecheck", "verify:gateway": "node artifact.mjs",
+    } }))
     await put("pnpm-workspace.yaml", "packages:\n  - \"packages/*\"\n")
     await put("scripts/verify-all.mjs", await readFile(script, "utf8"))
+    await put("scripts/test-env.mjs", await readFile(new URL('../scripts/test-env.mjs', import.meta.url), 'utf8'))
+    await put("scripts/test-env.test.mjs", await readFile(new URL('../scripts/test-env.test.mjs', import.meta.url), 'utf8'))
     await put("packages/desktop/scripts/build-attachment-reader.mjs", "")
     await put("scripts/audit/check-reachability.mjs", "console.log('reachability: controlled fixture')")
+    await put("scripts/audit/check-package-boundaries.mjs", "console.log('package-boundaries: controlled fixture')")
+    await put("artifact.mjs", "console.log('IH_COMPILED_GATEWAY_OK')")
     await put("e2e.mjs", "console.log('✓ e2e/fixture.e2e.ts (1 test)')")
     await put("typecheck.mjs", "")
     for (const [name, dependencies, summary, code] of [

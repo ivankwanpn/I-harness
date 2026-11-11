@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { PluginRegistry } from "@i-harness/plugin-registry"
 import { runHeadless } from "../src/run.ts"
+import { inlineToolOutput } from './inline-tool-output.ts'
 
 // The plugin mount, end to end through the REAL run.ts wiring (design:
 // docs/superpowers/specs/2026-09-17-plugin-mount-design.md).
@@ -57,17 +58,14 @@ describe("plugin mount — the registry's runtime inputs reach the agent", () =>
     })
     expect(result.exitCode).toBe(0)
 
-    const results = result.session!.events.filter((e) => e.type === "tool/result") as {
-      name: string
-      output: unknown
-    }[]
+    const results = result.session!.events.filter((e) => e.type === "tool/result")
     const search = results.find((e) => e.name === "skill_search")
     // THE ASSERTION THAT MATTERS. Without the mount this search returns nothing:
     // the fixture skill lives under `<home>/plugins/skills/…`, which no other
     // root would have pointed the skills scanner at. Workspace is `home` and
     // there is no `<home>/skills`, so the plugin overlay is the only source.
-    expect(JSON.stringify(search?.output)).toContain("hello")
-    expect(JSON.stringify(search?.output)).toContain("Greets the user by name")
+    expect(JSON.stringify(inlineToolOutput(search))).toContain("hello")
+    expect(JSON.stringify(inlineToolOutput(search))).toContain("Greets the user by name")
   })
 
   it("the run is unaffected when the registry is empty", async () => {
@@ -194,12 +192,9 @@ describe("plugin mount — a plugin's subagent role reaches the agent", () => {
     // reason. A tool BODY throw is now soft (the turn continues), so the reason
     // is asserted on the channel it travels: the spawn's tool/result.
     expect(result.exitCode).toBe(0)
-    const toolResults = result.session!.events.filter((e) => e.type === "tool/result") as {
-      name: string
-      output: unknown
-    }[]
+    const toolResults = result.session!.events.filter((e) => e.type === "tool/result")
     const spawn = toolResults.find((e) => e.name === "spawn_agent")
-    expect(String((spawn?.output as { error?: string } | undefined)?.error)).toContain("unknown role: code-simplifier")
+    expect(inlineToolOutput<{ error: string }>(spawn).error).toContain("unknown role: code-simplifier")
 
     // …and the role really did not resolve: no child consumed the second script
     // step, so the parent's continuation takes it and says "child done" — while

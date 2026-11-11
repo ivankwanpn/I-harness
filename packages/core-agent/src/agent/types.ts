@@ -76,10 +76,7 @@ export interface AgentDeps {
   modelToolSchemas?: () => ToolSchema[]
   /** Live price of the same system/tool surface used by modelToolSchemas. */
   modelOverheadTokens?: () => number
-  // M19 (Ruling 24): the executing session's id, seeded onto every prepared
-  // ToolExec so tool bodies can attribute the caller (agent-team resolves
-  // team-tool callers from it). Additive: absent → ToolExec.sessionId stays
-  // undefined (pre-M19 behavior).
+  // The executing session ID attributes each prepared ToolExec to its owner.
   sessionId?: string
   /** Explicit child origin; independent of inherited clients or role names. */
   isSubagent?: boolean

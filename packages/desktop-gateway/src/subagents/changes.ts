@@ -46,7 +46,7 @@ export function createSubagentChanges(service: SessionService, options: { onChan
       const prior=managed.get(event.sessionId);prior?.off()
       const owner=event.owner,binding={owner,off:()=>{}}
       managed.set(event.sessionId,binding)
-      try{binding.off=owner.subscribe(value=>{if(!closed&&managed.get(event.sessionId)===binding&&('type'in value)&&typeof value.type==='string'&&(value.type.startsWith('subagent/')||value.type.startsWith('team/')||value.type.startsWith('job/')))changed(event.sessionId)})}catch(error){managed.delete(event.sessionId);throw error}
+      try{binding.off=owner.subscribe(value=>{if(!closed&&managed.get(event.sessionId)===binding&&('type'in value)&&typeof value.type==='string'&&(value.type.startsWith('subagent/')||value.type.startsWith('job/')))changed(event.sessionId)})}catch(error){managed.delete(event.sessionId);throw error}
       changed(event.sessionId)
     }else if(event.kind==='retiring'||event.kind==='removed'){
       const binding=managed.get(event.sessionId);if(binding?.owner===event.owner){managed.delete(event.sessionId);binding.off();cancelChanged(event.sessionId);changed(event.sessionId)}

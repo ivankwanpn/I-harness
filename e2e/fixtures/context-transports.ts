@@ -33,13 +33,21 @@ export function installTransport(route: CorpusRoute) {
     return new Response(terminal, { status: 200, headers: { "content-type": "text/event-stream" } })
   }
   vi.stubGlobal("fetch", route === "subscription" ? async () => { throw new Error("subscription used global fetch") } : captureHttp)
-  vi.mocked(systemFetch).mockImplementation(route === "subscription" ? captureHttp : async () => { throw new Error("unexpected systemFetch route") })
+  vi.mocked(systemFetch).mockImplementation(async (input, init, beforeTransport) => {
+    if (route !== "subscription") throw new Error("unexpected systemFetch route")
+    // The real system transport reserves and then invokes this original issue
+    // guard immediately before the physical send. The quarantine must keep
+    // that boundary, including auth-time currentness and output-cap validation.
+    const issue = await beforeTransport?.()
+    issue?.()
+    return captureHttp(input, init)
+  })
   const runtime = {
     async send(command: { input: Record<string, unknown> }) {
       if (route !== "bedrock") throw new Error("unexpected Bedrock transport")
       // Capture the real SDK command input, preserving Buffer/Uint8Array types.
       captures.push({ kind: "sdk-command-estimate", body: command.input, commandName: command.constructor.name })
-      return { stream: [] }
+      return { stream: [{ messageStop: { stopReason: "end_turn" } }] }
     },
     destroy() {},
   } as unknown as BedrockRuntimeFace

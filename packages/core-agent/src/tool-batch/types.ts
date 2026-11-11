@@ -25,7 +25,7 @@ export interface ExecuteToolCallsOptions {
   signal?: AbortSignal
   // M19 (Ruling 24): the identity of the session whose agent is executing the
   // batch — seeded onto each prepared ToolExec so tool bodies can attribute
-  // the caller (the agent-team scheduler resolves team-tool callers from it).
+  // the original caller, including nested tool executions.
   // Additive: absent → ToolExec.sessionId stays undefined (pre-M19 behavior).
   sessionId?: string
   // M25: optional host telemetry stream (Ruling M25-P3 — independent of the

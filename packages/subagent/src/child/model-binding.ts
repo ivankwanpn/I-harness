@@ -47,7 +47,7 @@ export interface RoleModelHost {
   /** M73: the SESSION's own model's numbers — what an INHERITING child runs
    * under (no declared role model). They ride this host shape for the same
    * reason `roleSelectionFor` does: every spawn arm (the subagent tool, the
-   * team scheduler, the guardian) already carries it, so the values reach
+   * serialized caller and the guardian) already carries it, so the values reach
    * `spawnChild` without a second parameter path. NOT the numbers of a role's
    * DECLARED model — that binding resolves at spawn and carries its own
    * (RoleModelState's ready arm below). Absent → no key is written. */

@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { expect, it } from 'vitest'
-import { HarnessClient } from '@i-harness/sdk'
+import { HarnessClient, SdkTimeoutError } from '@i-harness/sdk'
 import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createSessionAssembly } from '@i-harness/session-executor'
@@ -63,7 +63,9 @@ it('actual stdio prepares, forks, nests and cold retries one original operation 
   }
 },30000)
 
+// Three SDK processes, two actual forks and cold reads; measured full workload 76.24s.
 it('actual stdio retains a genuine catalog/member and selected legacy results through nested cold recovery',async()=>{
+  const started=Date.now()
   const base=process.env.IH_LEGACY_FORK_EVIDENCE_ROOT??tmpdir();await mkdir(base,{recursive:true})
   const root=await mkdtemp(join(base,'cli-retained-')),workspace=join(root,'w'),sessions=join(root,'s'),config=join(root,'c'),settings=join(config,'settings.json'),effects=join(workspace,'native-effects')
   await mkdir(workspace);await mkdir(config);await writeFile(settings,JSON.stringify({contextSubsystems:{contextOutput:{enabled:true}}}))
@@ -107,6 +109,8 @@ it('actual stdio retains a genuine catalog/member and selected legacy results th
   await assembly.dispose();await lease.release();await original.close()
   expect(sourceModels).toBe(2);expect(nativeLaunches).toBe(1)
   const sourceBefore=await readFile(join(sessions,'source.jsonl')),requests:string[]=[],receipts:unknown[]=[]
+  const phaseMark=(phase:string)=>{receipts.push({phase,elapsedMs:Date.now()-started})}
+  phaseMark('source-closed')
   let script=0,ordinal=0,phase='disabled'
   const plan=[{id:'read-visible',name:'context_output_read',args:{refId:visible.id}},{id:'search-visible',name:'context_output_search',args:{query:'VISIBLE'}},
     {id:'read-hidden',name:'context_output_read',args:{refId:hidden.id}},{id:'read-future',name:'context_output_read',args:{refId:future.id}},{id:'read-foreign',name:'context_output_read',args:{refId:foreign.id}},{id:'status',name:'context_output_status',args:{}}]
@@ -128,7 +132,12 @@ it('actual stdio retains a genuine catalog/member and selected legacy results th
     const filtered=new Transform({transform(chunk,_encoding,done){buffer+=decoder.write(chunk);for(;;){const newline=buffer.indexOf('\n');if(newline<0)break;const line=buffer.slice(0,newline);buffer=buffer.slice(newline+1);let message:any;try{message=JSON.parse(line)}catch{}if(dropReady&&drops===0&&message?.result?.kind==='ready'){drops++;receipts.push({phase:'dropped actual post-READY reply',operation:message.result.operation,sessionId:message.result.sessionId});dropped.resolve();continue}this.push(line+'\n')}done()},flush(done){buffer+=decoder.end();if(buffer)this.push(buffer);done()}})
     child.stdout.pipe(filtered)
     const client=new HarnessClient(filtered,child.stdin,{child}),request=client.request.bind(client)
-    client.request=(method,params,timeout)=>request(method,params,dropReady&&drops===0&&method==='session/fork/begin'?250:timeout)
+    client.request=(method,params,timeout)=>{
+      if(!dropReady||drops!==0||method!=='session/fork/begin')return request(method,params,timeout)
+      // Lose the caller's reply only AFTER the real server publishes READY.
+      // A slow preparation or an actual refusal must not impersonate this cut.
+      return Promise.race([request(method,params,0),dropped.promise.then(()=>{throw new SdkTimeoutError(method,250)})])
+    }
     return{client,dropped:dropped.promise,async close(){await client.close();const[code,signal]=await exiting;await writeFile(join(root,`stderr-${label}.log`),stderr);receipts.push({label,code,signal,drops});expect({code,signal}).toEqual({code:0,signal:null})}}
   }
   async function textPage(client:HarnessClient,id:string,ref:ManagedArtifactRef){let offset=0,text='';for(;;){const page=await client.readResultPage(id,{ref,offset,maxBytes:4096});if('kind'in page||!('data'in page)||page.data.kind!=='text')throw new Error('Actual stdio retained text unavailable');expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(4096);text+=page.data.text;if(page.eof)return text;offset=page.nextOffset!}}
@@ -139,10 +148,10 @@ it('actual stdio retains a genuine catalog/member and selected legacy results th
     const prepared=await client.prepareForkSession({version:1,sourceSessionId:'source',selection:{kind:'completed',atSeq}});if(prepared.kind!=='prepared')throw new Error('Actual retained prepare unavailable')
     const attempt=client.createForkAttempt(prepared.prepared);receipts.push({phase:'operation saved before begin',operation:attempt.operation})
     const lost=await attempt.run().catch(error=>error);expect(lost).toMatchObject({name:'ForkOperationError',kind:'transport'});expect(lost.operation).toBe(attempt.operation);expect(attempt.lastOutcome).toBeUndefined()
-    let dropTimer:ReturnType<typeof setTimeout>|undefined
-    try{await Promise.race([processOwner.dropped,new Promise<never>((_resolve,reject)=>{dropTimer=setTimeout(()=>reject(new Error('Actual post-READY reply was not observed')),5000)})])}finally{if(dropTimer)clearTimeout(dropTimer)}
+    await processOwner.dropped;phaseMark('actual-ready-dropped')
     const child=await attempt.run();if(child.kind!=='adopted')throw new Error('Actual retained child not adopted after dropped READY')
     const grandchild=await client.forkSession(child.sessionId)
+    phaseMark('nested-ready')
     expect(requests).toHaveLength(0);expect((await client.dashboard()).sessions.every(row=>!row.live)).toBe(true)
     script=0;phase='disabled';const disabledRead=await client.run({sessionId:grandchild.sessionId,prompt:'probe disabled retained read'})
     expect(toolValue(disabledRead.events,'disabled-read-visible').execution.outcome).toBe('failed')
@@ -151,7 +160,7 @@ it('actual stdio retains a genuine catalog/member and selected legacy results th
     expect((await client.retryForkSession(grandchild.operation)).kind).toBe('adopted');expect(requests.length).toBe(beforeDisabledRetry)
     expect((await client.dashboard()).sessions.filter(row=>row.live).length).toBe(liveBeforeDisabledRetry)
     receipts.push({phase:'disabled transfer/read-denial/passive',modelRequestsDuringFork:0,assembliesDuringFork:0,modelRequestsDuringPassive:0,newAssembliesDuringPassive:0,disabledReadDenied:true})
-    await processOwner.close();processOwner=undefined
+    await processOwner.close();processOwner=undefined;phaseMark('disabled-closed')
     // Existing service semantics disable reads too. Prove disabled transfer
     // first, then explicitly enable this isolated saved feature for reads.
     modelSettings.contextSubsystems.contextOutput.enabled=true;await writeFile(settings,JSON.stringify(modelSettings))
@@ -161,20 +170,22 @@ it('actual stdio retains a genuine catalog/member and selected legacy results th
     expect(toolValue(firstReads.events,'enabled-search-visible').retention).toMatchObject({kind:'inline',value:{hits:[{ref:{id:visible.id}}]}})
     for(const id of ['read-hidden','read-future','read-foreign'])expect(toolValue(firstReads.events,'enabled-'+id).execution.outcome).toBe('failed')
     expect(toolValue(firstReads.events,'enabled-status').retention).toMatchObject({kind:'inline',value:{results:4}})
-    await processOwner.close();processOwner=undefined;expect(await readFile(join(sessions,'source.jsonl'))).toEqual(sourceBefore)
+    await processOwner.close();processOwner=undefined;phaseMark('enabled-closed');expect(await readFile(join(sessions,'source.jsonl'))).toEqual(sourceBefore)
     const offline=createSessionCoordinator(createJsonlBackend(sessions),{lock:{enabled:true}}),coldLease=await acquireResultReadStore({workspace,coordinator:offline,sessionId:grandchild.sessionId,contextOutputSettingsPath:settings,readCallerAvailable:()=>true})
     await coldLease.service!.clear('source');await coldLease.service!.clear(child.sessionId);await coldLease.release()
-    await offline.updateMeta('source',{archived:true});await offline.updateMeta(child.sessionId,{archived:true});await offline.close()
+    await offline.updateMeta('source',{archived:true});await offline.updateMeta(child.sessionId,{archived:true});await offline.close();phaseMark('sources-cleared-archived')
     processOwner=start();client=processOwner.client;await client.initialize();const beforeCold=requests.length
     expect(await textPage(client,grandchild.sessionId,managed.ref)).toBe('VISIBLE managed wire')
     expect(JSON.parse(await textPage(client,grandchild.sessionId,catalogRef))).toEqual(catalog)
     let cursor:ExecFrameCursor|undefined,stdout='',stderr=''
     for(;;){const page=await client.readResultPage(grandchild.sessionId,{ref:memberRef,viaCatalog:catalogRef,...(cursor?{cursor}:{}),maxBytes:4096});if('kind'in page||!('frames'in page))throw new Error('Actual inherited native member unavailable');expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(4096);for(const frame of page.frames){const value=Buffer.from(frame.data,'base64').toString();if(frame.channel==='stdout')stdout+=value;else stderr+=value}if(page.eof)break;cursor=page.nextCursor!}
     expect(stdout).toBe('VISIBLE native member wire');expect(stderr).toBe('native wire stderr');expect(requests.length).toBe(beforeCold)
+    phaseMark('cold-pages-read')
     script=0;phase='cold';const coldReads=await client.run({sessionId:grandchild.sessionId,prompt:'cold read retained observations'})
     expect(toolValue(coldReads.events,'cold-read-visible').retention).toMatchObject({kind:'inline',value:{text:'VISIBLE legacy wire'}})
     expect(toolValue(coldReads.events,'cold-search-visible').retention).toMatchObject({kind:'inline',value:{hits:[{ref:{id:visible.id}}]}})
     for(const id of ['read-hidden','read-future','read-foreign'])expect(toolValue(coldReads.events,'cold-'+id).execution.outcome).toBe('failed')
+    phaseMark('cold-tools-read')
     expect(toolValue(coldReads.events,'cold-status').retention).toMatchObject({kind:'inline',value:{results:2}})
     const beforeRetry=requests.length;expect((await client.retryForkSession(grandchild.operation)).kind).toBe('adopted');expect(requests.length).toBe(beforeRetry)
     expect(await readFile(effects,'utf8')).toBe(nativeLine)
@@ -183,4 +194,4 @@ it('actual stdio retains a genuine catalog/member and selected legacy results th
   }finally{
     await processOwner?.close();await new Promise<void>((resolve,reject)=>{model.close(error=>error?reject(error):resolve());model.closeAllConnections()});await writeFile(join(root,'retained-receipts.json'),JSON.stringify(receipts,null,2));console.info(JSON.stringify({control:'actual CLI nested managed catalog member and legacy',evidence:root}));if(!process.env.IH_LEGACY_FORK_EVIDENCE_ROOT)await rm(root,{recursive:true,force:true})
   }
-},60000)
+},90000)

@@ -5,7 +5,7 @@ import { generationError, type AuxiliaryGenerationAction, type ApprovalGeneratio
 import type { SessionView } from '@i-harness/core-session'
 import {isManagedBatchSource,type ManagedBatchSource} from '../tool-batch/managed-source.ts'
 import type {ManagedAgentHost,ManagedGenerationLifecycle} from './managed-types.ts'
-import {assertExecutionGeneration,captureExecutionApprovalAudit} from '../../../session-executor/src/lifecycle/generation-actions.ts'
+import {assertExecutionGeneration,captureExecutionApprovalAudit} from '../lifecycle/generation-actions.ts'
 import {assertManagedActionCurrent,captureManagedReviewerContext,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 
 type ManagedReviewerLease=Pick<ReturnType<typeof captureManagedReviewerContext>,'identity'|'ready'|'events'|'latestUser'|'assertCurrent'|'close'>

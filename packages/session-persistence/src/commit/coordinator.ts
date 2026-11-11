@@ -1,16 +1,21 @@
+import { createCoordinatorAdmission } from '../coordinator/public-admission.ts'
 import { createHash } from 'node:crypto'
-import { CURRENT_FORMAT_VERSION, canonicalJsonData, decodeFactBatch, encodeFactBatch, legacyPrefixDigest, stringifyJsonData, type FactReceipt, type Session, type SessionEvent } from '@i-harness/core-session'
-import { COMMIT_LOG_GENERATION, CommitLogConflictError, CommitLogClosedError, createCommitLog, openCommitLog, CommitLogNotFoundError, type CommitLog, type CommitLogMode } from '@i-harness/session-commit-log'
+import { CURRENT_FORMAT_VERSION, validateSemanticBootstrapHistory, canonicalJsonData, decodeFactBatch, encodeFactBatch, legacyPrefixDigest, stringifyJsonData, type FactReceipt, type Session, type SessionEvent } from '@i-harness/core-session'
+import { COMMIT_LOG_GENERATION, CommitLogConflictError, CommitLogClosedError, CommitLogCleanupError, createCommitLog as createStoredCommitLog, openCommitLog, CommitLogNotFoundError, type CommitLog, type CommitLogMode, type CommitLogCleanup } from '@i-harness/session-commit-log'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { buildSession, migrate, preflightSessionFormat } from '../format/validation.ts'
 import type { SessionMeta } from '../coordinator/types.ts'
-import type { LegacySessionStore } from './legacy.ts'
+import type { LegacySession, LegacySessionStore } from './legacy.ts'
+export { createOwnedLegacySessionStore } from './legacy.ts'
+export { isCommittedDocumentClaimed } from './document-claim.ts'
 import type { ManagedDocument } from '../coordinator/fact-types.ts'
 import { createCommitObservations } from './observations.ts'
-import { bootstrapManifest, buildBootstrapHeader, captureBootstrapRequest } from '../coordinator/bootstrap-header.ts'
+import { bootstrapManifest, buildBootstrapHeader, captureBootstrapRequest, captureBootstrapInvocation } from '../coordinator/bootstrap-header.ts'
 import type { BootstrapRequest } from '../coordinator/bootstrap-types.ts'
 import { openCommitManagedDocument } from './managed.ts'
+import { captureTaskSnapshot } from '../coordinator/task-document-snapshot.ts'
+import { originalManagedDocumentOwner } from '../coordinator/managed-document.ts'
 import { openCommitExecution } from './execution.ts'
 import { withCommitProcessReadObservation } from './process-read.ts'
 import { createCommitOwnershipPorts, type CommitOwnershipPorts } from './capabilities.ts'
@@ -29,7 +34,7 @@ export type CommitCoordinatorOptions = {
   readonly acquireRetryMs?: number
   readonly acquireDeadlineMs?: number
   readonly now?: () => Date
-  /** Pre-commit-log generations, read-only; a write migrates to format 15 first. */
+  /** Legacy reads remain available; writes require the original exclusive migration scope. */
   readonly legacy?: LegacySessionStore
   /** Metadata folds restored into the execution state (owned metadata context). */
   readonly originalExecutionFoldFactory?: Parameters<typeof import('@i-harness/core-session/internal/execution').restoreManagedExecutionState>[2]
@@ -51,8 +56,9 @@ export class CommitSessionDeletedError extends CommitLogNotFoundError {
 
 export type CommitCoordinator = {
   readonly storageRoot: string
-  create(meta?: Partial<SessionMeta>): Promise<{ id: string }>
-  createChildSession(request: BootstrapRequest, options: { closure: string }): Promise<{ id: string; document: ManagedDocument; receipt: import('../coordinator/bootstrap-types.ts').BootstrapReceipt }>
+  create(meta?: Partial<SessionMeta>, initialTaskDocument?: unknown): Promise<{ id: string }>
+  inspectBirth(invocation: import('../coordinator/bootstrap-types.ts').BootstrapInvocation): Promise<import('../coordinator/bootstrap-types.ts').BootstrapInspection>
+  createChildSession(request: BootstrapRequest, options: { closure: string; initialTaskDocument?: unknown }): Promise<{ id: string; document: ManagedDocument; receipt: import('../coordinator/bootstrap-types.ts').BootstrapReceipt }>
   bootstrapChildTargetWithCapture(request: import('../coordinator/child-bootstrap-intent.ts').ChildBootstrapCaptureRequest, guards: import('../coordinator/bootstrap-types.ts').BootstrapGuards, capture: () => Promise<BootstrapRequest>): Promise<import('../coordinator/bootstrap-types.ts').BootstrapOutcome>
   resumeChildTarget(request: import('../coordinator/child-bootstrap-intent.ts').ChildBootstrapCaptureRequest, guards: import('../coordinator/bootstrap-types.ts').BootstrapGuards, payload?: BootstrapRequest): Promise<import('../coordinator/bootstrap-types.ts').BootstrapOutcome>
   fork(parentId: string, options?: ForkOptions): Promise<{ id: string }>
@@ -117,32 +123,41 @@ function toMeta(header: Readonly<Record<string, unknown>>, meta: Readonly<Record
 
 function metaOf(log: CommitLog): SessionMeta { return toMeta(log.header(), log.metadata()) }
 
-/** Synthesize the bootstrap receipt over the exact events the birth commit wrote:
- *  a seed batch (when the seed has records) then the completion batch. */
-function receiptOf(request: BootstrapRequest, stage: ReturnType<typeof buildBootstrapHeader>['stage'], closure: string, id: string, initial?: SessionEvent): import('../coordinator/bootstrap-types.ts').BootstrapReceipt {
-  const owner = { sessionId: id, incarnation: 'birth' }
+/** Canonical semantic birth entries, shared by the native commit and its receipt. */
+function birthEntries(request: BootstrapRequest, stage: ReturnType<typeof buildBootstrapHeader>['stage'], closure: string, initial?: SessionEvent): SessionEvent[] {
   const seedLength = stage.seed.seedLength
-  let previous = legacyPrefixDigest(0, new Uint8Array())
-  let seed: FactReceipt | undefined
-  const records = request.seed.records
+  const completion = {
+    type: 'session/bootstrap' as const, version: 1 as const, seq: seedLength,
+    operationId: request.invocation.operationId,
+    manifestDigest: bootstrapManifest(stage, request.seed.records),
+    dependencyClosureDigest: closure, seedLength,
+    ...(stage.initial ? { initialInputId: stage.initial.inputId, initialStartedAt: stage.initial.startedAt, initialExpiresAt: stage.initial.expiresAt } : {}),
+  }
+  return [...request.seed.records.map(event => ({ ...event })), completion as SessionEvent, ...(initial ? [{ ...initial, seq: seedLength + 1 } as SessionEvent] : [])]
+}
+
+/** Compatibility receipt over the exact acknowledged semantic birth prefix. */
+function receiptOf(request: BootstrapRequest, stage: ReturnType<typeof buildBootstrapHeader>['stage'], id: string, committed: readonly SessionEvent[], owner: FactReceipt['owner']): import('../coordinator/bootstrap-types.ts').BootstrapReceipt {
+  if (owner.sessionId !== id) throw TypeError('Original birth document owner required')
+  const seedLength = stage.seed.seedLength
+  const completion = committed[seedLength] as Extract<SessionEvent, { type: 'session/bootstrap' }>
+  // The commit log canonicalizes object keys on disk. Use that same semantic
+  // representation so the compatibility receipt is stable before/after reopen.
+  const records = JSON.parse(canonicalJsonData(committed.slice(0, seedLength))) as SessionEvent[]
+  let previous = legacyPrefixDigest(0, new Uint8Array()), seed: FactReceipt | undefined
   if (records.length) {
     const batch = encodeFactBatch(`bootstrap:${request.invocation.operationId}:seed`, previous, records)
     seed = { owner, key: batch.key, lastSeq: batch.key.firstSeq + batch.key.count - 1, prefixDigest: decodeFactBatch(batch.bytes).prefixDigest }
     previous = seed.prefixDigest
   }
-  const completion = { type: 'session/bootstrap' as const, version: 1 as const, seq: seedLength, operationId: request.invocation.operationId, manifestDigest: bootstrapManifest(stage, records), dependencyClosureDigest: closure, seedLength }
-  const completionEvents: SessionEvent[] = [completion as unknown as SessionEvent]
-  if (initial) completionEvents.push({ ...initial, seq: seedLength + 1 } as SessionEvent)
+  const completionEvents = JSON.parse(canonicalJsonData(committed.slice(seedLength, seedLength + 1 + (stage.initial ? 1 : 0)))) as SessionEvent[]
   const complete = encodeFactBatch(`bootstrap:${request.invocation.operationId}:complete`, previous, completionEvents)
   return {
-    version: 1,
-    invocation: request.invocation,
-    manifestDigest: bootstrapManifest(stage, records),
-    seedLength,
-    dependencyClosureDigest: closure,
+    version: 1, invocation: request.invocation, manifestDigest: completion.manifestDigest,
+    seedLength, dependencyClosureDigest: completion.dependencyClosureDigest,
     ...(seed ? { seed } : {}),
     completion: { owner, key: complete.key, lastSeq: complete.key.firstSeq + complete.key.count - 1, prefixDigest: decodeFactBatch(complete.bytes).prefixDigest },
-    ...(stage.initial ? { initial: { inputId: stage.initial.inputId, seq: seedLength + 1, startedAt: stage.initial.startedAt, expiresAt: stage.initial.expiresAt } } : {}),
+    ...(stage.initial ? { initial: { inputId: completion.initialInputId!, seq: seedLength + 1, startedAt: completion.initialStartedAt!, expiresAt: completion.initialExpiresAt! } } : {}),
   }
 }
 
@@ -152,20 +167,33 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
   const reportFailure = options.reportBackgroundFailure ?? ((error: unknown) => console.warn('[i-harness] background persistence failure:', error))
   if (options.lock?.enabled === false) throw new Error('Commit coordinator requires the writer lease')
   const logOptions = (sessionId: string) => ({ root, sessionId, now, compactDocuments: sessionId === DOCUMENT_SESSION, lockRoot: options.lock?.lockRoot ?? root, lease: { retryMs: options.acquireRetryMs, deadlineMs: options.acquireDeadlineMs } })
-  const open = (sessionId: string, mode: CommitLogMode): Promise<CommitLog> => openCommitLog(logOptions(sessionId), mode)
+  const openResources = new Set<CommitLogCleanup>()
+  const retainLog = (log: CommitLog): CommitLog => {
+    const close = log.close.bind(log)
+    openResources.add(log)
+    log.close = async () => { await close(); openResources.delete(log) }
+    return log
+  }
+  const retainOpenFailure = (error: unknown): never => {
+    if (error instanceof CommitLogCleanupError) openResources.add(error.cleanup)
+    throw error
+  }
+  const open = (sessionId: string, mode: CommitLogMode): Promise<CommitLog> => {
+    assertContinuation()
+    return openCommitLog(logOptions(sessionId), mode).then(retainLog, retainOpenFailure)
+  }
+  const createCommitLog = (...args: Parameters<typeof createStoredCommitLog>): Promise<CommitLog> => {
+    assertContinuation()
+    return createStoredCommitLog(...args).then(retainLog, retainOpenFailure)
+  }
   const owned = new Map<string, CommitLog>()
-  let ownedAdmissionClosed = false
-  let closeFlight: Promise<void> | undefined
   const ownedWork = new Set<Promise<unknown>>()
   const writes = new Set<Promise<unknown>>()
-  const track = <T>(flights: Set<Promise<unknown>>, work: () => Promise<T>): Promise<T> => {
-    const flight = work()
-    flights.add(flight)
-    void flight.finally(() => flights.delete(flight)).catch(() => {})
-    return flight
-  }
+  const admission = createCoordinatorAdmission(ownedWork, [writes], () => new CommitLogClosedError(), 'Commit coordinator close failed')
+  const track = admission.track
+  const assertContinuation = admission.assertContinuation
   const ownedOperation = <T>(work: () => Promise<T>): Promise<T> => {
-    if (ownedAdmissionClosed) return Promise.reject(new CommitLogClosedError())
+    try { assertContinuation() } catch (error) { return Promise.reject(error) }
     return track(ownedWork, work)
   }
   const pending = new Map<string, Set<Promise<void>>>()
@@ -212,6 +240,23 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     return buildSession(state.meta, state.events)
   }
 
+  const inLegacyNamespace = <T>(sessionId: string, work: (source: LegacySession | undefined) => Promise<T>): Promise<T> => {
+    if (!options.legacy) return work(undefined)
+    if (!options.legacy.migrate) throw Object.assign(new Error('Legacy writes require an original exclusive migration scope; this legacy port is read-only'), { code: 'LEGACY_MIGRATION_UNSUPPORTED' })
+    return options.legacy.migrate(sessionId, work)
+  }
+
+  const assertNewTarget = async (sessionId: string, source: LegacySession | undefined, recreateDeleted = false) => {
+    if (!source) return
+    if (recreateDeleted) {
+      try {
+        const current = await open(sessionId, 'read')
+        try { if (current.view().deleted) return } finally { await current.close() }
+      } catch (error) { if (!(error instanceof CommitLogNotFoundError)) throw error }
+    }
+    throw new CommitLogConflictError(sessionId)
+  }
+
   /** Open a writable handle; a legacy-only session first publishes a format-15
    *  generation carrying its exact migrated history, then reopens that. */
   const ensureWritable = async (sessionId: string): Promise<CommitLog> => {
@@ -225,10 +270,45 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     }
     catch (error) {
       if (error instanceof CommitSessionDeletedError || !(error instanceof CommitLogNotFoundError)) throw error
-      const legacy = await readLegacy(sessionId)
-      const header = toHeader({ ...legacy.meta, formatVersion: CURRENT_FORMAT_VERSION }, sessionId, now)
-      const log = await createCommitLog(logOptions(sessionId), { header: header as unknown as Record<string, unknown>, entries: legacy.events })
-      return log
+      const legacy = options.legacy
+      if (!legacy) throw new CommitLogNotFoundError(sessionId)
+      if (!legacy.migrate) {
+        throw Object.assign(new Error('Legacy writes require an original exclusive migration scope; this legacy port is read-only'), { code: 'LEGACY_MIGRATION_UNSUPPORTED' })
+      }
+      let candidate: CommitLog | undefined
+      try {
+        return await legacy.migrate<CommitLog>(sessionId, async raw => {
+          // Another migrator may have published while this original legacy
+          // lease was waiting. Select that generation instead of stale input.
+          try {
+            const current = await open(sessionId, 'write')
+            if (current.view().deleted) {
+              await current.close()
+              throw new CommitSessionDeletedError(sessionId)
+            }
+            candidate = current
+            return current
+          } catch (error) {
+            if (!(error instanceof CommitLogNotFoundError)) throw error
+          }
+          if (!raw) throw new CommitLogNotFoundError(sessionId)
+          if (!raw.meta || raw.meta.sessionId !== sessionId || typeof raw.meta.createdAt !== 'string') throw new Error('Legacy session has no original metadata for migration')
+          if (await getDocumentOf('deletion:' + sessionId)) throw new CommitSessionDeletedError(sessionId)
+          const events = await migrate(raw.version, [...raw.events], raw.meta)
+          const header = toHeader({ ...raw.meta, formatVersion: CURRENT_FORMAT_VERSION }, sessionId, now)
+          candidate = await createCommitLog(logOptions(sessionId), { header: header as unknown as Record<string, unknown>, entries: events })
+          return candidate
+        })
+      } catch (error) {
+        if (candidate) {
+          try { await candidate.close() }
+          catch (cleanup) {
+            owned.set(sessionId, candidate)
+            throw new AggregateError([error, cleanup], 'Migration publication cleanup unresolved')
+          }
+        }
+        throw error
+      }
     }
   }
 
@@ -279,21 +359,37 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       return JSON.parse(new TextDecoder().decode(await log.readSidecar(side.digest))) as unknown
     } finally { await log.close() }
   }
-  const clearDocumentsOf = (keys: readonly string[]): Promise<void> => track(writes, async () => {
-    if (!keys.length) return
-    const log = await documentLog()
-    try { await log.append({ ops: keys.map(key => ({ kind: 'doc-clear' as const, key })) }) } finally { await log.close() }
-  })
+  const inLegacyDocuments = <T>(keys: readonly string[], work: () => Promise<T>): Promise<T> => {
+    if (!options.legacy) return work()
+    if (!options.legacy.withDocuments) return Promise.reject(new Error('Legacy document publication requires its original document lease scope'))
+    return options.legacy.withDocuments(keys, work)
+  }
+  const clearDocumentsOf = (keys: readonly string[]): Promise<void> => {
+    const selected = [...new Set(keys)]
+    return track(writes, async () => {
+      if (!selected.length) return
+      await inLegacyDocuments(selected, async () => {
+        const log = await documentLog()
+        try { await log.append({ ops: selected.map(key => ({ kind: 'doc-clear' as const, key })) }) } finally { await log.close() }
+      })
+    })
+  }
   const putDocumentOf = (key: string, data: unknown): Promise<void> => track(writes, async () => {
     const text = stringifyJsonData(data)
     if (text === undefined) throw new TypeError('document must be losslessly JSON-serializable')
-    const log = await documentLog()
-    try {
-      const side = await log.writeSidecar(new TextEncoder().encode(text))
-      await log.append({ ops: [{ kind: 'doc', key, side }] })
-    } finally { await log.close() }
+    await inLegacyDocuments([key], async () => {
+      const log = await documentLog()
+      try {
+        const side = await log.writeSidecar(new TextEncoder().encode(text))
+        await log.append({ ops: [{ kind: 'doc', key, side }] })
+      } finally { await log.close() }
+    })
   })
-  const ownershipPorts = createCommitOwnershipPorts(root, { putDocument: putDocumentOf, getDocument: getDocumentOf, profile: profileOf })
+  const ownershipPorts = createCommitOwnershipPorts(root, {
+    putDocument(key, data) { assertContinuation(); return putDocumentOf(key, data) },
+    getDocument(key) { assertContinuation(); return getDocumentOf(key) },
+    profile(id) { assertContinuation(); return profileOf(id) },
+  })
   const ownershipPins = new Map<string, { release(): Promise<void> }>()
   const pinSession = async (sessionId: string) => {
     if (ownershipPins.has(sessionId)) return
@@ -307,56 +403,104 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
   }
   const observations = createCommitObservations({ profile: profileOf, getDocument: getDocumentOf })
 
-  return {
+  const continuation: CommitCoordinator = {
     storageRoot: root,
-    create(meta) {
+    create(meta, initialTaskDocument) {
+      const task = initialTaskDocument === undefined ? undefined : captureTaskSnapshot(initialTaskDocument)
       return track(writes, async () => {
         const sessionId = meta?.sessionId ?? randomSessionId()
         const header = toHeader(meta, sessionId, now)
-        const log = await createCommitLog({ ...logOptions(sessionId), recreateDeleted: true }, { header: header as unknown as Record<string, unknown> })
+        const log = await inLegacyNamespace(sessionId, async source => {
+          await assertNewTarget(sessionId, source, true)
+          return createCommitLog({ ...logOptions(sessionId), recreateDeleted: true }, { header: header as unknown as Record<string, unknown> })
+        })
         await log.close()
+        if (task !== undefined) await putDocumentOf('task-' + sessionId, task)
         await clearDocumentsOf(['deletion:' + sessionId])
         return { id: sessionId }
       })
     },
+    async inspectBirth(input) {
+      const invocation = captureBootstrapInvocation(input)
+      let header: Readonly<Record<string, unknown>>, events: readonly SessionEvent[]
+      try {
+        const log = await open(invocation.targetSessionId, 'read')
+        try {
+          if (log.view().deleted) return { kind: 'conflict', invocation, needsConfirmation: false }
+          header = log.header()
+          events = log.view().entries
+        } finally { await log.close() }
+      } catch (error) {
+        if (!(error instanceof CommitLogNotFoundError)) throw error
+        try {
+          const source = await readLegacy(invocation.targetSessionId)
+          header = source.meta ? { ...source.meta } : {}
+          events = source.events
+        } catch (error) {
+          if (error instanceof CommitLogNotFoundError) return { kind: 'absent', invocation, needsConfirmation: false }
+          throw error
+        }
+      }
+      // A query cannot promote mutable metadata into a stored birth. Validate
+      // the real prefix against the original header, independently of renames,
+      // archive visibility or any later metadata patch.
+      validateSemanticBootstrapHistory(events, Number(header.formatVersion ?? CURRENT_FORMAT_VERSION), header)
+      const seed = header.semanticSeed as SessionMeta['semanticSeed']
+      const matching = header.sessionId === invocation.targetSessionId && header.createdAt === invocation.createdAt
+        && seed?.operationId === invocation.operationId && seed.requestDigest === invocation.requestDigest
+      return { kind: matching ? 'ready' : 'conflict', invocation, needsConfirmation: false }
+    },
     async load(sessionId) { return { session: await readSession(sessionId) } },
     createChildSession(request, options) {
+      const task = options.initialTaskDocument === undefined ? undefined : captureTaskSnapshot(options.initialTaskDocument)
+      const initializeTask = async (id: string) => {
+        if (task !== undefined && await getDocumentOf('task-' + id) === undefined) await putDocumentOf('task-' + id, task)
+      }
       return track(writes, async () => {
         const captured = captureBootstrapRequest(request)
         const { stage, initial } = buildBootstrapHeader(captured)
         const id = captured.invocation.targetSessionId
-        const existing = await open(id, 'read').then(async (log) => { try { if (log.view().deleted) throw new CommitLogConflictError(id); return log.header() } finally { await log.close() } }, error => { if (error instanceof CommitLogNotFoundError) return undefined; throw error })
-        if (existing) {
-          const seed = (existing as { semanticSeed?: { operationId?: string } }).semanticSeed
-          if (seed?.operationId !== captured.invocation.operationId) throw new CommitLogConflictError(id)
-          const rebuilt = buildBootstrapHeader(captured)
-          return { id, document: await this.openManagedDocument(id), receipt: receiptOf(captured, rebuilt.stage, options.closure, id, rebuilt.initial) }
-        }
         const header = JSON.parse(Buffer.from(stage.headerBytes).toString('utf8')) as Record<string, unknown>
-        const seedLength = stage.seed.seedLength
-        const completion = {
-          type: 'session/bootstrap' as const, version: 1 as const, seq: seedLength,
-          operationId: captured.invocation.operationId,
-          manifestDigest: bootstrapManifest(stage, captured.seed.records),
-          dependencyClosureDigest: options.closure,
-          seedLength,
-          ...(stage.initial ? { initialInputId: stage.initial.inputId, initialStartedAt: stage.initial.startedAt, initialExpiresAt: stage.initial.expiresAt } : {}),
-        }
-        const entries = [
-          ...captured.seed.records.map(event => ({ ...event })),
-          completion as unknown as SessionEvent,
-          ...(initial ? [{ ...initial, seq: seedLength + 1 } as SessionEvent] : []),
-        ]
-        const parent = captured.lineage.parentSession
-        const intentId = `child:${captured.invocation.operationId}`
-        let parentIntent = false
-        if (parent) {
-          parentIntent = await this.beginIntent(parent, intentId, { kind: 'child-birth', childId: id, requestDigest: captured.invocation.requestDigest }).then(() => true, () => false)
-        }
-        const log = await createCommitLog(logOptions(id), { header, entries })
-        await log.close()
-        if (parentIntent && parent) await this.endIntent(parent, intentId, 'committed').catch(() => {})
-        return { id, document: await this.openManagedDocument(id), receipt: receiptOf(captured, stage, options.closure, id, initial) }
+        const entries = birthEntries(captured, stage, options.closure, initial)
+        return inLegacyNamespace(id, async source => {
+          const existing = await open(id, 'read').then(async log => {
+            try {
+              if (log.view().deleted) throw new CommitLogConflictError(id)
+              return { header: log.header(), entries: log.view().entries.map(event => ({ ...event })) }
+            } finally { await log.close() }
+          }, error => { if (error instanceof CommitLogNotFoundError) return undefined; throw error })
+          if (captured.target.kind === 'existing-empty' && !existing) {
+            if (source && source.events.length !== 0) throw new CommitLogConflictError(id)
+            throw Object.assign(new Error('Commit bootstrap cannot replace an existing empty header; use a new target'), { code: 'COMMIT_EXISTING_EMPTY_UNSUPPORTED' })
+          }
+          if (existing) {
+            // Operation ids alone cannot certify replay: the original immutable
+            // header and acknowledged birth prefix must match the entire payload.
+            if (canonicalJsonData(existing.header) !== canonicalJsonData(header)
+              || canonicalJsonData(existing.entries.slice(0, entries.length)) !== canonicalJsonData(entries)) {
+              if (captured.target.kind === 'existing-empty' && existing.entries.length === 0) {
+                throw Object.assign(new Error('Commit bootstrap cannot replace an existing empty header; use a new target'), { code: 'COMMIT_EXISTING_EMPTY_UNSUPPORTED' })
+              }
+              throw new CommitLogConflictError(id)
+            }
+            await initializeTask(id)
+            const document=await this.openManagedDocument(id)
+            return { id, document, receipt: receiptOf(captured, stage, id, existing.entries, originalManagedDocumentOwner(document,ownershipPorts.ownership)) }
+          }
+          await assertNewTarget(id, source)
+          const parent = captured.lineage.parentSession
+          const intentId = `child:${captured.invocation.operationId}`
+          let parentIntent = false
+          if (parent) {
+            parentIntent = await this.beginIntent(parent, intentId, { kind: 'child-birth', childId: id, requestDigest: captured.invocation.requestDigest }).then(() => true, () => false)
+          }
+          const log = await createCommitLog(logOptions(id), { header, entries })
+          await log.close()
+          if (parentIntent && parent) await this.endIntent(parent, intentId, 'committed').catch(() => {})
+          await initializeTask(id)
+            const document=await this.openManagedDocument(id)
+          return { id, document, receipt: receiptOf(captured, stage, id, entries, originalManagedDocumentOwner(document,ownershipPorts.ownership)) }
+        })
       })
     },
     async bootstrapChildTargetWithCapture(request, guards, capture) {
@@ -367,6 +511,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       return this.createChildSession(payload, { closure: payload.seed.dependencyDigest }).then(
         ({ document, receipt }) => ({ kind: 'ready' as const, document, receipt }),
         (error) => {
+          if ((error as { code?: string } | null | undefined)?.code === 'COMMIT_EXISTING_EMPTY_UNSUPPORTED') return { kind: 'not-issued' as const, reason: 'unsupported' as const }
           if (error instanceof CommitLogConflictError) return { kind: 'refused' as const, reason: 'conflict' as const }
           throw error
         },
@@ -384,7 +529,10 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
         const childId = options.sessionId ?? randomSessionId()
         const header = { ...toHeader(parent.meta, childId, now), parentSession: parentId, seedLength: cut, ...options.meta, sessionId: childId } as unknown as Record<string, unknown>
         const digest = createHash('sha256').update(stringifyJsonData(parent.events.slice(0, cut)) ?? '[]').digest('hex')
-        const log = await createCommitLog(logOptions(childId), { header, entries: parent.events.slice(0, cut), ops: [{ kind: 'seed', parent: parentId, cut, digest }] })
+        const log = await inLegacyNamespace(childId, async source => {
+          await assertNewTarget(childId, source)
+          return createCommitLog(logOptions(childId), { header, entries: parent.events.slice(0, cut), ops: [{ kind: 'seed', parent: parentId, cut, digest }] })
+        })
         await log.close()
         return { id: childId }
       })
@@ -405,7 +553,6 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
         const held = owned.get(sessionId)
         if (held) return { session: build(held) }
         const log = await ensureWritable(sessionId)
-        if (ownedAdmissionClosed) { await log.close(); throw new CommitLogClosedError() }
         owned.set(sessionId, log)
         return { session: build(log) }
       })
@@ -430,10 +577,6 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
         let log = owned.get(sessionId)
         if (!log) {
           log = await ensureWritable(sessionId)
-          if (ownedAdmissionClosed) {
-            await log.close()
-            throw new CommitLogClosedError()
-          }
           owned.set(sessionId, log)
         }
         await pinSession(sessionId)
@@ -504,9 +647,10 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     withExistingSessionBindingObservation: observations.withExistingSessionBindingObservation,
     withSessionBindingObservation: observations.withSessionBindingObservation,
     async updateMeta(sessionId, patch) {
-      if (Object.hasOwn(patch, 'formatVersion') && patch.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error('cannot downgrade session format')
+      const captured = captureTaskSnapshot(patch) as Partial<SessionMeta>
+      if (Object.hasOwn(captured, 'formatVersion') && captured.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error('cannot downgrade session format')
       return withWrite(sessionId, async (log) => {
-        await log.append({ ops: [{ kind: 'meta', patch: patch as Readonly<Record<string, unknown>> }] })
+        await log.append({ ops: [{ kind: 'meta', patch: captured as Readonly<Record<string, unknown>> }] })
         return metaOf(log)
       })
     },
@@ -557,7 +701,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       return ownedOperation(async () => {
         if (owned.has(sessionId)) return
         const log = await ensureWritable(sessionId)
-        if (ownedAdmissionClosed) { await log.close(); throw new CommitLogClosedError() }
+
         owned.set(sessionId, log)
       })
     },
@@ -569,12 +713,8 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       owned.delete(sessionId)
     },
     close() {
-      if (closeFlight) return closeFlight
-      ownedAdmissionClosed = true
-      const flight = (async () => {
+      return admission.retire(async () => {
         const failures: unknown[] = []
-        const accepted = await Promise.allSettled([...ownedWork, ...writes])
-        for (const result of accepted) if (result.status === 'rejected' && !(result.reason instanceof CommitLogClosedError)) failures.push(result.reason)
         for (const id of [...pending.keys()]) {
           try { await this.flush(id) } catch (error) { failures.push(error) }
         }
@@ -592,11 +732,18 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
           if (managed.has(id)) continue // Failed document cleanup still owns this lease.
           try { await handle.close(); owned.delete(id) } catch (error) { failures.push(error) }
         }
+        const retainedDocuments = new Set([...managed.keys()].map(id => owned.get(id)))
+        for (const resource of [...openResources]) {
+          if (retainedDocuments.has(resource as CommitLog)) continue
+          try { await resource.close(); openResources.delete(resource) } catch (error) { failures.push(error) }
+        }
+        try { await options.legacy?.close?.() } catch (error) { failures.push(error) }
         if (failures.length) throw new AggregateError(failures, 'Commit coordinator close failed')
-      })()
-      closeFlight = flight
-      void flight.finally(() => { if (closeFlight === flight) closeFlight = undefined }).catch(() => {})
-      return flight
+      })
     },
   }
+  return admission.expose(continuation, new Set([
+    'sessionOfDocument', 'ownerOf', 'hasLiveOwnership', 'flush', 'closeManagedDocument',
+    'releaseOwnership', 'revokeManagedDocumentNewWork', 'close',
+  ]), new Set(['capabilities', 'enqueue', 'onDocumentDeleted']))
 }

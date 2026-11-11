@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { createHash } from "node:crypto"
 import { afterEach, expect, it } from "vitest"
 import type { PersistenceBackend } from "@i-harness/session-persistence"
-import { createSessionCoordinator as createCoreCoordinator } from "@i-harness/session-persistence"
+import { createReadOnlySessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "../src/index.ts"
 import { createSessionCoordinator } from "./helpers/composed.ts"
 const roots: string[] = []
@@ -69,8 +69,8 @@ it("withholds destructive capability for custom read-only backends", async () =>
   // built on. The JSONL backend always has it (and its identity guard rejects
   // post-construction edits), so a backend that never had it is the real probe.
   const readOnly = { id: "readonly", lockRoot: root, async putDocument() {}, async getDocument() {} } as unknown as PersistenceBackend
-  const coordinator = createCoreCoordinator(readOnly)
-  expect(coordinator.deleteOwnedSession).toBeUndefined()
+  const coordinator = createReadOnlySessionCoordinator(readOnly)
+  expect('deleteOwnedSession' in coordinator).toBe(false)
   await coordinator.close()
 })
 it.runIf(process.platform === "win32")("refuses deletion while another coordinator owns the actual session lease", async () => {

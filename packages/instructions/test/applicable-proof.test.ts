@@ -9,7 +9,23 @@ import { fixture } from './helpers/instruction-fixture.ts'
 import { createInstructionService } from '../src/service.ts'
 import type { InstructionObservationEvent, InstructionWatchInterest, InstructionObservationLease } from '../src/contracts.ts'
 
-it('publishes global uncertainty once when same-interest mapping fails after a scoped remap', async () => {
+async function probeFileSymlink() {
+  const probe = await temporary()
+  try {
+    const target = join(probe.root, 'target'), link = join(probe.root, 'link')
+    await writeFile(target, 'owned capability probe')
+    await symlink(target, link, 'file')
+    expect(await readFile(link, 'utf8')).toBe('owned capability probe')
+    return { available: true as const }
+  } catch (error) {
+    if (process.platform !== 'win32' || (error as NodeJS.ErrnoException).code !== 'EPERM') throw error
+    return { available: false as const, reason: 'Windows file symlink privilege is unavailable (actual owned-file probe: EPERM)' }
+  } finally { await probe.remove() }
+}
+const fileSymlink = await probeFileSymlink()
+
+it('publishes global uncertainty once when same-interest mapping fails after a scoped remap', async context => {
+  if (!fileSymlink.available) context.skip(fileSymlink.reason)
   const f = await fixture(), outside = await temporary(), watch = new ControlledWatch(), owner = createInstructionObservationOwner(watch)
   await f.dir('a'); await f.dir('b'); await f.write('a/AGENTS.md', 'a'); const bPath = await f.write('b/AGENTS.md', 'b')
   const outsideFile = join(outside.root, 'AGENTS.md'); await writeFile(outsideFile, 'outside')
@@ -40,7 +56,8 @@ it('publishes global uncertainty once when same-interest mapping fails after a s
   } finally { await service.close(); await owner.close(); await watch.close(); await f.cleanup(); await outside.remove() }
 })
 
-for (const destination of ['inside', 'outside'] as const) it(`revokes an existing target proof after canonical retarget ${destination}`, async () => {
+for (const destination of ['inside', 'outside'] as const) it(`revokes an existing target proof after canonical retarget ${destination}`, async context => {
+  if (!fileSymlink.available) context.skip(fileSymlink.reason)
   const f = await fixture(), outside = await temporary()
   try {
     await f.write('actual', 'inside'); await f.write('alternate', 'alternate'); await writeFile(join(outside.root, 'actual'), 'outside')

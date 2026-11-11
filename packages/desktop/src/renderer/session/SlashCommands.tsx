@@ -74,7 +74,7 @@ export const SlashCommands = forwardRef<PickerKeyboard, {
 
   const builtins: Suggestion[] = [
     ...(showCompact ? [{ name: "compact", description: t("壓縮目前會話上下文") }] : []),
-    ...(workflows ? [{ name: "goal", description: t("目標與計畫") }, { name: "team", description: t("代理團隊") }, { name: "jobs", description: t("背景工作") }, { name: "reviews", description: t("代審") }] : []),
+    ...(workflows ? [{ name: "goal", description: t("目標與計畫") }, { name: "jobs", description: t("背景工作") }, { name: "reviews", description: t("代審") }] : []),
     ...(settings ? [{ name: "settings", description: t("設定") }] : []),
   ].map(row => ({ ...row, kind: "command", source: "builtin" }))
   const term = query.toLocaleLowerCase()

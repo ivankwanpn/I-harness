@@ -1,1 +1,0 @@
-{"extends":"./tsconfig.json","include":["test/private-team-root-causal.test.ts","test/private-team-root-inflight-stop.test.ts"]}

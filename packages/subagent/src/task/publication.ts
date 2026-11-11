@@ -1,22 +1,9 @@
+import { validTaskObservation } from '@i-harness/session-persistence/internal/task-state'
+export { validTaskObservation, validTaskResultPublication } from '@i-harness/session-persistence/internal/task-state'
 import type { SessionView } from '@i-harness/core-session'
-import type { TaskRecord, TaskOutcome, TaskStatus, TaskSavedObservation } from './types.ts'
-import { retainedResultWitness,retainedTaskResultWitness, validPublicationDescriptor, validSavedObservation } from '../result-publication.ts'
+import type { TaskRecord } from './types.ts'
+import { retainedResultWitness,retainedTaskResultWitness } from '../result-publication.ts'
 import {readManagedTaskResult,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
-
-/** Task rows persist their own status/outcome domain. Reusing the state/job
- * observation schema would reject an owner's own legally saved current-format
- * document on its next cold restore. */
-const taskStatuses: readonly TaskStatus[] = ['accepted', 'running', 'completed', 'error', 'cancelled', 'recovery-required']
-const taskOutcomes: readonly TaskOutcome[] = ['completed', 'error', 'cancelled', 'recovery-required']
-
-export function validTaskObservation(saved: unknown): saved is TaskSavedObservation {
-  if (saved && typeof saved === 'object' && Object.hasOwn(saved, 'outcome')) return validSavedObservation(saved, taskStatuses, taskOutcomes)
-  return validSavedObservation(saved, ['accepted', 'running'])
-}
-
-export function validTaskResultPublication(row: object): boolean {
-  return validPublicationDescriptor(row, validTaskObservation)
-}
 
 /** Derived cold qualification over the saved observation. No new producer,
  * completion fact, notification or execution source is created here. */

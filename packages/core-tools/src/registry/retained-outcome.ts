@@ -105,10 +105,15 @@ export function beginRetainedDispatch(prepared: PreparedCall) {
     dispatch.references.delete(fact)
   } })
   const body = register()
-  const bodyValue=dispatch.sources[0]!
+  let bodyValue=dispatch.sources[0]!
   const finish = () => { dispatch.open = false; delete prepared.exec.retainOutcome; delete prepared.exec.retainResultReference }
   return {
     body,
+    nextBody() {
+      const next = register()
+      bodyValue = dispatch.sources.at(-1)!
+      return next
+    },
     success() { finish(); dispatches.delete(prepared.exec); for (const source of dispatch.sources) { source.output = undefined; source.state = 'consumed' } },
     failure(error: unknown) {
       finish()

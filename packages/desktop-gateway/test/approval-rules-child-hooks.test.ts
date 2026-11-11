@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { createHash } from "node:crypto"
 import { expect, it, vi } from "vitest"
 import type { ModelClient } from "../../llm-seam/src/index.ts"
-import { createSessionService } from "@i-harness/session-executor"
+import { createSessionService, createUnmanagedTaskChildHost } from "@i-harness/session-executor"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createHookTrustStore } from "@i-harness/hooks"
@@ -13,7 +13,7 @@ import { createApprovalRulesAdapter } from "../src/approval-rules.ts"
 import { approvalPolicyIdentity } from "../src/approval-policy-identity.ts"
 import { pluginExtensions, mountedHookAuthority } from "../src/plugin-mount.ts"
 
-async function childHookFixture(spawnName: "spawn_agent" | "spawn_teammate", change?: "script" | "config" | "grant" | "malformed" | "uninstalled", format: "claude" | "native" = "claude") {
+async function childHookFixture(spawnName: "spawn_agent", change?: "script" | "config" | "grant" | "malformed" | "uninstalled", format: "claude" | "native" = "claude") {
   const root = await mkdtemp(join(tmpdir(), "ih-child-hook-authority-"))
   const configDir = join(root, "config"), pluginRoot = join(configDir, "plugins", "fixture")
   const hookPath = join(pluginRoot, "hooks", "hooks.json")
@@ -34,18 +34,21 @@ async function childHookFixture(spawnName: "spawn_agent" | "spawn_teammate", cha
   const inputs = { skillDirs: [], mcpServerConfigs: {}, commandDescriptors: [], agentDescriptors: [], hookConfigs: [hookPath] }
   const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
   await coordinator.create({ sessionId: "lead" })
-  const parent: ModelClient = controlledModel(request => ({ async *stream() { yield { type: "text/chunk", text: "Received" }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request))
+  let parentRounds = 0
+  const parent: ModelClient = controlledModel(request => ({ async *stream() {
+    if (++parentRounds === 1) yield {type:'tool_call',call:{name:spawnName,args:{task_name:'helper',agent_type:'explore',message:'Read the fixture',fork_turns:'none',background:true}}}
+    else yield {type:'text/chunk',text:'Received'}
+    yield {type:'end'}
+  } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   let rounds = 0
   const child: ModelClient = controlledModel(request => ({ async *stream() {
     if (++rounds === 1) yield { type: "tool_call", call: { id: "ordinary-read", name: "read", args: { path: "fixture.txt" } } }
-    else if (rounds === 2 && !change) yield { type: "tool_call", call: { id: "wrapper-read", name: "code_exec", args: { code: spawnName === "spawn_teammate"
-      ? 'const file = await tools.read({path:"fixture.txt"});text(file.content);const members = await tools.list_members({});text(members.members.map(m=>m.name));const tasks = await tools.team_task_list({});text(tasks.tasks)'
-      : 'const file = await tools.read({path:"fixture.txt"});text(file.content)' } } }
+    else if (rounds === 2 && !change) yield { type: "tool_call", call: { id: "wrapper-read", name: "code_exec", args: { code: 'const file = await tools.read({path:"fixture.txt"});text(file.content)' } } }
     else yield { type: "text/chunk", text: "Child completed" }
     yield { type: "end" }
   } } as import('@i-harness/llm-seam').ModelClient).stream(request))
-  const service = createSessionService({ workspace: root, model: parent, sandbox: "read-only", approveAll: true, coordinator,
-    team: {}, concurrentSessionTeams: true, codeMode: { mode: "mixed" },
+  const service = createSessionService({ workspace: root, model: parent, sandbox: "read-only", approveAll: true, coordinator, prepareTaskChild:createUnmanagedTaskChildHost({coordinator,policy:'unmanaged'}),
+    codeMode: { mode: "mixed" },
     extensionsFor: async () => pluginExtensions(inputs, configDir, "lead", () => {}),
     roleSelectionFor: () => ({ provider: "local", model: "fixture" }), allowSubagentModelSelection: true,
     resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }),
@@ -72,10 +75,8 @@ async function childHookFixture(spawnName: "spawn_agent" | "spawn_teammate", cha
       if (call.name === "read" && call.exec.sessionId !== "lead") { arrived.resolve(); await release.promise }
       return next()
     })
-    const spawn = await assembly.tools.prepare({ name: spawnName, args: spawnName === "spawn_agent"
-      ? { task_name: "helper", agent_type: "explore", message: "Read the fixture", fork_turns: "none" }
-      : { name: "helper", description: "Read fixture", prompt: "Read the fixture", context: "fresh" } }, undefined, { sessionId: "lead" })
-    await assembly.tools.dispatch(spawn)
+    const run=service.submit('lead','Create the hook fixture subagent',new AbortController().signal)
+    void run.catch(()=>{})
     if (change) {
       await arrived.promise
       if (change === "script") await writeFile(scriptPath, "changed artifact")
@@ -85,7 +86,8 @@ async function childHookFixture(spawnName: "spawn_agent" | "spawn_teammate", cha
       if (change === "uninstalled") await rm(pluginRoot, { recursive: true, force: true })
       release.resolve()
     }
-    await vi.waitFor(() => expect(assembly.subagentState().jobs.every(job => job.status !== "running")).toBe(true))
+    await run
+    await vi.waitFor(() => expect(assembly.subagentState().jobs.every(job => job.status !== "running")).toBe(true), {timeout:10000})
     expect(observed).not.toEqual([])
     expect(observed.every(row => row.ownedCaller && row.bindingValid)).toBe(true)
     if (!change) expect(observed.every(row => row.policyAvailable), "all real caller/binding predicates passed; the Desktop policy must cover mounted Claude hooks").toBe(true)
@@ -97,23 +99,26 @@ async function childHookFixture(spawnName: "spawn_agent" | "spawn_teammate", cha
       expect(JSON.stringify({ events: snapshot.session.events, entry, jobs: assembly.subagentState().jobs })).toContain("prepared approval authority or policy changed before dispatch")
       return
     }
-    expect(results.find(event => event.callId === "ordinary-read")).toMatchObject({ output: { content: "Owned plugin fixture" } })
+    expect(results.find(event => event.callId === "ordinary-read")).toMatchObject({ envelope: { execution: { outcome: "succeeded", dispatch: "dispatched" }, retention: { kind: "inline", value: { content: "Owned plugin fixture" } } } })
     expect(results.find(event => event.callId === "wrapper-read")).not.toHaveProperty("isError")
-    expect(JSON.stringify(results.find(event => event.callId === "wrapper-read")?.output)).toContain("Owned plugin fixture")
-    if (spawnName === "spawn_teammate") expect(JSON.stringify(results.find(event => event.callId === "wrapper-read")?.output)).toContain("helper")
+    expect(JSON.stringify(results.find(event => event.callId === "wrapper-read")?.envelope?.retention)).toContain("Owned plugin fixture")
     expect(results.some(event => event.isError)).toBe(false)
+    expect(results.every(event=>event.envelope?.execution.outcome==='succeeded')).toBe(true)
   } finally {
     release.resolve()
     await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true })
   }
 }
 
-it.each(["spawn_agent", "spawn_teammate"] as const)("runs real %s ordinary and Code Mode tools through Desktop authority with a Claude startup plugin", async spawnName => { await childHookFixture(spawnName) })
+// Genuine persisted Task creation and joined child turns take about 9s on native Windows.
+const nativeChildTimeout = 30000
 
-it.each(["spawn_agent", "spawn_teammate"] as const)("runs real %s tools through the same normalized native hook authority", async spawnName => { await childHookFixture(spawnName, undefined, "native") })
+it.each(["spawn_agent"] as const)("runs real %s ordinary and Code Mode tools through Desktop authority with a Claude startup plugin", async spawnName => { await childHookFixture(spawnName) }, nativeChildTimeout)
+
+it.each(["spawn_agent"] as const)("runs real %s tools through the same normalized native hook authority", async spawnName => { await childHookFixture(spawnName, undefined, "native") }, nativeChildTimeout)
 
 it.each(["script", "config", "grant", "malformed", "uninstalled"] as const)("refuses real child dispatch after Claude plugin %s authority changes", async change => {
-  await childHookFixture("spawn_teammate", change)
-})
+  await childHookFixture("spawn_agent", change)
+}, nativeChildTimeout)
 
-it("refuses a real child after its normalized native hook artifact changes", async () => { await childHookFixture("spawn_teammate", "script", "native") })
+it("refuses a real child after its normalized native hook artifact changes", async () => { await childHookFixture("spawn_agent", "script", "native") }, nativeChildTimeout)

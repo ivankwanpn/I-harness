@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { SessionLockConflictError } from '@i-harness/fs-lock'
 import { CURRENT_FORMAT_VERSION, EMPTY_SEMANTIC_DEPENDENCY_DIGEST, append, createSession, exportConversationSeed } from '@i-harness/core-session'
 import { compileSemanticSeed } from '../src/semantic-seed.ts'
+import type { LegacySession, LegacySessionStore } from '../src/commit/legacy.ts'
 import { createCommitCoordinator } from '../src/commit/coordinator.ts'
 import { CommitLogNotFoundError } from '@i-harness/session-commit-log'
 
@@ -20,18 +21,25 @@ async function setup() {
 
 function legacyStore(events: Array<Record<string, unknown>>, ids = ['old']) {
   let reads = 0
-  return {
-    get reads() { return reads },
-    store: {
-      async read(id: string) {
-        reads++
-        if (!ids.includes(id)) throw new Error('missing')
-        return { version: CURRENT_FORMAT_VERSION, events: events.map((event, seq) => ({ ...event, seq })) as never[], meta: { sessionId: id, createdAt: 'c', formatVersion: CURRENT_FORMAT_VERSION } }
-      },
-      async list() { return ids },
+  // This fixture adapter owns immutable input. Unlike a raw filesystem read
+  // port, no concurrent writer can change it during publication.
+  const records = events.map((event, seq) => Object.freeze({ ...event, seq }))
+  const names = Object.freeze([...ids])
+  const store: LegacySessionStore = {
+    async read(id) {
+      reads++
+      if (!names.includes(id)) throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+      return { version: CURRENT_FORMAT_VERSION, events: records.map(event => ({ ...event })) as never[], meta: { sessionId: id, createdAt: 'c', formatVersion: CURRENT_FORMAT_VERSION } }
+    },
+    async list() { return [...names] },
+    async withDocuments<T>(_keys: readonly string[], work: () => Promise<T>): Promise<T> { return work() },
+    async migrate<T>(id: string, publish: (source: LegacySession | undefined) => Promise<T>): Promise<T> {
+      return publish(names.includes(id) ? await store.read(id) : undefined)
     },
   }
+  return { get reads() { return reads }, store }
 }
+
 afterEach(async () => {
   for (const coordinator of coordinators.splice(0)) await coordinator.close().catch(() => {})
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
@@ -419,7 +427,7 @@ it('captures owned append events before their queued sequence derivation', async
   expect(session.events).toHaveLength(1)
   expect(session.events[0]).toMatchObject({ text: 'original', seq: 0 })
 })
-it('joins late owned acquisition during close while preserving ordinary post-close writes', async () => {
+it('joins accepted owned acquisition, then refuses every fresh public operation after close', async () => {
   const { root, coordinator } = await setup()
   await coordinator.create({ sessionId: 'late' })
   const { openCommitLog } = await import('@i-harness/session-commit-log')
@@ -429,13 +437,14 @@ it('joins late owned acquisition during close while preserving ordinary post-clo
   const closing = coordinator.close().then(() => { settled = true })
   await Promise.resolve(); expect(settled).toBe(false)
   await blocker.close()
-  await expect(loading).rejects.toMatchObject({ code: 'COMMIT_LOG_CLOSED' })
+  await expect(loading).resolves.toMatchObject({ session: { events: [] } })
   await closing
   expect(coordinator.ownerOf('late')).toBe(false)
   await expect(coordinator.loadOwned('late')).rejects.toMatchObject({ code: 'COMMIT_LOG_CLOSED' })
   await expect(coordinator.openManagedDocument('late')).rejects.toMatchObject({ code: 'COMMIT_LOG_CLOSED' })
-  await coordinator.updateMeta('late', { title: 'ordinary write remains supported' })
-  coordinator.enqueue('late', [{ type: 'user/message', text: 'after close' }]); await coordinator.flush('late')
-  expect((await coordinator.profile('late')).meta.title).toBe('ordinary write remains supported')
+  await expect(coordinator.updateMeta('late', { title: 'must not be written' })).rejects.toMatchObject({ code: 'COMMIT_LOG_CLOSED' })
+  expect(() => coordinator.enqueue('late', [{ type: 'user/message', text: 'after close' }])).toThrow()
+  await coordinator.flush('late')
+  await expect(coordinator.profile('late')).rejects.toMatchObject({ code: 'COMMIT_LOG_CLOSED' })
   expect(coordinator.ownerOf('late')).toBe(false)
 })

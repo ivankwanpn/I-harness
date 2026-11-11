@@ -9,13 +9,11 @@
 
 export type BirthFailureOutcome = { kind: string; reason?: unknown }
 
-const subject = (label: "child" | "Team child") => (label === "child" ? "Original child birth" : "Original Team child birth")
-
 /** Build the failure for a non-ready birth outcome, preserving the uncertain cases only. */
-export function birthFailure(label: "child" | "Team child", outcome: BirthFailureOutcome): Error {
+export function birthFailure(outcome: BirthFailureOutcome): Error {
   const detail = `${outcome.kind}${outcome.reason !== undefined ? `: ${String(outcome.reason)}` : ""}`
   if (outcome.kind === "blocked") {
-    return Object.assign(new Error(`${subject(label)} requires recovery (${detail})`), { code: "FACT_RECOVERY_REQUIRED" as const, outcome })
+    return Object.assign(new Error(`Original child birth requires recovery (${detail})`), { code: "FACT_RECOVERY_REQUIRED" as const, outcome })
   }
-  return Object.assign(new Error(`${subject(label)} was refused (${detail})`), { code: "FACT_BIRTH_REFUSED" as const, outcome })
+  return Object.assign(new Error(`Original child birth was refused (${detail})`), { code: "FACT_BIRTH_REFUSED" as const, outcome })
 }

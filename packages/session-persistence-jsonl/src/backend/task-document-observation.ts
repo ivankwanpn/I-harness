@@ -4,8 +4,7 @@ import type { FileHandle } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { isHeldTaskDocumentScope, TASK_DOCUMENT_MAX_BYTES, type HeldTaskDocumentScope, type RawTaskObservation, type TaskDocumentWitness, type TaskDocumentAck, type Confirmation, type TaskDocumentBackendSession } from '@i-harness/session-persistence'
 import { createOwnedDocumentWrite } from './document-write.ts'
-import { constructOriginalTaskWrite,isHeldTeamBirthScope,type HeldTeamBirthScope } from '@i-harness/session-persistence/internal/task-document-operations'
-import {parseTeamBirthBinding} from '../../../session-persistence/src/coordinator/team-birth-binding.ts'
+import { constructOriginalTaskWrite } from '@i-harness/session-persistence/internal/task-document-operations'
 
 const LIMIT = TASK_DOCUMENT_MAX_BYTES
 const CHUNK = 64 * 1024
@@ -13,8 +12,8 @@ type Opener = (path: string, flags: 'r' | 'r+') => Promise<FileHandle>
 type Resource = { handle: FileHandle; close: FileHandle['close']; failed: boolean; cause?: unknown }
 
 /** Private raw observation owner. Confirmation and Documents admission are separate future owners. */
-export function createTaskDocumentObservation(root: string, path: string, scope: HeldTaskDocumentScope|HeldTeamBirthScope, opener: Opener = open, checkAvailable: () => Promise<void> = async () => {}, nativeStage?: object) {
-  if (!isHeldTaskDocumentScope(scope)&&!isHeldTeamBirthScope(scope)) throw new TypeError('Invalid original document scope')
+export function createTaskDocumentObservation(root: string, path: string, scope: HeldTaskDocumentScope, opener: Opener = open, checkAvailable: () => Promise<void> = async () => {}, nativeStage?: object) {
+  if (!isHeldTaskDocumentScope(scope)) throw new TypeError('Invalid original document scope')
   const assert = scope.assertActive
   Reflect.apply(assert, scope, [])
   const rootPath = resolve(root), filePath = resolve(path), expected = resolve(rootPath, `${scope.key}.doc.jsonl`)
@@ -34,7 +33,7 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
   let absentRoot: BigIntStats | undefined
   let ownedWrite: ReturnType<typeof createOwnedDocumentWrite> | undefined
   function guard() {
-    if ((!isHeldTaskDocumentScope(scope)&&!isHeldTeamBirthScope(scope)) || scope.assertActive !== assert) throw new TypeError('Changed original document scope')
+    if ((!isHeldTaskDocumentScope(scope)) || scope.assertActive !== assert) throw new TypeError('Changed original document scope')
     Reflect.apply(assert, scope, [])
   }
   function confirmationInput(witness: RawTaskObservation['witness']): Original {
@@ -102,7 +101,7 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
       const finalHandleIdentity = await handle.stat({ bigint: true }); guard()
       const rootAfter = await directories()
       if (!same(before, afterHandle) || !same(before, afterPath) || !sameDirectory(rootBefore, rootAfter) || finalIdentity.dev !== precise.dev || finalIdentity.ino !== precise.ino || finalHandleIdentity.dev !== precise.dev || finalHandleIdentity.ino !== precise.ino) throw new Error('Changed task document')
-      const value: unknown = isHeldTeamBirthScope(scope)?parseTeamBirthBinding(bytes):JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+      const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
       freeze(value)
       const witness = Object.freeze({}) as RawTaskObservation['witness']
       body = { ok: true, value: Object.freeze({ kind: 'present' as const, value, witness }), original: { witness, bytes, file: before, root: rootBefore, identity: { dev: precise.dev, ino: precise.ino } } }
@@ -206,7 +205,7 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
       if (this !== session || ownedWrite || confirming || resources.size || !absentRoot) throw new TypeError('Invalid task initialization stage')
       guard(); const expectedRoot = absentRoot
       const construct=()=>createOwnedDocumentWrite({ path: filePath, bytes, guard, async verifyRoot() { const root = await directories(); if (!sameDirectory(expectedRoot, root)) throw new Error('Changed task document root'); await checkAvailable(); guard() } })
-      ownedWrite=nativeStage&&isHeldTeamBirthScope(scope)?constructOriginalTaskWrite(nativeStage,scope,checkAvailable,opener,filePath,bytes,construct):construct()
+      ownedWrite=construct()
       return ownedWrite.handle
     },
     settleResources(): Promise<void> {

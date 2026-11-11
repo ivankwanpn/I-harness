@@ -1,5 +1,6 @@
+import { onExecutionCascade } from '@i-harness/core-plugin'
 import { markCascadeRedispatch, type Plugin, type PluginContext } from "@i-harness/core-plugin"
-import type { ToolExec } from "@i-harness/core-tools"
+import type { ToolDispatchMetadata } from "@i-harness/core-tools"
 import { TOOL_TIMEOUT } from "@i-harness/guard-timeout"
 
 export interface RetryConfig {
@@ -73,9 +74,9 @@ export function createRetryGuard(_ctx: PluginContext, config?: RetryConfig): Plu
       // this guard must be mounted BEFORE createTimeoutGuard to see the
       // substituted TOOL_TIMEOUT raw value (the registry wraps it in
       // { name, output } only after the cascade returns). On timeout it
-      // RE-INVOKES the cascade (next() is one-shot) with a reconstructed final.
-      ctx.onCascade("tools/execute", async (dispatch, next) => {
-        const d = dispatch as { name: string; args: unknown; exec: ToolExec; tool: { execute(args: unknown, exec: ToolExec): Promise<unknown> } }
+      // asks the original dispatcher for a fresh attempt (next() is one-shot).
+      onExecutionCascade(ctx, "tools/execute", async (dispatch, next) => {
+        const d = dispatch as ToolDispatchMetadata
         if (retrying.has(d)) return next() // nested re-dispatch frame: delegate, no retry loop
         retrying.add(d)
         try {
@@ -94,16 +95,17 @@ export function createRetryGuard(_ctx: PluginContext, config?: RetryConfig): Plu
             // the sleep so an aborted step never re-dispatches the tool.
             if (upstream?.aborted) break
             attempt += 1
-            // Deliberate seam-bypass: this re-invokes ONLY the cascade
-            // handlers — it skips registry.execute's pre-execute hooks, the
-            // monotonic guards, and post-execute. Approval was already granted
-            // for the original dispatch and only the FINAL (post-retry) result
-            // should reach post-execute, so each attempt must not re-run them.
+            // The original dispatcher joins native cleanup, renews the attempt,
+            // and revalidates binding, policy and instructions. Logical approval
+            // and finalization remain owned by the original call.
             // M51 B1: mark the re-dispatch frame so once-per-logical-call
             // cascade handlers (hooks pre/post-tool) skip their own run — the
             // frame that already ran the pair owns the single one.
             markCascadeRedispatch(d)
-            result = await ctx.cascade("tools/execute", d, () => d.tool.execute(d.args, d.exec))
+            if (!d.retryAttempt) break
+            const retry = await d.retryAttempt()
+            if (retry.kind === 'unavailable') break
+            result = retry.value
           }
           return result
         } finally {

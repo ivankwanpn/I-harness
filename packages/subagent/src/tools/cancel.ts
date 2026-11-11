@@ -1,5 +1,6 @@
 import type { Tool } from "@i-harness/core-tools"
 import type { SubagentToolDeps } from "./types.ts"
+import {childFactOwner} from '../child/document.ts'
 
 export function createInterruptTool(deps: SubagentToolDeps): Tool {
   const interruptTool: Tool<{ target: string }, { previous_status: string }> = {
@@ -10,6 +11,7 @@ export function createInterruptTool(deps: SubagentToolDeps): Tool {
     execute: async (args) => {
       const entry = deps.table.get(args.target)
       if (!entry) throw new Error(`unknown subagent: ${args.target}`)
+      await childFactOwner(entry,deps.childSessions?.coordinator)
       const previous = entry.status
       entry.controller.abort()
       await entry.cancel?.("Subagent interrupted")
@@ -22,8 +24,8 @@ export function createInterruptTool(deps: SubagentToolDeps): Tool {
 export function createCloseTool(deps: SubagentToolDeps): Tool {
   const closeTool: Tool<{ target: string }, { previous_status: string }> = {
     name: "close_agent",
-    description: "Close a subagent or teammate by its exact returned management path: root/<task> from spawn_agent or lead/<name> from spawn_teammate/list_members. Aborts and drains execution, unmounts its scope, and removes the runtime; its job result remains available. Its outstanding task terminalizes as cancelled.",
-    inputSchema: { type: "object", properties: { target: { type: "string", description: "Exact agent path from spawn_agent, list_agents, or member.agentPath from spawn_teammate/list_members. Preserve its root/ or lead/ prefix." } }, required: ["target"] },
+    description: "Close a subagent by its exact returned management path. Aborts and drains execution, unmounts its scope, and removes the runtime; its job result remains available. Its outstanding task terminalizes as cancelled.",
+    inputSchema: { type: "object", properties: { target: { type: "string", description: "Exact agent path from spawn_agent or list_agents." } }, required: ["target"] },
     isReadOnly: false,
     execute: async (args) => {
       const entry = deps.table.get(args.target)
@@ -36,6 +38,7 @@ export function createCloseTool(deps: SubagentToolDeps): Tool {
         throw new Error(`unknown subagent: ${args.target}`)
       }
       const previous = entry.status
+      await childFactOwner(entry,deps.childSessions?.coordinator)
       deps.table.update(entry.path, entry, { closing: true })
       entry.controller.abort()
       // M26-D3: a closed chat no longer has an outstanding settlement — terminalize

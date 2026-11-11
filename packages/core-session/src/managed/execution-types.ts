@@ -103,18 +103,6 @@ export interface PreparedExecutionRequest {
  assertCurrent():void
  settle():Promise<void>
 }
-export type ManagedTeamLedgerEvent=Extract<SessionEventView,{type:'team/member'|'team/task'|'team/message/queued'|'team/message/delivered'}>
-export interface OriginalManagedTeamParent {
- readonly domain:ManagedExecutionDomain
- readonly ready:Promise<void>
- readonly ledger:readonly ManagedTeamLedgerEvent[]
- assertInitialPrefix():void
- authorizeTeamDeliveryOpen(source:object,capture:object,outcome:import('./types.ts').FactOutcome):void
- assertTeamDeliveryCut():void
- hasInbox(messageId:string):boolean
- assertCurrent():void
- close():Promise<void>
-}
 export interface OriginalManagedReviewerContext {
  readonly identity:ManagedExecutionIdentity
  readonly ready:Promise<void>

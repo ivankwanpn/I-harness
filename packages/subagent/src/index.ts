@@ -1,3 +1,4 @@
+import {recoverCanonicalTaskPublications,closeTaskOwnerAfterAcceptedWork,canonicalTaskChildren,canonicalTaskChild} from './task/required-settlement.ts'
 import {managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
 import {forwardTableProjection} from './runtime-projection.ts'
 import { bindPreparedTaskLaunchLeaf, type OriginalTaskCaller } from '@i-harness/core-tools/internal/task-caller'
@@ -14,12 +15,10 @@ export { projectAgentTasks, projectAgentTaskDetail, projectStatus, projectWorkfl
 export type { AgentTaskDetail, AgentTaskGroup, AgentTaskStatus, AgentTaskView, SubagentTaskSource, TaskSourceStatus, WorkflowTaskRow } from "./projection.ts"
 export { createRoleRegistry, builtinRoles } from "./roles.ts"
 export type { PrepareTaskChild, TaskChildHostInput, TaskChildHostPreparation } from './child/task-host.ts'
-export {assertOriginalTeamChildHostRequest,assertOriginalColdTeamChildHostRequest,isOriginalColdTeamChildHostInput} from './child/task-host.ts'
 export {inspectTaskChildHistory,inspectTaskChildSource,inspectManagedTaskChildHistory,inspectManagedTaskChildSource,isManagedTaskChildHistory} from './child/task-history.ts'
 export type { SubagentRole, RoleRegistry, RoleCleanup } from "./roles.ts"
 export { createAgentTable } from "./agent-table.ts"
 export type { ChildStatus, ChildAgentEntry, AgentTable } from "./agent-table.ts"
-export { hasCommittedInitialInput } from './child/initial-input.ts'
 // W11: the runtime-context section naming sub-agents past the staleness
 // threshold. Its consumer is the assembly (`createSessionAssembly`), which
 // registers it under the "subagents" section name. The section's options type
@@ -48,7 +47,7 @@ export type { ParentInputAdmission, NotificationDrainOptions } from "./task-noti
 
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { ToolRegistry } from "@i-harness/core-tools"
-import { deliveryInputId, readDeliveries, type SessionView, type FactOwner } from "@i-harness/core-session"
+import { createSession, deliveryInputId, readDeliveries, type SessionView, type FactOwner } from "@i-harness/core-session"
 import { readOwnedDeliveryState } from '../../core-session/src/managed/view.ts'
 import { DeliverySourcesError } from './task-notification.ts'
 import type { ModelClient } from "@i-harness/llm-seam"
@@ -67,7 +66,7 @@ import type { RoleModelHost, RoleModelSelection, RoleModelState } from "./child.
 import { createAgentRegistry, type AgentRegistry } from "@i-harness/core-agent"
 import { emitRestoredJobTransitions, restoreState, snapshotState, wireSubagentPersistence } from "./persist.ts"
 import type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
-import { classifyRestoredTasks, createTaskRegistry, isSessionCancelledChain, restoreTaskDocument, type TaskRegistry } from "./task-protocol.ts"
+import { classifyRestoredTasks, createTaskRegistry, isSessionCancelledChain, restoreTaskDocument, type TaskRegistry, type TaskRecord } from "./task-protocol.ts"
 import { createNotificationDrain, type ParentInputAdmission } from "./task-notification.ts"
 import type { ReportPolicy } from "./report-policy.ts"
 import { subagentFactOwner } from './facts.ts'
@@ -76,10 +75,6 @@ import type { ManagedDocument } from '@i-harness/session-persistence'
 import { captureOwnedTaskContext } from './task/owned-context.ts'
 import { isColdBoundChild } from './task/cold-bindings.ts'
 import { createTaskStartupFacade } from './task/startup-facade.ts'
-import {createManagedTeamBirthFactory,createManagedColdTeamBirthFactory,isOriginalTeamChildEntry} from './child/team-birth.ts'
-import {associateOriginalTeamCleanup,readOriginalTeamCleanup,retainOriginalResidentTeamCleanup,bindOriginalTeamCleanupParent,createOriginalTeamCleanup,type OriginalTeamChildCleanup} from './team-cleanup.ts'
-import {isOriginalManagedTeamParentIdentity} from '@i-harness/core-session/internal/execution'
-export type {CommittedTeamChildBirth,TeamChildBirthAttempt} from './child/team-birth.ts'
 import {isManagedExecutionAttachment} from '../../session-persistence/src/execution-internal.ts'
 import {isManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 
@@ -136,9 +131,6 @@ export interface RegisterSubagentOptions extends RoleModelHost {
 }
 
 export interface RegisterSubagentResult {
-  retainTeamChildCleanup?(parent:import('@i-harness/core-session/internal/execution').OriginalManagedTeamParent,path:string,entry:ChildAgentEntry):OriginalTeamChildCleanup
-  reserveManagedTeamChild?(caller:import('@i-harness/core-tools/internal/team-caller').OriginalManagedTeamCaller,provisioning:import('@i-harness/core-session/internal/execution').OriginalTeamProvisioning):import('./child/team-birth.ts').TeamChildBirthAttempt
-  reserveManagedColdTeamChild?(owner:import('@i-harness/core-session/internal/execution').OriginalTeamProvisioningOwner,parent:import('@i-harness/core-session/internal/execution').OriginalManagedTeamParent,binding:import('../../session-persistence/src/team-child-recovery-internal.ts').OriginalTeamColdBinding,target:import('../../session-persistence/src/team-child-recovery-internal.ts').OriginalTeamTargetDiscovery):import('./child/team-birth.ts').TeamChildBirthAttempt
   /** Restored roles and original persistence are ready for catalog mounting. */
   catalogReady: Promise<void>
   /** Release the original restored-work barrier after the real model is bound. */
@@ -149,26 +141,14 @@ export interface RegisterSubagentResult {
   roles: RoleRegistry
   jobs: JobRegistry
   table: AgentTable
-  // M19 (Ruling 17): the live Agent instances registry — the team scheduler
-  // (agent-team) uses it to wake spawned child agents (followup re-drives).
-  // Additive: existing consumers destructure { roles, jobs, table } and are
-  // unaffected.
+  /** Live child instances used by serialized followups. */
   agents: AgentRegistry
-  // M23 (Minor 4): lazy resident rebuild closure over this mount's REAL
-  // SubagentToolDeps. registerSubagent encapsulates the deps object, so hosts
-  // (run.ts → mountAgentTeams) wire this into the agent-team deliver gate to
-  // fix the post-resume wakeup no-op without duplicating the deps shape.
+  /** Rebuild a child through this mount's original registry and lifecycle. */
   ensureResident: (entry: ChildAgentEntry, controller?: AbortController, executionCurrent?: () => boolean) => Promise<boolean>
   followupActivation?: import('./followup/drive.ts').FollowupDeps['activation']
   captureFollowupGeneration?: import('./followup/drive.ts').FollowupDeps['captureGeneration']
   followupGeneration: import('./followup/drive.ts').FollowupDeps['openGeneration']
-  // M24a (G1a/G4): resolves when the post-restore async steps complete — the
-  // G1a hooked-mirror rebuild (each restored child's durable log loaded into
-  // a live mirror session) followed by the G4 pending-inbox sweep. Hosts MUST
-  // await this BEFORE mounting agent teams (mountAgentTeams' recoverRoot
-  // delivers queued team messages to entry.session, which must be a live
-  // mirror by then) and before the main agent can touch the tools. Resolves
-  // immediately (no-op) when there is no restored state.
+  /** Owned child documents and permitted inbox recovery are ready. */
   ready: Promise<void>
   /** Wait for notification admissions and their queued task-document saves. */
   flushPersistence(): Promise<void>
@@ -270,6 +250,37 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // The original runtime containers are staged without observers. The public
   // facades route mutations through the task owner before reaching a producer.
   const stagedRuntime = { jobs, table, roles }
+  function deriveCanonicalTaskMirrors():void{
+    const known=canonicalTaskChildren(taskOwner)
+    const persistedJobs=new Map(stagedRuntime.jobs.listAll().map(job=>[job.id,job]))
+    const projectedJobs=new Set(persistedJobs.keys()),latest=new Map<string,Readonly<TaskRecord>>()
+    for(const task of known){
+      if(!task.childSessionId||!task.jobId)continue
+      latest.set(task.agentPath,task)
+      if(projectedJobs.has(task.jobId))continue
+      stagedRuntime.jobs.registerJob('root','subagent',task.description,task.jobId,task.timeStarted??task.timeCreated,undefined,{agentPath:task.agentPath,sessionId:task.childSessionId})
+      stagedRuntime.jobs.updateJob(task.jobId,{
+        status:task.outcome==='completed'?'completed':task.outcome==='cancelled'?'killed':'error',
+        output:task.outcome==='completed'?task.resultText??'':task.error??task.resultText??'',taskId:task.id,
+        ...(task.result?{result:task.result,publication:task.publication??'unqualified',savedObservation:{status:task.outcome==='completed'?'completed' as const:task.outcome==='cancelled'?'killed' as const:'error' as const,...(task.result.kind==='retained'?{execution:task.result.envelope.execution}:{})}}:{}),
+      })
+      projectedJobs.add(task.jobId)
+    }
+    for(const task of latest.values()){
+      if(stagedRuntime.table.get(task.agentPath))continue
+      const cached=persistedJobs.get(task.jobId!)
+      // An explicitly removed conversation remains removed. Its historical
+      // Task/result is still queryable; absence of a redundant cache is not
+      // the same as a recorded removal of this exact original child.
+      if(cached?.taskId===task.id&&cached.agentPath===task.agentPath&&cached.sessionId===task.childSessionId)continue
+      stagedRuntime.table.add(task.agentPath,{
+        path:task.agentPath,status:task.outcome==='completed'?'waiting':task.outcome==='cancelled'?'killed':'error',
+        session:createSession(),controller:new AbortController(),mailbox:[],taskId:task.id,jobId:task.jobId,sessionId:task.childSessionId,roleName:task.agent,
+        ...(task.resultText!==undefined?{finalText:task.resultText}:{}),...(task.error!==undefined?{error:task.error}:{}),
+        ...(task.result?{result:task.result}:{}),...(task.modelLabel!==undefined?{modelLabel:task.modelLabel}:{}),
+      })
+    }
+  }
   let mountedRuntime = stagedRuntime
   let runtimeWorkReady = !ownedTask
   let catalogWorkReady = !ownedTask
@@ -331,14 +342,6 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     table = guarded('table', table, ['add', 'update', 'remove'])
     roles = guarded('roles', roles, ['register', 'remove'])
   }
-  const makeTeamCleanup=(path:string,entry:ChildAgentEntry)=>createOriginalTeamCleanup(path,entry,stagedRuntime,()=>{try{assertRuntimeWork();return mountedRuntime}catch(error){const code=(error as {code?:unknown})?.code;if(runtimeRetiring||code==='FACT_RECOVERY_REQUIRED'||code==='FACT_CLOSED')return stagedRuntime;throw error}})
-  if(managed&&ownedTask)associateOriginalTeamCleanup(table,{
-    birth(path,entry){if(!isOriginalTeamChildEntry(entry,ctx,parentRegistry,path))throw TypeError('Original Team child birth required');return makeTeamCleanup(path,entry)},
-    resident(parent,path,entry){if(!isOriginalManagedTeamParentIdentity(managed.domain,parent))throw TypeError('Original Team parent required');assertRuntimeWork();parent.assertInitialPrefix();const name=path.startsWith('lead/')?path.slice(5):'';if(!name||name.includes('/'))throw TypeError('Original Team child path required');const member=parent.ledger.filter(event=>event.type==='team/member'&&event.member.name===name).at(-1);if(!member||member.type!=='team/member'||member.member.sessionId!==entry.sessionId||!entry.sessionId||!['active','provisioning'].includes(member.member.phase))throw TypeError('Original Team ledger child required');return makeTeamCleanup(path,entry)},
-  })
-  const retainTeamChildCleanup=managed&&ownedTask?(parent:import('@i-harness/core-session/internal/execution').OriginalManagedTeamParent,path:string,entry:ChildAgentEntry):OriginalTeamChildCleanup=>{if(!isOriginalManagedTeamParentIdentity(managed.domain,parent))throw TypeError('Original Team parent required');const port=readOriginalTeamCleanup(table,path,entry)??retainOriginalResidentTeamCleanup(table,parent,path,entry);return bindOriginalTeamCleanupParent(table,parent,path,entry,port)}:undefined
-  const teamBirthOptions=managed&&opts.persist&&opts.prepareTaskChild?{domain:managed.domain,execution:managed.execution,coordinator:opts.persist.coordinator,prepare:opts.prepareTaskChild,roles,model:opts,parentRegistry,parentModel:()=>{const value=modelAccessor?modelAccessor():parentModel;if(!value)throw TypeError('Original parent model unavailable');return value},assertOwnerCurrent:assertRuntimeWork,timeoutMs:opts.modelActionTimeoutMs,maxAttempts:opts.modelActionMaxAttempts}:undefined
-  const reserveManagedTeamChild=teamBirthOptions&&createManagedTeamBirthFactory(teamBirthOptions),reserveManagedColdTeamChild=teamBirthOptions&&createManagedColdTeamBirthFactory(teamBirthOptions)
   // M23 (Minor 4): the deps object is kept in a named variable so the
   // ensureResident closure below closes over the SAME (persist-wrapped)
   // registries the tools use.
@@ -429,9 +432,9 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // activated only after the host publishes its actual receiver lane.
   const notifDrain = createNotificationDrain({
     current:()=>!notificationsRetired&&(!opts.factOwner||managedExecutionStatus(opts.factOwner as ManagedDocument)!=='retired'),
-    reconcileSources: settleParentDeliverySources,
+    reconcileSources: async()=>{await settleParentDeliverySources();if(subagentDeps.notificationNamespace)await recoverCanonicalTaskPublications(tasks,subagentDeps.notificationNamespace)},
     reportPolicy: opts.reportPolicy,
-    tasks,
+    tasks:taskOwner,
     admit: opts.parentNotify,
     evidence(taskId) {
       // A live source stays registered until its own terminal AND task-save
@@ -467,12 +470,13 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     catalogReady = (async () => {
       await taskOwner.ready
       taskOwner.assertReady()
+      await taskOwner.qualifyRestoredResults()
+      await classifyRestoredTasks(taskOwner, opts.persist!.coordinator)
+      deriveCanonicalTaskMirrors()
       const wired = wireSubagentPersistence(stagedRuntime, { ...opts.persist!, factOwner: opts.persist!.factOwner ?? opts.factOwner })
       factPersistence = wired
       mountedRuntime = wired
       if (opts.restoredState) emitRestoredJobTransitions(opts.persist!, opts.restoredState, jobs, wired.observe)
-      await taskOwner.qualifyRestoredResults()
-      await classifyRestoredTasks(taskOwner, opts.persist!.coordinator)
       if(runtimeRetiring)throw activationRetired
       catalogWorkReady=true
     })()
@@ -497,7 +501,6 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     notificationsRetired = true
     runtimeRetiring = true
     if(!activated){activated=true;activation.reject(activationRetired)}
-    taskOwner.retireOwnedLoad()
     const owner = residentOwnerFor(subagentDeps)
     if (owner.inInvocation()) { owner.retire(); return refusedReentry() }
     if (disposeFlight) return disposeFlight
@@ -508,7 +511,12 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     owner.retire()
     // Release original consumer fences before any source/entry join can flush
     // a queued save behind them. The same flight retains read cleanup debt.
-    const taskClosing = taskOwner.closeOwnedLoad()
+    const acceptedNotifications=Promise.allSettled([...notificationDrains]).then(results=>{
+      const failures=results.flatMap(result=>result.status==='rejected'?[result.reason]:[])
+      if(failures.length)throw new AggregateError(failures,'Accepted Task notifications require recovery')
+    })
+    void acceptedNotifications.catch(()=>{})
+    const taskClosing = closeTaskOwnerAfterAcceptedWork(taskOwner,acceptedNotifications)
     void taskClosing.catch(() => {})
     const fenceEntries = () => { for (const entry of table.entries().values()) {
       if (!entryPhases.has(entry)) entryPhases.set(entry, { settled: false, disposed: false,
@@ -549,9 +557,6 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     return attempt.promise
   }
   return {
-    retainTeamChildCleanup,
-    reserveManagedTeamChild,
-    reserveManagedColdTeamChild,
     catalogReady,activateRestoredWork,
     async retainResults() {
       await ready
@@ -633,9 +638,16 @@ async function restoreTasksAndSweep(
 async function restoreMirrorsAndSweep(deps: SubagentToolDeps, table: AgentTable, beforeSweep?: () => void): Promise<void> {
   for (const entry of table.entries().values()) {
     if (!entry.sessionId || !deps.childSessions) continue
-    if (isColdBoundChild(deps.tasks, entry.sessionId, entry.taskId)) continue
+    const canonical=canonicalTaskChild(deps.tasks,entry.sessionId,entry.taskId)
+    if (isColdBoundChild(deps.tasks, entry.sessionId, entry.taskId)&&!canonical) continue
     try {
       const document = await deps.childSessions.coordinator.openManagedDocument(entry.sessionId)
+      if(document.view.header?.origin==='team')throw Error('Historical Team children are read-only')
+      if(canonical){
+        if(canonical.agentPath!==entry.path||!canonical.childBirth||!deps.childSessions.coordinator.inspectChildBootstrap)throw Error('Original completed Task child unavailable')
+        const inspected=await deps.childSessions.coordinator.inspectChildBootstrap(canonical.childBirth.request)
+        if(inspected.kind!=='ready'||canonicalTaskChild(deps.tasks,entry.sessionId,entry.taskId)!==canonical)throw Error('Original completed Task child changed')
+      }
       table.update(entry.path, entry, { session: document.view, factOwner: document })
     } catch {
       // G1a fail-visible: no silent empty-stub downgrade.

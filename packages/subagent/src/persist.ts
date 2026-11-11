@@ -1,4 +1,5 @@
-import {associateJobProjection,assertJobProjectionCurrent,waitJobProjectionCurrent,originalJobProjectionFor,captureJobProjection,associateTableProjection,captureTableProjection,persistProjection} from './runtime-projection.ts'
+import {isOriginalRequiredSpawnJob,isOriginalRequiredSpawnEntry} from './tools/source-run.ts'
+import {associateJobProjection,inheritOriginalJobProjection,inheritOriginalTableProjection,assertJobProjectionCurrent,waitJobProjectionCurrent,originalJobProjectionFor,captureJobProjection,associateTableProjection,captureTableProjection,persistProjection} from './runtime-projection.ts'
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { append, CURRENT_FORMAT_VERSION, createNondurableFactOwner, isNondurableSession, isManagedFactOwner, validRetainedResultRevision, type SessionView, type FactOwner, type SessionEvent } from "@i-harness/core-session"
 import { retainedResultWitness, unknownResult, validResultPublication, type ResultPublication, type AuxiliaryResultStatus } from './result-publication.ts'
@@ -80,6 +81,7 @@ export interface SubagentPersistence {
  * every row for the session; the document is rewritten on every job transition,
  * so carrying all of them made save cost grow with session age. */
 const MAX_DURABLE_FINISHED_JOBS = 32
+const durableAgentFields=new Set(['status','finalText','result','taskId','error','retention','retentionError','mailbox','jobId','sessionId','roleName','modelLabel','lastInboxSeq','publication','savedObservation'])
 
 export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; roles: RoleRegistry }): SubagentStateSnapshot {
   // The harness registers all subagent jobs under owner "root" (spawnChild uses
@@ -210,7 +212,9 @@ export function restoreState(
 function createSessionFromEmpty() {
   // Minimal Session shape (formatVersion + events); callers only need a
   // non-null session object on restored entries.
-  return { formatVersion: CURRENT_FORMAT_VERSION, events: [] as unknown[] } as unknown as ReturnType<typeof import("@i-harness/core-session").createSession>
+  // Serialized rows provide a view placeholder, never a new memory owner.
+  // Durable ordinary children attach their original document during restore.
+  return Object.freeze({ formatVersion: CURRENT_FORMAT_VERSION, events: Object.freeze([]) }) as unknown as ReturnType<typeof import("@i-harness/core-session").createSession>
 }
 
 // Task 4.4: a real transition observer — called with the post-change snapshot
@@ -269,12 +273,16 @@ export function persistentJobRegistry(
           }catch(error){completion.reject(error);throw error}
         }}:registration
         const receipt=wrapped
-        if(original)associateJobProjection(receipt,persistProjection(original,async()=>{assertJobProjectionCurrent(receipt);observe?.(jobs.read(receipt.id));await save()},()=>assertJobProjectionCurrent(receipt),settleRequiredFacts,()=>waitJobProjectionCurrent(receipt)),retainRequiredProjection)
+        if(original){associateJobProjection(receipt,persistProjection(original,async()=>{assertJobProjectionCurrent(receipt);observe?.(jobs.read(receipt.id));await save()},()=>assertJobProjectionCurrent(receipt),settleRequiredFacts,()=>waitJobProjectionCurrent(receipt)),retainRequiredProjection);inheritOriginalJobProjection(receipt,registration)}
         if(finish)persistentJobSettlements.set(receipt,(status,output)=>{if(!terminal){if(jobs.read(receipt.id).status!=='running')return Promise.reject(Error('Original job terminal already decided'));try{receipt.finish!(status,output)}catch{} }if(!terminal||terminal.status!==status||terminal.output!==output)return Promise.reject(Error('Original job settlement changed'));return terminal.promise})
         acquired?.(receipt)
       })
-      observe?.(jobs.read(result.id))
-      void save()
+      // The original required Task source already owns its native birth,
+      // result and outbox. This initial row is only its memory projection.
+      if(!isOriginalRequiredSpawnJob(wrapped??result)){
+        observe?.(jobs.read(result.id))
+        void save().catch(()=>{})
+      }
       return wrapped ?? result
     },
     updateJob(id, patch) {
@@ -293,7 +301,7 @@ export function persistentJobRegistry(
       if (updated) {
         const next = jobs.read(id)
         if (prev !== undefined && (prev.status !== next.status || prev.output !== next.output || prev.result !== next.result)) observe?.(next)
-        void save()
+        void save().catch(()=>{})
       }
       return updated
     },
@@ -303,7 +311,7 @@ export function persistentJobRegistry(
       // must not trigger a save.
       if (outcome === "cancellation-requested") {
         observe?.(jobs.read(id))
-        void save()
+        void save().catch(()=>{})
       }
       return outcome
     },
@@ -347,19 +355,22 @@ export function persistentAgentTable(
     ...table,
     update(path, expected, patch) {
       const updated = table.update(path, expected, patch)
-      if (updated) void save()
+      // Runtime wiring (owned view, functions, closing/controller) is absent
+      // from snapshotState. Conversation state and inbox cursors still save.
+      if (updated&&Object.keys(patch).some(key=>durableAgentFields.has(key))) void save().catch(()=>{})
       return updated
     },
     add(path, entry) {
       table.add(path, entry)
-      void save()
+      if(!isOriginalRequiredSpawnEntry(entry)||entry.mailbox.length||entry.lastInboxSeq!==undefined)void save().catch(()=>{})
     },
     remove(path) {
       table.remove(path)
-      void save()
+      // An explicit removal is conversation state, not a Task result mirror.
+      void save().catch(()=>{})
     },
   }
-  associateTableProjection(result,(entry,current,wait)=>persistProjection(captureTableProjection(table,entry),save,current,settleRequiredFacts,wait));return result
+  associateTableProjection(result,(entry,current,wait)=>persistProjection(captureTableProjection(table,entry),save,current,settleRequiredFacts,wait));inheritOriginalTableProjection(result,table);return result
 }
 
 export function persistentRoleRegistry(
@@ -391,11 +402,11 @@ export function persistentRoleRegistry(
           return attempt.promise
         })
       } : undefined)
-      void save()
+      void save().catch(()=>{})
     },
     remove(name) {
       roles.remove(name)
-      void save()
+      void save().catch(()=>{})
     },
   }
 }
@@ -404,8 +415,17 @@ export function wireSubagentPersistence(
   state: { jobs: JobRegistry; table: AgentTable; roles: RoleRegistry },
   persist: SubagentPersistence,
 ): { jobs: JobRegistry; table: AgentTable; roles: RoleRegistry; observe?: JobTransitionObserver; flushFacts(): Promise<void>; closeFacts(): Promise<void> } {
-  const saveAll = async () => {
-    await persist.coordinator.putDocument(persist.stateId, snapshotState(state))
+  const auxiliarySaves=new Set<Promise<void>>()
+  const saveAll=()=>{
+    const pending=(async()=>{await persist.coordinator.putDocument(persist.stateId,snapshotState(state))})()
+    auxiliarySaves.add(pending)
+    void pending.then(()=>auxiliarySaves.delete(pending),()=>{})
+    return pending
+  }
+  const flushAuxiliary=async()=>{
+    const settled=await Promise.allSettled([...auxiliarySaves])
+    const failures=settled.flatMap(result=>result.status==='rejected'?[result.reason]:[])
+    if(failures.length)throw new AggregateError(failures,'Auxiliary subagent projections require recovery')
   }
   // Task 4.4: the transition observer is wired ONLY when the caller handed the
   // live parent session (web path) — otherwise zero events (additive-only).
@@ -419,7 +439,7 @@ export function wireSubagentPersistence(
   // Return wrapped registries (deterministic — no in-place mutation). The
   // caller uses the returned object for the 11 tools and later lookups.
   return {
-    observe, flushFacts: async () => { await facts?.flush() }, closeFacts: async () => { await facts?.close() },
+    observe, flushFacts: async () => { await facts?.flush();await flushAuxiliary() }, closeFacts: async () => { const results=await Promise.allSettled([facts?.close(),flushAuxiliary()]);const failures=results.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(failures.length)throw new AggregateError(failures,'Subagent projection cleanup unresolved') },
     jobs: persistentJobRegistry(state.jobs, async () => { await saveAll() }, observe,facts?.retainProjection,facts?.flush),
     table: persistentAgentTable(state.table, async () => { await saveAll() },facts?.flush),
     roles: persistentRoleRegistry(state.roles, async () => { await saveAll() }),

@@ -130,9 +130,7 @@ export async function assembleChild(
     ...(contextWindow !== undefined
       ? { compact: { contextWindow, ...(overheadTokens !== undefined ? { overheadTokens } : {}) } }
       : {}),
-    // M19 (Ruling 24): the child's durable session id is seeded onto every
-    // prepared ToolExec so the agent-team scheduler can attribute the child's
-    // tool calls to its team member (the roster maps sessionId → member).
+    // Retained results and prepared calls keep the child's durable identity.
     ...(sessionId !== undefined ? { sessionId } : {}),
   })
   if (childReg.get("get_context_remaining")) {

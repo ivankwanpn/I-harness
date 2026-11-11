@@ -17,7 +17,6 @@
     "@i-harness/usage-stats": "workspace:*",
     "@i-harness/http-transport": "workspace:*",
     "@i-harness/coding-plans": "workspace:*",
-    "@i-harness/agent-team": "workspace:*",
     "@i-harness/core-tools": "workspace:*",
     "@i-harness/guard-approval": "workspace:*",
     "@i-harness/jobs": "workspace:*",

@@ -19,6 +19,7 @@ import type { createNotificationHistory } from "./notification-history.ts"
 import type { createRuntimeDiagnostics } from "./runtime-diagnostics.ts"
 import type { RuntimeDiagnosticFilter } from "../shared/runtime-diagnostics.ts"
 import type { AttachmentDraftStore } from "./attachment-draft-store.ts"
+import type { createDesktopSessionCatalog } from './session-catalog.ts'
 // This native helper must be bundled into Electron main. An externalized
 // workspace-package import would require raw gateway TypeScript at app boot.
 import { listDesktopTerminalShellOptions } from "../../../desktop-gateway/src/terminal-shells.ts"
@@ -41,6 +42,7 @@ export interface DesktopIpcDependencies {
   notifications?: ReturnType<typeof createNotificationHistory>
   diagnostics?: ReturnType<typeof createRuntimeDiagnostics>
   drafts?: AttachmentDraftStore
+  sessionCatalog?: ReturnType<typeof createDesktopSessionCatalog>
   about?: { info(): unknown; copy(): unknown }
   native?: ReturnType<typeof attachNativeWindow>
   browser?: ReturnType<typeof createBrowserSurface>
@@ -326,7 +328,12 @@ export async function dispatchDesktopRequest(
       return { opened: true }
     }
     case "desktop/session/navigation/state": {
-      const runtime = await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const workspace = dependencies.catalog.get(workspaceId)
+      if (!workspace) throw Error('Unknown workspace')
+      const ready = dependencies.runtimes.peek?.(workspaceId)
+      if (!ready && dependencies.sessionCatalog) return dependencies.sessionCatalog.navigation(workspace)
+      const runtime = ready ?? await runtimeForKnownWorkspace(workspaceId, dependencies)
       if (!runtime.info.capabilities["desktop-sessions"]?.includes("1")) throw new Error("Session management unavailable")
       return await runtime.client.request(value.kind, {})
     }
@@ -457,8 +464,14 @@ export async function dispatchDesktopRequest(
       if (title && title.length > 256) throw new Error("title is too long")
       return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request(value.kind, { sessionId, action: value.action, ...(title ? { title } : {}) })
     }
-    case "session/dashboard":
-      return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.dashboard()
+    case "session/dashboard": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const workspace = dependencies.catalog.get(workspaceId)
+      if (!workspace) throw Error('Unknown workspace')
+      const ready = dependencies.runtimes.peek?.(workspaceId)
+      if (!ready && dependencies.sessionCatalog) return dependencies.sessionCatalog.dashboard(workspace)
+      return await (ready ?? await runtimeForKnownWorkspace(workspaceId, dependencies)).client.dashboard()
+    }
     case "session/create": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       if (value.clientToken !== undefined && (typeof value.clientToken !== "string" || value.clientToken.length < 8 || value.clientToken.length > 128)) throw new Error("Invalid draft creation token")

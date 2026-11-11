@@ -2,12 +2,13 @@
 // a REAL step subprocess (node on PATH — Windows-safe, tokenized, no shell
 // syntax), observed through job_output.
 //
-// Tool-driving goes through runHeadless + mockScript (see team.e2e.ts for the
+// Tool-driving goes through runHeadless + mockScript (see cli.e2e.ts for the
 // mock-injection ruling).
 import { describe, expect, it } from "vitest"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { runHeadless } from "../apps/cli/src/run.ts"
+import { inlineToolOutput } from '../apps/cli/test/inline-tool-output.ts'
 import { makeWorkspace, removeWorkspace } from "./helpers.ts"
 
 describe("e2e workflow", () => {
@@ -37,21 +38,21 @@ describe("e2e workflow", () => {
         ],
       })
       expect(result.exitCode, result.error).toBe(0)
-      const results = result.session?.events.filter((e) => e.type === "tool/result") as { name: string; output: unknown }[]
+      const results = result.session!.events.filter((e) => e.type === "tool/result")
       // The real workflow/*.yml sample was scanned into the definitions registry.
       const list = results.find((e) => e.name === "workflow_list")
-      expect(JSON.stringify(list?.output)).toContain("hello")
+      expect(JSON.stringify(inlineToolOutput(list))).toContain("hello")
       // workflow_run returned the single-job id for the run.
       const run = results.find((e) => e.name === "workflow_run")
-      expect(JSON.stringify(run?.output)).toContain("workflow-1")
+      expect(JSON.stringify(inlineToolOutput(run))).toContain("workflow-1")
       // job_output collected the REAL subprocess stdout + progress + final status.
       const out = results.find((e) => e.name === "job_output")
-      const outJson = JSON.stringify(out?.output)
+      const output = inlineToolOutput<{ digest: string; full_result: { digest: string; args: { digest: string } } }>(out)
+      const outJson = JSON.stringify(output)
       expect(outJson).toContain("wf hello from step")
       expect(outJson).toContain("[step 1/1 greet] ok")
-      expect(out?.output).toMatchObject({status:"completed",job_id:"workflow-1",digest:expect.stringMatching(/^[a-f0-9]{64}$/),
+      expect(output).toMatchObject({status:"completed",job_id:"workflow-1",digest:expect.stringMatching(/^[a-f0-9]{64}$/),
         full_result:{tool:"job_output",args:{job_id:"workflow-1",offset_bytes:0},retention:"memory"},truncated:false})
-      const output = out!.output as {digest:string;full_result:{digest:string;args:{digest:string}}}
       expect(output.full_result.digest).toBe(output.digest)
       expect(output.full_result.args.digest).toBe(output.digest)
     } finally {

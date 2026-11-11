@@ -22,6 +22,7 @@ import { existsSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { join } from "node:path"
 import { runHeadless } from "../apps/cli/src/run.ts"
+import { inlineToolOutput } from '../apps/cli/test/inline-tool-output.ts'
 import type { ExecService } from "../packages/exec/src/index.ts"
 import { createLocalSandbox } from "../packages/sandbox-local/src/index.ts"
 import { createWindowsAclSandbox } from "../packages/sandbox-windows-acl/src/index.ts"
@@ -48,17 +49,16 @@ describe.skipIf(process.platform !== "win32")("e2e sandbox (win32 ACL fabric)", 
       expect(result.exitCode, result.error).toBe(0)
       expect(result.error ?? "").not.toContain("sandbox")
       expect(result.finalText).toBe("done")
-      const bash = result.session?.events.find((e) => e.type === "tool/result" && e.name === "bash") as
-        | { output: { exitCode?: number; stdout?: string; stderr?: string } }
-        | undefined
+      const bash = result.session?.events.find((e) => e.type === "tool/result" && e.name === "bash")
       expect(bash).toBeDefined()
-      expect(typeof bash?.output.exitCode).toBe("number")
+      const output = inlineToolOutput<{ exitCode?: number; stdout?: string; stderr?: string }>(bash)
+      expect(typeof output.exitCode).toBe("number")
       // F5 (m55 final review): a numeric exit code alone tolerated the F1
       // runner-launch failure (the confined command never ran; the tsx loader
       // died with ERR_MODULE_NOT_FOUND). Host-tolerant still — the confined
       // shell may legitimately fail here (git-bash MSYS E_ACCESSDENIED) — but
       // the RUNNER-FAILURE signatures must be absent.
-      const bashText = `${bash?.output.stdout ?? ""}\n${bash?.output.stderr ?? ""}`
+      const bashText = `${output.stdout ?? ""}\n${output.stderr ?? ""}`
       expect(bashText).not.toContain("ERR_MODULE_NOT_FOUND")
       expect(bashText).not.toContain("windows-acl-run: ")
     } finally {

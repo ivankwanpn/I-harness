@@ -1,15 +1,15 @@
 import {committedFactSeqs,type CapturedActionFact,type ProducerFactOutcome,type MetadataFact,type GoalOperation} from '@i-harness/core-session'
-import {isOriginalExecutionObservation} from '@i-harness/core-session/internal/execution'
+import {isOriginalExecutionObservation,assertManagedActionLifetimeCurrent,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 import {applyGoalMutation,isGoalSnapshot,type GoalMutationRequest} from '@i-harness/goal'
 import type {ManagedExecutionAttachment} from '../../session-persistence/src/execution-internal.ts'
 
 /** One retained set of original action captures for the published runtime. */
-export function createManagedGoalUi(execution:ManagedExecutionAttachment,assertRuntime:()=>void,retain:(close:()=>Promise<void>)=>void){
+export function createManagedGoalUi(execution:ManagedExecutionAttachment,domain:ManagedExecutionDomain,assertRuntime:()=>void,retain:(close:()=>Promise<void>)=>void){
  const pending=new Set<()=>Promise<void>>();let closing=false
  const capture=()=>{assertRuntime();const observation=execution.observe();if(!isOriginalExecutionObservation(observation)||observation.identity!==execution.identity)throw TypeError('Original managed Goal observation required');observation.assertCurrent();const goal=observation.metadata.goal;if(goal.kind!=='available'||!isGoalSnapshot(goal.snapshot))throw TypeError('Original Goal fold unavailable');observation.assertCurrent();return {observation,goal:goal.snapshot.kind==='present'?goal.snapshot.value:null,plan:observation.plan()}}
  async function issue(selected:ReturnType<typeof capture>,draft:{event:MetadataFact}|{proposal:string}){
   if(closing||pending.size)throw Error('Goal metadata recovery required')
-  const action=execution.owner.beginAction(),guard=()=>{try{action.assertOpen();assertRuntime();selected.observation.assertCurrent();return true}catch{return false}}
+  const action=execution.owner.beginAction(),guard=()=>{try{if(closing)return false;assertManagedActionLifetimeCurrent(domain,action);selected.observation.assertCurrent();return true}catch{return false}}
   const planCapture=(action as typeof action&{capturePlanProposal?:(proposal:string,check:()=>boolean)=>CapturedActionFact<ProducerFactOutcome>}).capturePlanProposal
   let fact:CapturedActionFact<ProducerFactOutcome>
   try{if('event'in draft){if(!action.captureMetadata)throw TypeError('Original guarded metadata capture required');fact=action.captureMetadata(draft.event,guard)}else{if(!planCapture)throw TypeError('Original guarded Plan proposal capture required');fact=planCapture.call(action,draft.proposal,guard)}}catch(error){action.finish();throw error}

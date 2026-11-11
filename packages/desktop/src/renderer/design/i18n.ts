@@ -77,7 +77,7 @@ const english = {
   "Codex 訂閱模型": "Codex subscription model", "尚無可用模型，請重新整理。": "No models available. Refresh to check again.",
   "使用模型": "Use model", "重新整理模型": "Refresh models", "授權訂閱使用": "Authorize plan access", "重新登入": "Sign in again", "登出": "Sign out",
   "技能與命令": "Skills and commands", "操作": "Actions", "內建": "Built-in",
-  "目標與計畫": "Goals and plans", "代理團隊": "Agent team", "帶入": "Insert", "選擇": "Select",
+  "目標與計畫": "Goals and plans", "帶入": "Insert", "選擇": "Select",
   "沒有符合的已啟用命令或技能": "No matching enabled commands or skills",
   "輸入名稱或描述以縮小搜尋範圍。": "Type a name or description to narrow the results.",
   "會話專案": "Conversation project", "選擇會話專案": "Choose conversation project", "選擇專案": "Choose project",

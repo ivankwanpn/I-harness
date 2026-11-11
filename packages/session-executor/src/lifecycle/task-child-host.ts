@@ -1,4 +1,4 @@
-import {inspectTaskChildSource,inspectManagedTaskChildHistory,isManagedTaskChildHistory,assertOriginalTeamChildHostRequest,isOriginalColdTeamChildHostInput,assertOriginalColdTeamChildHostRequest} from '@i-harness/subagent'
+import {inspectTaskChildSource,inspectManagedTaskChildHistory,isManagedTaskChildHistory} from '@i-harness/subagent'
 import type { PrepareTaskChild } from '@i-harness/subagent'
 import type { SessionCoordinator,ExistingSessionBindingObservation,ChildBootstrapCaptureRequest,BootstrapGuards } from '@i-harness/session-persistence'
 import {observationCleanupFor} from '@i-harness/session-persistence/internal/retained-inspection'
@@ -25,8 +25,7 @@ export function createUnmanagedTaskChildHost(options: {coordinator: SessionCoord
   return Object.freeze({project:Object.freeze({kind:'unmanaged' as const}),metadata:Object.freeze({}),async beforeResultIssue(){if(running)throw Error('Original task host scope unacknowledged');if(debt)throw scopeFailure?.cause},prepare(request:ChildBootstrapCaptureRequest){
    input.assertCurrent()
   checkHistory()
-   if(request.core.caller.kind==='team'){if(isOriginalColdTeamChildHostInput(input))assertOriginalColdTeamChildHostRequest(input,request);else assertOriginalTeamChildHostRequest(input,request)}
-   else if(request.core.caller.kind!=='task'||request.core.caller.parentSessionId!==input.parentSessionId)throw Error('Foreign unmanaged task request')
+   if(request.core.caller.kind!=='task'||request.core.caller.parentSessionId!==input.parentSessionId)throw Error('Foreign unmanaged task request')
    if(request.requestIntent.project.kind!=='unmanaged')throw Error('Foreign unmanaged task request')
    let closed=false
    return {async run<T>(work:(guards:BootstrapGuards)=>Promise<T>):Promise<T>{

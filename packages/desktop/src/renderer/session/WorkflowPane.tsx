@@ -2,7 +2,6 @@ import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useEffect, useId, useState } from "react"
 import { PaneTabs } from "../vendor/zcode/PaneTabs.tsx"
 import { WorkflowGoalPlan } from "./WorkflowGoalPlan.tsx"
-import { WorkflowTeam } from "./WorkflowTeam.tsx"
 import { WorkflowJobs, WorkflowReviews } from "./WorkflowJobsReviews.tsx"
 import { useWorkflow } from "./use-workflow.ts"
 import { useWorkflowText, type WorkflowMessage } from "./workflow-i18n.ts"
@@ -16,7 +15,7 @@ export interface WorkflowPaneProps {
   sessionId: string
   running?: boolean
   onChanged?(): void
-  section?: "goal" | "team" | "jobs" | "reviews"
+  section?: "goal" | "jobs" | "reviews"
   active?: boolean
 }
 
@@ -25,13 +24,14 @@ export function WorkflowPane(props: WorkflowPaneProps) {
   return <SettingsDraftScope owner={props.bridge}><WorkflowSession key={JSON.stringify([props.workspaceId, props.sessionId])} {...props} /></SettingsDraftScope>
 }
 
-const tabs: { id: string; label: WorkflowMessage }[] = [{ id: "goal", label: "目標與計畫" }, { id: "team", label: "團隊" }, { id: "jobs", label: "背景任務" }, { id: "reviews", label: "代審記錄" }]
+const tabs: { id: string; label: WorkflowMessage }[] = [{ id: "goal", label: "目標與計畫" }, { id: "jobs", label: "背景任務" }, { id: "reviews", label: "代審記錄" }]
 function WorkflowSession({ bridge, workspaceId, sessionId, running = false, onChanged, section = "goal", active = true }: WorkflowPaneProps) {
   const t = useWorkflowText()
   const id = useId()
-  const [tab, setTab] = useState(section)
-  const [visited, setVisited] = useState<ReadonlySet<string>>(() => new Set([section]))
-  useEffect(() => { setTab(section) }, [section])
+  const selectedSection = section === 'jobs' || section === 'reviews' ? section : 'goal'
+  const [tab, setTab] = useState(selectedSection)
+  const [visited, setVisited] = useState<ReadonlySet<string>>(() => new Set([selectedSection]))
+  useEffect(() => { setTab(selectedSection) }, [selectedSection])
   useEffect(() => { setVisited(current => current.has(tab) ? current : new Set(current).add(tab)) }, [tab])
   const { view, busy, error, disabled, retry, mutate } = useWorkflow(bridge, workspaceId, sessionId, onChanged, active)
   const mounted = (name: string) => tab === name || visited.has(name)
@@ -43,7 +43,6 @@ function WorkflowSession({ bridge, workspaceId, sessionId, running = false, onCh
     <div role="tabpanel" id={`${id}-panel`} aria-labelledby={`${id}-${tab}`} className="workflow-tab-body">
       {!view ? !error && active ? <p className="workflow-empty" role="status">{t("正在讀取工作流程…")}</p> : null : <>
         {mounted("goal") ? <div hidden={tab !== "goal"}><WorkflowGoalPlan workspaceId={workspaceId} sessionId={sessionId} view={view} disabled={disabled} running={running} mutate={mutate} /></div> : null}
-        {mounted("team") ? <div hidden={tab !== "team"}><WorkflowTeam workspaceId={workspaceId} sessionId={sessionId} team={view.team} disabled={disabled} planMode={view.plan.active} running={running} mutate={mutate} /></div> : null}
         {mounted("jobs") ? <div hidden={tab !== "jobs"}><WorkflowJobs jobs={view.jobs} bridge={bridge} workspaceId={workspaceId} sessionId={sessionId} active={active && tab === "jobs"} disabled={disabled} mutate={mutate} error={error} onRetry={retry} /></div> : null}
         {mounted("reviews") ? <div hidden={tab !== "reviews"}><WorkflowReviews reviews={view.reviews} /></div> : null}
       </>}

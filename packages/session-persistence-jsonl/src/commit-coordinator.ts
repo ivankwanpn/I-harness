@@ -1,5 +1,5 @@
 import { createJsonlBackend } from './backend-factory.ts'
-import { createCommitCoordinator, type CommitCoordinator, type CommitCoordinatorOptions } from '@i-harness/session-persistence/internal/commit'
+import { createCommitCoordinator, createOwnedLegacySessionStore, type CommitCoordinator, type CommitCoordinatorOptions } from '@i-harness/session-persistence/internal/commit'
 
 /**
  * The commit-log coordinator over a JSONL store root. Legacy format 13/14
@@ -11,10 +11,10 @@ export function createJsonlCommitCoordinator(root: string, options: Omit<CommitC
   return createCommitCoordinator({
     ...options,
     root,
-    legacy: {
-      read: sessionId => backend.read(sessionId),
-      list: () => backend.list(),
-      readDocument: key => backend.getDocument(key),
-    },
+    legacy: createOwnedLegacySessionStore(backend, {
+      lock: { enabled: true, lockRoot: options.lock?.lockRoot ?? root },
+      acquireRetryMs: options.acquireRetryMs,
+      acquireDeadlineMs: options.acquireDeadlineMs,
+    }),
   })
 }

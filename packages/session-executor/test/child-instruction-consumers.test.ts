@@ -104,7 +104,7 @@ import { createSession, committedFactSeqs, decodeFactBatch, type BatchKey } from
 import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 const createSessionCoordinator = (backend: Parameters<typeof composeJsonlTaskTransitionCoordinator>[0], options?: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1]) => composeJsonlTaskTransitionCoordinator(backend, options, taskDocumentStorageContract)
-import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
+import { createControlledJsonlBackend as createJsonlBackend, ownedControls } from '../../session-persistence/test/helpers/composed.ts'
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
 import { createSessionService } from '../src/service.ts'
 import { createProjectInstructionEnvironment } from '../src/context/instructions/host.ts'
@@ -305,18 +305,18 @@ it.each(['acknowledge', 'retire', 'late-source-failure'] as const)('holds a queu
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const address = server.address(); if (!address || typeof address === 'string') throw Error('Missing loopback address')
   const f = await cold(createOpenAICompatibleClient({ model: 'queued-fixture', apiKey: 'fixture-loopback', baseUrl: `http://127.0.0.1:${address.port}` }))
-  const append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!, entry = f.entries[0]!
+  const controls = ownedControls(f.backend), append = controls.originalAppend, reconcile = controls.originalReconcile, entry = f.entries[0]!
   const document = entry.factOwner as import('@i-harness/session-persistence').ManagedDocument
   const settleFinished = document.settleFinishedActions.bind(document)
   const finished = vi.spyOn(document, 'settleFinishedActions')
   let failFinished = mode === 'late-source-failure'
   finished.mockImplementation(async function () { if (failFinished) throw undefined; return settleFinished.call(entry.factOwner) })
-  f.backend.appendOwnedBatch = async (...args) => {
+  controls.append = async (...args) => {
     const result = await append(...args)
     if (!closeKey && args[0] === 'child0' && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'context/action' && event.op === 'close')) { closeKey = args[3].key; closeCaptures++; return { kind: 'unknown', key: closeKey } }
     return result
   }
-  f.backend.reconcileOwnedBatch = async (...args) => {
+  controls.reconcile = async (...args) => {
     if (closeKey?.batchId === args[3].key.batchId) { recoveryEntered.resolve(); await acknowledgment.promise }
     return reconcile(...args)
   }
@@ -441,19 +441,19 @@ it('keeps a failed never-returned factory slot with the original host while actu
 }, 20000)
 
 it('holds actual resident unknown runtime publication and its original pin ahead of document release until backend acknowledgment', async () => {
-  const f = await cold(), append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
+  const f = await cold(), controls = ownedControls(f.backend), append = controls.originalAppend, reconcile = controls.originalReconcile
   let unknown: BatchKey | undefined, acknowledged = false, publications = 0
   try {
     // Attach the fault after an actual cold reconstruction has completed its
     // first original generation. Only this installed Session lease publishes.
-    f.backend.appendOwnedBatch = append; f.backend.reconcileOwnedBatch = reconcile
+    controls.append = append; controls.reconcile = reconcile
     const assembly = await activateResidents(f), entry = f.entries[0]!
-    f.backend.appendOwnedBatch = async (...args) => {
+    controls.append = async (...args) => {
       const result = await append(...args)
       if (args[0] === 'child0' && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'runtime/context')) { unknown = args[3].key; publications++; return { kind: 'unknown', key: unknown } }
       return result
     }
-    f.backend.reconcileOwnedBatch = (...args) => !acknowledged && unknown?.batchId === args[3].key.batchId ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : reconcile(...args)
+    controls.reconcile = (...args) => !acknowledged && unknown?.batchId === args[3].key.batchId ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : reconcile(...args)
     expect(await observed.host!.observe({ path: join(f.root, 'c'), kind: 'directory' }, { session: entry.session, sessionId: entry.sessionId })).toMatchObject({ status: 'queued' })
     await expect(observed.leases[0]!.lease.requestContext.reconcile()).rejects.toThrow()
     await entry.followupChain
@@ -521,17 +521,22 @@ it('keeps an actual parent file mapping inside the original assembly host finite
     restoreMapping = () => mapping.mockRestore()
     reading = dispatchRegistered(assembly.tools, 'read', { path }, { session: parent.view, sessionId: 'parent' }, assembly.factOwner); void reading.catch(() => {})
     await entered.promise
-    closing = assembly.dispose(); void closing.catch(() => {})
-    await expect.poll(() => observed.hostCloses).toBe(1)
+    let disposed = false
+    closing = assembly.dispose().then(() => { disposed = true }); void closing.catch(() => {})
+    // Retirement is synchronous. The original accepted read/source drains
+    // before the host's close phase; neither phase may release its document.
+    expect(await observed.host!.observe({ path, kind: 'file' }, { session: parent.view, sessionId: 'parent' })).toEqual({ status: 'unavailable', reason: 'mapping-unavailable' })
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(disposed).toBe(false)
     expect(closeParent).not.toHaveBeenCalled()
     expect(observed.runtimes.find(row => row.session === parent.view)!.closes).toBe(0)
     release.resolve(); expect(await reading).toMatchObject({ instruction_scope: { status: 'unavailable', reason: 'mapping-unavailable' } })
-    await closing; expect(closeParent).toHaveBeenCalledTimes(1)
+    await closing; expect(observed.hostCloses).toBe(1); expect(closeParent).toHaveBeenCalledTimes(1)
   } finally { release.resolve(); restoreMapping(); await reading?.catch(() => {}); await closing; await f.close() }
 }, 20000)
 
 it('recovers the original active generation after unknown publication without replay or replacement', async () => {
-  const f = await cold(), append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
+  const f = await cold(), controls = ownedControls(f.backend), append = controls.originalAppend, reconcile = controls.originalReconcile
   let unknown: BatchKey | undefined, acknowledged = false, publications = 0
   let body: { occurred: false } | { occurred: true; value: unknown } = { occurred: false }
   const settlements: { operation: string; kind: string; code?: string }[] = []
@@ -555,12 +560,12 @@ it('recovers the original active generation after unknown publication without re
     }
     return action
   }
-  f.backend.appendOwnedBatch = async (...args) => {
+  controls.append = async (...args) => {
     const result = await append(...args)
     if (args[0] === 'child0' && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'runtime/context')) { unknown = args[3].key; publications++; return { kind: 'unknown', key: unknown } }
     return result
   }
-  f.backend.reconcileOwnedBatch = (...args) => !acknowledged && unknown?.batchId === args[3].key.batchId ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : reconcile(...args)
+  controls.reconcile = (...args) => !acknowledged && unknown?.batchId === args[3].key.batchId ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : reconcile(...args)
   try {
     f.release(); const assembly = await f.constructing
     await entry.followupChain

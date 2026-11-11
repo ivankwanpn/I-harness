@@ -55,10 +55,8 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
     let version = 0
     async function readOwners() {
       const own = ++version
-      // Reading every workspace at startup spawned a gateway for every folder.
-      // Ownership is only needed for the active workspace; other folders load
-      // when the user selects one of their sessions.
-      const targets = workspaces.filter(workspace => workspace.id === selectedWorkspaceId)
+      // Cold folders use the native committed catalog without starting a gateway.
+      const targets = workspaces
       if (targets.length === 0) { setOwnerError(undefined); return }
       const results = await Promise.allSettled(targets.map(async workspace => {
         const rows = await bridge.request({ kind: "desktop/session/navigation/state", workspaceId: workspace.id })

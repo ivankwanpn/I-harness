@@ -1,7 +1,11 @@
 import type { GenerationActionEvent, GenerationLane, GenerationOrigin, GenerationPurpose, ManagedAction, ProducerFactOutcome } from '@i-harness/core-session'
 import type { ExecutionConfirmation, GenerationControl, PreparedModelRequest } from '@i-harness/llm-seam'
 
-/** Executor composition owns the implementation; Agent only drives lifecycle. */
+/** Durable origin plus this process's monotonic anchor. Recovered starts carry
+ * elapsed budget explicitly; it can only shorten the accepted window. */
+export interface GenerationStart { readonly wall: number; readonly monotonic: number }
+
+/** Core-agent owns the implementation; hosts compose the original lifecycle. */
 export interface AgentGenerationAction {
   readonly actionId: string
   readonly openedSeq: number
@@ -22,7 +26,7 @@ export interface AgentGenerationAction {
   phase(recovery: Extract<import('@i-harness/core-session').SessionEvent, { type: 'context/recovery' }>): Promise<void>
 }
 export interface AgentGenerationLifecycle {
-  open(purpose: GenerationPurpose, origin: GenerationOrigin, options?: { timeoutMs?: number; maxAttempts?: number; signal?: AbortSignal; start?: { wall: number; monotonic: number }; selectedClient?: () => import('@i-harness/llm-seam').ModelClient | undefined }): Promise<AgentGenerationAction>
+  open(purpose: GenerationPurpose, origin: GenerationOrigin, options?: { timeoutMs?: number; maxAttempts?: number; signal?: AbortSignal; start?: GenerationStart; selectedClient?: () => import('@i-harness/llm-seam').ModelClient | undefined }): Promise<AgentGenerationAction>
   drain(): Promise<void>
 }
 /** Construction dependency: a factory must forward this before releasing any

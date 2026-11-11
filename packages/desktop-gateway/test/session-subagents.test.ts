@@ -1,3 +1,4 @@
+import { associateOriginalHostAssemblyObserver } from '../../session-executor/src/host-assembly-observer.ts'
 import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -5,7 +6,7 @@ import { join } from "node:path"
 import { expect, it, vi } from "vitest"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
-import { createSessionService, createDurableSessionLoader, type SessionService, type SessionAssembly, type SessionServiceOptions } from "@i-harness/session-executor"
+import { createSessionService, createDurableSessionLoader, createUnmanagedTaskChildHost, type SessionService, type SessionAssembly, type SessionServiceOptions } from "@i-harness/session-executor"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { append, createSession, copyConversationData, decodeFactBatch } from "@i-harness/core-session"
@@ -16,7 +17,7 @@ import { createContextOutputService } from '@i-harness/context-output'
 import { createResultCapture } from '../../output-retention/src/index.ts'
 
 it('uses committed revision metadata for retained child catalogs and lineage-gates exact body pages before I/O', async () => {
-  const f = await fixture(), body = { resultText: '中文🙂"\n'.repeat(6000), error: '' }
+  const f = await fixture(), body = { resultText: '中文🙂"\n'.repeat(600), error: '' }
   await f.coordinator.create({ sessionId: 'retained', parentSession: 'parent', origin: 'subagent', seedLength: 1 })
   const store = createContextOutputService({ root: join(f.root, 'results'), workspaceId: 'w' })
   const tasks = createTaskRegistry({ reportPolicy: { childPreviewBytes: 2048, maxReportBytes: 16384 }, coordinator: f.coordinator, stateId: 'parent', results: {
@@ -59,7 +60,12 @@ it('uses committed revision metadata for retained child catalogs and lineage-gat
 
 it("real service pushes one committed child result after its actual receipt, with lineage checked before live access", async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-child-push-assembly-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { maxDelayMs: 60_000, lock: { enabled: true } })
+  const backend = createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => {
+    if (args[0].startsWith('child-') && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'tool/result' && event.callId === 'child-list')) {
+      resultFrames++; childId = args[0]; resultEntered.resolve(); await releaseResult.promise
+    }
+    return append(...args)
+  } }), coordinator = createSessionCoordinator(backend, { maxDelayMs: 60_000, lock: { enabled: true } })
   for (const sessionId of ['parent', 'other']) await coordinator.create({ sessionId })
   const resultEntered = Promise.withResolvers<void>(), releaseResult = Promise.withResolvers<void>()
   const childSecondRequest = Promise.withResolvers<void>(), releaseChild = Promise.withResolvers<void>()
@@ -70,35 +76,30 @@ it("real service pushes one committed child result after its actual receipt, wit
     yield { type: 'end' }
   } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   const parent: NonNullable<SessionServiceOptions['model']> = controlledModel(request => ({ async *stream() {
-    if (++parentRequests === 1) yield { type: 'tool_call', call: { name: 'wait_agent', args: { target: 'root/actual', timeout_ms: 300_000 } } }
+    if (++parentRequests === 1) yield { type: 'tool_call', call: { name: 'spawn_agent', args: { task_name: 'actual', agent_type: 'explore', message: 'read the workspace', fork_turns: 'none', background: true } } }
+    else if (parentRequests === 2) yield { type: 'tool_call', call: { name: 'wait_agent', args: { target: 'root/actual', timeout_ms: 300_000 } } }
     else yield { type: 'text/chunk', text: 'parent finished' }
     yield { type: 'end' }
   } } as import('@i-harness/llm-seam').ModelClient).stream(request))
-  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model: parent, approveAll: true, sandbox: 'danger-full-access',
+  const service = createSessionService({ workspace: root, coordinator, prepareTaskChild: createUnmanagedTaskChildHost({coordinator,policy:'unmanaged'}), sessionFor: createDurableSessionLoader(coordinator), model: parent, approveAll: true, sandbox: 'danger-full-access',
     allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: 'fixture', model: 'child' }), resolveRoleModel: async () => ({ status: 'ready', binding: { client: child } }),
   })
   const assembly = await service.assemblyFor('parent')
   assembly.ctx.on('tools/post-execute', event => { if ((event as { name: string }).name === 'list_dir') finalizations++ })
-  const actualAppend = backend.appendOwnedBatch!
   let childId = ''
-  backend.appendOwnedBatch = async (...args) => {
-    if (args[0].startsWith('child-') && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'tool/result' && event.callId === 'child-list')) {
-      resultFrames++; childId = args[0]; resultEntered.resolve(); await releaseResult.promise
-    }
-    return actualAppend(...args)
-  }
+  let inspectNotifications = true
   const changed = vi.fn(), pushedResults: unknown[] = []
   const catalog = createDesktopSubagents(coordinator, service, { onChanged(id) {
     changed(id)
-    const result = childId ? assembly.liveChildSession!(childId)?.events.find(event => event.type === 'tool/result' && event.callId === 'child-list') : undefined
+    const result = childId && inspectNotifications ? assembly.liveChildSession!(childId)?.events.find(event => event.type === 'tool/result' && event.callId === 'child-list') : undefined
     if (result && !pushedResults.includes(result)) pushedResults.push(result)
   } })
   let turn: Promise<unknown> | undefined
   try {
-    await assembly.tools.get('spawn_agent')!.execute({ task_name: 'actual', agent_type: 'explore', message: 'read the workspace', background: true }, { sessionId: 'parent' })
+    turn = service.submit('parent', 'observe actual child', new AbortController().signal)
+    void turn.catch(() => {})
     await resultEntered.promise
     expect(childRequests).toBe(1)
-    turn = service.submit('parent', 'observe actual child', new AbortController().signal)
     await vi.waitFor(() => expect(assembly.session.events.some(event => event.type === 'tool/dispatch')).toBe(true))
     await vi.waitFor(() => expect(changed).toHaveBeenCalledWith('parent'))
     expect(service.queueState('parent').running).toBe(true)
@@ -106,17 +107,18 @@ it("real service pushes one committed child result after its actual receipt, wit
     const originalAccess = assembly.liveChildSession!, access = vi.fn(originalAccess)
     assembly.liveChildSession = access
     const flush = vi.spyOn(coordinator, 'flush'), assemble = vi.spyOn(service, 'assemblyFor')
-    await expect(catalog.history('parent', childId)).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
-    expect(access).not.toHaveBeenCalled()
+    const committedBefore=(await catalog.history('parent',childId)).events
+    expect(committedBefore.some(event=>event.type==='tool/result'&&event.callId==='child-list')).toBe(false)
     expect(assembly.liveChildSession!(childId)!.events.some(event => event.type === 'tool/result' && event.callId === 'child-list')).toBe(false)
     expect((await backend.read(childId)).events.some(event => event.type === 'tool/result' && event.callId === 'child-list')).toBe(false)
-    await expect(coordinator.snapshot!(childId)).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    expect((await coordinator.snapshot!(childId)).session.events.some(event=>event.type==='tool/result'&&event.callId==='child-list')).toBe(false)
     expect(pushedResults).toEqual([])
+    inspectNotifications=false
     access.mockClear()
     await expect(catalog.history('other', childId)).rejects.toThrow(/scope/)
-    expect(access).not.toHaveBeenCalled(); expect(flush).not.toHaveBeenCalled(); expect(assemble).not.toHaveBeenCalled()
+    expect(access).not.toHaveBeenCalled(); expect(flush).not.toHaveBeenCalled(); expect(assemble).not.toHaveBeenCalled();inspectNotifications=true
     const requestsBefore = [parentRequests, childRequests]
-    await expect(catalog.history('parent', childId)).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    expect((await catalog.history('parent',childId)).events).toEqual(committedBefore)
     expect([parentRequests, childRequests]).toEqual(requestsBefore)
     releaseResult.resolve()
     await childSecondRequest.promise
@@ -130,9 +132,11 @@ it("real service pushes one committed child result after its actual receipt, wit
     const afterRequests = [parentRequests, childRequests]
     expect((await catalog.history('parent', childId)).events).toEqual(live.events)
     expect((await catalog.list('parent')).agents.find(row => row.sessionId === childId)).toMatchObject({ live: true, status: 'running', path: 'root/actual' })
+    inspectNotifications=false
     access.mockClear()
     await expect(catalog.history('other', childId)).rejects.toThrow(/scope/)
     expect(access).not.toHaveBeenCalled(); expect(flush).not.toHaveBeenCalled(); expect(assemble).not.toHaveBeenCalled()
+    inspectNotifications=true
     expect([parentRequests, childRequests]).toEqual(afterRequests)
     expect(service.liveSession(childId)).toBeUndefined(); expect(service.liveAssembly(childId)).toBeUndefined()
     expect([resultFrames, finalizations]).toEqual([1, 1])
@@ -145,27 +149,33 @@ it("real service pushes one committed child result after its actual receipt, wit
     await catalog.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true })
   }
 }, 15_000)
-async function fixture() {
+async function fixture(minimal = false) {
   const root = await mkdtemp(join(tmpdir(), "desktop-subagent-catalog-"))
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
-  await coordinator.create({ sessionId: "parent", title: "Parent" })
-  await coordinator.create({ sessionId: "other" })
-  await coordinator.create({ sessionId: "fork", parentSession: "parent", origin: "fork" })
-  for (const [id, parent] of [["normal", "parent"], ["team", "parent"], ["nested", "normal"], ["unrelated", "other"], ["fork-child", "fork"]]) {
-    await coordinator.create({ sessionId: id, parentSession: parent, origin: "subagent", seedLength: 0 })
-    await coordinator.append(id!, [{ type: "turn/start", seq: 0 }, { type: "user/message", seq: 1, text: `delegated ${id}` }, { type: "assistant/message", seq: 2, text: `${id} result` }, { type: "turn/end", seq: 3 }])
+  const joined = async (jobs: Promise<unknown>[]) => {
+    const results=await Promise.allSettled(jobs),errors=results.flatMap(result=>result.status==='rejected'?[result.reason]:[])
+    if(errors.length){await coordinator.close();throw new AggregateError(errors,'Catalog fixture setup failed')}
   }
-  await coordinator.create({ sessionId: "review", parentSession: "parent", origin: "approval-review", seedLength: 0 })
-  await coordinator.create({ sessionId: "legacy-review", parentSession: "parent", origin: "subagent", seedLength: 0 })
+  await joined([coordinator.create({sessionId:'parent',title:'Parent'}),coordinator.create({sessionId:'other'})])
+  if (!minimal) {
+    // Independent session files use the coordinator's existing per-session lanes.
+    await joined([
+      coordinator.create({sessionId:'fork',parentSession:'parent',origin:'fork',seedLength:0}),
+      ...[['normal','parent'],['team','parent'],['unrelated','other'],['legacy-review','parent']].map(([sessionId,parentSession])=>coordinator.create({sessionId,parentSession,origin:'subagent',seedLength:0})),
+      coordinator.create({sessionId:'review',parentSession:'parent',origin:'approval-review',seedLength:0}),
+    ])
+    await joined([['nested','normal'],['fork-child','fork'],['legacy-review-child','legacy-review']].map(([sessionId,parentSession])=>coordinator.create({sessionId,parentSession,origin:'subagent',seedLength:0})))
+    await joined(['normal','team','nested','unrelated','fork-child'].map(id=>coordinator.append(id,[{type:'turn/start',seq:0},{type:'user/message',seq:1,text:'delegated '+id},{type:'assistant/message',seq:2,text:id+' result'},{type:'turn/end',seq:3}])))
   await coordinator.append("legacy-review", [{ type: "user/message", seq: 0, text: 'An agent requests execution of a tool call. Decide: approve (execute now, never ask the user),\nallow (ask the user first), or deny (never execute).\n<request>x</request>\n<recent_context>x</recent_context>\nOutput STRICT JSON only' }])
-  await coordinator.create({ sessionId: "legacy-review-child", parentSession: "legacy-review", origin: "subagent", seedLength: 0 })
-  await coordinator.append("legacy-review-child", [{ type: "user/message", seq: 0, text: "internal descendant" }])
+    await coordinator.append('legacy-review-child',[{type:'user/message',seq:0,text:'internal descendant'}])
   await coordinator.putDocument("parent", { formatVersion: 1, roles: [], jobs: [], agentTable: [
     { path: "root/helper", sessionId: "normal", roleName: "explore", modelLabel: "local:small", status: "waiting", mailbox: [], jobId: "subagent-1", finalText: "normal result" },
     { path: "lead/teammate", sessionId: "team", roleName: "teammate", status: "waiting", mailbox: [], jobId: "subagent-2" },
   ] })
+  }
   const assemble = vi.fn(async () => { throw new Error("read must not activate a parent") })
   const service = { liveAssembly: () => undefined, liveSession: () => undefined, assemblyFor: assemble, onAssembly: () => () => {} } as unknown as SessionService
+  associateOriginalHostAssemblyObserver(service, (listener, options) => service.onAssembly!(listener, options))
   return { root, coordinator, service, assemble, close: async () => { await coordinator.close(); await rm(root, { recursive: true, force: true }) } }
 }
 
@@ -369,6 +379,10 @@ it("detaches an old observer when its root is replaced by a host without the opt
 it("reads normal/team descendants and durable results after restart without activating an Agent, and hides reviewers/fork branches", async () => {
   const f = await fixture()
   try {
+  await f.coordinator.append('parent', [
+    { type: 'team/member', version: 1, teamId: 'historical', member: { id: 'old-member', name: 'teammate', description: 'Saved member', provider: 'spawn', context: 'fresh', phase: 'provisioning', sessionId: 'team' } },
+    { type: 'team/member', version: 1, teamId: 'historical', member: { id: 'old-member', name: 'teammate', description: 'Saved member', provider: 'spawn', context: 'fresh', phase: 'active', sessionId: 'team' } },
+  ])
     await f.coordinator.close()
     const coordinator = createSessionCoordinator(createJsonlBackend(f.root), { lock: { enabled: true } })
     try {
@@ -376,6 +390,8 @@ it("reads normal/team descendants and durable results after restart without acti
       const result = await catalog.list("parent")
       expect(result.agents.map((row) => row.sessionId).sort()).toEqual(["nested", "normal", "team"])
       expect(result.agents.find((row) => row.sessionId === "normal")).toMatchObject({ path: "root/helper", roleName: "explore", modelLabel: "local:small", status: "completed", finalText: "normal result", live: false, canFollowup: false, canMessage: false, canInterrupt: false, canClose: false, controlReason: expect.any(String) })
+      expect(result.agents.find(row => row.sessionId === 'team')).toMatchObject({ path: 'lead/teammate', live: false, canFollowup: false, canMessage: false, canInterrupt: false, canClose: false })
+      expect((await catalog.history('parent', 'team')).events.some(event => event.type === 'user/message')).toBe(true)
       expect(await catalog.history("parent", "nested", { afterSeq: 0, limit: 2 })).toEqual({ events: [expect.objectContaining({ type: "turn/start", seq: 0 }), expect.objectContaining({ type: "user/message", seq: 1 })], nextSeq: 2 })
       expect(await catalog.history("parent", "normal", { afterSeq: Number.MAX_SAFE_INTEGER, limit: 1 })).toEqual({ events: [], nextSeq: 4 })
       expect(f.assemble).not.toHaveBeenCalled()
@@ -414,9 +430,9 @@ it("retains named normal/team catalog rows after their live entries have been cl
   const f = await fixture()
   try {
     await f.coordinator.putDocument("parent", { formatVersion: 1, roles: [], jobs: [], agentTable: [] })
-    await f.coordinator.putDocument("task-parent", { formatVersion: 1, tasks: [{ childSessionId: "normal", agentPath: "root/named-helper", description: "Named helper", agent: "explore", modelLabel: "deepseek:deepseek-flash", status: "completed", resultText: "normal result" }], notifications: [] })
     const member = { id: "member-team", name: "named-teammate", description: "saved member", provider: "spawn", context: "fresh" as const, sessionId: "team" }
     await f.coordinator.append("parent", [{ type: "team/member", version: 1, seq: 0, teamId: "saved-team", member: { ...member, phase: "provisioning" } }, { type: "team/member", version: 1, seq: 1, teamId: "saved-team", member: { ...member, phase: "active" } }])
+    await f.coordinator.putDocument("task-parent", { formatVersion: 1, tasks: [{ childSessionId: "normal", agentPath: "root/named-helper", description: "Named helper", agent: "explore", modelLabel: "deepseek:deepseek-flash", status: "completed", resultText: "normal result" }], notifications: [] })
     const result = await createDesktopSubagents(f.coordinator, f.service).list("parent")
     expect(result.agents.find((row) => row.sessionId === "normal")).toMatchObject({ label: "Named helper", roleName: "explore", modelLabel: "deepseek:deepseek-flash", status: "completed", live: false, canFollowup: false })
     expect(result.agents.find((row) => row.sessionId === "team")).toMatchObject({ label: "named-teammate", roleName: "teammate", status: "completed", live: false, canFollowup: false })
@@ -506,7 +522,7 @@ it("uses exact live SID-to-path authority for controls and refuses a detached ru
   const followup = vi.fn(async () => ({ delivered: true }))
   const close = vi.fn(async () => ({ previous_status: "waiting" }))
   const list = vi.fn(async () => ({ agents: [{ path: "root/helper", sessionId: "normal", roleName: "explore", status: "waiting" }, { path: "lead/teammate", sessionId: "team", roleName: "teammate", status: "running" }] }))
-  for (const [name, execute] of [["list_agents", list], ["followup_task", followup], ["close_agent", close], ["team_followup_task", followup]]) tools.register({ name: name as string, description: "fixture", inputSchema: { type: "object" }, isReadOnly: name === "list_agents", execute: execute as typeof list })
+  for (const [name, execute] of [["list_agents", list], ["followup_task", followup], ["close_agent", close]]) tools.register({ name: name as string, description: "fixture", inputSchema: { type: "object" }, isReadOnly: name === "list_agents", execute: execute as typeof list })
   let mounted = true
   const assembly = { tools, session, subagentState: () => ({ formatVersion: 1, agentTable: [{ path: "root/helper", sessionId: "normal", roleName: "explore", status: "waiting", mailbox: [] }, { path: "lead/teammate", sessionId: "team", roleName: "teammate", status: "running", mailbox: [] }], jobs: [], roles: [] }) } as unknown as SessionAssembly
   f.service.liveAssembly = () => mounted ? assembly : undefined
@@ -515,8 +531,8 @@ it("uses exact live SID-to-path authority for controls and refuses a detached ru
     expect((await catalog.list("parent")).agents.find((row) => row.sessionId === "normal")).toMatchObject({ live: true, canFollowup: true, canClose: true, canInterrupt: false })
     expect(await catalog.control("parent", "normal", { action: "followup", text: "continue exactly this child" })).toMatchObject({ childSessionId: "normal", result: { delivered: true } })
     expect(followup).toHaveBeenCalledWith({ target: "root/helper", message: "continue exactly this child" }, expect.objectContaining({ sessionId: "parent" }))
-    await catalog.control("parent", "team", { action: "followup", text: "team continuation" })
-    expect(followup).toHaveBeenLastCalledWith({ target: "teammate", message: "team continuation" }, expect.objectContaining({ sessionId: "parent" }))
+    await expect(catalog.control("parent", "team", { action: "followup", text: "historical continuation" })).rejects.toThrow(/read-only/)
+    expect(followup).toHaveBeenCalledTimes(1)
     mounted = false
     await expect(catalog.control("parent", "normal", { action: "close" })).rejects.toThrow(/runtime|active|unavailable/i)
     expect(close).not.toHaveBeenCalled()
@@ -547,19 +563,28 @@ it("refuses a child path replaced during the final lineage read instead of contr
   } finally { await f.close() }
 })
 
-it("drives normal and teammate followups through their real owning tools without assembling a child as a main chat", async () => {
-  const f = await fixture()
-  const parent: NonNullable<SessionServiceOptions["model"]> = controlledModel(request => ({ async *stream() { yield { type: "text/chunk", text: "parent done" }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request))
+// Two native births, four child turns, catalog/history reads; measured 16.85s on Windows.
+it("drives independent normal subagent followups through their real owning tools without assembling a child as a main chat", async () => {
+  const f = await fixture(true)
+  let parentRounds = 0
+  const parent: NonNullable<SessionServiceOptions["model"]> = controlledModel(request => ({ async *stream() {
+    const round=++parentRounds
+    if (round <= 2) yield { type: 'tool_call', call: { name: 'spawn_agent', args: { task_name: round === 1 ? 'actual-normal' : 'actual-second', agent_type: 'explore', message: 'initial', fork_turns: 'none', background: false } } }
+    else yield { type: 'text/chunk', text: 'parent done' }
+    yield { type: 'end' }
+  } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   let turns = 0
-  const child: NonNullable<SessionServiceOptions["model"]> = controlledModel(request => ({ async *stream() { yield { type: "text/chunk", text: `child-final-${++turns}` }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request))
-  const service = createSessionService({ workspace: f.root, coordinator: f.coordinator, sessionFor: createDurableSessionLoader(f.coordinator), model: parent, team: {}, concurrentSessionTeams: true, allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: "local", model: "fixture" }), resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }) })
+  const child: NonNullable<SessionServiceOptions["model"]> = controlledModel(request => ({ async *stream() {const turn=++turns;yield { type: "text/chunk", text: `child-final-${turn}` }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request))
+  const service = createSessionService({ workspace: f.root, coordinator: f.coordinator, prepareTaskChild: createUnmanagedTaskChildHost({coordinator:f.coordinator,policy:'unmanaged'}), sessionFor: createDurableSessionLoader(f.coordinator), model: parent, approveAll: true, allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: "local", model: "fixture" }), resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }) })
   const catalog = createDesktopSubagents(f.coordinator, service)
   try {
     const assembly = await service.assemblyFor("parent")
-    const normal = await assembly.tools.get("spawn_agent")!.execute({ task_name: "actual-normal", agent_type: "explore", message: "initial", fork_turns: "none", background: false }, { sessionId: "parent" }) as { agent_path: string }
-    await assembly.tools.get("spawn_teammate")!.execute({ name: "actual-team", description: "team", prompt: "initial", context: "fresh" }, { sessionId: "parent" })
+    await service.submit('parent', 'Create both fixture children', new AbortController().signal);
+    const normal = { agent_path: 'root/actual-normal' }
+    expect(assembly.subagentState().agentTable.map(row=>row.path),JSON.stringify(assembly.session.events.filter(event=>event.type==='tool/result'))).toContain(normal.agent_path)
+    expect(assembly.subagentState().agentTable.map(row=>row.path),JSON.stringify(assembly.session.events.filter(event=>event.type==='tool/result'))).toContain('root/actual-second')
     const settleOwnedTurn = async (path: string, finalText: string) => {
-      // Both root/ and lead/ entries belong to this parent's shared registry.
+      // Both root/ entries belong to this parent's shared registry.
       // Wait on that owner, then flush the actual child log before catalog reads.
       const result = await assembly.tools.get("wait_agent")!.execute({ target: path }, { sessionId: "parent" }) as { path: string; status: string; timed_out: boolean; finalText?: string; error?: string }
       expect(result).toMatchObject({ path, status: "waiting", timed_out: false, finalText })
@@ -571,48 +596,71 @@ it("drives normal and teammate followups through their real owning tools without
       await f.coordinator.flush(owned.sessionId!)
       await f.coordinator.flush("parent")
     }
-    await settleOwnedTurn(normal.agent_path, "child-final-1")
-    await settleOwnedTurn("lead/actual-team", "child-final-2")
-    const before = await catalog.list("parent")
-    await vi.waitFor(() => expect(before.agents.some(row => row.path === "lead/actual-team" && row.status !== "running")).toBe(true))
+    await settleOwnedTurn(normal.agent_path, "child-final-1");
+    await settleOwnedTurn("root/actual-second", "child-final-2")
+    const before = await catalog.list("parent");
+    await vi.waitFor(() => expect(before.agents.some(row => row.path === "root/actual-second" && row.status !== "running")).toBe(true))
     const normalRow = before.agents.find((row) => row.path === normal.agent_path)!
-    const teamRow = before.agents.find((row) => row.path === "lead/actual-team")!
-    expect(normalRow.canFollowup).toBe(true); expect(teamRow.canFollowup).toBe(true)
+    const secondRow = before.agents.find((row) => row.path === "root/actual-second")!
+    expect(normalRow.canFollowup).toBe(true); expect(secondRow.canFollowup).toBe(true)
     await catalog.control("parent", normalRow.sessionId, { action: "followup", text: "normal followup" })
-    await settleOwnedTurn(normal.agent_path, "child-final-3")
+    await settleOwnedTurn(normal.agent_path, "child-final-3");
     await vi.waitFor(() => expect(turns).toBeGreaterThanOrEqual(3))
-    await catalog.control("parent", teamRow.sessionId, { action: "followup", text: "team followup" })
-    await settleOwnedTurn("lead/actual-team", "child-final-4")
+    await catalog.control("parent", secondRow.sessionId, { action: "followup", text: "second followup" })
+    await settleOwnedTurn("root/actual-second", "child-final-4")
     await vi.waitFor(() => expect(turns).toBe(4))
     expect(service.liveAssembly(normalRow.sessionId)).toBeUndefined()
-    expect(service.liveAssembly(teamRow.sessionId)).toBeUndefined()
-    const history = await catalog.history("parent", teamRow.sessionId)
-    await vi.waitFor(() => expect(JSON.stringify(history.events)).toContain("team followup"))
-  } finally { await catalog.close(); await service.close(); await f.close() }
-}, 15000)
+    expect(service.liveAssembly(secondRow.sessionId)).toBeUndefined()
+    const history = await catalog.history("parent", secondRow.sessionId)
+    await vi.waitFor(() => expect(JSON.stringify(history.events)).toContain("second followup"))
+  } finally { await catalog.close(); await service.close(); await f.close(); }
+}, 45000)
 
 it("restores a completed closed child's actual model from its JSONL task document and exposes it in the cold catalog", async () => {
-  const f = await fixture()
-  const model: NonNullable<SessionServiceOptions["model"]> = controlledModel(request => ({ async *stream() { yield { type: "text/chunk", text: "done" }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request))
-  const service = createSessionService({ workspace: f.root, coordinator: f.coordinator, sessionFor: createDurableSessionLoader(f.coordinator), model, allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: "deepseek", model: "deepseek-flash" }), resolveRoleModel: async () => ({ status: "ready", binding: { client: model } }) })
+  const f = await fixture(true)
+  let modelRounds = 0
+  const model: NonNullable<SessionServiceOptions["model"]> = controlledModel(request => ({ async *stream() {
+    if (++modelRounds === 1) yield {type:'tool_call',call:{name:'spawn_agent',args:{message:'inspect',task_name:'model-proof',agent_type:'explore',background:false}}}
+    else yield {type:'text/chunk',text:'done'}
+    yield {type:'end'}
+  } } as import('@i-harness/llm-seam').ModelClient).stream(request))
+  const service = createSessionService({ workspace: f.root, coordinator: f.coordinator, prepareTaskChild: createUnmanagedTaskChildHost({coordinator:f.coordinator,policy:'unmanaged'}), sessionFor: createDurableSessionLoader(f.coordinator), model, approveAll: true, allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: "deepseek", model: "deepseek-flash" }), resolveRoleModel: async () => ({ status: "ready", binding: { client: model } }) })
   let reader: ReturnType<typeof createSessionCoordinator> | undefined
   try {
     const assembly = await service.assemblyFor("parent")
-    const spawned = await assembly.tools.get("spawn_agent")!.execute({ message: "inspect", task_name: "model-proof", agent_type: "explore", background: false }, { sessionId: "parent" }) as { task_id: string; agent_path: string }
+    await service.submit('parent','Create model fixture',new AbortController().signal)
+    const event=assembly.session.events.find(event=>event.type==='tool/result'&&event.name==='spawn_agent')
+    if(event?.type!=='tool/result'||event.envelope?.retention.kind!=='inline')throw Error('Original Task result missing')
+    const spawned=event.envelope.retention.value as {agent_path:string;task_id:string}
     const owned = assembly.subagentState().agentTable.find(row => row.path === spawned.agent_path)!
+    expect(owned,JSON.stringify(assembly.session.events.filter(event=>event.type==='tool/result'))).toBeDefined()
     expect(owned.modelLabel).toBe("deepseek:deepseek-flash")
     await assembly.tools.get("close_agent")!.execute({ target: spawned.agent_path }, { sessionId: "parent" })
     expect(assembly.subagentState().agentTable.some(row => row.path === spawned.agent_path)).toBe(false)
     await service.close()
     await f.coordinator.flush(owned.sessionId!)
+    await f.coordinator.close()
     reader = createSessionCoordinator(createJsonlBackend(f.root), { lock: { enabled: true } })
     const doc = await reader.getDocument(taskDocKey("parent")) as TaskProtocolDocument
-    const restored = createTaskRegistry({ coordinator: reader })
-    restored.restore(doc)
-    await restored.qualifyRestoredResults()
-    expect(restored.get(spawned.task_id)).toMatchObject({ status: "completed", modelLabel: "deepseek:deepseek-flash" })
+    expect(doc.tasks.find(task=>task.id===spawned.task_id)).toMatchObject({ status: "completed", modelLabel: "deepseek:deepseek-flash" })
     const catalog = await createDesktopSubagents(reader, f.service).list("parent")
     expect(catalog.agents.find(row => row.sessionId === owned.sessionId)).toMatchObject({ status: "completed", live: false, roleName: "explore", modelLabel: "deepseek:deepseek-flash" })
     expect(f.assemble).not.toHaveBeenCalled()
   } finally { await reader?.close(); await service.close(); await f.close() }
 }, 15000)
+
+it('keeps historical Team rows read-only even when an older runtime table still contains them', async () => {
+  const f = await fixture(), runtime = observedRuntime(f), owner = runtime.mount('parent')
+  const session = copyConversationData((await f.coordinator.snapshot!('team')).session)
+  owner.table.add('lead/teammate', { path: 'lead/teammate', sessionId: 'team', session, status: 'running', controller: new AbortController(), mailbox: [] })
+  const effect = vi.fn(async () => ({ ok: true }))
+  for (const name of ['send_message', 'followup_task', 'interrupt_agent', 'close_agent']) owner.assembly.tools.register({ name, description: '', inputSchema: {}, execute: effect })
+  const catalog = createDesktopSubagents(f.coordinator, f.service)
+  try {
+    const row = (await catalog.list('parent')).agents.find(agent => agent.sessionId === 'team')
+    expect(row).toMatchObject({ path: 'lead/teammate', canFollowup: false, canMessage: false, canInterrupt: false, canClose: false })
+    for (const action of ['message', 'followup', 'interrupt', 'close'] as const) await expect(catalog.control('parent','team',{ action, ...(['message','followup'].includes(action) ? { text: 'do not execute' } : {}) })).rejects.toThrow(/read-only/)
+    expect(effect).not.toHaveBeenCalled()
+    expect((await catalog.history('parent','team')).events.some(event=>event.type==='user/message')).toBe(true)
+  } finally { await catalog.close(); await f.close() }
+})

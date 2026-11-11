@@ -396,6 +396,15 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
     },
   }
   const port = Object.freeze({
+    async retireAttempt(handle: object) {
+      if (this !== port) throw new Error('Invalid reservation port receiver')
+      const entry = reservations.get(handle)
+      if (!entry || entry.state !== 'started' || !entry.attempt) throw new Error('Original started attempt required')
+      await entry.attempt.retire()
+      await entry.delivery?.close()
+      if (!entry.attempt.isClean() || entry.delivery && !entry.delivery.isClean()) throw new Error('Original attempt cleanup requires recovery')
+      pendingInstances.delete(entry.instanceId)
+    },
     attachStep(handle: object, step: OriginalStepBinding) {
       if(this!==port)throw new Error('Invalid reservation port receiver')
       const entry=reservations.get(handle)

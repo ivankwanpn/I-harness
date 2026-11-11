@@ -2,13 +2,15 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { open, stat, type FileHandle } from 'node:fs/promises';
 import type { ArchiveReadResources } from '@i-harness/session-persistence/internal/archive-read';
 type Resource = {
-    handle: FileHandle;
+    handle?: FileHandle;
+    original?: object;
     close: () => Promise<void>;
     failed: boolean;
     error?: unknown;
     consumed: boolean;
     flight?: Promise<void>;
 };
+type FileResource = Resource & { handle: FileHandle };
 /** Original per-backend ledger. Failed descriptors remain reachable after caller rejection. */
 export function createArchiveReadOwner() {
     const resources = new Set<Resource>(), pending = new Set<Promise<unknown>>(), participants = new Set<{
@@ -34,7 +36,7 @@ export function createArchiveReadOwner() {
         catch (error) {
             r.failed = true;
             r.error = error;
-            r.consumed = r.handle.fd < 0;
+            r.consumed = r.handle !== undefined && r.handle.fd < 0;
             throw error;
         } })();
         r.flight = flight;
@@ -72,7 +74,7 @@ export function createArchiveReadOwner() {
             return Promise.reject(e);
         }
         const flight = Promise.resolve().then(async () => {
-            let resource: Resource | undefined, failed = false, primary: unknown, result: T | undefined;
+            let resource: FileResource | undefined, failed = false, primary: unknown, result: T | undefined;
             try {
                 const handle = await open(path, 'r');
                 resource = { handle, close: handle.close.bind(handle), failed: false, consumed: false };
@@ -115,7 +117,7 @@ export function createArchiveReadOwner() {
     function openHeld(path:string,assertHeld:()=>void) {
         const healthy=()=>{assertHeld();if([...resources].some(r=>r.failed))throw Error('Archive read cleanup unresolved')};
         healthy();
-        let resource:Resource|undefined,initial:import('node:fs').BigIntStats|undefined,extent=0,retiredScope=false;
+        let resource:FileResource|undefined,initial:import('node:fs').BigIntStats|undefined,extent=0,retiredScope=false;
         const reads=new Set<Promise<unknown>>();
         const track=<T>(flight:Promise<T>)=>{pending.add(flight);void flight.finally(()=>pending.delete(flight)).catch(()=>{});return flight};
         const opening=track(Promise.resolve().then(async()=>{
@@ -132,5 +134,9 @@ export function createArchiveReadOwner() {
             }));reads.add(flight);void flight.finally(()=>reads.delete(flight)).catch(()=>{});return flight;
         },async close(){retiredScope=true;await opening.catch(()=>{});await Promise.allSettled([...reads]);if(resource)await close(resource)}};
     }
-    return { run, association, openHeld };
+    function retainCleanup(original: { close(): Promise<void> }, error: unknown) {
+        if ([...resources].some(resource => resource.original === original)) return;
+        resources.add({ original, close: original.close.bind(original), failed: true, error, consumed: false });
+    }
+    return { run, association, openHeld, retainCleanup };
 }

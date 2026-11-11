@@ -1,6 +1,4 @@
-import {TeamMountRecoveryRequired,isOriginalTeamRecoveryPort,type TeamMountHandle,type createOriginalTeamRecoveryPort} from '@i-harness/agent-team'
 import {foldScheduleEvents} from '@i-harness/schedule'
-import {associateOriginalTeamRetry} from './host-team-recovery.ts'
 import {mountOwnedRewind,withManagedRewindFacts,type OwnedRewindHandle} from './owned-rewind.ts'
 import {associateOriginalManagedRewind} from './host-managed-rewind.ts'
 import {originalFilesystemPolicyFor} from './execution-runtime.ts'
@@ -19,7 +17,7 @@ import {mountOwnedCode,type OwnedCodeOutput} from './owned-code.ts'
 import {createContextOutputTools} from '@i-harness/context-output'
 import {receivedExecutionInputsFor} from './lifecycle/execution-inputs.ts'
 import {createToolResultRetention} from './lifecycle/result-retention.ts'
-import {subscribeManagedExecution,subscribeManagedExecutionReadiness,assertOriginalTeamDeliveryReceipt} from '@i-harness/core-session/internal/execution'
+import {subscribeManagedExecution,subscribeManagedExecutionReadiness} from '@i-harness/core-session/internal/execution'
 import {supportsManagedServiceOptions} from './service/execution-mode.ts'
 import {createContext,captureExecutionHookChannel,type PluginContext} from '@i-harness/core-plugin'
 import { createResidentActivation, type ResidentActivationController } from './lifecycle/resident-activation.ts'
@@ -161,9 +159,8 @@ export interface SessionServiceOptions extends AssemblyOptions {
     mountRegistry?:import('./managed-assembly.ts').ManagedRegistryFactory
     ownedWorkflow?:boolean
     ownedRewind?:{root:string;workspace:string}
-    onTeamRecoveryRequired?(sessionId:string):void
     ownedTask?:{options(original:import('./managed-assembly.ts').ManagedRegistryConstruction,shared:{shell?:import('@i-harness/exec').ExecService;output?:import('./owned-shell.ts').OwnedShellOutput;codeConfig?:import('@i-harness/code-mode').CodeModeConfig}):Promise<Omit<RegisterSubagentOptions,'managedParent'|'parentNotify'|'parentSession'|'factOwner'|'getParentModel'|'deferRestoredWork'>>}
-    mountDefaultSurface?(original:import('./managed-assembly.ts').ManagedRegistryConstruction,live:{modelToolSchemas():import('@i-harness/llm-seam').ToolSchema[];modelBinding():import('./managed-assembly.ts').ManagedExecutionModelBinding;task?:RegisterSubagentResult;parentNotify?:ParentInputAdmission;shell?:import('@i-harness/exec').ExecService;output?:import('./owned-shell.ts').OwnedShellOutput;retainTeamRecovery(handle:TeamMountHandle,port:ReturnType<typeof createOriginalTeamRecoveryPort>):void}):Promise<import('./managed-assembly.ts').OwnedDefaultSurface>
+    mountDefaultSurface?(original:import('./managed-assembly.ts').ManagedRegistryConstruction,live:{modelToolSchemas():import('@i-harness/llm-seam').ToolSchema[];modelBinding():import('./managed-assembly.ts').ManagedExecutionModelBinding;task?:RegisterSubagentResult;parentNotify?:ParentInputAdmission;shell?:import('@i-harness/exec').ExecService;output?:import('./owned-shell.ts').OwnedShellOutput}):Promise<import('./managed-assembly.ts').OwnedDefaultSurface>
     acquireInstructions?(sessionId:string,execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment,retain:(cleanup:()=>void|Promise<void>)=>void):Promise<import('./managed-assembly.ts').OwnedInstructionBinding>
     ownedTitle?:{enabled:boolean;titleMaxOutputTokens?:number;timeoutMs?:number}
     ownedShell?:OwnedShellOptions
@@ -381,8 +378,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   type StopSettlement = { acknowledged: boolean; settlement?: Promise<import('@i-harness/core-session').DeliveryCloseReceipt> }
   const managedStopReceipts=new Map<string,{recipient:ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>;fenceId:string;settleSources?:()=>Promise<void>} & StopSettlement>()
   const laneControls=(id:string):Omit<SessionTurnLane,'runAdmitted'>|undefined=>managedRuntimes.get(id)?.lane??lanes.get(id)
-  type TeamRecovery={domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain;handle:TeamMountHandle;port:ReturnType<typeof createOriginalTeamRecoveryPort>;resume:()=>Promise<void>;close:()=>Promise<void>;gate:PromiseWithResolvers<void>;pending:boolean;stopped:boolean;retry?:Promise<void>;stop?:Promise<void>}
-  type CreatingAssembly = { teamRecovery?:TeamRecovery; work: Promise<unknown>; publicWork?:Promise<SessionAssembly>; managedWork?:Promise<ManagedRuntime>; cleanup?: () => Promise<void>; failed: boolean; assembly?: SessionAssembly; residentActivation: ResidentActivationController }
+  type CreatingAssembly = { work: Promise<unknown>; publicWork?:Promise<SessionAssembly>; managedWork?:Promise<ManagedRuntime>; cleanup?: () => Promise<void>; failed: boolean; assembly?: SessionAssembly; residentActivation: ResidentActivationController }
   const creating = new Map<string, CreatingAssembly>()
   const modelBindings = new Map<string, Promise<SessionModelBindingResult>>()
   const extensionRefreshes = new Map<string, Promise<void>>()
@@ -525,19 +521,6 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
   const deliveryDrains = new Map<string, ReturnType<typeof createDeliveryDrain>>()
   const deliveryStops = new Map<string, { delivery: ReturnType<typeof receivedInputsFor>['delivery']; fenceId: string; settleSources?: () => Promise<void> } & StopSettlement>()
-  function stopTeamRecovery(id:string){
-    const state=creating.get(id)?.teamRecovery;if(!state||!state.pending&&!state.stopped)return false
-    if(!state.stopped){state.stopped=true;state.pending=false;state.gate.reject(new Error('agent aborted'))}
-    if(!state.stop){const flight=Promise.resolve().then(()=>Reflect.apply(state.close,state.port,[]));state.stop=flight;void flight.catch(error=>{if(state.stop===flight)state.stop=undefined;d.warn('[i-harness] Team recovery close requires cleanup: '+String(error))})}return true
-  }
-  async function retryTeamRecovery(id:string):Promise<boolean>{
-    const row=creating.get(id),state=row?.teamRecovery;if(!row||!state?.pending)return false
-    if(state.stopped||closed||closing.has(id))throw Error('Original Team recovery retired')
-    if(state.retry){await state.retry;return true}
-    if(!isOriginalTeamRecoveryPort(state.port,state.domain,state.handle)||Object.getOwnPropertyDescriptor(state.port,'resume')?.value!==state.resume)throw TypeError('Original Team recovery changed')
-    const flight=(async()=>{state.domain.assertCurrent();await Reflect.apply(state.resume,state.port,[]);state.domain.assertCurrent();if(state.stopped||creating.get(id)!==row||row.teamRecovery!==state)throw Error('Original Team recovery retired');state.pending=false;state.gate.resolve()})()
-    state.retry=flight;try{await flight}finally{if(state.retry===flight)state.retry=undefined}return true
-  }
   function requestDeliveryStop(id: string) {
     const recipient=managedRecipients.get(id)
     if (recipient) {
@@ -571,8 +554,6 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return flight
   }
   async function awaitDeliveryStop(id: string) {
-    const team=creating.get(id)?.teamRecovery;if(team?.stopped&&!team.stop)stopTeamRecovery(id)
-    await creating.get(id)?.teamRecovery?.stop
     await managedCodeStops.get(id)?.flight
     const pending=managedStopReceipts.get(id)
     if (pending) return joinStopSettlement(pending, async () => {
@@ -1211,9 +1192,40 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       if(opts.managedRuntime!.mountRegistry||opts.managedRuntime!.ownedShell||opts.managedRuntime!.ownedCode||opts.managedRuntime!.ownedTask||opts.managedRuntime!.ownedWorkflow||opts.managedRuntime!.ownedRewind||opts.managedRuntime!.mountDefaultSurface){
        runtime=await createManagedExecutionRuntimeWithRegistry({...common,...opts.managedRuntime!.ownedRewind?{async prepareFilesystem(original:import('./managed-assembly.ts').ManagedRegistryConstruction){const config=opts.managedRuntime!.ownedRewind!;rewindMount=await mountOwnedRewind({domain:original.domain,root:config.root,workspace:config.workspace,assertCurrent:original.assertCurrent,retain:original.retain});original.assertCurrent();if(!rewindMount)return undefined;const recorder=rewindMount.recorder,take=recorder.take;return {take(path:string,before:Uint8Array|null){if(recorder.take!==take)throw Error('Original Rewind recorder changed');const result=Reflect.apply(take,recorder,[path,before]);if(recorder.take!==take)throw Error('Original Rewind recorder changed');return result}}}}:{},async configureRegistry(original){const registrySurface=await opts.managedRuntime!.mountRegistry?.(original);original.assertCurrent();if(opts.managedRuntime!.ownedShell){if(opts.workspace===undefined)throw Error('Original Shell workspace required');shellMount=mountOwnedShell(original,opts.workspace,opts.managedRuntime!.ownedShell,shellOutput!,!!(opts.managedRuntime!.originalFilesystem||opts.managedRuntime!.originalSchedule||opts.managedRuntime!.originalApproval),shellExecution)}if(opts.managedRuntime!.ownedWorkflow){if(!shellMount||!shellOutput||opts.workspace===undefined)throw Error('Original Workflow Shell and output owners required');workflowMount=mountOwnedWorkflow(original,opts.workspace,shellMount,shellOutput)}if(opts.managedRuntime!.ownedTask){
         recipient=receivedExecutionInputsFor(entry.execution).taskDelivery(original.domain)
-        const originalRecipient=recipient,current=()=>{if(retired||closed||closing.has(sessionId)||(published?(!runtime||managedRuntimes.get(sessionId)!==runtime):creating.get(sessionId)!==row))throw new ParentNotificationStoppedError();original.domain.assertCurrent();assertWritableOpen(sessionId)}
-        managedRecipients.set(sessionId,recipient);managedPrepubSettlers.set(sessionId,async()=>{await workflowMount?.reconcileCapturedHandoffs();await taskLifecycle?.journal()})
-        const notify:ParentInputAdmission={taskEvidence(namespace,id){current();return originalRecipient.taskEvidence(namespace,id)},async prepareTaskDelivery(input){current();if(input.sessionId!==sessionId)throw new ParentNotificationStoppedError();const result=await originalRecipient.prepareTaskLaunch(input);current();return result},async admitTaskDelivery(input){current();if(input.sessionId!==sessionId)throw new ParentNotificationStoppedError();const result=await originalRecipient.admitTask(input.evidence,{text:input.text,description:input.description,display:input.display});current();privateDrain?.signal();return result},async admitTeamDelivery(evidence){current();const result=await originalRecipient.admitTeam(evidence);current();if(assertOriginalTeamDeliveryReceipt(evidence,result)==='pending'&&published)privateDrain?.signal();return result},async admit(){throw new ParentNotificationStoppedError('Original Task delivery evidence required')},wake(id){if(id!==sessionId||!published)return;try{current();privateDrain?.signal()}catch{/* Retired original parent cannot be woken. */}}}
+        const originalRecipient = recipient
+        const live = () => !retired && !closed && !closing.has(sessionId)
+          && (published ? !!runtime && managedRuntimes.get(sessionId) === runtime : creating.get(sessionId) === row)
+        const current = () => {
+          if (!live()) throw new ParentNotificationStoppedError()
+          original.domain.assertCurrent()
+          assertWritableOpen(sessionId)
+        }
+        managedRecipients.set(sessionId, recipient)
+        managedPrepubSettlers.set(sessionId, async () => { await workflowMount?.reconcileCapturedHandoffs(); await taskLifecycle?.journal() })
+        const notify: ParentInputAdmission = {
+          taskEvidence(namespace, id) { current(); return originalRecipient.taskEvidence(namespace, id) },
+          async prepareTaskDelivery(input) {
+            current()
+            if (input.sessionId !== sessionId) throw new ParentNotificationStoppedError()
+            const result = await originalRecipient.prepareTaskLaunch(input)
+            current()
+            return result
+          },
+          async admitTaskDelivery(input) {
+            current()
+            if (input.sessionId !== sessionId) throw new ParentNotificationStoppedError()
+            const result = await originalRecipient.admitTask(input.evidence, { text: input.text, description: input.description, display: input.display })
+            // The original recipient already acknowledged this input. Runtime
+            // retirement only suppresses the scheduling hint, never that ACK.
+            if (live() && !failedClose.has(sessionId)) privateDrain?.signal()
+            return result
+          },
+          async admit() { throw new ParentNotificationStoppedError('Original Task delivery evidence required') },
+          wake(id) {
+            if (id !== sessionId || !published) return
+            try { current(); privateDrain?.signal() } catch { /* Retired original parent cannot be woken. */ }
+          },
+        }
         taskNotify=notify
         const taskOptions=await opts.managedRuntime!.ownedTask.options(original,{...shellMount?{shell:shellMount.service}:{},...shellOutput?{output:shellOutput}:{},...codeConfig?{codeConfig}:{}});original.assertCurrent()
         const taskFields=Object.getOwnPropertyDescriptors(taskOptions);for(const field of Object.values(taskFields))if(field.get){const get=field.get;field.get=()=>Reflect.apply(get,taskOptions,[])}
@@ -1222,7 +1234,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         const mounted=taskMount,dispose=mounted.dispose,drain=mounted.drainParentNotifications,journal=mounted.settleParentDeliveryJournalDebt,activate=mounted.activateRestoredWork,catalogReady=mounted.catalogReady,ready=mounted.ready,project=mounted.projectTasks.bind(mounted),table=mounted.table,jobs=mounted.jobs,tasks=mounted.tasks,entriesMethod=table.entries,getMethod=table.get,listJobsMethod=jobs.listAll,listTasksMethod=tasks.list,tableGet=getMethod.bind(table),kill=jobs.kill.bind(jobs)
         taskLifecycle=Object.freeze({dispose:()=>Reflect.apply(dispose,mounted,[]),drain:()=>Reflect.apply(drain,mounted,[]),journal:()=>Reflect.apply(journal,mounted,[]),activate:()=>Reflect.apply(activate,mounted,[]),ready,projectTasks(){const check=()=>{if(table.entries!==entriesMethod||table.get!==getMethod||jobs.listAll!==listJobsMethod||tasks.list!==listTasksMethod)throw Error('Original Task projection changed')};check();const rows=project();check();return rows},projectionIntegrity(){if(!opts.coordinator)return Promise.reject(Error('Task projection integrity requires the original coordinator'));const coordinator=opts.coordinator;return (async()=>[...await inspectTaskProjection(tasks,coordinator),...await inspectJobRecordProjection(tasks,coordinator),...await inspectDocumentWriteIntents(coordinator, sessionId)])()},reconcileProjection(){if(!opts.coordinator)return Promise.reject(Error('Task projection integrity requires the original coordinator'));const coordinator=opts.coordinator;return (async()=>[...await reconcileTaskProjection(tasks,coordinator),...await inspectJobRecordProjection(tasks,coordinator),...await inspectDocumentWriteIntents(coordinator, sessionId)])()},cancelTask(id:string){const entry=tableGet(id);if(entry!==undefined){if(entry.status!=='running')return 'already-finished';entry.controller.abort();return entry.jobId!==undefined?kill(entry.jobId):'cancellation-requested'}return kill(id)}})
         original.retain(taskLifecycle.dispose);await catalogReady;original.assertCurrent()
-       }if(opts.managedRuntime!.ownedCode){if(!shellOutput?.sourceFor)throw Error('Original Code output source required');if(!opts.managedRuntime!.ownedShell){for(const tool of createContextOutputTools(shellOutput.service, { exposure: 'direct' }))original.tools.register(tool)}codeMount=await mountOwnedCode(original,{service:shellOutput.service,sourceFor:shellOutput.sourceFor},codeConfig!)}let surface=registrySurface;if(opts.managedRuntime!.mountDefaultSurface){original.assertCurrent();surface=await opts.managedRuntime!.mountDefaultSurface(original,{modelToolSchemas:()=>codeMount?codeMount.schemas():original.tools.schemas(),modelBinding:()=>{original.assertCurrent();const selected=runtime?runtime.selectedModelBinding():initialBinding;if(!selected)throw Error('Original parent model not bound');return selected},retainTeamRecovery(handle,port){original.assertCurrent();if(row.teamRecovery||!isOriginalTeamRecoveryPort(port,original.domain,handle))throw TypeError('Original Team recovery port required');const resume=Object.getOwnPropertyDescriptor(port,'resume')?.value,close=Object.getOwnPropertyDescriptor(port,'close')?.value;if(typeof resume!=='function'||typeof close!=='function')throw TypeError('Original Team recovery methods required');const gate=Promise.withResolvers<void>();void gate.promise.catch(()=>{});row.teamRecovery={domain:original.domain,handle,port,resume,close,gate,pending:false,stopped:false};original.retain(()=>Reflect.apply(close,port,[]))},...taskMount?{task:taskMount}:{},...taskNotify?{parentNotify:taskNotify}:{},...shellMount?{shell:shellMount.service}:{},...shellOutput?{output:shellOutput}:{}});original.assertCurrent()}if(taskMount){const selected=await resolveModel();original.assertCurrent();initialBinding=selected;initialTaskModel=selected.model;taskLifecycle!.activate();await taskLifecycle!.ready;original.assertCurrent()}if(surface&&types.isProxy(surface))throw TypeError('Original default surface required');const activate=surface&&Object.getOwnPropertyDescriptor(surface,'activateAfterTaskReady');if(activate){if(!taskMount||!('value'in activate)||typeof activate.value!=='function'||types.isProxy(activate.value))throw TypeError('Original staged Team activation required');try{await Reflect.apply(activate.value,surface,[])}catch(error){const state=row.teamRecovery;if(!(error instanceof TeamMountRecoveryRequired)||!state||state.handle!==error.handle||!isOriginalTeamRecoveryPort(state.port,original.domain,state.handle))throw error;state.pending=true;const notify=opts.managedRuntime!.onTeamRecoveryRequired;if(!notify){state.pending=false;throw new AggregateError([error,Error('Team recovery notification unavailable')],'Team recovery cannot await retry',{cause:error})}try{notify(sessionId)}catch(notification){state.pending=false;throw new AggregateError([error,notification],'Team recovery notification failed',{cause:error})}await state.gate.promise}original.assertCurrent();if(Object.getOwnPropertyDescriptor(surface!,'activateAfterTaskReady')?.value!==activate.value)throw Error('Original staged Team activation changed')}return surface},resolveModel,assertConstructionCurrent(){if(retired)throw Error('Original construction retired');assertWritableOpen(sessionId)}})
+       }if(opts.managedRuntime!.ownedCode){if(!shellOutput?.sourceFor)throw Error('Original Code output source required');if(!opts.managedRuntime!.ownedShell){for(const tool of createContextOutputTools(shellOutput.service, { exposure: 'direct' }))original.tools.register(tool)}codeMount=await mountOwnedCode(original,{service:shellOutput.service,sourceFor:shellOutput.sourceFor},codeConfig!)}let surface=registrySurface;if(opts.managedRuntime!.mountDefaultSurface){original.assertCurrent();surface=await opts.managedRuntime!.mountDefaultSurface(original,{modelToolSchemas:()=>codeMount?codeMount.schemas():original.tools.schemas(),modelBinding:()=>{original.assertCurrent();const selected=runtime?runtime.selectedModelBinding():initialBinding;if(!selected)throw Error('Original parent model not bound');return selected},...taskMount?{task:taskMount}:{},...taskNotify?{parentNotify:taskNotify}:{},...shellMount?{shell:shellMount.service}:{},...shellOutput?{output:shellOutput}:{}});original.assertCurrent()}if(taskMount){const selected=await resolveModel();original.assertCurrent();initialBinding=selected;initialTaskModel=selected.model;taskLifecycle!.activate();await taskLifecycle!.ready;original.assertCurrent()}if(surface&&types.isProxy(surface))throw TypeError('Original default surface required');return surface},resolveModel,assertConstructionCurrent(){if(retired)throw Error('Original construction retired');assertWritableOpen(sessionId)}})
       }else runtime=createManagedExecutionRuntime({...common,...await resolveModel()})
       await runtime.startSchedule?.()
       assertWritableOpen(sessionId)
@@ -1231,7 +1243,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         const published=runtime,originalRecipient=recipient
         privateDrain=createDeliveryDrain({
           current:()=>!retired&&!closed&&!closing.has(sessionId)&&!failedClose.has(sessionId)&&managedRuntimes.get(sessionId)===published,
-          reconcile:async()=>{await taskLifecycle?.drain();await originalRecipient.settle();await originalRecipient.reconcileExecCandidates();await originalRecipient.reconcileCodeCandidates();await originalRecipient.reconcileWorkflowCandidates()},
+          reconcile:async()=>{await originalRecipient.settle();await taskLifecycle?.drain();await originalRecipient.reconcileExecCandidates();await originalRecipient.reconcileCodeCandidates();await originalRecipient.reconcileWorkflowCandidates()},
           pending:()=>{const observation=entry.execution.observe();return observation.inbox.pending().filter(input=>['session.delivery.exec','session.delivery.code','session.delivery.subagent','session.delivery.workflow','session.delivery.team'].includes(input.provenance?.producer??'')&&observation.inbox.isExecutable(input.inputId)).map(input=>input.inputId)},
           schedule(inputId,settled){if(retired||managedRuntimes.get(sessionId)!==published)return false;const input=entry.execution.observe().inbox.pending().find(value=>value.inputId===inputId);if(!input)return false;if(queues.get(sessionId)?.byId.get(inputId)?.scheduled||published.lane.currentInput()?.inputId===inputId)return false;void submit(sessionId,input.text,new AbortController().signal,{admittedInputId:inputId}).then(settled,settled);return true},
           report:error=>d.warn('[i-harness] private delivery reconciliation failed: '+String(error)),
@@ -1388,7 +1400,14 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         // sources whose close was requested, so running it before the turn
         // leaves that required entry pending forever. Defer it for the turn
         // that adopts the admitted input; later submissions settle normally.
-        try { await awaitDeliveryStop(sessionId); await priorAssembly?.settleRuntimeContextPublications(); if (options?.admittedInputId === undefined) await priorDocument?.settleFinishedActions() }
+        try {
+          // A Stop capture may be waiting behind this exact finished owner's
+          // uncertain write. Reconcile that original frame before asking the
+          // close receipt to admit; the live Stop fence already blocks delivery.
+          if (options?.admittedInputId === undefined) await priorDocument?.settleFinishedActions()
+          await awaitDeliveryStop(sessionId)
+          await priorAssembly?.settleRuntimeContextPublications()
+        }
         catch (failure) {
           if (priorAssembly && !options?.admittedInputId && !controller.signal.aborted && !closed && !closing.has(sessionId) && !failedClose.has(sessionId)) {
             try { await priorAssembly.inbox.admit(input, controller.signal) }
@@ -1572,7 +1591,6 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
 
   function cancelRunning(sessionId: string): { cancelled: boolean } {
-    const teamStopped=stopTeamRecovery(sessionId)
     requestDeliveryStop(sessionId)
     const code=managedCodeMounts.get(sessionId)
     const priorCodeStop=managedCodeStops.get(sessionId)
@@ -1600,7 +1618,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const record = postTurn ?? (current === undefined
       ? [...(records?.values() ?? [])].filter(r => r.state === "wait").sort((a, b) => a.order - b.order)[0]
       : records?.get(current.inputId))
-    if (record === undefined || record.controller.signal.aborted) return { cancelled: teamStopped }
+    if (record === undefined || record.controller.signal.aborted) return { cancelled: false }
     record.controller.abort()
     stopNotifications(sessionId)
     if (current === undefined) record.state = "cancelled"
@@ -1612,7 +1630,6 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const liveAssembly = (sessionId: string) => closed || closing.has(sessionId) || failedClose.has(sessionId) ? undefined : assemblies.get(sessionId)
   const resultReader = createResultPageReader(opts, id => !closed && !closing.has(id) && !failedClose.has(id))
   function revokeSession(sessionId: string): void {
-    stopTeamRecovery(sessionId)
     retireManaged(sessionId)
     pendingExecutionNotifications.get(sessionId)?.();pendingExecutionNotifications.delete(sessionId)
     creating.get(sessionId)?.residentActivation.retire()
@@ -1966,7 +1983,6 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     closeSession,
     close,
   }
-  associateOriginalTeamRetry(service,retryTeamRecovery)
   const readOriginalRuntime=(id:string)=>{if(!privateEntries.has(id))return undefined;const runtime=managedRuntimes.get(id);if(!runtime||closed||closing.has(id))return undefined;const check=()=>{if(closed||closing.has(id)||managedRuntimes.get(id)!==runtime)throw Error('Original managed runtime retired');runtime.domain.assertCurrent()};check();return Object.freeze({execution:runtime.execution,domain:runtime.domain,tools:runtime.tools,assertCurrent:check})}
   associateOriginalManagedExecution(service,{read(id){if(!privateEntries.has(id))return undefined;if(closed||closing.has(id)||!privateCache)throw Error('Original managed execution unavailable');const execution=privateCache.current(id);if(!execution)throw Error('Original managed execution unavailable');return execution},runtime:readOriginalRuntime,async acquireChild(id){if(closed||!privateCache)throw Error('Original managed execution unavailable');const entry=await privateCache.get(id);if(closed){await privateCache.close(id);throw Error('Original managed execution unavailable')}let released=false;return Object.freeze({execution:entry.execution,async release(){if(released)return;released=true;await privateCache!.close(id)}})},async prepareRuntime(id){await prepareFirstParty(id);if(!managedCompatible(id)){if(privateEntries.has(id))throw Error('Private entry cannot switch to Session-shaped compatibility');return undefined}validateFirstParty(id);await getManagedRuntime(id);validateFirstParty(id);return readOriginalRuntime(id)},retain(id,execution,cleanup){if(!privateEntries.has(id)||closed||closing.has(id)||!privateCache)throw Error('Original managed execution unavailable');privateCache.retain(id,execution,cleanup)}})
   associateOriginalManagedRewind(service,id=>{

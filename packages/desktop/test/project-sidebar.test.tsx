@@ -33,6 +33,15 @@ function fixture(handle?: (request: DesktopRequest) => unknown) {
 }
 
 describe("project conversation sidebar", () => {
+  it('discovers unclassified history in inactive assigned folders using metadata without opening their conversation lists', async () => {
+    const { props, bridge } = fixture(request => request.kind === 'desktop/session/navigation/state'
+      ? { s1: { pinned: true, unread: false } } : undefined)
+    render(<ProjectSidebar {...props} selectedProjectId={undefined} selectedWorkspaceId={undefined} />)
+    await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: 'desktop/session/navigation/state', workspaceId: 'w2' }))
+    expect(screen.getByText('未分類會話')).toBeTruthy()
+    expect(bridge.request).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'session/dashboard' }))
+  })
+
   it("honors a valid project creation target even when the current conversation has no selected storage folder", async () => {
     const { props } = fixture()
     render(<ProjectSidebar {...props} selectedWorkspaceId={undefined} selectedSessionId={undefined} canCreate />)

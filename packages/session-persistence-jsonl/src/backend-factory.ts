@@ -1,6 +1,6 @@
+import { isCommittedDocumentClaimed } from '@i-harness/session-persistence/internal/commit'
 import { capturePublishedBootstrap } from './backend/bootstrap-published.ts'
 import { associateArchiveReadResources, associateArchiveHistoryPrefixReader } from '@i-harness/session-persistence/internal/archive-read'
-import {associateOriginalTeamTargetBackend,associateOriginalTeamBindingBackend} from '../../session-persistence/src/team-child-recovery-internal.ts'
 import { createArchiveReadOwner } from './backend/archive-read-owner.ts'
 import { readSessionArchive } from './backend/archive-reader.ts'
 import { associateArtifactPaths, createOriginalJsonlPathResolution } from '@i-harness/session-persistence/internal/artifact-path'
@@ -29,6 +29,8 @@ import { createJsonlProcessReadCapability } from './backend/process-read.ts'
 import { assembleSessionCoordinatorWithProcessStorage, type TaskTransitionBackendSession, type TaskTransitionConfiguration } from '@i-harness/session-persistence/internal/process-read-assembly'
 import { routeInvocation, type CoordinatorOptions, type SessionCoordinator, type BootstrapRoute, type BootstrapReadState } from '@i-harness/session-persistence'
 import { createTaskDocumentObservation } from './backend/task-document-observation.ts'
+import { taskDocumentStorageContract } from '@i-harness/session-persistence/internal/task-state'
+import { SessionLockUnsupportedError } from '@i-harness/session-persistence'
 import { writeLegacyDocument } from './backend/document-write.ts'
 import type { HeldTaskDocumentScope, TaskDocumentBackendSession, HeldFactOwner } from '@i-harness/session-persistence'
 
@@ -49,10 +51,23 @@ export function composeJsonlTaskDocumentCoordinator(backend: PersistenceBackend,
 export function createJsonlTaskDocumentCoordinator(root: string, options: CoordinatorOptions | undefined, validator: { validate(value: unknown): void }): SessionCoordinator {
   return composeJsonlTaskDocumentCoordinator(createJsonlBackend(root), options, validator)
 }
-/** Internal candidate: full transition wiring is not production-qualified. */
+/** Full native task/document/process composition owned by the original backend. */
 export function composeJsonlTaskTransitionCoordinator(backend: PersistenceBackend, options: CoordinatorOptions | undefined, validator: TaskTransitionConfiguration['validator']): SessionCoordinator {
   const owner = processReadOwners.get(backend); if (!owner) throw new TypeError('Original JSONL backend required'); owner.assertOriginal()
-  return assembleSessionCoordinatorWithProcessStorage(backend, options,
+  if (options?.lock?.enabled === false) throw new SessionLockUnsupportedError('Current-format writable coordination requires ownership; use createReadOnlySessionCoordinator for non-owning reads')
+  // Preserve the caller's lazy option reads and receiver while defaulting only
+  // the ownership policy. Spreading options would eagerly read lease budgets.
+  const nativeOptions: CoordinatorOptions = {
+    get originalExecutionFoldFactory() { return options?.originalExecutionFoldFactory },
+    get maxPendingGroups() { return options?.maxPendingGroups },
+    get coalesceTargetBytes() { return options?.coalesceTargetBytes },
+    get maxDelayMs() { return options?.maxDelayMs },
+    get reportBackgroundFailure() { return options?.reportBackgroundFailure },
+    get acquireRetryMs() { return options?.acquireRetryMs },
+    get acquireDeadlineMs() { return options?.acquireDeadlineMs },
+    lock: { enabled: true, get lockRoot() { return options?.lock?.lockRoot } },
+  }
+  return assembleSessionCoordinatorWithProcessStorage(backend, nativeOptions,
     { capture(id, keys) { owner.assertOriginal(); return owner.capability.capture(id, keys) }, captureManagedAuxiliary(id, keys) { owner.assertOriginal(); return owner.capability.captureManagedAuxiliary(id, keys) } },
     { validator, open(scope) { owner.assertOriginal(); return owner.openTask(scope) } },
     { validator, open(scope) { owner.assertOriginal(); return owner.openTransitionTask(scope) }, observeFresh(scope) { owner.assertOriginal(); return owner.capability.observeFreshTaskParent(scope) },
@@ -208,6 +223,28 @@ export function createJsonlBackend(root: string, options?: {
   }
   const docPath = pathResolution.document
   const tombPath = (kind: string, id: string) => artifactPath(`desktop-deleted-${kind}-${createHash("sha256").update(id).digest("hex")}`, ".tombstone")
+  /** A committed successor is the canonical writer namespace. The original
+   * session lease prevents publication between this check and native issue. */
+  async function assertWritableGeneration(id: string) {
+    const legacyPath = filePath(id)
+    const directory = legacyPath.slice(0, -'.jsonl'.length)
+    await confined(directory)
+    let names: string[]
+    try { names = await readdir(directory) }
+    catch (error) { if ((error as NodeJS.ErrnoException | null | undefined)?.code === 'ENOENT') return; throw error }
+    if (names.some(name => {
+      const match = /^session\.v(\d+)\.jsonl$/.exec(name)
+      return match !== null && Number(match[1]) > CURRENT_FORMAT_VERSION
+    })) throw Object.assign(new Error('This session has a newer committed generation; use the commit-log coordinator'), { code: 'SESSION_FORMAT_SUPERSEDED' })
+  }
+  async function assertWritableDocument(key: string) {
+    docPath(key)
+    if (await isCommittedDocumentClaimed(rootPath, key, archiveReads.retainCleanup)) throw Object.assign(new Error('This document has a committed successor; use the commit-log coordinator'), { code: 'SESSION_FORMAT_SUPERSEDED' })
+  }
+  async function assertLegacyNativeAdmission(kind: string, id: string) {
+    if (kind === 'session') await assertWritableGeneration(id)
+    await assertNotDeleted(kind, id)
+  }
   async function assertNotDeleted(kind: string, id: string) {
     if (kind === "document") {
       const digest = /^(?:desktop-navigation-|desktop-session-project-|approval-history-|desktop-goal-|desktop-input-tokens-)([a-f0-9]{64})$/.exec(id)?.[1]
@@ -255,8 +292,8 @@ export function createJsonlBackend(root: string, options?: {
     const journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 as const }
     return serializeHeader({ ...meta, journal }) + '\n'
   }
-  const { trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth, ...bootstrapBackend } = createBootstrapHeaderBackend(filePath, assertNotDeleted, rootPath, captureIO, publication)
-  const factJournal = createFactJournalBackend(filePath, assertNotDeleted, Object.freeze({ filePath, assertNotDeleted, enter: (id, owner, batch) => nativePrewrite.enter(id, owner, batch) }), publication)
+  const { trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth, ...bootstrapBackend } = createBootstrapHeaderBackend(filePath, assertLegacyNativeAdmission, rootPath, captureIO, publication)
+  const factJournal = createFactJournalBackend(filePath, assertLegacyNativeAdmission, Object.freeze({ filePath, assertNotDeleted: assertLegacyNativeAdmission, enter: (id, owner, batch) => nativePrewrite.enter(id, owner, batch) }), publication)
   const wrappedAppend = options?.wrapOwnedBatch !== undefined && factJournal.appendOwnedBatch !== undefined
     ? options.wrapOwnedBatch(factJournal.appendOwnedBatch) : undefined
   const wrappedReconcile = options?.wrapOwnedReconcile !== undefined && factJournal.reconcileOwnedBatch !== undefined
@@ -267,7 +304,7 @@ export function createJsonlBackend(root: string, options?: {
     ...(wrappedReconcile !== undefined ? { reconcileOwnedBatch: wrappedReconcile } : {}),
     ...bootstrapBackend,
     // Original private selected lane shares capture IO with bootstrap.
-    selectedJournal: createSelectedFactJournalBackend(filePath, assertNotDeleted, captureIO, publication),
+    selectedJournal: createSelectedFactJournalBackend(filePath, assertLegacyNativeAdmission, captureIO, publication),
     id: "jsonl",
     capabilities: { seekableRead: false, rawArtifacts: true },
     // M23: the coordinator's ownership lease defaults to the store root.
@@ -276,6 +313,7 @@ export function createJsonlBackend(root: string, options?: {
     deletionReceipt,
 
     async create(sessionId: string, meta: SessionMeta): Promise<void> {
+      await assertWritableGeneration(sessionId)
       validateSubagentHeader(meta)
       if (meta.semanticSeed?.version === 3) throw new TypeError('Legacy create cannot install selected results')
       await assertNotDeleted("session", sessionId)
@@ -287,6 +325,7 @@ export function createJsonlBackend(root: string, options?: {
     },
 
     async append(sessionId: string, events: SessionEvent[]): Promise<void> {
+      await assertWritableGeneration(sessionId)
       await assertNotDeleted("session", sessionId)
       await assertPublicBootstrap(sessionId)
       const path = filePath(sessionId)
@@ -387,6 +426,7 @@ export function createJsonlBackend(root: string, options?: {
     },
 
     async repair(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }> {
+      await assertWritableGeneration(sessionId)
       forgetJournal(sessionId)
       await assertPublicBootstrap(sessionId)
       await assertNotDeleted("session", sessionId)
@@ -431,6 +471,7 @@ export function createJsonlBackend(root: string, options?: {
     },
 
     async replaceEvents(sessionId, events) {
+      await assertWritableGeneration(sessionId)
       forgetJournal(sessionId)
       await assertNotDeleted("session", sessionId)
       await assertPublicBootstrap(sessionId)
@@ -461,6 +502,7 @@ export function createJsonlBackend(root: string, options?: {
     },
 
     async upgradeSessionFormat(sessionId, expected, target) {
+      await assertWritableGeneration(sessionId)
       forgetJournal(sessionId)
       await assertNotDeleted("session", sessionId)
       await assertPublicBootstrap(sessionId)
@@ -488,6 +530,7 @@ export function createJsonlBackend(root: string, options?: {
     },
 
     async updateMeta(sessionId, patch) {
+      await assertWritableGeneration(sessionId)
       await assertNotDeleted("session", sessionId)
       await assertPublicBootstrap(sessionId)
       const path = filePath(sessionId)
@@ -513,6 +556,9 @@ export function createJsonlBackend(root: string, options?: {
     },
 
     async putDocument(key: string, data: unknown): Promise<void> {
+      await assertWritableDocument(key)
+      if (key.startsWith("task-")) await assertWritableGeneration(key.slice(5))
+      else if (key.startsWith("session-title/")) await assertWritableGeneration(key.slice("session-title/".length))
       await assertNotDeleted("document", key)
       await mkdir(rootPath, { recursive: true })
       const path = docPath(key)
@@ -589,6 +635,26 @@ export function createJsonlBackend(root: string, options?: {
       for (const path of paths) await unlink(path).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error })
     },
   }
+  Object.defineProperty(backend, 'assertLegacyTargetAvailable', {
+    value: async function(this: PersistenceBackend, id: string) {
+      if (this !== backend) throw new TypeError('Original JSONL namespace receiver required')
+      assertOriginal()
+      await assertPublicBootstrap(id, true)
+      assertOriginal()
+    },
+  })
+  Object.defineProperty(backend, 'createCoordinator', {
+    enumerable: true,
+    value: function(this: PersistenceBackend, coordinatorOptions?: CoordinatorOptions) {
+      if (this !== backend) throw new TypeError('Original JSONL backend receiver required')
+      const required = ['create', 'append', 'read', 'list', 'repair', 'putDocument', 'getDocument', 'profile', 'updateMeta', 'readJournalPrefix', 'appendOwnedBatch', 'reconcileOwnedBatch', 'readDocumentObserved', 'prepareBootstrapHeader', 'reconcileBootstrapHeader', 'readBootstrapState', 'confirmBootstrapFrames', 'deleteOwnedSession'] as const
+      for (const name of required) {
+        const field = Object.getOwnPropertyDescriptor(backend, name)
+        if (!field || !('value' in field) || typeof field.value !== 'function') throw new TypeError(`Original writable JSONL capability unavailable: ${name}`)
+      }
+      return composeJsonlTaskTransitionCoordinator(backend, coordinatorOptions, taskDocumentStorageContract)
+    },
+  })
   options?.wrap?.(backend)
   const artifactOwner = pathResolution.bindBackend(backend, {
     async prepareRoot() { assertOriginal(); await mkdir(rootPath, {recursive:true}); assertOriginal() },
@@ -599,13 +665,7 @@ export function createJsonlBackend(root: string, options?: {
     },
   })
   const assertOriginal = artifactOwner.assertOriginal
-  const teamRoutes=bootstrapBackend.bootstrapRoutes!,teamDiscover=teamRoutes.discoverTeamChild!,teamSettle=teamRoutes.settleTeamDiscovery!,teamCurrent=()=>{assertOriginal();for(const [name,original] of [['discoverTeamChild',teamDiscover],['settleTeamDiscovery',teamSettle]] as const){const field=Object.getOwnPropertyDescriptor(teamRoutes,name);if(!field||!('value'in field)||field.value!==original)throw TypeError('Original Team target backend changed')}}
-  associateOriginalTeamTargetBackend(backend,Object.freeze({async discover(id,owner){teamCurrent();const result=await teamDiscover.call(teamRoutes,id,owner);teamCurrent();return result},async settle(id,owner){teamCurrent();await teamSettle.call(teamRoutes,id,owner);teamCurrent()}}))
-  associateOriginalTeamBindingBackend(backend,Object.freeze({open(scope){
-    assertOriginal();async function available(){for(const path of [tombPath('session',scope.parentSessionId),tombPath('document',scope.key)]){try{await lstat(path);throw Object.assign(Error('Team binding deleted'),{code:'SESSION_DELETED'})}catch(error){if((error as NodeJS.ErrnoException|null|undefined)?.code!=='ENOENT')throw error}}}
-    const original=createTaskDocumentObservation(rootPath,docPath(scope.key),scope,undefined,available,createOriginalTaskNativeStage(scope,available,assertOriginal))
-    const session=Object.freeze({async observe(){if(this!==session)throw TypeError('Original Team binding receiver required');assertOriginal();await available();const result=await original.observe();await available();assertOriginal();return result},async confirm(witness:Parameters<typeof original.confirm>[0]){if(this!==session)throw TypeError('Original Team binding receiver required');assertOriginal();await available();const result=await original.confirm(witness);await available();assertOriginal();return result},stageInitialize(bytes:Uint8Array){if(this!==session)throw TypeError('Original Team binding receiver required');assertOriginal();return original.stageInitialize(bytes)},settleResources(){if(this!==session)return Promise.reject(TypeError('Original Team binding receiver required'));return original.settleResources()}});return session
-  }}))
+
   associateArchiveReadResources(backend,archiveReads.association)
   nativePrewrite.associate(backend, assertOriginal)
   associateOwnedExecutionReader(backend,{assertOriginal,filePath,assertNotDeleted,archive:archiveReads,
@@ -619,6 +679,8 @@ export function createJsonlBackend(root: string, options?: {
   function openOwnedTask(scope: HeldTaskDocumentScope, initialize: boolean): TaskDocumentBackendSession {
     assertOriginal(); const original = createTaskDocumentObservation(rootPath, docPath(scope.key), scope, undefined, available, createOriginalTaskNativeStage(scope, available, assertOriginal))
     async function available() {
+      await assertWritableGeneration(scope.parentSessionId)
+      if (await isCommittedDocumentClaimed(rootPath, scope.key)) throw Object.assign(Error('Document belongs to the committed generation'), { code: 'SESSION_FORMAT_SUPERSEDED' })
       for (const path of [tombPath('session', scope.parentSessionId), tombPath('document', scope.key)]) {
         try { await lstat(path); throw Object.assign(new Error('Task document is deleted'), { code: 'SESSION_DELETED' }) }
         catch (error) { if ((error as NodeJS.ErrnoException | null | undefined)?.code !== 'ENOENT') throw error }

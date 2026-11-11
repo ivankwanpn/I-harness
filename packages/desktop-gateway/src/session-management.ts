@@ -1,6 +1,7 @@
 import { ForkAdmissionError, type SessionCoordinator, type SessionMeta } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
-import { createHash } from "node:crypto"
+import { navigationDocumentKey, parseSessionNavigation, type SessionNavigation } from './session-navigation.ts'
+export type { SessionNavigation } from './session-navigation.ts'
 import { readInbox, committedFactSeqs, deriveSessionTitle } from "@i-harness/core-session"
 import { recoverColdSessionRewind, sessionArtifactManifest } from "./session-artifacts.ts"
 import { createSessionManagementFence, type SessionManagementFence } from "./session-management-fence.ts"
@@ -10,7 +11,7 @@ import { acquireManagedExecution } from '../../session-persistence/src/execution
 export type SessionManagementAction = "rename" | "archive" | "restore" | "pin" | "unpin" | "read" | "unread" | "delete"
 export interface SessionBatchCommand { action: "archive" | "restore" | "delete" | "move"; sessionIds: string[]; projectId?: string; expectedOwners?: Record<string, string | null> }
 export interface SessionBatchResult { results: ({ sessionId: string; ok: true; projectId?: string; executionWorkspace?: string } | { sessionId: string; ok: false; error: string })[] }
-export interface SessionNavigation { pinned: boolean; unread: boolean; projectId?: string }
+
 export interface SessionManagementOptions {
   /** Original metadata owner calls this after committed visibility withdrawal. */
   onVisibilityWithdrawn?(sessionId: string): void
@@ -32,14 +33,9 @@ interface ManagedAgentState { formatVersion?: unknown; agentTable?: { path?: str
 export function createSessionManagement(coordinator: SessionCoordinator, service: SessionService, visible: (id: string, meta: SessionMeta) => Promise<boolean> = async (_id, meta) => meta.origin !== "subagent" && meta.origin !== "approval-review" && !(meta.origin === "team" && meta.parentSession), options: SessionManagementOptions = {}) {
   const writes = new Map<string, Promise<unknown>>()
   const fence = options.fence ?? createSessionManagementFence()
-  const documentKey = (id: string) => `desktop-navigation-${createHash("sha256").update(id).digest("hex")}`
+  const documentKey = navigationDocumentKey
   async function navigationFor(id: string): Promise<SessionNavigation> {
-    const document = await coordinator.getDocument(documentKey(id))
-    if (document === undefined) return { pinned: false, unread: false }
-    if (document === null || typeof document !== "object" || Array.isArray(document)) throw new Error("Session navigation metadata is invalid")
-    const row = document as { version?: unknown; pinned?: unknown; unread?: unknown }
-    if (row.version !== 1 || typeof row.pinned !== "boolean" || typeof row.unread !== "boolean") throw new Error("Session navigation metadata is invalid")
-    return { pinned: row.pinned, unread: row.unread }
+    return parseSessionNavigation(await coordinator.getDocument(documentKey(id)))
   }
   function serial<T>(id: string, action: () => Promise<T>): Promise<T> {
     const job = (writes.get(id) ?? Promise.resolve()).catch(() => undefined).then(action)

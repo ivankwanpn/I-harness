@@ -12,7 +12,7 @@ export const executionOptionMode = Object.freeze({
  windowsSandboxBackend:'complete',wslExecution:'complete',webSearchMode:'complete',webCacheRoot:'complete',legacyPrivateTempRoot:'complete',
  modelPolicy:'policy',model:'forward',modelLabel:'complete',mockScript:'complete',mockCycles:'complete',
  approveAll:'complete',approvalMode:'complete',sandbox:'complete',allowRuntimeSandboxChanges:'complete',shellTimeoutMs:'complete',shellBackgroundAfterMs:'complete',shellRetention:'complete',retry:'complete',
- maxParallelToolCalls:'forward',mcp:'complete',pluginMcp:'complete',pluginAgents:'complete',pluginAgentsEphemeral:'complete',lsp:'complete',skills:'complete',team:'complete',concurrentSessionTeams:'complete',agentShell:'complete',
+ maxParallelToolCalls:'forward',mcp:'complete',pluginMcp:'complete',pluginAgents:'complete',pluginAgentsEphemeral:'complete',lsp:'complete',skills:'complete',agentShell:'complete',
  additionalSystemPrompt:'complete',hookContext:'complete',sessionQuery:'complete',additionalTools:'complete',
  contextOutput:'complete',contextOutputSettingsPath:'complete',contextOutputSourceFor:'complete',contextOutputLegacyReadObservation:'complete',
  compact:'complete',autoCompactionEnabled:'complete',rewindStoreRoot:'complete',preset:'complete',planMode:'complete',guardian:'complete',

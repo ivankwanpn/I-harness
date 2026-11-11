@@ -3,17 +3,13 @@ import { composeJsonlTaskTransitionCoordinator } from '../../../session-persiste
 import { taskDocumentStorageContract } from '../../../subagent/src/task/storage-contract.ts'
 
 /**
- * D-12 test migration helper for the persistence package.
+ * Explicit native composition for tests that exercise the underlying ownership
+ * modules. The public factory now selects this same composition through the
+ * JSONL constructor-owned capability. Keeping the explicit helper lets tests
+ * supply their existing controlled backend without replacing guarded methods.
  *
- * `createSessionCoordinator` from `src/index.ts` is the legacy factory and
- * refuses format-14 sessions by design (`TASK_TRANSITION_UNSUPPORTED`). The
- * composed coordinator is the production path; tests that need a working
- * coordinator construct it through this helper, with the same
- * `(backend, options?) => coordinator` call shape as the legacy factory.
- *
- * The import crosses into the sibling storage package by relative path on
- * purpose: `session-persistence` cannot declare a dependency on the JSONL
- * storage that depends on it, and the boundary gate scans only `src/`.
+ * Test-only sibling imports avoid a production dependency from persistence to
+ * its concrete JSONL storage package.
  */
 export function createSessionCoordinator(backend: PersistenceBackend, options?: CoordinatorOptions): SessionCoordinator {
   return composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true }, ...options }, taskDocumentStorageContract)
@@ -38,7 +34,7 @@ export function createControlledJsonlBackend(root: string, configure?: (backend:
       const target = backend as unknown as Record<string, unknown>
       const dispatch = methods as unknown as Record<string, unknown>
       for (const [key, value] of Object.entries(backend)) {
-        if (typeof value !== 'function' || key === 'appendOwnedBatch' || key === 'reconcileOwnedBatch') continue
+        if (typeof value !== 'function' || key === 'createCoordinator' || key === 'appendOwnedBatch' || key === 'reconcileOwnedBatch') continue
         target[key] = function(this: PersistenceBackend, ...args: unknown[]) {
           const next = dispatch[key]
           if (typeof next !== 'function') throw new TypeError('Missing controlled method ' + key)

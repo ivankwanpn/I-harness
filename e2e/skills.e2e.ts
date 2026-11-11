@@ -1,12 +1,13 @@
 // e2e/skills.e2e.ts — M25 §2.1: the REAL skills mount (M24b) scanning real
 // SKILL.md files from the workspace, plus the fail-closed missing-skill path.
 //
-// Tool-driving goes through runHeadless + mockScript (see team.e2e.ts for the
+// Tool-driving goes through runHeadless + mockScript (see cli.e2e.ts for the
 // mock-injection ruling).
 import { describe, expect, it } from "vitest"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { runHeadless } from "../apps/cli/src/run.ts"
+import { inlineToolOutput } from '../apps/cli/test/inline-tool-output.ts'
 import { makeWorkspace, removeWorkspace } from "./helpers.ts"
 
 describe("e2e skills", () => {
@@ -29,13 +30,13 @@ describe("e2e skills", () => {
         ],
       })
       expect(result.exitCode, result.error).toBe(0)
-      const results = result.session?.events.filter((e) => e.type === "tool/result") as { name: string; output: unknown }[]
+      const results = result.session!.events.filter((e) => e.type === "tool/result")
       // The search hit the REAL on-disk SKILL.md.
       const search = results.find((e) => e.name === "skill_search")
-      expect(JSON.stringify(search?.output)).toContain("alpha")
+      expect(JSON.stringify(inlineToolOutput(search))).toContain("alpha")
       // skill_get returned the real file body.
       const get = results.find((e) => e.name === "skill_get")
-      expect(JSON.stringify(get?.output)).toContain("scripts/rebuild.sh")
+      expect(JSON.stringify(inlineToolOutput(get))).toContain("scripts/rebuild.sh")
     } finally {
       removeWorkspace(dir)
     }
@@ -68,9 +69,9 @@ describe("e2e skills", () => {
       // `pnpm -r --no-bail test`, which is why block ①'s rewrite census, scoped
       // to the workspace packages, missed it.)
       expect(result.exitCode, result.error).toBe(0)
-      const results = result.session?.events.filter((e) => e.type === "tool/result") as { name: string; output: unknown }[]
+      const results = result.session!.events.filter((e) => e.type === "tool/result")
       const failed = results.find((e) => e.name === "skill_get")
-      expect(String((failed?.output as { error?: string } | undefined)?.error)).toContain("SKILL_NOT_FOUND")
+      expect(inlineToolOutput<{ error: string }>(failed).error).toContain("SKILL_NOT_FOUND")
     } finally {
       removeWorkspace(dir)
     }

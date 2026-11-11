@@ -1,4 +1,6 @@
 import { createSessionCoordinatorCore } from './coordinator-factory.ts'
+import { types as utilTypes } from 'node:util'
+import { SessionLockUnsupportedError } from '@i-harness/fs-lock'
 export { captureBootstrapRoute, captureBootstrapCaptureRoute, childBootstrapPathKey, routeInvocation, routeForReservation, encodeOwnedCaptureReservation, parseOwnedCaptureReservation, validateOwnedCaptureStage } from './coordinator/bootstrap-route.ts'
 export type { BootstrapRoute, BootstrapCaptureRoute, BootstrapRouteBackend } from './coordinator/bootstrap-route.ts'
 import type { PersistenceBackend, CoordinatorOptions, SessionCoordinator } from "./coordinator/types.ts"
@@ -48,7 +50,34 @@ export {
 export { SessionLockConflictError, SessionLockUnsupportedError } from "@i-harness/fs-lock"
 
 export function createSessionCoordinator(backend: PersistenceBackend, opts?: CoordinatorOptions): SessionCoordinator {
-  return createSessionCoordinatorCore(backend, opts)
+  if (opts?.lock?.enabled === false) throw new SessionLockUnsupportedError('Current-format writable coordination requires ownership; use createReadOnlySessionCoordinator for non-owning reads')
+  if (!backend || typeof backend !== 'object' || utilTypes.isProxy(backend)) throw new TypeError('Original writable backend constructor required')
+  const factory = Object.getOwnPropertyDescriptor(backend, 'createCoordinator')
+  if (!factory || !('value' in factory) || factory.writable || factory.configurable || typeof factory.value !== 'function' || utilTypes.isProxy(factory.value)) {
+    throw new TypeError('Backend has no original writable coordinator factory; use createReadOnlySessionCoordinator for legacy or non-owning reads')
+  }
+  return Reflect.apply(factory.value, backend, [opts]) as SessionCoordinator
+}
+/** A read facet over one original storage owner. It never exposes adoption or
+ * mutation, and reads remain usable while another coordinator holds the writer. */
+export interface ReadOnlySessionCoordinator {
+  readonly access: 'read'
+  readonly list: SessionCoordinator['list']
+  readonly profile: SessionCoordinator['profile']
+  readonly snapshot: NonNullable<SessionCoordinator['snapshot']>
+  readonly getDocument: SessionCoordinator['getDocument']
+  readonly close: SessionCoordinator['close']
+}
+export function createReadOnlySessionCoordinator(backend: PersistenceBackend, opts?: CoordinatorOptions): ReadOnlySessionCoordinator {
+  const owner = createSessionCoordinatorCore(backend, opts)
+  return Object.freeze({
+    access: 'read' as const,
+    list: owner.list.bind(owner),
+    profile: owner.profile.bind(owner),
+    snapshot: owner.snapshot!.bind(owner),
+    getDocument: owner.getDocument.bind(owner),
+    close: owner.close.bind(owner),
+  })
 }
 export { ownedContextReadiness } from "./context-readiness.ts"
 export type { HeldFactOwner, IssuingFactOwner, BackendFactOutcome, OwnedFactBackend, ManagedDocument } from './coordinator/fact-types.ts'

@@ -1,7 +1,17 @@
 import { afterEach, expect, it, vi } from 'vitest'
 type CloseControl = { fail: boolean; error: Error }
 type Gate = { entered: ReturnType<typeof Promise.withResolvers<void>>; release: ReturnType<typeof Promise.withResolvers<void>> }
-const probe = vi.hoisted(() => ({ nextClose: undefined as Gate | undefined, nextCloseCheck: undefined as CloseControl | undefined, nextReenter: undefined as (() => Promise<void>) | undefined, opens: 0, nextRead: undefined as Gate | undefined, afterReady: undefined as (() => Promise<void>) | undefined, waits: 0, secondWait: undefined as (() => void) | undefined, rejected: undefined as ((error: unknown) => void) | undefined }))
+const probe = vi.hoisted(() => ({ afterCloseStep: undefined as (() => Promise<void>) | undefined, nextClose: undefined as Gate | undefined, nextCloseCheck: undefined as CloseControl | undefined, nextReenter: undefined as (() => Promise<void>) | undefined, opens: 0, nextRead: undefined as Gate | undefined, afterReady: undefined as (() => Promise<void>) | undefined, waits: 0, secondWait: undefined as (() => void) | undefined, rejected: undefined as ((error: unknown) => void) | undefined }))
+vi.mock('../../core-agent/src/agent/finalization.ts', async load => {
+  const original = await load<typeof import('../../core-agent/src/agent/finalization.ts')>()
+  return { ...original, async closeStep(...args: Parameters<typeof original.closeStep>) {
+    const result = await original.closeStep(...args)
+    const after = probe.afterCloseStep
+    probe.afterCloseStep = undefined
+    await after?.()
+    return result
+  } }
+})
 vi.mock('../../session-persistence/src/execution-internal.ts', async load => {
   const original = await load<typeof import('../../session-persistence/src/execution-internal.ts')>()
   return { ...original, associateExecutionDependencies(backend: object, open: Parameters<typeof original.associateExecutionDependencies>[1]) {
@@ -49,7 +59,7 @@ import { originalManagedExecution } from '../../session-persistence/src/coordina
 import * as documents from '../../session-persistence/src/coordinator/managed-document.ts'
 import { getManagedExecutionAdmissionWait, assertManagedActionLifetimeCurrent, settleManagedExecutionDependencies } from '@i-harness/core-session/internal/execution'
 
-afterEach(() => { probe.nextReenter = undefined; probe.opens = 0; probe.nextCloseCheck = undefined; probe.nextRead = undefined; probe.nextClose = undefined; probe.afterReady = undefined; probe.waits = 0; probe.secondWait = undefined; probe.rejected = undefined })
+afterEach(() => { probe.afterCloseStep = undefined; probe.nextReenter = undefined; probe.opens = 0; probe.nextCloseCheck = undefined; probe.nextRead = undefined; probe.nextClose = undefined; probe.afterReady = undefined; probe.waits = 0; probe.secondWait = undefined; probe.rejected = undefined })
 const gate = (): Gate => ({ entered: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() })
 type PreparedArchive = Awaited<ReturnType<OriginalManagedRuntime['execution']['prepare']>>
 type HydrationFixture = { runtime: OriginalManagedRuntime; service: ReturnType<typeof createSessionService>; action: ReturnType<OriginalManagedRuntime['execution']['owner']['beginAction']>; requests(): number }
@@ -156,6 +166,8 @@ it('keeps original conversation hydration visible to the same writer admission o
     model: controlledModel(async function* () { yield { type: 'text/chunk', text: 'existing committed output' }; yield { type: 'end' } }),
     managedRuntime: { systemPrompt: 'system', tools: [] },
   })
+
+
   const held = gate()
   let archive: PreparedArchive | undefined
   try {
@@ -375,3 +387,57 @@ it.each(['commit', 'discard'] as const)('keeps an accepted staged write busy bef
     await rm(root, { recursive: true, force: true })
   }
 }, 30_000)
+
+it.each(['ready', 'abort', 'unknown'] as const)('joins genuine dependency cleanup after step close before the pre-stop hook: %s', async end => {
+  const base = process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!
+  const root = await mkdtemp(join(base, 'prestop-ready-'))
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true }, originalExecutionFoldFactory: createOwnedMetadataFold }, taskDocumentStorageContract)
+  await coordinator.create({ sessionId: 'main' })
+  const factory = vi.spyOn(documents, 'createManagedDocument'), held = gate()
+  let runtime: OriginalManagedRuntime | undefined, reading: Promise<unknown> | undefined, hooks = 0, requests = 0
+  const service = createSessionService({ workspace: root, coordinator, contextWindow: 4096, maxOutputTokens: 128,
+    model: controlledModel(async function* () { requests++; yield { type: 'text/chunk', text: 'done' }; yield { type: 'end' } }),
+    managedRuntime: { systemPrompt: 'system', tools: [], async mountRegistry(original) {
+      onExecutionEvent(original.ctx, 'agent/pre-stop', () => { hooks++ })
+    } },
+  })
+  const controller = new AbortController()
+  let outcome: Promise<unknown> | undefined
+  let core: ReturnType<typeof originalManagedExecution>['core'] | undefined
+  try {
+    const input = await service.managedInputFor!('main')
+    await input!.inbox.admit({ inputId: 'seed', text: 'original archive record', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'desktop.input' } })
+    await input!.inbox.cancel('seed', 'fixture only')
+    runtime = (await prepareOriginalManagedRuntime(service, 'main'))!
+    const ownership = factory.mock.calls.at(-1)![4]
+    core = originalManagedExecution(runtime.execution.owner as Parameters<typeof originalManagedExecution>[0], ownership).core
+    probe.afterCloseStep = async () => {
+      probe.nextClose = held
+      reading = runtime!.execution.observe().inbox.admitted('seed')
+      void reading.catch(() => {})
+      await held.entered.promise
+    }
+    const turn = service.submit('main', 'real foreground input', controller.signal)
+    outcome = turn.then(() => ({ kind: 'done' }), error => ({ kind: 'failed', error }))
+    await Promise.race([held.entered.promise, outcome.then(value => { throw Error('Turn ended before post-step dependency: ' + JSON.stringify(value)) })])
+    expect(requests).toBe(1)
+    expect(hooks).toBe(0)
+    if (end === 'abort') controller.abort()
+    if (end === 'unknown') core.readinessChanged(true)
+    held.release.resolve()
+    if (end === 'ready') { await turn; expect(hooks).toBe(1) }
+    else {
+      await expect(turn).rejects.toBeTruthy()
+      expect(hooks).toBe(0)
+    }
+    expect(requests).toBe(1)
+  } finally {
+    held.release.resolve()
+    core?.readinessChanged(false)
+    await Promise.allSettled([outcome, reading])
+    await service.close(); await coordinator.close(); factory.mockRestore()
+    const tail = relative(base, root)
+    if (!tail || tail === '..' || tail.startsWith(`..${sep}`) || isAbsolute(tail)) throw Error('Unsafe fixture cleanup')
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30000)

@@ -11,8 +11,6 @@ import type { Agent } from "@i-harness/core-agent"
 import type { CodeModeMount } from "@i-harness/code-mode"
 import type { ChildAgentEntry } from "../agent-table.ts"
 import type { SpawnOptions } from "./types.ts"
-import { retainInitialInput } from './initial-input.ts'
-import {readOriginalTeamCleanup} from '../team-cleanup.ts'
 import type { InitialChildInput } from './generation.ts'
 
 function originalMethod<T extends (...args: any[]) => any>(owner: object | undefined, name: string): T | undefined {
@@ -43,15 +41,14 @@ export async function publishChild(
   const closeInitial = original?.closeInitial ?? originalMethod<() => Promise<void>>(initial, 'close')
   const unmountContext = original?.unmount ?? originalMethod<() => void>(childCtx.scope, 'unmount')!
   const inputId = initial?.inputId ?? randomUUID(), admission = initial ? undefined : factOwner.beginAction(controller.signal)
-  let initialOutcome:import('@i-harness/core-session').ProducerFactOutcome
   try {
-    initialOutcome=initial?.outcome ?? await admission!.facts.inputs.admit({ type: 'agent/input/admitted', version: 1, inputId, text: opts.message, delivery: 'queue', intent: 'user', provenance: { kind: 'inherited', authority: 'observation', scope: 'turn', producer: 'subagent.initial', ...(opts.childSessions?.parentSessionId ? { originSessionId: opts.childSessions.parentSessionId } : {}) } })
-    committedFactSeqs(initialOutcome)
+    const initialOutcome=initial?.outcome ?? await admission!.facts.inputs.admit({ type: 'agent/input/admitted', version: 1, inputId, text: opts.message, delivery: 'queue', intent: 'user', provenance: { kind: 'inherited', authority: 'observation', scope: 'turn', producer: 'subagent.initial', ...(opts.childSessions?.parentSessionId ? { originSessionId: opts.childSessions.parentSessionId } : {}) } })
+    if (committedFactSeqs(initialOutcome).length !== 1) throw new TypeError('Initial input must name one admission')
   } finally { admission?.finish() }
   opts.validateBeforeLaunch?.()
   opts.retainPublication?.({kind:'agent',value:agent})
   if (sessionId !== undefined) opts.agents.register(sessionId, agent)
-  const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName, undefined, undefined, opts.childStart?.kind==='committed-child-birth'||opts.childStart?.kind==='committed-team-child-birth'?()=>controller.abort():undefined,
+  const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName, undefined, undefined, opts.childStart?.kind==='committed-child-birth'?()=>controller.abort():undefined,
     { agentPath: childPath, ...(sessionId !== undefined ? { sessionId } : {}) },registration=>{bindOriginalSpawnJob(opts.onPublished,registration);opts.retainPublication?.({kind:'job',value:registration})})
   let resultLifetime = true
   let initialClosed = false, initialFlight: Promise<void> | undefined
@@ -91,8 +88,7 @@ export async function publishChild(
     ...(codeModeMount ? { cancel: (reason?: string) => cancelMount!(reason) } : {}),
     dispose: () => {
       if (disposal) return disposal
-      const teamCleanup=readOriginalTeamCleanup(opts.table,childPath,entry)
-      if(teamCleanup)teamCleanup.markClosing();else opts.table.update(childPath, entry, { closing: true })
+      opts.table.update(childPath, entry, { closing: true })
       let retirementFailure: unknown, retirementFailed = false
       try { retireInstruction?.(); instruction?.retire() } catch (error) { retirementFailure = error; retirementFailed = true }
       revokeDocument?.()
@@ -113,7 +109,6 @@ export async function publishChild(
       disposal = pending; void pending.catch(() => { if (disposal === pending) disposal = undefined }); return pending
     },
   }
-  retainInitialInput(entry,inputId,initialOutcome)
   const publication=Object.freeze({path:childPath,jobId,sessionId,...(modelLabel!==undefined?{modelLabel}:{})})
   const runGate=Promise.withResolvers<void>()
   // Defer transport until the entry and its retained lifecycle are published.
@@ -143,7 +138,7 @@ export async function publishChild(
     opts.retainPublication?.({kind:'entry',value:entry})
     bindOriginalSpawnRun(opts.onPublished,entry,initialRun,opts.table)
     opts.validateBeforeLaunch?.()
-    if((opts.childStart?.kind==='committed-child-birth'||opts.childStart?.kind==='committed-team-child-birth')&&opts.table.get(childPath))throw Error('Original child publication path occupied')
+    if((opts.childStart?.kind==='committed-child-birth')&&opts.table.get(childPath))throw Error('Original child publication path occupied')
     opts.table.add(childPath, entry)
     onEntryPublished?.(entry)
     opts.onEntryPublished?.(entry,publication)

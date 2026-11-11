@@ -1,4 +1,3 @@
-import {retryOriginalTeamRecovery} from '../../session-executor/src/host-team-recovery.ts'
 import { createHash, randomUUID } from "node:crypto"
 import type { AsyncInbox, ImageInput, SessionEventView } from "@i-harness/core-session"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -166,7 +165,6 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     resume(id: string) {
       return serial(id, async () => {
         if (closed) throw new Error("Input service closed")
-        if(await retryOriginalTeamRecovery(service,id))return {resumed:true}
         const managed=await service.managedInputFor?.(id,{completePreparation:options.prepare!==undefined&&!options.managedPreparation})
         if(managed){const observation=managed.observe();const pending=managed.inbox.pending();observation.assertCurrent();for(const input of pending)start(id,input.inputId,input.text,true)}
         else {await ownSession(id);(await coordinator.openManagedDocument(id)).assertReady();for (const input of (await service.receivedInputFor(id)).pending()) start(id, input.inputId, input.text)}

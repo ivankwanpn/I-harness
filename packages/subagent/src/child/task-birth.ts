@@ -67,7 +67,7 @@ export async function bootstrapTaskChild(slot:TaskLaunchSlot,deps:SubagentToolDe
   }
   return result
  })
- if(outcome.kind!=='ready'&&outcome.kind!=='already-ready'){d.warn('original child birth did not become ready',{outcome:outcome.kind,...('reason' in outcome&&outcome.reason!==undefined?{reason:String(outcome.reason)}:{}),targetSessionId:request.invocation.targetSessionId,parentSessionId:request.core.caller.kind==='task'?request.core.caller.parentSessionId:undefined,taskId:request.core.caller.kind==='task'?request.core.caller.taskId:undefined});throw birthFailure('child',outcome)}
+ if(outcome.kind!=='ready'&&outcome.kind!=='already-ready'){d.warn('original child birth did not become ready',{outcome:outcome.kind,...('reason' in outcome&&outcome.reason!==undefined?{reason:String(outcome.reason)}:{}),targetSessionId:request.invocation.targetSessionId,parentSessionId:request.core.caller.kind==='task'?request.core.caller.parentSessionId:undefined,taskId:request.core.caller.kind==='task'?request.core.caller.taskId:undefined});throw birthFailure(outcome)}
  const birth=retainedBirth!
  verifyTaskChildBirth(birth)
  await transfer.releaseSource?.()
@@ -79,7 +79,7 @@ function verifyTaskChildBirth(birth:Birth){
  if(birth.request.core.caller.kind!=='task')throw Error('Original task child header unavailable')
  verifyOriginalChildBirth(birth,'subagent',birth.request.core.caller.parentSessionId)
 }
-export function verifyOriginalChildBirth(birth:OriginalChildBirthData,origin:'subagent'|'team'|'approval-review',parentSessionId:string){
+export function verifyOriginalChildBirth(birth:OriginalChildBirthData,origin:'subagent'|'approval-review',parentSessionId:string){
  const {document,receipt,request,payload}=birth,{view}=document,header=view.header,initial=receipt.initial,frame=receipt.completion,key=frame.key
  if(!header)throw Error('Original child header unavailable')
  if(!isManagedFactOwner(view,document)||canonicalJsonData(receipt.invocation)!==canonicalJsonData(request.invocation)||!isManagedResultSource(view,document,request.invocation.targetSessionId)||header.origin!==origin||origin==='subagent'&&header.subagentProtocolVersion!==1||header.parentSession!==parentSessionId||header.seedLength!==payload.seed.records.length||receipt.seedLength!==payload.seed.records.length||header.semanticSeed?.seedDigest!==payload.seed.digest||header.semanticSeed?.manifestDigest!==receipt.manifestDigest||header.semanticSeed.requestDigest!==request.invocation.requestDigest||!initial||initial.inputId!==payload.initial!.inputId||initial.startedAt!==payload.initial!.startedAt||initial.expiresAt!==payload.initial!.expiresAt||frame.owner.sessionId!==request.invocation.targetSessionId||key.count<2||frame.lastSeq!==key.firstSeq+key.count-1||initial.seq<key.firstSeq||initial.seq>frame.lastSeq)throw new Error('Original B2 initial receipt mismatch',{cause:{header,receipt}})

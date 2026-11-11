@@ -212,13 +212,6 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
         reviewerOrdinals(){check();const facts=owned.index.resultFacts(),count=owned.index.eventCount;let latestUser:number|undefined;for(let i=facts.length-1;i>=0;i--)if(facts[i]!.type==='user/message'){latestUser=facts[i]!.index;break}return {tail:Array.from({length:Math.min(12,count)},(_,index)=>count-Math.min(12,count)+index),latestUser}},
         workflowJobOrdinals(documentIds:readonly string[]){check();const jobs=new Map<string,number|undefined>();for(const id of documentIds)jobs.set(id,undefined);for(const fact of owned.index.resultFacts())if(fact.type==='job/status'&&fact.jobId)jobs.set(fact.jobId,fact.index);return [...jobs].slice(-200).flatMap(([id,ordinal])=>ordinal===undefined?[]:[{id,ordinal}])},
         workflowLastStepOrdinal(fromSeq:number){check();const facts=owned.index.resultFacts();for(let i=facts.length-1;i>=fromSeq;i--)if(facts[i]!.type==='step/end')return facts[i]!.index;return undefined},
-        teamLedgerOrdinals() {
-            check();const header=owned.source.header,fork=Boolean(header?.parentSession&&header.origin!=='subagent'&&header.origin!=='approval-review')
-            const floor=fork?(header?.seedLength??owned.index.eventCount):0
-            return owned.index.resultFacts().filter(fact=>fact.index>=floor&&fact.type.startsWith('team/')).map(fact=>fact.index)
-        },
-        hasTeamInbox(messageId:string) {check();return owned.index.resultFacts().some(fact=>fact.type==='subagent/inbox'&&fact.inboxMessageId===messageId)},
-        teamInboxOrdinals(messageId:string){check();const header=owned.source.header,fork=Boolean(header?.parentSession&&header.origin!=='subagent'&&header.origin!=='approval-review'),floor=fork?(header?.seedLength??owned.index.eventCount):0;return owned.index.resultFacts().filter(fact=>fact.index>=floor&&fact.type==='subagent/inbox'&&fact.inboxMessageId===messageId).map(fact=>fact.index)},
         /** Structural selection only; payload remains in the held writer. */
         taskResultOrdinal(taskId:string) {
             check();const facts=owned.index.resultFacts(),visibility=historyVisibility(facts)

@@ -96,11 +96,7 @@ export type SessionEvent =
     // a local union so core-session stays dependency-free (sandbox-policy owns
     // the real SandboxMode type; a sandbox import here would create a cycle).
     | { type: "sandbox/mode"; mode: "read-only" | "workspace-write" | "danger-full-access"; source?: "delegation"; seq?: number }
-    // M19 subagent teams: team/* log events (version 1). The snapshot shapes
-    // are INLINED (not imported from agent-team) — core-session must stay
-    // dependency-free; agent-team imports core-session, so a reverse import
-    // would create a cycle. Keep structurally identical to TeamEvent in
-    // agent-team/src/types.ts.
+    // Legacy Team log events retain their version-1 shapes for archive readers.
     | { type: "team/member"; version: 1; teamId: string; member: { id: string; name: string; description: string; provider: string; context: "fresh" | "fork"; phase: "provisioning" | "active" | "failed"; error?: string; sessionId?: string }; seq?: number }
     | { type: "team/task"; version: 1; teamId: string; task: { id: string; revision: number; subject: string; description: string; status: "pending" | "in_progress" | "completed" | "deleted"; ownerId?: string; blockedBy: string[]; writeScopes: string[] }; seq?: number }
     | { type: "team/message/queued"; version: 1; teamId: string; message: { id: string; senderId: string; senderName: string; targetId: string; delivery: "quiet" | "wakeup"; content: string; display?: InputDisplay }; seq?: number }

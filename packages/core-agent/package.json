@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./model-origin": "./src/tool-batch/model-origin.ts"
+    "./model-origin": "./src/tool-batch/model-origin.ts",
+    "./internal/lifecycle/*": "./src/lifecycle/*.ts"
   },
   "scripts": {
     "test": "vitest run",
@@ -20,6 +21,7 @@
     "@i-harness/llm-seam": "workspace:*",
     "@i-harness/token-meter": "workspace:*",
     "@i-harness/telemetry": "workspace:*",
-    "@i-harness/context-engine": "workspace:*"
+    "@i-harness/context-engine": "workspace:*",
+    "@i-harness/session-persistence": "workspace:*"
   }
 }

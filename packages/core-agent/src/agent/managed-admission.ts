@@ -1,7 +1,7 @@
 import { prepareModelRequest, type LLMRequest } from '@i-harness/llm-seam';
 import { assertManagedActionCurrent, getManagedExecutionAdmissionWait } from '@i-harness/core-session/internal/execution';
 import type { ManagedAction, FactOutcome, SettlementFacts } from '@i-harness/core-session';
-import { assertExecutionGeneration } from '../../../session-executor/src/lifecycle/generation-actions.ts';
+import { assertExecutionGeneration } from '../lifecycle/generation-actions.ts';
 import type { ManagedAgentHost, ManagedGenerationAction } from './managed-types.ts';
 import type { createManagedAgentContext } from './managed-context.ts';
 import type { createManagedReduction } from './context-reduction/managed.ts';

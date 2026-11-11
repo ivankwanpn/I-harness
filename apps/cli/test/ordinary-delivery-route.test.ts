@@ -31,9 +31,12 @@ it('default CLI parent admission preserves an unbound ordinary child without a s
     const events = (await backend.read(id)).events
     expect(events.filter(e => e.type === 'subagent/end')).toHaveLength(1)
     expect(events.filter(e => e.type === 'agent/delivery-source' || e.type === 'agent/delivery-received')).toHaveLength(0)
-    const tasks = await coordinator.getDocument(`task-${id}`) as { tasks: { outcome: string }[]; notifications: { status: string }[] }
-    expect(tasks.tasks).toEqual([expect.objectContaining({ outcome: 'completed' })])
-    expect(tasks.notifications).toEqual([expect.objectContaining({ status: 'pending' })])
+    const cold=createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})
+    try{
+      const tasks = await cold.getDocument(`task-${id}`) as { tasks: { outcome: string }[]; notifications: { status: string }[] }
+      expect(tasks.tasks).toEqual([expect.objectContaining({ outcome: 'completed' })])
+      expect(tasks.notifications).toEqual([expect.objectContaining({ status: 'pending' })])
+    }finally{await cold.close()}
     expect(requests).toHaveLength(3)
   } finally { off(); await coordinator.close() }
 }, 15000)

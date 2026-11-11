@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useId, useRef, useState, useCallback, lazy, Suspense, type CSSProperties } from "react"
-import { Brain, Search, PanelLeft, PanelRight, FolderOpen, TerminalSquare, Globe, UsersRound, Code2, Activity, Wrench, Target, Network, ListTodo, ShieldCheck, GitBranch, FileDiff, FileText } from "lucide-react"
+import { Brain, Search, PanelLeft, PanelRight, FolderOpen, TerminalSquare, Globe, UsersRound, Code2, Activity, Wrench, Target, ListTodo, ShieldCheck, GitBranch, FileDiff, FileText } from "lucide-react"
 import { BrowserPane } from "../browser/BrowserPane.tsx"
 import { WorkbenchTools, type WorkbenchTool } from "./WorkbenchTools.tsx"
 import { useUiStore } from "./ui-store.ts"
@@ -228,7 +228,7 @@ export function Workbench({
   const [gitOpen, setGitOpen] = useState(false)
   const [gitBusy, setGitBusy] = useState(false)
   useEffect(() => { setGitOpen(false) }, [selectedProjectId])
-  const [workflowSection, setWorkflowSection] = useState<"goal" | "team" | "jobs" | "reviews">("goal")
+  const [workflowSection, setWorkflowSection] = useState<"goal" | "jobs" | "reviews">("goal")
   useEffect(() => {
     if ((workPaneTab === "execution" && (!selectedSessionId || !capabilities["desktop-execution"]?.includes("1"))) || (workPaneTab === "processes" && (!selectedSessionId || !capabilities["desktop-agent-processes"]?.includes("1"))) || (workPaneTab === "diagnostics" && !capabilities["desktop-environment-diagnostics"]?.includes("1"))) setWorkPaneTab("changes")
     if (workPaneTab === "reminders" && (!selectedSessionId || !capabilities["desktop-schedule"]?.includes("1"))) setWorkPaneTab("changes")
@@ -301,7 +301,7 @@ export function Workbench({
     if (name === "settings") { setSurface("settings"); return }
     setSurface("conversation")
     if (!reviewOpen) toggleReview()
-    setWorkflowSection(name === "team" || name === "jobs" || name === "reviews" ? name : "goal")
+    setWorkflowSection(name === "jobs" || name === "reviews" ? name : "goal")
     setWorkPaneTab("workflow")
   }
   const workspaceTitle = selectedWorkspaceId ? t("未分類會話") : t("尚未選擇會話")
@@ -421,7 +421,7 @@ export function Workbench({
               ...(capabilities['desktop-instructions']?.includes('1') ? [{ id: 'instructions', label: english ? 'Instructions' : '指令來源', icon: <FileText size={16} />, selected: reviewOpen && workPaneTab === 'instructions', open: () => openPane('instructions') }] : []),
               ...(capabilities["desktop-subagent-catalog"]?.includes("1") ? [{ id: "subagents", label: t("子代理"), icon: <UsersRound size={16} />, selected: reviewOpen && workPaneTab === "subagents", open: () => openPane("subagents") }] : []),
             ] : [] },
-            { label: english ? "Work and collaboration" : "工作與協作", items: selectedSessionId && capabilities["desktop-workflow"]?.includes("1") ? ([["goal", "Goal / Plan", Target], ["team", "Team", Network], ["jobs", t("背景工作"), ListTodo], ["reviews", t("代審"), ShieldCheck]] as const).map(([id, label, Icon]): WorkbenchTool => ({ id, label, icon: <Icon size={16} />, open: () => openWorkflow(id) })) : [] },
+            { label: english ? "Work and collaboration" : "工作與協作", items: selectedSessionId && capabilities["desktop-workflow"]?.includes("1") ? ([["goal", "Goal / Plan", Target], ["jobs", t("背景工作"), ListTodo], ["reviews", t("代審"), ShieldCheck]] as const).map(([id, label, Icon]): WorkbenchTool => ({ id, label, icon: <Icon size={16} />, open: () => openWorkflow(id) })) : [] },
           ]} /> : null}
           {selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <button type="button" className="primary-button header-action" aria-label={t(surface === "search" ? "返回會話" : "搜尋會話")} title={t(surface === "search" ? "返回會話" : "搜尋會話")} onClick={() => setSurface(surface === "search" ? "conversation" : "search")}><Search size={16} /><span className="header-action-label">{t(surface === "search" ? "返回會話" : "搜尋會話")}</span></button> : null}
         </TitleBar>

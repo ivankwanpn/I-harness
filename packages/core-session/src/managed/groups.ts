@@ -28,7 +28,6 @@ export type UsageDraft = Exclude<Event<'context/usage'>, UsageSample> | (Omit<Us
   checkpoint: Omit<UsageSample['checkpoint'], 'accepted'> & { accepted: Omit<UsageSample['checkpoint']['accepted'], 'acceptedSeq'> & { acceptedSeq: SeqRef<'model/exchange-accepted'> } }
 })
 export type LifecycleFact = Event<'turn/start' | 'turn/end' | 'step/start' | 'step/end' | 'step/failed' | 'conversation/semantics' | 'assistant/chunk' | 'reasoning' | 'model/retry'>
-export type TeamFact = Event<'team/member' | 'team/task' | 'team/message/queued' | 'team/message/delivered'>
 export type ContextReductionDraft = { kind: 'context-reduction'; events: readonly (DistributiveOmit<Event<'compaction/replacement' | 'compaction/prune' | 'compaction/reset'>, 'seq'> & { seq?: never })[]; softTerminal?: SoftReductionTerminalDraft }
 export type FactGroupDraft =
   | { kind: 'delivery-generation'; event: import("../events/delivery.ts").DeliveryGenerationEvent }
@@ -41,7 +40,6 @@ export type FactGroupDraft =
   | ContextReductionDraft
   | { kind: 'soft-reduction'; event: SoftReductionStart | SoftReductionTerminalDraft }
   | { kind: 'input-admission'; admitted: Event<'agent/input/admitted'> }
-  | { kind: 'team-input-admission'; admitted: Event<'agent/input/admitted'> }
   | { kind: 'input-cancellation'; cancelled: Event<'agent/input/cancelled'> }
   | { kind: 'input-start'; promoted?: Event<'agent/input/promoted'>; turn: Event<'turn/start'>; message: Event<'user/message'>; preparation?: PreparedInputResult }
   | { kind: 'input-preparation'; event: InputPreparationEvent }
@@ -60,8 +58,7 @@ export type FactGroupDraft =
   | { kind: 'seed-import'; events: readonly SessionEvent[] }
   | { kind: 'scheduled-input'; dispatches: readonly Event<'schedule/change'>[]; admitted: Event<'agent/input/admitted'> }
   | { kind: 'policy-import'; modes: readonly Event<'sandbox/mode'>[] }
-  | { kind: 'team-transaction'; events: readonly TeamFact[] }
-  | { kind: 'delivery'; event: Event<'subagent/start' | 'subagent/end' | 'subagent/inbox' | 'job/status' | 'team/member' | 'team/task' | 'team/message/queued' | 'team/message/delivered' | 'exec/end' | 'code/end' | 'workflow/end' | 'agent/delivery-handoff'> }
+  | { kind: 'delivery'; event: Event<'subagent/start' | 'subagent/end' | 'subagent/inbox' | 'job/status' | 'exec/end' | 'code/end' | 'workflow/end' | 'agent/delivery-handoff'> }
   | { kind: 'usage'; event: UsageDraft }
   | { kind: 'legacy-compaction'; events: readonly Event<'compaction/start' | 'compaction/end' | 'compaction/summary' | 'compaction/reset' | 'compaction/prune' | 'rewind/point'>[] }
 
@@ -89,9 +86,8 @@ const family: Record<string, readonly SessionEvent['type'][]> = {
   lifecycle: ['turn/start', 'turn/end', 'step/start', 'step/end', 'step/failed', 'conversation/semantics', 'assistant/chunk', 'reasoning', 'model/retry'],
   metadata: ['plan/mode', 'sandbox/mode', 'todo/write', 'goal/change', 'schedule/change', 'session/title', 'context/budget', 'context/recovery', 'command/run', 'command/done', 'operator/run-end'],
   'result-reference': ['context/result-ref'],
-  delivery: ['subagent/start', 'subagent/end', 'subagent/inbox', 'job/status', 'team/member', 'team/task', 'team/message/queued', 'team/message/delivered', 'exec/end', 'code/end', 'workflow/end', 'agent/delivery-handoff'],
+  delivery: ['subagent/start', 'subagent/end', 'subagent/inbox', 'job/status', 'exec/end', 'code/end', 'workflow/end', 'agent/delivery-handoff'],
   usage: ['context/usage'], 'legacy-compaction': ['compaction/start', 'compaction/end', 'compaction/summary', 'compaction/reset', 'compaction/prune', 'rewind/point'],
-  'team-transaction': ['team/member', 'team/task', 'team/message/queued', 'team/message/delivered'],
   'context-reduction': ['compaction/replacement', 'compaction/prune', 'compaction/reset', 'context/soft-reduction'],
 }
 function groupEvents(group: DeepReadonly<FactGroupDraft>): readonly unknown[] {
@@ -103,7 +99,6 @@ function groupEvents(group: DeepReadonly<FactGroupDraft>): readonly unknown[] {
     case 'subagent-delivery-start': return [group.start, {type:'agent/delivery-source',version:1,kind:'subagent',...group.binding,startSeq:{kind:'group',position:0,expectedType:'subagent/start'}}]
     case 'delivery-admission': return [group.receipt, group.admitted]
     case 'input-admission': return [group.admitted]
-    case 'team-input-admission': return [group.admitted]
     case 'input-cancellation': return [group.cancelled]
     case 'input-start':
     case 'steer-claim': {
@@ -127,7 +122,6 @@ function groupEvents(group: DeepReadonly<FactGroupDraft>): readonly unknown[] {
     case 'plan-proposal': return [group.mode, group.message]
     case 'legacy-compaction': return group.events
     case 'context-reduction': return [...group.events, ...(group.softTerminal ? [group.softTerminal] : [])]
-    case 'team-transaction': return group.events
     case 'seed-import': return group.events
     case 'scheduled-input': return [...group.dispatches, group.admitted]
     case 'policy-import': return group.modes
@@ -158,7 +152,6 @@ export function captureFactGroup(draft: FactGroupDraft):
     if (draft.kind === 'subagent-delivery-start' && (!Object.keys(draft.binding).every(key=>['recipientSessionId','generationId','sourceNamespace','sourceId','callSeq'].includes(key)) || !validDeliveryEvent({type:'agent/delivery-source',version:1,kind:'subagent',...draft.binding,startSeq:0}))) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
     if (draft.kind === 'delivery-admission' && (Object.hasOwn(draft.receipt,'seq') || !validDeliveryEvent(draft.receipt))) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
     if (draft.kind === 'input-admission' && draft.admitted.provenance?.producer === 'session.delivery.team') return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
-    if (draft.kind === 'team-input-admission' && (!isStrictFactData(draft)||Reflect.ownKeys(draft).length!==2||draft.admitted.provenance?.producer!=='session.delivery.team')) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
     if (draft.kind === 'delivery-generation' && (Object.hasOwn(draft.event,'seq') || !validDeliveryEvent(draft.event))) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
     if (draft.kind === 'workflow-delivery-source' && (!isStrictFactData(draft) || !closedDeliveryData(draft) || Reflect.ownKeys(draft).length !== 2 || Object.hasOwn(draft.event, 'seq') || !validDeliveryEvent(draft.event) || draft.event.type !== 'agent/delivery-source' || draft.event.kind !== 'workflow')) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
     if (draft.kind === 'code-delivery-source' && (!isStrictFactData(draft) || !closedDeliveryData(draft) || Reflect.ownKeys(draft).length !== 2 || Object.hasOwn(draft.event, 'seq') || !validDeliveryEvent(draft.event) || draft.event.type !== 'agent/delivery-source' || draft.event.kind !== 'code')) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
@@ -190,7 +183,7 @@ export function captureFactGroup(draft: FactGroupDraft):
   if (result.kind !== 'captured') return result
   const group = result.value, events = groupEvents(group)
   const types = events.map(event => (event as SessionEvent)?.type)
-  const expected = group.kind === 'delivery-generation' ? ['agent/delivery-generation'] : group.kind === 'subagent-delivery-start' ? ['subagent/start','agent/delivery-source'] : group.kind === 'delivery-admission' ? ['agent/delivery-received','agent/input/admitted'] : group.kind === 'input-admission'||group.kind==='team-input-admission' ? ['agent/input/admitted'] : group.kind === 'input-cancellation' ? ['agent/input/cancelled']
+  const expected = group.kind === 'delivery-generation' ? ['agent/delivery-generation'] : group.kind === 'subagent-delivery-start' ? ['subagent/start','agent/delivery-source'] : group.kind === 'delivery-admission' ? ['agent/delivery-received','agent/input/admitted'] : group.kind === 'input-admission' ? ['agent/input/admitted'] : group.kind === 'input-cancellation' ? ['agent/input/cancelled']
       : group.kind === 'input-start' || group.kind === 'steer-claim' ? [...(group.promoted ? ['agent/input/promoted'] : []), ...(group.kind === 'input-start' ? ['turn/start'] : []), 'user/message', ...(group.preparation ? [...group.preparation.observations.map(() => 'user/message'), 'agent/input/preparation'] : [])]
       : group.kind === 'exchange-acceptance' ? ['assistant/message', 'model/exchange-accepted', ...(group.generation ? ['context/action'] : [])] : group.kind === 'assistant-audit' ? ['assistant/message'] : group.kind === 'plugin-feedback' ? ['user/message'] : group.kind === 'plan-proposal' ? ['plan/mode', 'user/message'] : undefined
   const valid = group.kind === 'scheduled-input' ? group.dispatches.length > 0 && group.dispatches.every(event => event.type === 'schedule/change' && event.operation === 'dispatch') && group.admitted.type === 'agent/input/admitted' && group.admitted.intent === 'system'

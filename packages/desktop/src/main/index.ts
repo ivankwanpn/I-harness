@@ -18,6 +18,7 @@ import { closeDesktopProjectContentSearches } from "./project-content-search.ts"
 import { resolveDesktopProfilePath } from "./profile-path.ts"
 import { createUsageWarnings } from "./usage-warnings.ts"
 import { createRuntimeDiagnostics } from "./runtime-diagnostics.ts"
+import { createDesktopSessionCatalog } from './session-catalog.ts'
 
 app.setPath("userData", resolveDesktopProfilePath(app.getPath("appData"), app.getPath("userData"), undefined, app.commandLine.hasSwitch("user-data-dir")))
 
@@ -42,6 +43,7 @@ app.whenReady().then(() => {
   const localPreferences = createLocalPreferences(join(app.getPath("userData"), "desktop-preferences.json"))
   const workspaces = createWorkspaceCatalog(join(app.getPath("userData"), "workspaces.json"))
   const projects = createProjectCatalog(join(app.getPath("userData"), "projects.json"), workspaces)
+  const sessionCatalog = createDesktopSessionCatalog(join(app.getPath('userData'), 'sessions'))
   const manager = createWorkspaceRuntimeManager({
     projectContexts: () => projectRuntimeContexts(projects, workspaces),
     sessionsRoot: join(app.getPath("userData"), "sessions"),
@@ -75,7 +77,7 @@ app.whenReady().then(() => {
   drainNativeSettings = async () => {
     let retrySurfaces=false
     try {await closeDesktopSurfaceWindows()} catch(error) {retrySurfaces=true;diagnostics.recordRequestFailure('desktop',undefined,error,'runtime/error')}
-    await closeDesktopProjectContentSearches(); await globalProviders.close(); await manager.close()
+    await closeDesktopProjectContentSearches(); await globalProviders.close(); await manager.close(); await sessionCatalog.close()
     if(retrySurfaces){try{await closeDesktopSurfaceWindows()}catch(error){diagnostics.recordRequestFailure('desktop',undefined,error,'runtime/error');await diagnostics.flush();throw error}}
     stopDiagnostics(); await diagnostics.flush(); stopUsageWarnings(); await usageWarnings.flush(); await notifications.flush(); await drafts.flush()
   }
@@ -97,6 +99,7 @@ app.whenReady().then(() => {
       projects,
       revealWorkspace: async (path) => { const failure = await shell.openPath(path); if (failure) throw new Error(failure) },
       runtimes: manager,
+      sessionCatalog,
       native,
       browser,
       globalProviders,

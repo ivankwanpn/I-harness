@@ -15,7 +15,6 @@
     "@i-harness/workspace-runtime": "workspace:*",
     "@agentclientprotocol/sdk": "^1.4.0",
     "@i-harness/acp": "workspace:*",
-    "@i-harness/agent-team": "workspace:*",
     "@i-harness/attachment": "workspace:*",
     "@i-harness/compaction": "workspace:*",
     "@i-harness/core-agent": "workspace:*",

@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import type { ChildAgentEntry } from '../agent-table.ts'
 import type { SubagentToolDeps } from '../tools/types.ts'
 import { isNondurableSession } from '@i-harness/core-session'
-import {readOriginalTeamCleanup} from '../team-cleanup.ts'
 
 export interface RetainedResidentResource {
   readonly entry: ChildAgentEntry
@@ -255,8 +254,7 @@ export class ResidentPreparation implements RetainedResidentResource {
     this.permanent = true; this.phase = 'retired'
     this.retireInstructions()
     if (this.deps.table.get(this.path) === this.entry && this.entry.session === this.view && this.entry.factOwner === this.factOwner) {
-      const cleanup=readOriginalTeamCleanup(this.deps.table,this.path,this.entry)
-      if(cleanup)cleanup.markClosing();else this.deps.table.update(this.path, this.entry, { closing: true }); this.entry.controller.abort()
+      this.deps.table.update(this.path, this.entry, { closing: true }); this.entry.controller.abort()
     }
     this.revokeDocument?.()
   }

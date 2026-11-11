@@ -3,7 +3,7 @@ export { captureGenerationBudget } from './agent/generation-budget.ts'
 export {createManagedAgent} from './agent/managed-create.ts'
 export type {ManagedAgent,ManagedAgentHost,ManagedAgentInputOptions,ManagedGenerationAction,ManagedGenerationLifecycle,ManagedInputPreparation,ManagedSuccessfulInstructionHandoff} from './agent/managed-types.ts'
 export type { SessionRequestContext, InstructionRequestEvidence, RequestContextPin, SuccessfulInstructionHandoff } from './agent/request-context.ts'
-export type { AgentGenerationAction, AgentGenerationLifecycle, AgentGenerationDependencies, DocumentGenerationFactory } from './agent/generation.ts'
+export type { GenerationStart, AgentGenerationAction, AgentGenerationLifecycle, AgentGenerationDependencies, DocumentGenerationFactory } from './agent/generation.ts'
 export { createAgentRegistry } from "./agent/registry.ts"
 export type { AgentBudgetConfig, AgentConfig, AgentDeps, AgentResult, Agent, AgentRegistry, ReasoningEffort, ModelContextBindingDescriptor, AgentInputOptions } from "./agent/types.ts"
 export {

@@ -145,7 +145,7 @@ export async function executeToolCalls(ctx: PluginContext, session: BatchSource,
   cancellation.observeAbort()
   if (cancellation.aborted) return await finishCancelledBatch(session, batch, records, cancellation)
   if (cancellation.hasRefusal) {
-    if(isManagedBatchSource(session))records.cancelNeverDispatched()
+    if(isManagedBatchSource(session))records.cancelNeverDispatched(cancellation.firstRefusal)
     try { await records.drainSettled() }
     catch (cause) { throw Object.assign(new AggregateError([cancellation.firstRefusal, cause], `${cancellation.firstRefusal instanceof Error ? cancellation.firstRefusal.message : 'Tool execution failed'}; real tool settlement requires recovery`), { code: 'FACT_RECOVERY_REQUIRED' }) }
     throw cancellation.firstRefusal
@@ -158,7 +158,7 @@ export async function executeToolCalls(ctx: PluginContext, session: BatchSource,
     }
     await records.commitReady()
   }
-  } catch (error) { executionFailed = true; executionFailure = error;try{if(isManagedBatchSource(session))records.cancelNeverDispatched()}catch(cleanup){executionFailure=savingFailure(error,[cleanup],'Original never-dispatched cancellation failed')}throw executionFailure }
+  } catch (error) { executionFailed = true; executionFailure = error;try{if(isManagedBatchSource(session))records.cancelNeverDispatched(error)}catch(cleanup){executionFailure=savingFailure(error,[cleanup],'Original never-dispatched cancellation failed')}throw executionFailure }
   finally {
     finished.resolve()
     try { await closeSource() }

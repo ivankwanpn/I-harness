@@ -40,9 +40,6 @@ importers:
       '@i-harness/acp':
         specifier: workspace:*
         version: link:../../packages/acp
-      '@i-harness/agent-team':
-        specifier: workspace:*
-        version: link:../../packages/agent-team
       '@i-harness/attachment':
         specifier: workspace:*
         version: link:../../packages/attachment
@@ -228,36 +225,6 @@ importers:
         specifier: workspace:*
         version: link:../core-session
 
-  packages/agent-team:
-    dependencies:
-      '@i-harness/core-agent':
-        specifier: workspace:*
-        version: link:../core-agent
-      '@i-harness/core-plugin':
-        specifier: workspace:*
-        version: link:../core-plugin
-      '@i-harness/core-session':
-        specifier: workspace:*
-        version: link:../core-session
-      '@i-harness/core-tools':
-        specifier: workspace:*
-        version: link:../core-tools
-      '@i-harness/exec':
-        specifier: workspace:*
-        version: link:../exec
-      '@i-harness/llm-seam':
-        specifier: workspace:*
-        version: link:../llm-seam
-      '@i-harness/session-persistence':
-        specifier: workspace:*
-        version: link:../session-persistence
-      '@i-harness/subagent':
-        specifier: workspace:*
-        version: link:../subagent
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
-
   packages/attachment:
     dependencies:
       '@i-harness/core-session':
@@ -402,6 +369,9 @@ importers:
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../llm-seam
+      '@i-harness/session-persistence':
+        specifier: workspace:*
+        version: link:../session-persistence
       '@i-harness/telemetry':
         specifier: workspace:*
         version: link:../telemetry
@@ -538,9 +508,6 @@ importers:
 
   packages/desktop-gateway:
     dependencies:
-      '@i-harness/agent-team':
-        specifier: workspace:*
-        version: link:../agent-team
       '@i-harness/code-retrieval':
         specifier: workspace:*
         version: link:../code-retrieval
@@ -1261,9 +1228,6 @@ importers:
 
   packages/session-executor:
     dependencies:
-      '@i-harness/agent-team':
-        specifier: workspace:*
-        version: link:../agent-team
       '@i-harness/attachment':
         specifier: workspace:*
         version: link:../attachment

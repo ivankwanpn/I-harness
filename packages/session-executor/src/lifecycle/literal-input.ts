@@ -20,23 +20,34 @@ export async function openLiteralInputExecution(options: {
   let lifecycle: ReturnType<typeof createGenerationLifecycle> | undefined, preparations: ReturnType<typeof createInputPreparationOwner> | undefined
   let generation: Awaited<ReturnType<ReturnType<typeof createGenerationLifecycle>['open']>> | undefined
   let closing: Promise<void> | undefined
-  const close = () => closing ??= (async () => {
-    let failed = false, failure: unknown
-    try {
-      let originalClose: Promise<void> | undefined
-      try { originalClose = generation?.close(signal.aborted ? 'stopped' : 'failed') }
-      finally { closeDecided.resolve() }
-      await originalClose
-      if (attachment.inbox.isPending(input.inputId)) await attachment.inbox.cancel(input.inputId, 'generation ended before promotion')
-    } catch (error) { failed = true; failure = error }
-    const errors: unknown[] = []
-    closeDecided.resolve()
-    try { action.finish() } catch (error) { errors.push(error) }
-    try { await lifecycle?.drain() } catch (error) { errors.push(error) }
-    try { await preparations?.close() } catch (error) { errors.push(error) }
-    if (errors.length) throw new AggregateError([...(failed ? [failure] : []), ...errors], 'Literal input close requires recovery', failed ? { cause: failure } : undefined)
-    if (failed) throw failure
-  })()
+  const close = () => {
+    if (closing) return closing
+    const attempt = (async () => {
+      let failed = false, failure: unknown
+      try {
+        let originalClose: Promise<void> | undefined
+        try {
+          if (generation?.originalCloseInvoked?.()) {
+            if (!generation.recoverClose) throw generationError('GENERATION_UNCERTAIN')
+            originalClose = generation.recoverClose()
+          } else originalClose = generation?.close(signal.aborted ? 'stopped' : 'failed')
+        }
+        finally { closeDecided.resolve() }
+        await originalClose
+        if (attachment.inbox.isPending(input.inputId)) await attachment.inbox.cancel(input.inputId, 'generation ended before promotion')
+      } catch (error) { failed = true; failure = error }
+      const errors: unknown[] = []
+      closeDecided.resolve()
+      try { action.finish() } catch (error) { errors.push(error) }
+      try { await lifecycle?.drain() } catch (error) { errors.push(error) }
+      try { await preparations?.close() } catch (error) { errors.push(error) }
+      if (errors.length) throw new AggregateError([...(failed ? [failure] : []), ...errors], 'Literal input close requires recovery', failed ? { cause: failure } : undefined)
+      if (failed) throw failure
+    })()
+    closing = attempt
+    void attempt.catch(() => { if (closing === attempt) closing = undefined })
+    return attempt
+  }
   try {
     lifecycle = createGenerationLifecycle(owner.view, options.ownerSessionId, action, { enabled: options.localTestEnabled, selectedClient: options.selectedClient }, { beforeDrain: () => closeDecided.promise,passiveGeneration:options.passiveGeneration })
     preparations = createInputPreparationOwner(owner.view, action, { cancel: id => attachment.inbox.cancel(id, 'literal input did not reach promotion') })

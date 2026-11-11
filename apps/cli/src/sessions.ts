@@ -15,7 +15,7 @@ import { stat } from "node:fs/promises"
 import { join } from "node:path"
 import { deriveMessages, deriveSessionTitle, type SessionView as Session, type SessionEventView as SessionEvent } from "@i-harness/core-session"
 import {
-  createSessionCoordinator,
+  createReadOnlySessionCoordinator,
   resolveSessionStoreRoot,
   type SessionCoordinator,
 } from "@i-harness/session-persistence"
@@ -83,7 +83,7 @@ export function parseSessionsArgs(args: string[]): { subcommand: "list" | "show"
 
 /** The store listing — one settled row per session id (a single unreadable
  * file never fails the whole list; its row carries `problem`). */
-export async function listStoredSessions(coordinator: SessionCoordinator, storeRoot: string): Promise<StoredSessionRow[]> {
+export async function listStoredSessions(coordinator: Pick<SessionCoordinator, 'list' | 'profile' | 'snapshot'>, storeRoot: string): Promise<StoredSessionRow[]> {
   const ids = await coordinator.list()
   const rows: StoredSessionRow[] = []
   for (const id of ids) {
@@ -230,7 +230,7 @@ export async function runSessionsCommand(args: string[]): Promise<number> {
   const storeRoot = options.sessionDir ?? resolveSessionStoreRoot()
   const coordinator = cliSessionStore(options.sessionStore) === 'commit-log'
     ? asSessionCoordinator(createJsonlCommitCoordinator(storeRoot, { lock: { enabled: true, lockRoot: storeRoot } }))
-    : createSessionCoordinator(createJsonlBackend(storeRoot), { lock: { enabled: false } })
+    : createReadOnlySessionCoordinator(createJsonlBackend(storeRoot), { lock: { enabled: false } })
   try {
     if (subcommand === "show") {
       if (id === undefined) {

@@ -1,4 +1,4 @@
-/** Public Desktop transport DTOs. */
+/** Public Desktop transport DTOs and native committed catalog. */
 export type { AgentDefaults, AgentSettingsState } from "./agent-settings.ts"
 export type { WslSettingsState, WslSettingsRequest, WslSettingsOptions } from "./wsl-settings.ts"
 export type { ProviderCommand } from "./provider-wire.ts"
@@ -15,3 +15,5 @@ export type { DiagnosticsRequest } from "./environment-diagnostics.ts"
 export type { MemoryAuthoringRequest } from "./memory-wire.ts"
 export type { ContextSubsystemRequest } from "./context-subsystems.ts"
 export type { SessionBatchCommand } from "./session-management.ts"
+/** Native committed navigation reads without constructing an execution host. */
+export { createCommittedSessionCatalog } from './session-catalog.ts'

@@ -51,7 +51,11 @@ it.each(['stop', 'expiry', 'lower-expiry', 'fifo', 'failure', 'delegated'] as co
       if (mode === 'failure') {
         expect(final.filter(event => event.type === 'agent/input/promoted')).toEqual([expect.objectContaining({ inputId: 'older' })])
         expect(final.filter(event => event.type === 'agent/input/cancelled')).toEqual([])
-      } else expect(final.filter(event => event.type === 'agent/input/promoted')).toEqual([])
+      } else {
+        expect(final.filter(event => event.type === 'agent/input/promoted')).toEqual([])
+        expect(final.filter(event => event.type === 'context/attempt')).toEqual([])
+        expect(final.filter(event => event.type === 'agent/input/cancelled')).toMatchObject([{ inputId: admissions[0]!.inputId }])
+      }
     }
   } finally { release.resolve(); await running; await coordinator.close().catch(() => {}) }
 })

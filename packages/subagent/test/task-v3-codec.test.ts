@@ -98,11 +98,12 @@ function rebuild(d:ReturnType<typeof fixture>,change:(core:import('@i-harness/se
 }
 it('uses original recomputed child requests for none/task/ordinary binding boundaries',()=>{
  const changes:Parameters<typeof rebuild>[1][]=[
-  core=>{core.history={selection:{kind:'all'},source:{kind:'session',sessionId:'parent'}}},
   core=>{core.caller={kind:'team',teamId:'team',memberId:'member'};core.lineage={origin:'team',parentSession:'parent'}},
   core=>{core.caller={kind:'approval-review',reviewId:'review'};core.lineage={origin:'approval-review',parentSession:'parent'};core.execution.approval='parent-review'},
  ]
  for(const change of changes){const d=fixture();rebuild(d,change);expect(()=>codec.validate(d)).toThrow('Invalid task child birth identity')}
+ const foreign=fixture();expect(()=>rebuild(foreign,core=>{core.history={selection:{kind:'all'},source:{kind:'session',sessionId:'foreign'}}})).toThrow('Invalid child bootstrap data')
+ const inherited=fixture();rebuild(inherited,core=>{core.history={selection:{kind:'all'},source:{kind:'session',sessionId:'parent'}}});expect(()=>codec.validate(inherited)).not.toThrow()
  const anonymous=fixture();delete (anonymous.tasks[0] as {toolCallId?:string}).toolCallId;rebuild(anonymous,core=>{if(core.caller.kind==='task'){delete core.caller.toolCallId;delete core.caller.callEventSeq}});expect(()=>codec.validate(anonymous)).toThrow('Invalid task child birth identity')
  const noneSource=fixture();expect(()=>rebuild(noneSource,core=>Object.assign(core.history,{source:{kind:'session',sessionId:'parent'}}))).toThrow()
  for(const field of ['requestDigest','requestCoreDigest'] as const){const d=structuredClone(fixture()),request=d.tasks[0]!.childBirth.request;if(field==='requestDigest')Object.assign(request.invocation,{requestDigest:'f'.repeat(64)});else Object.assign(request.requestIntent,{requestCoreDigest:'f'.repeat(64)});expect(()=>codec.validate(d)).toThrow()}

@@ -37,6 +37,12 @@ export interface SessionModelSelection {
 // concrete backend (e.g. JSONL now, SQLite later) implements it. Capabilities
 // declare what consumers may rely on (F01-5).
 export interface PersistenceBackend {
+  /** The original storage constructor's immutable full coordinator factory.
+   * Readers need only the ordinary backend operations; writable construction
+   * must use this capability rather than infer native support from an id. */
+  readonly createCoordinator?: (this: PersistenceBackend, options?: CoordinatorOptions) => SessionCoordinator
+  /** Original constructor assertion for an absent main file with no pending birth namespace. */
+  readonly assertLegacyTargetAvailable?: (this: PersistenceBackend, sessionId: string) => Promise<void>
   readDocumentObserved?(key: string): Promise<ObservedDocument>
   bootstrapRoutes?: import('./bootstrap-route.ts').BootstrapRouteBackend
   prepareBootstrapHeader?: import('./bootstrap-types.ts').BootstrapBackend['prepareBootstrapHeader']
@@ -102,8 +108,9 @@ export interface CoordinatorOptions {
   reportBackgroundFailure?: (error: unknown) => void
   /**
    * Ownership lease (M23), backed by @i-harness/fs-lock process-level locks.
-   * `enabled` defaults to FALSE — opt-in (ruling M23-P2); the CLI wiring turns
-   * it on. `lockRoot` defaults to the backend's `lockRoot` (jsonl: store root;
+   * The public native coordinator factory enables ownership by default.
+   * Explicitly disabled ownership is supported by the read-only facet, not a
+   * current-format writer. `lockRoot` defaults to the backend's `lockRoot` (jsonl: store root;
    * sqlite: the db's directory) or process.cwd().
    */
   lock?: { enabled?: boolean; lockRoot?: string }

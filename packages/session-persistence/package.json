@@ -20,7 +20,9 @@
     "./internal/result-ordering": "./src/result-ordering-internal.ts",
     "./internal/fork-activity": "./src/fork-activity-internal.ts",
     "./internal/commit": "./src/commit/coordinator.ts",
-    "./internal/commit-facade": "./src/commit/facade.ts"
+    "./internal/commit-facade": "./src/commit/facade.ts",
+    "./internal/task-state": "./src/task-state-internal.ts",
+    "./internal/task-persistence": "./src/task-persistence-internal.ts"
   },
   "scripts": {
     "test": "vitest run",

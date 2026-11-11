@@ -18,12 +18,12 @@ import { deriveSessionTitle, rewindCuts, semanticSeedResultRefs } from "@i-harne
 import { foldGoal } from "@i-harness/goal"
 import { createIsolatedReviewerPool, type GuardianIsolatedConfig } from "@i-harness/guard-approval"
 import { isOwnedTitleSnapshot, maybeAutoTitle } from "@i-harness/session-title"
-import { createForkSessionController } from "@i-harness/session-persistence"
+import { createForkSessionController, createSessionCoordinator } from "@i-harness/session-persistence"
 import { createSelectedForkController } from "./selected-fork.ts"
-import { createJsonlTaskTransitionCoordinator } from "@i-harness/session-persistence-jsonl/internal/task-document-factory"
+import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createJsonlCommitCoordinator } from "@i-harness/session-persistence-jsonl/internal/commit-coordinator"
 import { asSessionCoordinator } from "@i-harness/session-persistence/internal/commit-facade"
-import { taskDocumentStorageContract } from "@i-harness/subagent/internal/task-storage-contract"
+import { taskDocumentStorageContract } from "@i-harness/session-persistence/internal/task-state"
 import { createFileBackedSessionQuery } from "@i-harness/session-query"
 import { openMemoryStore, createMemoryTools } from "@i-harness/memory"
 import type { SessionService, SessionProjectContext, SessionAssembly } from "@i-harness/session-executor"
@@ -175,11 +175,11 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     ? asSessionCoordinator(createJsonlCommitCoordinator(options.sessionDir, {
         lock: { enabled: true, lockRoot: options.sessionDir },
         originalExecutionFoldFactory: createOwnedMetadataFold,
-      }), { taskDocument: { validator: taskDocumentStorageContract, empty: taskDocumentStorageContract.empty } })
-    : createJsonlTaskTransitionCoordinator(options.sessionDir, {
+      }))
+    : createSessionCoordinator(createJsonlBackend(options.sessionDir), {
         lock: { enabled: true, lockRoot: options.sessionDir },
         originalExecutionFoldFactory: createOwnedMetadataFold,
-      }, taskDocumentStorageContract)
+      })
   const compactionSignals = new Map<string, AbortSignal>()
   const isConversation = createConversationVisibility(coordinator)
   const fence = createSessionManagementFence()
@@ -435,7 +435,6 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       ownedTask: { options: ownedTaskOptions }, ownedWorkflow: true,
       ownedRewind: { root: options.sessionDir, workspace: options.workspace },
       ownedTitle: { get enabled() { return autoTitle.enabled() }, titleMaxOutputTokens: 2048, timeoutMs: 8000 },
-      onTeamRecoveryRequired: sessionId => options.onWrite(makeNotification('session/status', { sessionId, status: 'error', code: 'TEAM_RECOVERY_REQUIRED' })),
       async mountDefaultSurface(original, live) {
         const id=original.domain.sessionId
         if(!live.task||!live.output||!live.shell||!live.parentNotify||!original.instructions)throw Error('Original Gateway owners unavailable')
@@ -451,7 +450,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
           bindHookContext(read){if(ownedHookContexts.has(id))throw Error('Original hook context already installed');original.retain(()=>{if(ownedHookContexts.get(id)===read)ownedHookContexts.delete(id)});ownedHookContexts.set(id,read)},
           leaves:{workspace:options.workspace,webCacheRoot:join(options.sessionDir,'web-cache'),webSearchMode:()=>webSearchMode,resolveCredential:ref=>nativeCredentials.resolve(ref),sessionQuery,videoAudioAnalyzer:input=>runtime.analyzeVideoAudio?.(input)??Promise.resolve({status:'unconfigured',reason:'Video audio analysis is unavailable in this provider runtime.'}),additionalTools:[...createMemoryTools(memory,()=>memory.enabled()),...createCodeRetrievalTools(nativeContext.codeRetrieval, { exposure: 'direct' })]},
           extensions:{roles:task.roles,workspace:options.workspace,configDir:dirname(settingsPath),startSource:(()=>{const observed=original.execution.observe(),source=observed.hasConversationMessages?'resume':'startup';observed.assertCurrent();return source})(),report:messages=>plugins.report(id,messages),interaction,policy:()=>({workspace:options.workspace,sandbox:mode,approval:approvalMode,project:()=>projectContexts.get(id)?.(),executionAuthority:executionAuthorities.get(id),hookConfigs:[],grantPaths:[resolveHookTrustPath(dirname(settingsPath)),join(dirname(settingsPath),'hook-authoring-grants.json')],pluginAuthority:{}})},
-          surface:{policyPrompt:parts.policy,shellPrompt:parts.shell,projectPrompt:parts.project,schemas:live.modelToolSchemas,goalChanged:()=>notifyWorkflow(id),async reconcileAuthority(){instructions.manager.diagnostics.invalidate();ownedChildHosts.get(id)?.invalidateDiagnostics();await ownedNative.reconcile(id)},async activateAfterTaskReady(){/* Teams are no longer mounted by default; old team ledgers stay read-only. */}},
+          surface:{policyPrompt:parts.policy,shellPrompt:parts.shell,projectPrompt:parts.project,schemas:live.modelToolSchemas,goalChanged:()=>notifyWorkflow(id),async reconcileAuthority(){instructions.manager.diagnostics.invalidate();ownedChildHosts.get(id)?.invalidateDiagnostics();await ownedNative.reconcile(id)}},
         })
       },
     },
@@ -529,7 +528,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const review = createWorkspaceReview(options.workspace)
   const projectContentSearch = createProjectContentSearch(options.workspace)
   const managedWorkflowUis=new Map<string,{execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment;ui:ReturnType<typeof createManagedWorkflowUi>}>()
-  const workflowUiFor=(id:string)=>{const runtime=originalManagedRuntimeFor(service,id);if(!runtime)return undefined;const existing=managedWorkflowUis.get(id);if(existing?.execution===runtime.execution){runtime.assertCurrent();return existing.ui}if(existing)throw Error('Original managed workflow owner changed');const retain=(close:()=>Promise<void>)=>retainManagedExecutionCleanup(service,id,runtime.execution,close);const ui=createManagedWorkflowUi({id,...runtime,retain,coordinator,service,teamEnabled:!!(runtime.tools.get("team_spawn_teammate")??runtime.tools.get("spawn_teammate")),async jobEvents(documentJobIds){runtime.assertCurrent();const observation=runtime.execution.observe(),events=await observation.jobStatusEvents(documentJobIds);observation.assertCurrent();runtime.assertCurrent();return events},async lastStepSince(ordinal){runtime.assertCurrent();const observation=runtime.execution.observe(),end=await observation.lastStepEndSince(ordinal);observation.assertCurrent();runtime.assertCurrent();return end}});retain(async()=>{if(managedWorkflowUis.get(id)?.ui===ui)managedWorkflowUis.delete(id)});managedWorkflowUis.set(id,{execution:runtime.execution,ui});return ui}
+  const workflowUiFor=(id:string)=>{const runtime=originalManagedRuntimeFor(service,id);if(!runtime)return undefined;const existing=managedWorkflowUis.get(id);if(existing?.execution===runtime.execution){runtime.assertCurrent();return existing.ui}if(existing)throw Error('Original managed workflow owner changed');const retain=(close:()=>Promise<void>)=>retainManagedExecutionCleanup(service,id,runtime.execution,close);const ui=createManagedWorkflowUi({id,...runtime,retain,coordinator,service,async jobEvents(documentJobIds){runtime.assertCurrent();const observation=runtime.execution.observe(),events=await observation.jobStatusEvents(documentJobIds);observation.assertCurrent();runtime.assertCurrent();return events},async lastStepSince(ordinal){runtime.assertCurrent();const observation=runtime.execution.observe(),end=await observation.lastStepEndSince(ordinal);observation.assertCurrent();runtime.assertCurrent();return end}});retain(async()=>{if(managedWorkflowUis.get(id)?.ui===ui)managedWorkflowUis.delete(id)});managedWorkflowUis.set(id,{execution:runtime.execution,ui});return ui}
   const rawWorkflow = createDesktopWorkflow(coordinator, service, { reviews: approvals.read, onChanged: notifyWorkflow,managed:workflowUiFor,async managedForMutation(id){const runtime=await prepareOriginalManagedRuntime(service,id);return runtime?workflowUiFor(id):undefined},
     onRunningChanged: (sessionId, running, error) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "error" : "completed", ...(error ? { error } : {}) })) })
   const workflow = { ...rawWorkflow, mutate: (id: string, command: unknown) => fence.run(id, () => rawWorkflow.mutate(id, command)) }

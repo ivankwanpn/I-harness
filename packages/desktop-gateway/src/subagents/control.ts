@@ -22,8 +22,8 @@ export function createSubagentControls(coordinator: SessionCoordinator, service:
       if (!owned || service.liveAssembly(owned.ownerId) !== owned.assembly) throw new Error("Subagent runtime is unavailable")
       if (owned.entry.status === "killed") throw new Error("Subagent is closed")
       if (command.action === "interrupt" && owned.entry.status !== "running") throw new Error("Subagent is not running")
-      const team = owned.entry.path.startsWith("lead/")
-      const name = command.action === "close" ? "close_agent" : team ? `team_${command.action === "message" ? "send_message" : command.action === "followup" ? "followup_task" : "interrupt_agent"}` : command.action === "message" ? "send_message" : command.action === "followup" ? "followup_task" : "interrupt_agent"
+      if (owned.entry.path.startsWith("lead/")) throw new Error("Historical Team sessions are read-only")
+      const name = command.action === "close" ? "close_agent" : command.action === "message" ? "send_message" : command.action === "followup" ? "followup_task" : "interrupt_agent"
       const driving = command.action === "followup" || command.action === "message"
       const rootSession = driving ? await snapshot(parentId) : undefined
       // Revalidate durable ownership immediately before invoking the exact live
@@ -36,7 +36,7 @@ export function createSubagentControls(coordinator: SessionCoordinator, service:
       if (driving && (derivePlanMode(owned.assembly.session).active || derivePlanMode(service.liveAssembly(parentId)?.session ?? rootSession!).active)) throw new Error(PLAN_REASON)
       const tool = owned.assembly.tools.get(name)
       if (!tool) throw new Error("Subagent control is unavailable")
-      const target = team && command.action !== "close" ? owned.entry.path.slice("lead/".length) : owned.entry.path
+      const target = owned.entry.path
       const result = await tool.execute({ target, ...(command.text !== undefined ? { message: command.text } : {}) }, { sessionId: owned.ownerId })
       await coordinator.flush(childId); await coordinator.flush(owned.ownerId)
       changed(parentId)

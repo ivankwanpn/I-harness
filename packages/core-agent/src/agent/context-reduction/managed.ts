@@ -4,7 +4,7 @@ import { assertManagedActionCurrent, assertManagedActionLifetimeCurrent, readMan
 import type { ManagedAction, FactOutcome, SettlementFacts } from '@i-harness/core-session';
 import { resolveCompactSpec } from '@i-harness/compaction';
 import { prepareModelRequest, mapModelRequest, isGenerationError } from '@i-harness/llm-seam';
-import { assertExecutionGeneration } from '../../../../session-executor/src/lifecycle/generation-actions.ts';
+import { assertExecutionGeneration } from '../../lifecycle/generation-actions.ts';
 import { projectionFingerprint } from '@i-harness/token-meter';
 import { randomUUID } from 'node:crypto';
 import type { ManagedAgentHost, ManagedGenerationAction } from '../managed-types.ts';

@@ -1,1 +1,0 @@
-{"extends":"./tsconfig.json","include":["test/private-team-stop-retry.test.ts"]}

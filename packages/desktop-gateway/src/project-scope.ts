@@ -1,10 +1,10 @@
-import { createHash } from "node:crypto"
+import { projectBindingDocumentKey, parseSessionProjectBinding } from './session-navigation.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { realpath, stat } from "node:fs/promises"
 import { isAbsolute, resolve } from "node:path"
 import type { SessionCoordinator, SessionMeta, ExistingSessionBindingObservation, SessionBindingObservation } from "@i-harness/session-persistence"
 import { captureBootstrapTargetPreparationRequest, type BootstrapTargetPreparationRequest, type BootstrapTargetPreparationOutcome } from '@i-harness/session-persistence'
-import { isStrictFactData, canonicalJsonData, captureSelectedResultsBootstrapPreparationFacts, type BootstrapPreparationFactsV2 } from '@i-harness/core-session'
+import { canonicalJsonData, captureSelectedResultsBootstrapPreparationFacts, type BootstrapPreparationFactsV2 } from '@i-harness/core-session'
 import type { SessionProjectContext } from "@i-harness/session-executor"
 import type { AuthorityState } from "@i-harness/sandbox"
 import { createSessionManagementFence, type SessionManagementFence } from "./session-management-fence.ts"
@@ -119,7 +119,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     catalogTail = job
     return job.finally(() => { catalogPending-- })
   }
-  const key = (id: string) => `desktop-session-project-${createHash("sha256").update(id).digest("hex")}`
+  const key = projectBindingDocumentKey
   async function ensureVisible(id: string): Promise<SessionMeta> {
     assertOpen()
     identifier(id)
@@ -147,13 +147,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     loading.set(id, job)
     return job
   }
-  function parseBinding(document: unknown): Binding {
-    if (document === undefined) return { bound: false }
-    if (!object(document) || !isStrictFactData(document) || document.version !== 1
-      || Object.getOwnPropertyNames(document).some(field => !['version', 'projectId'].includes(field))
-      || Object.values(Object.getOwnPropertyDescriptors(document)).some(field => !field.enumerable || field.value === undefined)) throw new Error('Invalid session project binding')
-    return { bound: true, ...(Object.hasOwn(document, 'projectId') ? { projectId: identifier(document.projectId) } : {}) }
-  }
+  const parseBinding = parseSessionProjectBinding
   function observeBinding(id: string, value: Binding, except?: RetainedSource) {
     if (canonicalJsonData(bindings.get(id)) !== canonicalJsonData(value)) { invalidateInspectors([id], except); invalidateRetained([id], except); bindingRevisions.set(id, (bindingRevisions.get(id) ?? 0) + 1) }
     bindings.set(id, value)

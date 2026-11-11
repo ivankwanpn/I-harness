@@ -2,8 +2,11 @@ import {it,expect} from 'vitest'
 import {createJobRegistry,type JobRegistration} from '../src/jobs.ts'
 import {createAgentTable,type ChildAgentEntry} from '../src/agent-table.ts'
 import {createSession} from '@i-harness/core-session'
-import {persistentAgentTable,persistentJobRegistry,settlePersistentJob} from '../src/persist.ts'
-import {captureJobProjection,captureTableProjection} from '../src/runtime-projection.ts'
+import {persistentAgentTable,persistentJobRegistry,settlePersistentJob,wireSubagentPersistence} from '../src/persist.ts'
+import {createRoleRegistry} from '../src/roles.ts'
+import {isOriginalRequiredSpawnJob,isOriginalRequiredSpawnEntry} from '../src/tools/source-run.ts'
+import {snapshotState} from '../src/persist.ts'
+import {captureJobProjection,captureTableProjection,requireJobProjection,captureTaskTableProjection} from '../src/runtime-projection.ts'
 import {createTaskRegistry} from '../src/task/registry.ts'
 function terminal(outcome:'completed'|'cancelled'|'error'='cancelled'){
  const tasks=createTaskRegistry(),task=tasks.submit({identity:{parentSessionId:'parent'},agentPath:'root/one',description:'one',prompt:'work',agent:'general',delivery:'tool'});tasks.terminalize({taskId:task.id,outcome,...(outcome==='completed'?{resultText:'late success'}:{error:'original terminal'})});return task
@@ -54,4 +57,73 @@ it('does not turn an unproved producer outcome into terminal job or body success
  const tasks=createTaskRegistry(),task=tasks.submit({identity:{parentSessionId:'parent'},agentPath:'root/one',description:'one',prompt:'work',agent:'general',delivery:'tool'});tasks.terminalize({taskId:task.id,outcome:'recovery-required',recoveryReason:'dispatch-unknown'})
  const jobs=createJobRegistry(),registration=jobs.registerJob('root','subagent','one',undefined,undefined,undefined,{agentPath:'root/one'}),table=createAgentTable(),actual=entry();table.add(actual.path,actual)
  await expect(captureJobProjection(registration)(task)).rejects.toThrow('outcome unavailable');await expect(captureTableProjection(table,actual)(task)).rejects.toThrow('outcome unavailable');expect(jobs.read(registration.id).status).toBe('running');expect(jobs.read(registration.id).result).toBeUndefined();expect(actual.status).toBe('running');expect(actual.finalText).toBeUndefined()
+})
+
+it.each(['before-io','unknown-after-io'])('isolates canonical required Task projection from auxiliary %s failure',async phase=>{
+ const rawJobs=createJobRegistry(),rawTable=createAgentTable();let writes=0,current=0,armed=false
+ const save=async()=>{writes++;if(!armed)return;if(phase==='unknown-after-io')await Promise.resolve();throw Error(phase)}
+ const jobs=persistentJobRegistry(rawJobs,save),table=persistentAgentTable(rawTable,save),actual=entry()
+ // Mount-time snapshots are independent attempts. Capture their original
+ // rejection without turning this focused terminal test into an IO probe.
+ table.add(actual.path,actual)
+ let registration:JobRegistration|undefined
+ jobs.registerJob('root','subagent','one',undefined,undefined,undefined,{agentPath:actual.path},receipt=>{registration=receipt})
+ await Promise.resolve();armed=true;const before=writes
+ const check=()=>{current++},job=requireJobProjection(registration!,check,async()=>{}),agent=captureTaskTableProjection(table,actual,check)
+ const task=terminal('error')
+ await Promise.all([job(task),agent(task)])
+ expect(writes).toBe(before);expect(current).toBeGreaterThan(0)
+ expect(rawJobs.read(registration!.id).status).toBe('error');expect(actual.status).toBe('error')
+ // Ordinary projections still own their exact original failure.
+ await expect(captureJobProjection(registration!)(task)).rejects.toThrow(phase)
+ expect(writes).toBe(before+1)
+})
+
+it('retains auxiliary save failures in their own mount flush and cleanup without repeating the save',async()=>{
+ let writes=0
+ const cause=Error('Original auxiliary projection unavailable')
+ const wired=wireSubagentPersistence({jobs:createJobRegistry(),table:createAgentTable(),roles:createRoleRegistry()},{
+  coordinator:{async putDocument(){writes++;throw cause}} as unknown as Parameters<typeof wireSubagentPersistence>[1]['coordinator'],
+  stateId:'auxiliary',parentSessionId:'parent',
+ })
+ wired.jobs.registerJob('root','code','ordinary')
+ await expect(wired.flushFacts()).rejects.toThrow('Auxiliary subagent projections require recovery')
+ await expect(wired.flushFacts()).rejects.toThrow('Auxiliary subagent projections require recovery')
+ await expect(wired.closeFacts()).rejects.toThrow('Subagent projection cleanup unresolved')
+ expect(writes).toBe(1)
+})
+
+it('never selects Task cache omission from an ordinary receipt, copied identity or projection shape',async()=>{
+ let writes=0
+ const rawJobs=createJobRegistry(),jobs=persistentJobRegistry(rawJobs,async()=>{writes++})
+ const receipt=jobs.registerJob('root','subagent','ordinary',undefined,undefined,undefined,{agentPath:'root/one'})
+ requireJobProjection(receipt)
+ expect(isOriginalRequiredSpawnJob(receipt)).toBe(false)
+ expect(isOriginalRequiredSpawnJob({...receipt})).toBe(false)
+ const rawTable=createAgentTable(),table=persistentAgentTable(rawTable,async()=>{writes++}),actual={...entry(),taskId:'forged-task'}
+ captureTaskTableProjection(table,actual)
+ expect(isOriginalRequiredSpawnEntry(actual)).toBe(false)
+ expect(isOriginalRequiredSpawnEntry({...actual})).toBe(false)
+ table.add(actual.path,actual)
+ expect(writes).toBe(2)
+ const before=snapshotState({jobs:rawJobs,table:rawTable,roles:createRoleRegistry()})
+ table.update(actual.path,actual,{closing:true})
+ expect(snapshotState({jobs:rawJobs,table:rawTable,roles:createRoleRegistry()})).toEqual(before)
+ expect(writes).toBe(2)
+})
+
+it.each(['mailbox','followup','custom-role'])('preserves required %s persistence and its original failure',async mode=>{
+ let armed=false,writes=0
+ const wired=wireSubagentPersistence({jobs:createJobRegistry(),table:createAgentTable(),roles:createRoleRegistry()},{
+  coordinator:{async putDocument(){writes++;if(armed)throw Error('required '+mode)}} as unknown as Parameters<typeof wireSubagentPersistence>[1]['coordinator'],stateId:'required',parentSessionId:'parent',
+ })
+ const actual={...entry(),taskId:'copied-task-id'}
+ if(mode==='followup'){wired.table.add(actual.path,actual);await wired.flushFacts()}
+ armed=true
+ if(mode==='mailbox'){actual.mailbox.push('unconsumed');wired.table.add(actual.path,actual)}
+ else if(mode==='followup')wired.table.update(actual.path,actual,{lastInboxSeq:7,finalText:'new followup result',status:'waiting'})
+ else wired.roles.register({name:'custom',description:'durable configuration',systemPrompt:'custom instructions',tools:[]})
+ await expect(wired.flushFacts()).rejects.toThrow('Auxiliary subagent projections require recovery')
+ await expect(wired.closeFacts()).rejects.toThrow('Subagent projection cleanup unresolved')
+ expect(writes).toBe(mode==='followup'?2:1)
 })

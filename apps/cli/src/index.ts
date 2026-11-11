@@ -12,12 +12,11 @@ import { createCliDiagnostics } from "./diagnostics-bootstrap.ts"
 import { createProviderRegistry, buildModelClient } from "@i-harness/provider"
 import { diagnosticsFor } from "@i-harness/diagnostics"
 import type { ModelClient } from "@i-harness/llm-seam"
-import { createForkSessionController, ForkAdmissionError } from "@i-harness/session-persistence"
-import { createJsonlTaskTransitionCoordinator } from "@i-harness/session-persistence-jsonl/internal/task-document-factory"
+import { createForkSessionController, ForkAdmissionError, createSessionCoordinator } from "@i-harness/session-persistence"
+import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { cliSessionStore, setCliSessionStoreOverride } from "./session-store.ts"
 import { createJsonlCommitCoordinator } from "@i-harness/session-persistence-jsonl/internal/commit-coordinator"
 import { asSessionCoordinator } from "@i-harness/session-persistence/internal/commit-facade"
-import { taskDocumentStorageContract } from "@i-harness/subagent/internal/task-storage-contract"
 import type { SessionCoordinator, ForkPrepareRequest, ForkCommand, ForkExecutionControl } from "@i-harness/session-persistence"
 import { createFileBackedSessionQuery, type SessionQuery } from "@i-harness/session-query"
 import { createDurableSessionLoader, createSessionService, createCliForkHost, createUnmanagedTaskChildHost } from "@i-harness/session-executor"
@@ -92,8 +91,8 @@ export { runHeadless } from "./run.ts"
 /** Durable store selection shared by every CLI coordinator construction site. */
 function createCliCoordinator(dir: string): SessionCoordinator {
   return cliSessionStore() === 'commit-log'
-    ? asSessionCoordinator(createJsonlCommitCoordinator(dir, { lock: { enabled: true, lockRoot: dir } }), { taskDocument: { validator: taskDocumentStorageContract, empty: taskDocumentStorageContract.empty } })
-    : createJsonlTaskTransitionCoordinator(dir, { lock: { enabled: true, lockRoot: dir } }, taskDocumentStorageContract)
+    ? asSessionCoordinator(createJsonlCommitCoordinator(dir, { lock: { enabled: true, lockRoot: dir } }))
+    : createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true, lockRoot: dir } })
 }
 export type { HeadlessOptions, HeadlessResult } from "./run.ts"
 

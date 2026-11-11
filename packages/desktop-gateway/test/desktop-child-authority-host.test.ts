@@ -12,7 +12,7 @@ import { createHostFixtureTrace } from "./host-fixture-trace.ts"
 import { createHostFixtureModel } from "./host-fixture-model.ts"
 import { append, createSession, deriveMessages, fromJSONL, toJSONL } from '@i-harness/core-session'
 
-it("the real Desktop host registers authority for spawned child and teammate ordinary and Code Mode tool dispatch", async () => {
+it("the real Desktop host registers authority for independent child ordinary and Code Mode tool dispatch", async () => {
   const trace = createHostFixtureTrace('desktop-child-authority-host')
   let parentRound = 0
   let toolNumber = 0
@@ -24,19 +24,16 @@ it("the real Desktop host registers authority for spawned child and teammate ord
     const call = (name: string, args: unknown) => ({ tool_calls: [{ index: 0, id: `call-${++toolNumber}`, function: { name, arguments: JSON.stringify(args) } }] })
     if (body.model === "parent") {
       if (++parentRound === 1) delta = call("spawn_agent", { task_name: "helper", agent_type: "explore", message: "Read fixture.txt", background: false })
-      else if (parentRound === 2) delta = call("spawn_teammate", { name: "helper-team", description: "Read the fixture", prompt: "Read fixture.txt", context: "fresh" })
-      else if (parentRound === 3) delta = call("wait_agent", { timeout_ms: 5000 })
+      else if (parentRound === 2) delta = call("spawn_agent", { task_name: "helper-second", agent_type: "explore", message: "Read fixture.txt", background: false })
     } else {
       const system = JSON.stringify(body.messages[0]?.content)
-      const path = system.includes("lead/helper-team") ? "lead/helper-team" : "root/helper"
+      const path = system.includes("root/helper-second") ? "root/helper-second" : "root/helper"
       const round = (childRounds.get(path) ?? 0) + 1; childRounds.set(path, round)
       if (round === 1) delta = call("read", { path: "fixture.txt" })
-      else if (round === 2) delta = call("code_exec", { code: path.startsWith("lead/")
-        ? 'const file = await tools.read({path:"fixture.txt"});text(file.content);const team = await tools.list_members({});text(team.members.map(m=>m.name));text(await tools.team_task_list({}))'
-        : 'const file = await tools.read({path:"fixture.txt"});text(file.content)' })
+      else if (round === 2) delta = call("code_exec", { code: 'const file = await tools.read({path:"fixture.txt"});text(file.content)' })
     }
     response.writeHead(200, { "content-type": "text/event-stream" })
-    response.end(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\ndata: [DONE]\n\n`)
+    response.end(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: typeof delta === 'object' && delta !== null && 'tool_calls' in delta ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`)
   })
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve))
   const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`
@@ -51,7 +48,7 @@ it("the real Desktop host registers authority for spawned child and teammate ord
   createHookTrustStore(join(root, "hook-trust.json")).approve({ sha256: sha256ClaudePluginTreeSync(plugin), script: plugin, handlerId: "claude:SessionStart:0:0" })
   const settingsPath = join(root, "settings.json")
   await writeFile(settingsPath, JSON.stringify({ autoTitle: false, approvalMode: "full-access", sandboxMode: "danger-full-access", plugins: { subagentModel: true }, codeMode: { mode: "mixed" },
-    agents: { roles: { explore: { provider: "fixture", model: "child" }, teammate: { provider: "fixture", model: "child" } } },
+    agents: { roles: { explore: { provider: "fixture", model: "child" } } },
     llm: { providers: { fixture: { protocol: "openai-completions", baseURL: `${origin}/v1`, models: [{ id: "parent", contextWindow: 272000 }, { id: "child", contextWindow: 272000 }] } }, defaultModel: { provider: "fixture", model: "parent" } } }))
   const frames: RpcMessage[] = []
   host = await trace.run('host/create', () => createDesktopHost({ workspace, settingsPath, sessionDir: join(root, "sessions"), buildProviderClient: createHostFixtureModel(origin, trace), onWrite: frame => { trace.observe(frame); frames.push(frame) } }))
@@ -65,9 +62,10 @@ it("the real Desktop host registers authority for spawned child and teammate ord
     await rpc("initialize")
     await rpc("desktop/provider/mutate", { action: "key/set", id: "fixture", value: "test-only-key" })
     const { sessionId } = await rpc("session/create") as { sessionId: string }
+    await rpc("desktop/session/project/bind", {sessionId})
     await rpc("session/prompt", { sessionId, prompt: "Delegate the fixture checks" })
     const catalog = await rpc("desktop/session/subagents/list", { sessionId }) as { agents: { path: string; sessionId: string }[] }
-    expect(catalog.agents.map(agent => agent.path).sort()).toEqual(["lead/helper-team", "root/helper"])
+    expect(catalog.agents.map(agent => agent.path).sort()).toEqual(["root/helper", "root/helper-second"])
     for (const agent of catalog.agents) {
       const { events } = await rpc("desktop/session/subagents/history", { sessionId, childSessionId: agent.sessionId }) as HistoryRange
       const results = events.filter(event => event.type === "tool/result")
@@ -94,8 +92,8 @@ it("the real Desktop host registers authority for spawned child and teammate ord
         if (result?.type !== 'tool/result' || result.envelope?.retention.kind !== 'inline') throw new Error(`Expected complete inline ${name} fixture value`)
         return result.envelope.retention.value
       }
-      expect(inlineValue('read')).toEqual({ content: 'Desktop host fixture' })
-      const text = agent.path.startsWith('lead/') ? 'Desktop host fixture\n["lead","helper-team"]\n{"tasks":[]}' : 'Desktop host fixture'
+      expect(inlineValue('read')).toEqual({ content: 'Desktop host fixture', instruction_scope: { status: 'queued' } })
+      const text = 'Desktop host fixture'
       // The complete small observation is inline. Its nested text index has
       // separate retained-code qualification; this test exercises tool authority.
       expect(inlineValue('code_exec')).toMatchObject({ status: 'completed', text, truncated: false,
@@ -108,4 +106,6 @@ it("the real Desktop host registers authority for spawned child and teammate ord
     }
     await rm(root, { recursive: true, force: true })
   }
-}, 20_000)
+// Two native inherited-history births each execute ordinary read and Code Mode;
+// the complete measured workload, history reads, and cleanup took 35–42s.
+}, 60_000)

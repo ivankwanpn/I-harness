@@ -192,8 +192,8 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     // bodies observe a step abort (guard-timeout links its derived controller
     // to this upstream signal; untimed tools honor exec.abortSignal directly).
     // M19 (Ruling 24): optionally seed the executing session identity so the
-    // dispatch path can attribute the caller (agent-team resolves team-tool
-    // callers from it). Additive: no identity → the exec is exactly as before.
+    // dispatch path can attribute the original caller, including nested tools.
+    // Without a caller identity, ToolExec.sessionId stays undefined.
     const exec: ToolExec = {}
     if (identity?.modelGeneration) exec.modelGeneration = identity.modelGeneration
     if (signal) exec.abortSignal = signal

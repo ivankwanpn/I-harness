@@ -6,6 +6,16 @@ import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-
 import { taskDocumentStorageContract } from '../src/task/storage-contract.ts'
 import { createTaskRegistry, inspectTaskProjection, reconcileTaskProjection, taskDocKey, type TaskProtocolDocument } from '../src/index.ts'
 
+it('reads legacy diagnostic warnings without treating them as canonical result identity',()=>{
+  const original=createTaskRegistry(),task=original.submit({identity:{parentSessionId:'parent'},agentPath:'legacy',description:'legacy',prompt:'work',agent:'general',delivery:'tool'})
+  const cold=createTaskRegistry()
+  cold.restore({formatVersion:1,tasks:[{...task,projectionWarning:'missing-child-session'}],notifications:[]})
+  expect(cold.get(task.id)?.projectionWarning).toBe('missing-child-session')
+  expect(cold.annotateProjection(task.id,undefined)).toBe(true)
+  expect(cold.get(task.id)?.projectionWarning).toBeUndefined()
+  expect(cold.get(task.id)?.status).toBe('accepted')
+})
+
 it('reports and annotates a terminal task whose durable child session has no completed turn (D-01)', async () => {
   const root = await mkdtemp(join(tmpdir(), 'task-projection-'))
   const coordinator = createJsonlTaskTransitionCoordinator(join(root, 'sessions'), { lock: { enabled: true } }, taskDocumentStorageContract)
@@ -29,8 +39,8 @@ it('reports and annotates a terminal task whose durable child session has no com
     ])
     expect(await reconcileTaskProjection(cold, coordinator)).toHaveLength(1)
     await cold.flushPersistence()
-    expect((await coordinator.getDocument(taskDocKey('parent')) as TaskProtocolDocument).tasks.find(row => row.id === task.id)?.projectionWarning)
-      .toBe('terminal-without-turn-end')
+    expect(cold.get(task.id)?.projectionWarning).toBe('terminal-without-turn-end')
+    expect((await coordinator.getDocument(taskDocKey('parent')) as TaskProtocolDocument).tasks.find(row => row.id === task.id)?.projectionWarning).toBeUndefined()
 
     // The child later completes a turn: the next reconcile clears the warning
     // without touching status/outcome.

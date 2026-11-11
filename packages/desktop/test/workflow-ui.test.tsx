@@ -9,7 +9,7 @@ import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 afterEach(() => { cleanup(); useUiStore.setState({ locale: "zh-TW" }); vi.useRealTimers() })
 
 function view(overrides: Partial<DesktopWorkflowView> = {}): DesktopWorkflowView {
-  return { goal: null, plan: { active: false }, jobs: [], team: { enabled: true, members: [], tasks: [] }, reviews: [], ...overrides }
+  return { goal: null, plan: { active: false }, jobs: [], reviews: [], ...overrides }
 }
 const goal = { id: "g1", revision: 4, phase: "active" as const, objective: "Inspect the repository" }
 function bridgeWith(value: DesktopWorkflowView, mutate?: (request: DesktopRequest) => Promise<unknown>) {
@@ -84,51 +84,6 @@ it("applies plan mode with the edited proposal", async () => {
   await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/session/workflow/mutate", workspaceId: "w", sessionId: "s", command: { action: "plan", enabled: true, proposal: "Inspect files first" } }))
 })
 
-it("creates a teammate explicitly and targets roster names for quiet messages, followups and interrupts", async () => {
-  const member = { id: "m1", name: "Reader", description: "Reads files", provider: "spawn", context: "fresh" as const, phase: "active" as const, sessionId: "child" }
-  const populated = view({ team: { enabled: true, members: [member], tasks: [] } })
-  const { bridge, request } = bridgeWith(populated)
-  render(<WorkflowPane bridge={bridge} workspaceId="w" sessionId="s" />)
-  await loaded()
-  fireEvent.click(screen.getByRole("tab", { name: "團隊" }))
-  expect(screen.getByText("Reader")).toBeTruthy()
-  fireEvent.click(screen.getByText("建立團隊成員"))
-  fireEvent.change(screen.getByRole("textbox", { name: "成員名稱" }), { target: { value: "writer" } })
-  fireEvent.change(screen.getByRole("textbox", { name: "成員職責" }), { target: { value: "Edits files" } })
-  fireEvent.change(screen.getByRole("textbox", { name: "初始任務" }), { target: { value: "Update docs" } })
-  fireEvent.click(screen.getByRole("button", { name: "建立成員" }))
-  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/session/workflow/mutate", workspaceId: "w", sessionId: "s", command: { action: "team", tool: "spawn_teammate", args: { name: "writer", description: "Edits files", prompt: "Update docs", context: "fresh" } } }))
-  const roster = within(screen.getByRole("article", { name: "成員 Reader" }))
-  fireEvent.change(roster.getByRole("textbox", { name: "訊息 Reader" }), { target: { value: "Read a.md" } })
-  fireEvent.click(roster.getByRole("button", { name: "傳送訊息" }))
-  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/session/workflow/mutate", workspaceId: "w", sessionId: "s", command: { action: "team", tool: "send_message", args: { target: "Reader", message: "Read a.md" } } }))
-  fireEvent.change(roster.getByRole("textbox", { name: "訊息 Reader" }), { target: { value: "Now b.md" } })
-  fireEvent.click(roster.getByRole("button", { name: "派發後續任務" }))
-  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/session/workflow/mutate", workspaceId: "w", sessionId: "s", command: { action: "team", tool: "followup_task", args: { target: "Reader", message: "Now b.md" } } }))
-  fireEvent.click(roster.getByRole("button", { name: "中斷成員" }))
-  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/session/workflow/mutate", workspaceId: "w", sessionId: "s", command: { action: "team", tool: "interrupt_agent", args: { target: "Reader" } } }))
-})
-
-it("creates board tasks and supplies the latest revision when completing or reopening one", async () => {
-  const task = { id: "t1", revision: 2, subject: "Read docs", description: "Inspect README", status: "pending" as const, blockedBy: [], writeScopes: [] }
-  let current = view({ team: { enabled: true, members: [], tasks: [task] } })
-  const { bridge, request } = bridgeWith(current, async (input) => {
-    if (input.kind === "desktop/session/workflow/mutate" && input.command.action === "team" && input.command.tool === "team_task_update") current = view({ team: { ...current.team, tasks: [{ ...task, revision: 3, status: "completed" }] } })
-    return current
-  })
-  render(<WorkflowPane bridge={bridge} workspaceId="w" sessionId="s" />)
-  await loaded()
-  fireEvent.click(screen.getByRole("tab", { name: "團隊" }))
-  fireEvent.change(screen.getByRole("textbox", { name: "任務標題" }), { target: { value: "Build" } })
-  fireEvent.change(screen.getByRole("textbox", { name: "任務說明" }), { target: { value: "Run targeted checks" } })
-  fireEvent.click(screen.getByRole("button", { name: "建立任務" }))
-  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/session/workflow/mutate", workspaceId: "w", sessionId: "s", command: { action: "team", tool: "team_task_create", args: { subject: "Build", description: "Run targeted checks" } } }))
-  fireEvent.click(screen.getByRole("button", { name: "完成任務 Read docs" }))
-  await screen.findByRole("button", { name: "重新開啟 Read docs" })
-  fireEvent.click(screen.getByRole("button", { name: "重新開啟 Read docs" }))
-  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/session/workflow/mutate", workspaceId: "w", sessionId: "s", command: { action: "team", tool: "team_task_update", args: { task_id: "t1", expected_revision: 3, action: "reopen" } } }))
-})
-
 it("distinguishes saved running jobs from owned live jobs and reads bounded output", async () => {
   const { bridge, request } = bridgeWith(view({ jobs: [
     { jobId: "cold", label: "Saved worker", kind: "subagent", status: "running", outputAvailable: true, live: false, canCancel: false },
@@ -177,10 +132,10 @@ it("ignores stale reads after session selection changes and refreshes only match
   request.mockClear()
   vi.useFakeTimers()
   const notify = (sessionId: string, type: string) => listeners.forEach((listener) => listener({ kind: "sdk/notification", workspaceId: "w", method: "session/event", params: { sessionId, event: { type } } }))
-  act(() => { notify("a", "goal/change"); notify("b", "reasoning/chunk"); notify("b", "assistant/chunk") })
+  act(() => { notify("a", "goal/change"); notify("b", "reasoning/chunk"); notify("b", "assistant/chunk"); notify("b", "team/task") })
   await act(async () => { await vi.advanceTimersByTimeAsync(250) })
   expect(request).not.toHaveBeenCalled()
-  act(() => { notify("b", "goal/change"); notify("b", "team/task"); notify("b", "tool/result") })
+  act(() => { notify("b", "goal/change"); notify("b", "tool/result") })
   await act(async () => { await vi.advanceTimersByTimeAsync(250) })
   expect(request).toHaveBeenCalledTimes(1)
   expect(request).toHaveBeenCalledWith({ kind: "desktop/session/workflow/read", workspaceId: "w", sessionId: "b" })
@@ -205,14 +160,12 @@ it("does not apply an old mutation response or notification to a newly selected 
   expect(onChanged).not.toHaveBeenCalled()
 })
 
-it("keeps plan changes disabled during an active turn and team commands disabled in plan mode", async () => {
+it("keeps plan changes disabled during an active turn", async () => {
   const { bridge } = bridgeWith(view({ plan: { active: true } }))
   render(<WorkflowPane bridge={bridge} workspaceId="w" sessionId="s" running />)
   await loaded()
   expect(screen.getByRole("button", { name: "套用計畫" }).hasAttribute("disabled")).toBe(true)
-  fireEvent.click(screen.getByRole("tab", { name: "團隊" }))
-  expect(screen.getByText("請先退出計畫模式再管理團隊。")).toBeTruthy()
-  expect(screen.getByRole("button", { name: "建立任務" }).hasAttribute("disabled")).toBe(true)
+  expect(screen.queryByRole("tab", { name: "團隊" })).toBeNull()
 })
 
 it("starts an existing active goal with its current reference", async () => {
@@ -254,17 +207,6 @@ it("ignores an output reply after its job panel closes", async () => {
   expect(screen.queryByRole("button", { name: "關閉輸出" })).toBeNull()
 })
 
-it("uses roster names when assigning a task whose snapshot owner is a member ID", async () => {
-  const { bridge, request } = bridgeWith(view({ team: { enabled: true, members: [
-    { id: "member-uuid", name: "Reader", description: "Reads", provider: "spawn", context: "fresh", phase: "active" },
-  ], tasks: [{ id: "t1", revision: 7, subject: "Read", description: "Read docs", status: "pending", blockedBy: [], writeScopes: [] }] } }))
-  render(<WorkflowPane bridge={bridge} workspaceId="w" sessionId="s" />)
-  await loaded()
-  fireEvent.click(screen.getByRole("tab", { name: "團隊" }))
-  fireEvent.change(screen.getByRole("combobox", { name: "負責成員 Read" }), { target: { value: "Reader" } })
-  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/session/workflow/mutate", workspaceId: "w", sessionId: "s", command: { action: "team", tool: "team_task_update", args: { task_id: "t1", expected_revision: 7, action: "reassign", owner: "Reader" } } }))
-})
-
 it("shows the actual goal runner and prevents duplicate starts even before parent status refreshes", async () => {
   const { bridge, request } = bridgeWith(view({ goal, goalRun: { running: true } }))
   render(<WorkflowPane bridge={bridge} workspaceId="w" sessionId="s" />)
@@ -283,13 +225,20 @@ it("shows the saved reason why autonomous goal execution paused", async () => {
   expect(screen.getByRole("button", { name: "繼續目標" })).toBeTruthy()
 })
 
-it("labels the selected conversation's lead as informational without self-target actions", async () => {
-  const { bridge } = bridgeWith(view())
-  render(<WorkflowPane bridge={bridge} workspaceId="w" sessionId="s" running />)
+it('offers ordinary workflow panels without Team creation or commands', async () => {
+  const { bridge, request } = bridgeWith(view())
+  render(<WorkflowPane bridge={bridge} workspaceId="w" sessionId="s" />)
   await loaded()
-  fireEvent.click(screen.getByRole("tab", { name: "團隊" }))
-  const lead = within(screen.getByRole("article", { name: "主代理 · 本會話" }))
-  expect(lead.getByText("執行中")).toBeTruthy()
-  expect(lead.queryByRole("button")).toBeNull()
-  expect(lead.queryByRole("textbox")).toBeNull()
+  expect(screen.getAllByRole('tab').map(tab=>tab.textContent)).toEqual(['目標與計畫','背景任務','代審記錄'])
+  expect(screen.queryByRole('button',{name:'建立成員'})).toBeNull()
+  expect(request.mock.calls.some(([input])=>input.kind==='desktop/session/workflow/mutate')).toBe(false)
+})
+
+it('normalizes a retired workflow section to the ordinary goal panel', async () => {
+ const {bridge}=bridgeWith(view())
+ render(<WorkflowPane bridge={bridge} workspaceId="w" sessionId="s" section={'team' as never} />)
+ await loaded()
+ expect(screen.getByRole('tab',{name:'目標與計畫'}).getAttribute('aria-selected')).toBe('true')
+ expect(screen.getByRole('textbox',{name:'目標內容'})).toBeTruthy()
+ expect(screen.queryByRole('tab',{name:'團隊'})).toBeNull()
 })

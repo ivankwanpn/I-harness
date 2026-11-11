@@ -10,8 +10,7 @@ import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 afterEach(() => { cleanup(); vi.useRealTimers(); useUiStore.setState({ locale: "zh-TW" }) })
 
 const goal = { id: "goal-a", revision: 4, phase: "active" as const, objective: "Saved objective" }
-const member = { id: "member-a", name: "Reader", description: "Read files", provider: "spawn", context: "fresh" as const, phase: "active" as const }
-const baseView = (patch: Partial<DesktopWorkflowView> = {}): DesktopWorkflowView => ({ goal, plan: { active: false, proposal: "Saved plan" }, team: { enabled: true, members: [member], tasks: [] }, jobs: [], reviews: [], ...patch })
+const baseView = (patch: Partial<DesktopWorkflowView> = {}): DesktopWorkflowView => ({ goal, plan: { active: false, proposal: "Saved plan" }, jobs: [], reviews: [], ...patch })
 
 function gateway(initial = baseView(), mutate?: (input: DesktopRequest) => Promise<unknown>) {
   let current = initial
@@ -42,7 +41,7 @@ it("retains objective and plan drafts through another workflow tab and a complet
   await loaded()
   fireEvent.change(screen.getByRole("textbox", { name: "目標內容" }), { target: { value: "Human objective draft" } })
   fireEvent.change(screen.getByRole("textbox", { name: "計畫內容" }), { target: { value: "Human plan draft" } })
-  fireEvent.click(screen.getByRole("tab", { name: "團隊" }))
+  fireEvent.click(screen.getByRole("tab", { name: "背景任務" }))
   fireEvent.click(screen.getByRole("tab", { name: "目標與計畫" }))
   expect(textboxValue("目標內容")).toBe("Human objective draft")
   expect(textboxValue("計畫內容")).toBe("Human plan draft")
@@ -51,57 +50,6 @@ it("retains objective and plan drafts through another workflow tab and a complet
   await loaded()
   expect(textboxValue("目標內容")).toBe("Human objective draft")
   expect(textboxValue("計畫內容")).toBe("Human plan draft")
-})
-
-it("keeps team creation, task and roster-message drafts scoped to the actual conversation", async () => {
-  const api = gateway()
-  const pane = render(<WorkflowPane bridge={api.bridge} workspaceId="w" sessionId="s" section="team" />)
-  await screen.findByRole("textbox", { name: "訊息 Reader" })
-  fireEvent.click(screen.getByText("建立團隊成員"))
-  fireEvent.change(screen.getByRole("textbox", { name: "成員名稱" }), { target: { value: "Writer draft" } })
-  fireEvent.change(screen.getByRole("textbox", { name: "任務標題" }), { target: { value: "Task draft" } })
-  fireEvent.change(screen.getByRole("textbox", { name: "訊息 Reader" }), { target: { value: "Reader message draft" } })
-  pane.rerender(<WorkflowPane bridge={api.bridge} workspaceId="w" sessionId="other" section="team" />)
-  await screen.findByRole("textbox", { name: "訊息 Reader" })
-  expect(textboxValue("訊息 Reader")).toBe("")
-  expect(textboxValue("任務標題")).toBe("")
-  pane.rerender(<WorkflowPane bridge={api.bridge} workspaceId="w" sessionId="s" section="team" />)
-  await screen.findByRole("textbox", { name: "訊息 Reader" })
-  expect(textboxValue("訊息 Reader")).toBe("Reader message draft")
-  expect(textboxValue("任務標題")).toBe("Task draft")
-  expect(textboxValue("成員名稱")).toBe("Writer draft")
-})
-
-it("blocks invalid teammate identifiers and retains the rejected draft until a valid name is submitted", async () => {
-  const api = gateway(baseView())
-  const pane = render(<WorkflowPane bridge={api.bridge} workspaceId="w" sessionId="s" section="team" />)
-  await screen.findByRole("textbox", { name: "訊息 Reader" })
-  fireEvent.click(screen.getByText("建立團隊成員"))
-  fireEvent.change(screen.getByRole("textbox", { name: "成員職責" }), { target: { value: "Read owned fixtures" } })
-  fireEvent.change(screen.getByRole("textbox", { name: "初始任務" }), { target: { value: "Inspect the fixture" } })
-  for (const name of ["OwnedReader", "lead", "reader--a", " owned-reader", "owned-reader ", "a".repeat(65)]) {
-    const field = screen.getByRole("textbox", { name: "成員名稱" })
-    fireEvent.change(field, { target: { value: name } })
-    expect(field.getAttribute("aria-invalid")).toBe("true")
-    expect(screen.getByRole("button", { name: "建立成員" }).hasAttribute("disabled")).toBe(true)
-    fireEvent.submit(field.closest("form")!)
-  }
-  await act(async () => {})
-  expect(api.request.mock.calls.filter(([input]) => input.kind === "desktop/session/workflow/mutate")).toHaveLength(0)
-  const field = screen.getByRole("textbox", { name: "成員名稱" })
-  expect(field.getAttribute("aria-invalid")).toBe("true")
-  const associated = field.getAttribute("aria-describedby")!.split(" ").map(id => document.getElementById(id)?.textContent).join(" ")
-  expect(associated).toContain("64")
-  expect(associated).toContain("lead")
-  pane.unmount()
-  render(<WorkflowPane bridge={api.bridge} workspaceId="w" sessionId="s" section="team" />)
-  await screen.findByRole("textbox", { name: "成員名稱" })
-  expect(textboxValue("成員名稱")).toBe("a".repeat(65))
-  expect(textboxValue("成員職責")).toBe("Read owned fixtures")
-  fireEvent.change(screen.getByRole("textbox", { name: "成員名稱" }), { target: { value: "owned-reader" } })
-  expect(screen.getByRole("textbox", { name: "成員名稱" }).getAttribute("aria-invalid")).toBeNull()
-  fireEvent.click(screen.getByRole("button", { name: "建立成員" }))
-  await waitFor(() => expect(api.request).toHaveBeenCalledWith({ kind: "desktop/session/workflow/mutate", workspaceId: "w", sessionId: "s", command: { action: "team", tool: "spawn_teammate", args: { name: "owned-reader", description: "Read owned fixtures", prompt: "Inspect the fixture", context: "fresh" } } }))
 })
 
 it("preserves a dirty goal's original revision until the user compares and adopts the new saved revision", async () => {

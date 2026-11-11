@@ -15,7 +15,6 @@ async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
   }
 }
 import { append, createSession, copyConversationData, type SessionEvent, type SessionEventView } from "@i-harness/core-session"
-import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createSessionExecutor, type AgentConfig, type AgentDeps } from "@i-harness/core-agent"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
@@ -723,19 +722,6 @@ describe("createSessionAssembly — the model handle (R-B1)", () => {
 // hooks, used at apps/cli/src/index.ts:553 `service.onAssembly(`). The mock
 // route is the cheaper of the two and is the one to reach for first; neither
 // exists today, so the gap is stated here rather than asserted around.
-/** In-memory SessionCoordinator for the team case only. The team's spawn path
- * needs durable child sessions, and this package declares no JSONL backend (so
- * no real coordinator is constructible here). Shape copied from the precedent at
- * packages/agent-team/test/lifecycle.test.ts:515 (`const coordinator = {`
- * … `as unknown as SessionCoordinator` at :533): a coordinator double, NOT a
- * model client — the recorder shapes above are untouched. */
-async function memoryCoordinator(): Promise<SessionCoordinator> {
-  const root=await mkdtemp(join(tmpdir(),'ih-f1-assembly-team-'))
-  const coordinator=createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})
-  await coordinator.create({sessionId:'lead-1'})
-  return coordinator
-}
-
 describe("createSessionAssembly — every handle-reachable holder follows a rebind (Task 2, R-B1)", () => {
   /** This file's recording-client shape (`capturingModel`, :462 — the same shape
    * as `recordingModel`, subagent/test/child.test.ts:253) with the replies served
@@ -895,42 +881,6 @@ describe("createSessionAssembly — every handle-reachable holder follows a rebi
     }
   }, 30_000)
 
-  it("holder 5c — a team-mate's first turn inherits the rebound client", async () => {
-    const coordinator = await memoryCoordinator()
-    const first = capturingModel()
-    const second = scriptedModel([
-      { role: "assistant", toolCalls: [{ name: "spawn_teammate", args: { name: "helper", description: "d", prompt: "do the work" } }] },
-      { role: "assistant", text: "teammate finished" }, // the teammate's own turn
-      { role: "assistant", text: "lead finished" }, // the lead's continuation
-    ], true)
-    const assembly = await createSessionAssembly({
-      workspace: process.cwd(),
-      model: first,
-      approveAll: true,
-      team: {},
-      // The team's spawn path REQUIRES durable child sessions (roster.ts:
-      // "durable child sessions required", then the holdsPrompt checkpoint read
-      // through `coordinator.load`), which the assembly only wires when BOTH
-      // sessionId and coordinator are present. The shared cassette makes the
-      // teammate's turn and the lead's continuation race for the next script
-      // step, so the assertions below never depend on WHO got which step.
-      sessionId: "lead-1",
-      coordinator,
-    })
-    try {
-      assembly.setModel(second)
-      // A rejected lead turn needs no assertion to fail this case (it rejects
-      // out of the await below); the holder assertion is the waitFor, whose
-      // subject is the TEAMMATE's request — only a teammate turn carries the
-      // teammate role's prompt.
-      await assembly.agent.run("use the team")
-      expect(assembly.session.events.find(event => event.type === "tool/result" && event.name === "spawn_teammate")).not.toMatchObject({ isError: true })
-      await waitFor(() => second.requests.some((r) => r.systemPrompt.includes("You are a teammate in an agent team.")))
-      expect(first.requests).toHaveLength(0)
-    } finally {
-      await assembly.dispose()
-    }
-  }, 30_000)
 
   it("holder 6 — auto-title's model: `assembly.model` read at CALL time forwards to the rebound client", async () => {
     const first = capturingModel()
@@ -1669,7 +1619,6 @@ describe("createSessionAssembly — the session's budget reaches its children (M
 // reviewer), never by call order.
 describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
   const REVIEWER_PROMPT = "You are the approval guardian."
-  const TEAMMATE_PROMPT = "You are a teammate in an agent team."
 
   /** One recorded deps' prompt as text. The MAIN agent is handed the assembly's
    * `systemPromptNow` FUNCTION; every child site hands a string (child.ts:433),
@@ -1699,21 +1648,6 @@ describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
       { role: "assistant", toolCalls: [{ name: "write", args: { path: join(dir, "..", "outside.txt"), text: "x" } }] },
       { role: "assistant", text: "the write went through" },
     ]
-  }
-
-  /** The team case's client: holder 5c's cassette (:838-842) with this file's
-   * recorder around it (`capturingModel`, :468) — the two existing pieces
-   * joined, because the spawn is driven by a TOOL CALL and the teammate's turn
-   * races the lead's continuation for the next script step (the reason no
-   * assertion below depends on WHO got which step). */
-  function teamLeadModel(): ModelClient & { requests: LLMRequest[] } {
-    const requests: LLMRequest[] = []
-    const cassette = textMock([
-      { role: "assistant", toolCalls: [{ name: "spawn_teammate", args: { name: "helper", description: "d", prompt: "do the work" } }] },
-      { role: "assistant", text: "teammate finished" },
-      { role: "assistant", text: "lead finished" },
-    ])
-    return Object.assign(controlledModel(async function* (request) { requests.push(request); yield* cassette.stream({ ...request, generation: undefined, confirmExecution: undefined }) }), { requests })
   }
 
   // hop 1 (`assembly.ts:1146`) + hop 4 (`reviewer.ts:178`, the gate's TRUE arm):
@@ -1801,42 +1735,4 @@ describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
     }
   }, 30_000)
 
-  // hop 2 (`assembly.ts:1182`) + hop 3 (`agent-team/src/scheduler.ts:221`).
-  it("hop 2+3: a TEAMMATE's budget carries the session's WINDOW, not its cap", async () => {
-    agentCalls.deps.length = 0
-    const coordinator = await memoryCoordinator()
-    const model = teamLeadModel()
-    const assembly = await createSessionAssembly({
-      workspace: process.cwd(),
-      model,
-      approveAll: true,
-      team: {},
-      contextWindow: 12_000,
-      maxOutputTokens: 100_000,
-      autoCompactionEnabled: () => false,
-      compact: { contextWindow: 4_000, auto: false }, // the third decoy (see the block header)
-      // The team's spawn path REQUIRES durable child sessions (roster.ts), which
-      // the assembly wires only when BOTH are present — holder 5c's shape (:854).
-      sessionId: "lead-1",
-      coordinator,
-    })
-    try {
-      await assembly.agent.run("use the team")
-      await waitFor(() => childrenWith(TEAMMATE_PROMPT).length > 0)
-      const teammates = childrenWith(TEAMMATE_PROMPT)
-      expect(teammates).toHaveLength(1)
-      // The decoy set again: a swap at EITHER hop (the assembly's literal, or
-      // the scheduler's) makes this read 100_000, and one to the compact
-      // config's window reads 4_000.
-      expect(teammates[0]!.budget?.contextWindow).toBe(12_000)
-      // …and the observed child is one that really RAN: its own request carries
-      // the cap clamped against that window (100_000 reaches the wire verbatim
-      // only where the window is wide enough for it).
-      await waitFor(() => model.requests.some((r) => r.systemPrompt.includes(TEAMMATE_PROMPT)))
-      const teammateRequests = model.requests.filter((r) => r.systemPrompt.includes(TEAMMATE_PROMPT))
-      expect(teammateRequests[0]!.maxOutputTokens).toBeLessThan(100_000)
-    } finally {
-      await assembly.dispose()
-    }
-  }, 30_000)
 })

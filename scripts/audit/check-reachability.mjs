@@ -812,17 +812,6 @@ const CORE_AGENT_BATCH_SOURCE_UNIT = new Set([
   "packages/core-agent/src/tool-batch/cancel.ts",
 ])
 
-// S19 preserves the original non-entry scheduler boundary. Existing domain
-// owners and any future/unlisted scheduler modules remain independent.
-const TEAM_SCHEDULER_SOURCE_UNIT = new Set([
-  "packages/agent-team/src/scheduler.ts",
-  "packages/agent-team/src/scheduler/admission.ts",
-  "packages/agent-team/src/scheduler/teammate-lifecycle.ts",
-  "packages/agent-team/src/scheduler/task-delivery.ts",
-  "packages/agent-team/src/scheduler/completion.ts",
-  "packages/agent-team/src/scheduler/recovery.ts",
-])
-
 // The reliability repair extracts only the original llm-seam error owner.
 // Unlisted/future seam modules and every adapter remain independent readers.
 const LLM_SEAM_ERROR_SOURCE_UNIT = new Set([
@@ -856,7 +845,6 @@ function declarationOwner(rel) {
   if (EXEC_SUPERVISOR_SOURCE_UNIT.has(rel)) return "packages/exec/src/execution-supervisor.ts"
   if (CORE_AGENT_SOURCE_UNIT.has(rel)) return "packages/core-agent/src/index.ts"
   if (CORE_AGENT_BATCH_SOURCE_UNIT.has(rel)) return "packages/core-agent/src/execute-tool-calls.ts"
-  if (TEAM_SCHEDULER_SOURCE_UNIT.has(rel)) return "packages/agent-team/src/scheduler.ts"
   return rel
 }
 
@@ -2346,54 +2334,6 @@ SELF_TEST_CASES.push({
   ].map(([label, rel, test]) => `${label}=` + scanUnusedExports([...llmSeamErrorFixture(true), { rel, test, text: "const read = (value: SeamOwnedValue) => value" }]).length) },
 })
 
-function teamSchedulerRelocationFixtureFiles(split) {
-  const file = (rel, text, test = false) => ({ rel, text, test })
-  const declaration = "export interface SchedulerOwnedValue { value: string }"
-  const reads = "const read = (value: SchedulerOwnedValue) => value"
-  return [
-    file("packages/agent-team/src/index.ts", 'export type { SchedulerOwnedValue } from "./scheduler.ts"'),
-    file("packages/agent-team/src/scheduler.ts", declaration + (split ? "" : "\n" + reads)),
-    ...(split ? [...TEAM_SCHEDULER_SOURCE_UNIT].filter(rel => rel !== "packages/agent-team/src/scheduler.ts").map(rel => file(rel, reads)) : []),
-  ]
-}
-
-SELF_TEST_CASES.push({
-  name: "S19: original and split scheduler retain the complete original finding object",
-  expect: [false, true].map(split => JSON.stringify({ split, finding: {
-    kind: "unused-export", subject: "@i-harness/agent-team#SchedulerOwnedValue", evidence: "packages/agent-team/src/index.ts",
-  } })),
-  run() {
-    return [false, true].flatMap(split => scanUnusedExports(teamSchedulerRelocationFixtureFiles(split)).map(finding => JSON.stringify({ split, finding })))
-  },
-})
-
-SELF_TEST_CASES.push({
-  name: "S19: every exact scheduler descendant shares only its original source owner",
-  expect: [...TEAM_SCHEDULER_SOURCE_UNIT].map(rel => `${rel}:packages/agent-team/src/scheduler.ts`),
-  run() { return [...TEAM_SCHEDULER_SOURCE_UNIT].map(rel => `${rel}:${declarationOwner(rel)}`) },
-})
-
-SELF_TEST_CASES.push({
-  name: "S19: existing team owners and external readers remain independent; tests do not wire exports",
-  expect: ["entry=0", "types=0", "fold=0", "transact=0", "roster=0", "mailbox=0", "task-board=0", "activity=0", "tools=0", "agent-path=0", "future=0", "subagent=0", "executor=0", "outside=0", "test-only=1"],
-  run() {
-    return [
-      ...["index", "types", "fold", "transact", "roster", "mailbox", "task-board", "activity", "tools", "agent-path"].map(name => [name === "index" ? "entry" : name, `packages/agent-team/src/${name}.ts`, false]),
-      ["future", "packages/agent-team/src/scheduler/future.ts", false],
-      ["subagent", "packages/subagent/src/child.ts", false],
-      ["executor", "packages/session-executor/src/assembly.ts", false],
-      ["outside", "apps/consumer/src/index.ts", false],
-      ["test-only", "packages/agent-team/test/consumer.test.ts", true],
-    ].map(([label, rel, test]) => {
-      const files = teamSchedulerRelocationFixtureFiles(true)
-      const text = "const read = (value: SchedulerOwnedValue) => value"
-      const existing = files.find(file => file.rel === rel)
-      if (existing) existing.text += "\n" + text
-      else files.push({ rel, test, text })
-      return `${label}=` + scanUnusedExports(files).length
-    })
-  },
-})
 
 // The five cases below were added by M1's fix wave (final whole-branch review,
 // I2 and Deferred item 18). Honest accounting, because an earlier version of

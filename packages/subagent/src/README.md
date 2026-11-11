@@ -27,8 +27,8 @@ All new modules are private source modules; the package export map is unchanged.
 
 The agent table, agent registry, job registry, roles, fork projection,
 task protocol, task notification, persistence and task projections remain their
-original independent owners. Team tools and scheduling remain in `agent-team`;
-there is no subagent `tools/team.ts` implementation to move or duplicate.
+original independent owners. Task documents provide canonical durable outcomes,
+and cold restoration derives the corresponding child and job projections.
 
 The extracted factories retain the original dependency object by reference.
 They do not destructure getters into snapshots. Spawn assembly and publication
@@ -62,10 +62,9 @@ the original restore construction/publication boundary and its captured/live
 callbacks. They are focused owners, not relocations of the whole tools factory.
 Splitting their async admission merely for a line count would obscure timing.
 
-Verification uses the existing full subagent suites (273 tests / 18 files),
-session-executor `child-observation`, `code-mode-children` and `assembly` (52 / 3),
-and agent-team `child-sequence`, `completion-delivery` and `lifecycle` (28 / 3),
-with package typechecks. Two added cases characterize the inherited ownership
+Verification uses the full subagent suite, session-executor `child-observation`,
+`code-mode-children` and `assembly`, together with package typechecks.
+Two added cases characterize the inherited ownership
 barrier and live restored prompt callback; both pass on original and split
 sources. Source reconstruction additionally checks complete statement bodies,
 getter/receiver/argument evaluation, allocation/callback placement and public
@@ -79,6 +78,4 @@ pnpm --filter @i-harness/subagent exec vitest run --maxWorkers=2 --minWorkers=1
 pnpm --filter @i-harness/subagent typecheck
 pnpm --filter @i-harness/session-executor exec vitest run test/child-observation.test.ts test/code-mode-children.test.ts test/assembly.test.ts --maxWorkers=2 --minWorkers=1
 pnpm --filter @i-harness/session-executor typecheck
-pnpm --filter @i-harness/agent-team exec vitest run test/child-sequence.test.ts test/completion-delivery.test.ts test/lifecycle.test.ts --maxWorkers=2 --minWorkers=1
-pnpm --filter @i-harness/agent-team typecheck
 ```

@@ -105,14 +105,15 @@ it('recognizes standalone SDK consent without interpreting a consumed directory 
   const result = spawnSync(process.execPath, ['--import', loader, join(repo, 'apps/cli/src/index.ts'), '--help'], { encoding: 'utf8', windowsHide: true })
   expect(result.status).toBe(0); expect(result.stdout).toBe('')
   const help = result.stderr
-  expect(help).toContain('sdk [--session-dir DIR] [--yes]')
+  expect(help).toContain('sdk [--session-dir DIR] [--session-store jsonl|commit-log] [--yes]')
   expect(help).toContain('explicit per-call sandbox escalation')
   expect(help).toContain('Without --yes, SDK tool approval requests fail closed')
   const invalid = spawnSync(process.execPath, ['--import', loader, join(repo, 'apps/cli/src/index.ts'), 'sdk', '--yes', '--session-dir'], { encoding: 'utf8', windowsHide: true })
   expect(invalid.status).toBe(1)
   expect(invalid.stderr).toContain('--session-dir requires a directory')
   expect(invalid.stdout).toBe('')
-})
+  // Both fresh CLI processes load the source graph before parsing arguments.
+}, 20000)
 
 it.each([false, true])('keeps no-flag SDK approval unanswered even with Desktop full-access=%s', async desktopFullAccess => {
   const f = await fixture({ desktopFullAccess, calls: nativeCalls })

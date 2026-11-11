@@ -14,7 +14,7 @@ import { ResidentPreparation, residentOwnerFor, invokeOriginal } from './residen
 
 // M23 (Minor 4): lazy resident rebuild, extracted verbatim from resume_agent's
 // rebuild body (M19). On resume the subagent Agent registry is fresh-empty
-// (entries are registered per spawn/turn), so a wakeup for a restored teammate
+// (entries are registered per spawn/turn), so a wakeup for a restored child
 // found no resident agent and silently dropped the drive. This rebuilds the
 // resident agent from the restored entry (durable session + role + model):
 //   - returns true when the entry is already resident OR the rebuild succeeded
@@ -168,7 +168,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
       ? { compact: { contextWindow, ...(overheadTokens !== undefined ? { overheadTokens } : {}) } }
       : {}),
     // M19 (Ruling 24): attribute the resumed child's tool calls to its
-    // team member via the durable session id.
+    // child via its durable session id.
     ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
   }))
   if (childReg.get("get_context_remaining")) {

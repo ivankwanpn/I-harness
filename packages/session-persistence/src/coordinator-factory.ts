@@ -1,10 +1,7 @@
+import { createCoordinatorAdmission } from './coordinator/public-admission.ts'
 import { associateOriginalResultRevocation } from './coordinator/result-revocation.ts'
 import { associateRestoredContextAcquisition } from './restored-context-internal.ts'
 import {associateManagedExecution} from './execution-internal.ts'
-import {associateTeamTargetDiscovery,associateOriginalTeamBindingOwner,associateOriginalTeamColdBindingOwner,associateOriginalTeamColdTarget,associateOriginalTeamColdResume,assertOriginalTeamColdTarget} from './team-child-recovery-internal.ts'
-import {createTeamBindingOwner} from './coordinator/team-binding-operation.ts'
-import {createTeamColdBindingOwner} from './coordinator/team-cold-binding.ts'
-import {assertTeamBirthPayload} from './coordinator/team-birth-binding.ts'
 import { attachArchiveReadResources } from './archive-read-internal.ts'
 import type { PersistenceBackend, CoordinatorOptions, SessionCoordinator } from './coordinator/types.ts'
 import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
@@ -68,7 +65,9 @@ export function createSelectedRuntimeCapture(coordinator:SessionCoordinator,make
  },async close(){retired=true;const results=await Promise.allSettled([...holders].map(holder=>holder.close())),errors=results.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(errors.length)throw new AggregateError(errors,'Selected operation cleanup unresolved')}})
 }
 export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?: CoordinatorOptions, storage?: ProcessReadStorage, onConstruct?: (owners: { managed: ReturnType<typeof createManagedDocuments>; latches: ReturnType<typeof createProcessReadLatches> }) => void, taskStorage?: Omit<TaskDocumentConfiguration, 'captureParent'>, transitionStorage?: TaskTransitionConfiguration): SessionCoordinator {
-  const assertDurableTransition = () => { if (CURRENT_FORMAT_VERSION >= 14 && !transitionStorage) throw new Error('TASK_TRANSITION_UNSUPPORTED') }
+  const publicWork = new Set<Promise<unknown>>()
+  const admission = createCoordinatorAdmission(publicWork, [], () => Object.assign(new Error('Coordinator is closed'), { code: 'FACT_CLOSED' }), 'Coordinator accepted IO failed during close')
+  const assertDurableTransition = () => { admission.assertContinuation(); if (CURRENT_FORMAT_VERSION >= 14 && !transitionStorage) throw new Error('TASK_TRANSITION_UNSUPPORTED') }
   const archiveReads = attachArchiveReadResources(backend)
   const report = opts?.reportBackgroundFailure
     ?? ((error: unknown) => { console.warn("[i-harness] background persistence failure:", error) })
@@ -78,8 +77,6 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
   const processLatches = storage ? createProcessReadLatches(ownership.exclusionScope) : undefined
   const documents = createDocuments(backend, ownership, report, processLatches, taskStorage && { ...taskStorage, captureParent: document => managed.captureParent(document), captureRequiredParent:(document,source)=>managed.captureRequiredParent(document,source) }, transitionStorage)
   const observations = documents.observations
-  const teamBindings=createTeamBindingOwner(backend,ownership,observations,processLatches,(owner,source)=>managed.captureRequiredParent(owner,source))
-  const teamColdBindings=createTeamColdBindingOwner(backend,ownership,observations,owner=>managed.captureParent(owner))
   let loads: ReturnType<typeof createLoads>
   const coldWrites = createColdExecutionWrites()
   const mutations = createMutations(backend, ownership, maxDelayMs, report, id => managed?.assertMutation(id), observations, processLatches, documents.taskTransitions, transitionStorage ? async (id, events) => { if (isTaskTransitionDrain(ownership, id)) await runTaskTransitionDrain(ownership, id, () => mutations.appendQueuedDrainUnlocked(id, events)); else await loads.transitionLoad(id, (check, markIssue) => mutations.appendTransitionUnlocked(id, events, check, markIssue), true) } : undefined, coldWrites)
@@ -196,29 +193,32 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     async flush(id) { observations.assertOutsideOwnedOperations([id]); await mutations.flush(id); await documents.joinTaskDocumentIO() },
     async close() {
       const operation = createRetainedCleanupOperation()
-      try { await closeWithRetained(operation) } finally { finishRetainedCleanupOperation(operation) }
+      try { await admission.retire(() => closeWithRetained(operation), preflightClose) } finally { finishRetainedCleanupOperation(operation) }
     },
     putDocument: documents.putDocument,
     putDocumentStrict: documents.putDocumentStrict,
     getDocument: documents.getDocument,
-    ownerOf: ownership.ownerOf,
-    hasLiveOwnership: ownership.hasLiveOwnership,
+    ownerOf: id => admission.isClosed() ? false : ownership.ownerOf(id),
+    hasLiveOwnership: id => admission.isClosed() ? false : ownership.hasLiveOwnership(id),
     adoptOwnership: transitionStorage ? async id => { await loads.loadOwned(id) } : async id => { assertDurableTransition(); return mutations.adoptOwnership(id) },
     releaseOwnership(sessionId) { return retire(sessionId, async () => { await managed.closeOne(sessionId); await mutations.releaseOwnership(sessionId) }) },
   }
-  async function closeWithRetained(operation: RetainedCleanupOperation) {
+  function preflightClose() {
       managed.assertOutsideCapture()
       assertOutsideForkController(coordinator)
       observations.assertOutsideOwnedOperations([], [], true)
       observations.preflightClose()
       assertOutsideRetirementSink(coordinator)
+  }
+  async function closeWithRetained(operation: RetainedCleanupOperation) {
+      preflightClose()
       archiveReads?.fence()
       const join = observations.closeAdmission(operation)
       processLatches?.closeAdmission()
       const joinCapture = managed.closeCaptureAdmission()
       const joinFork = closeForkControllerAdmission(coordinator)
       const errors: unknown[] = []
-      const joined=await Promise.allSettled([join().then(async()=>{await teamBindings.close();await teamColdBindings.close()}),joinCapture(),joinFork().then(() => managed.close())])
+      const joined=await Promise.allSettled([join(),joinCapture(),joinFork().then(() => managed.close())])
       for(const result of joined)if(result.status==='rejected')errors.push(result.reason)
       // Dependent original leases survive unresolved observation/managed work.
       if (errors.length === 0) await lifecycle.close(true, archiveReads?.settle)
@@ -227,14 +227,10 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
         throw new AggregateError(errors, 'Coordinator cleanup is unresolved')
       }
   }
-  associateRestoredContextAcquisition(coordinator,{acquire:id=>managed.acquireRestoredContext(id),assertAdmission(id){assertDurableTransition();managed.assertOutsideCapture(id);observations.assertOutsideObservedSession(id);observations.assertManagedSessionAdmission(id);archiveReads?.assertPublicReadAdmission()}})
-  associateManagedExecution(coordinator,{acquire:id=>managed.acquireExecution(id),assertAdmission(id){assertDurableTransition();managed.assertOutsideCapture(id);observations.assertOutsideObservedSession(id);observations.assertManagedSessionAdmission(id);archiveReads?.assertPublicReadAdmission()}})
-  associateTeamTargetDiscovery(coordinator,input=>{assertDurableTransition();return managed.captureTeamTarget(input)})
-  associateOriginalTeamBindingOwner(coordinator,input=>{assertDurableTransition();return teamBindings.capture(input)})
-  associateOriginalTeamColdBindingOwner(coordinator,input=>{assertDurableTransition();return teamColdBindings.capture(input)})
-  associateOriginalTeamColdTarget(coordinator,binding=>{assertDurableTransition();return managed.captureColdTeamTarget(binding)})
-  associateOriginalTeamColdResume(coordinator,(binding,target,guards,payload)=>{assertDurableTransition();const original=assertOriginalTeamColdTarget(coordinator,binding,target);if(original.target.kind!=='reserved')throw TypeError('Original Team cold reservation required');assertTeamBirthPayload(original.binding,payload);return trackBootstrap(original.binding.request,true,()=>observations.withChildBootstrapResume(original.binding.request,guards,payload,(_request,capturedGuards,capturedPayload)=>{if(!capturedPayload)throw TypeError('Original Team cold payload required');return managed.resumeColdTeamTarget(binding,target,capturedGuards,capturedPayload)}))})
-  associateRetainedCoordinatorClose(coordinator, closeWithRetained)
+  admission.expose(coordinator, new Set(['ownerOf', 'hasLiveOwnership', 'revokeManagedDocumentNewWork', 'closeManagedDocument', 'releaseOwnership', 'flush', 'close']), new Set(['enqueue', 'onDocumentDeleted']))
+  associateRestoredContextAcquisition(coordinator,{acquire:id=>admission.track(publicWork,()=>managed.acquireRestoredContext(id)),assertAdmission(id){admission.assertAdmission();assertDurableTransition();managed.assertOutsideCapture(id);observations.assertOutsideObservedSession(id);observations.assertManagedSessionAdmission(id);archiveReads?.assertPublicReadAdmission()}})
+  associateManagedExecution(coordinator,{acquire:id=>admission.track(publicWork,()=>managed.acquireExecution(id)),assertAdmission(id){admission.assertAdmission();assertDurableTransition();managed.assertOutsideCapture(id);observations.assertOutsideObservedSession(id);observations.assertManagedSessionAdmission(id);archiveReads?.assertPublicReadAdmission()}})
+  associateRetainedCoordinatorClose(coordinator, operation => admission.retire(() => closeWithRetained(operation), preflightClose))
   associateOriginalResultOrdering(coordinator, ownership)
   if (ownership.lockEnabled) associateOriginalResultRevocation(coordinator, observations.createResultRevocationAdmission(ownership), ownership)
   if (ownership.lockEnabled) associateProjectBindingWrites(coordinator, documents)
@@ -246,7 +242,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
   if (documents.taskOperations) associateTaskDocumentOperations(coordinator, documents.taskOperations)
   if (documents.taskTransitions) associateTaskDocumentTransitions(coordinator, documents.taskTransitions)
   selectedSources.set(coordinator,Object.freeze({acquire:observations.acquireSelectedBindingRead,cleanupForError:observations.cleanupForError,retainTask(owner,view,onRevoke){return retainTaskSourceRead(owner,view,ownership,onRevoke)},retainManagedTask(domain,history,onRevoke){return retainManagedTaskSourceRead(domain,history,ownership,onRevoke)},retain(document,onRevoke){return retainSelectedSourceRead(document,ownership,onRevoke)}}))
-  selectedComposers.set(coordinator,{beginCold:(target,options)=>coldFinalization.begin(target,options),assertCapability:assertDurableTransition,capture:managed.captureSelected,prepare(...args){assertDurableTransition();return managed.prepareSelectedCapture(...args)},reconcile:managed.reconcileSelected,inspect:managed.inspectSelected,inspectCold(input){const route=captureSelectedResultsRoute(input);managed.assertColdInspectionAdmission(route.request.invocation.targetSessionId);assertDurableTransition();return observations.withSelectedBootstrapMutation(route,()=>managed.inspectColdSelected(route))},coldRoute:managed.coldSelectedRoute,useCold:managed.useColdSelected,publish:managed.publishSelected,release:managed.releaseSelected,observations,targets:new WeakMap()})
+  selectedComposers.set(coordinator,{beginCold:(target,options)=>coldFinalization.begin(target,options),assertCapability(){admission.assertAdmission();assertDurableTransition()},capture:managed.captureSelected,prepare(...args){assertDurableTransition();return managed.prepareSelectedCapture(...args)},reconcile:managed.reconcileSelected,inspect:managed.inspectSelected,inspectCold(input){const route=captureSelectedResultsRoute(input);managed.assertColdInspectionAdmission(route.request.invocation.targetSessionId);assertDurableTransition();return observations.withSelectedBootstrapMutation(route,()=>managed.inspectColdSelected(route))},coldRoute:managed.coldSelectedRoute,useCold:managed.useColdSelected,publish:managed.publishSelected,release:managed.releaseSelected,observations,targets:new WeakMap()})
   if (processLatches) onConstruct?.({ managed, latches: processLatches })
   return coordinator
 }

@@ -82,10 +82,7 @@ export interface ToolExec {
   resultConsumer?: "code"
   abortSignal?: AbortSignal
   // M19 (Ruling 24): caller/session identity for tool executions that carry
-  // one — the agent loop seeds it from the executing session id. Additive: a
-  // prepared call without it behaves exactly as before. The agent-team
-  // scheduler resolves team tool callers from this (a teammate's child-session
-  // id → that member; the parent session id → the Lead).
+  // one — the agent loop seeds it from the executing session id.
   sessionId?: string
   // M26 (R-D1): the executing tool/call identity — seeded by the M13 scheduler
   // so tool bodies can durably key a submission to the invoking log event.
@@ -224,6 +221,7 @@ export interface PreparedCall {
 }
 /** Trusted dispatch metadata. The registry and binding validator are never model JSON. */
 export interface ToolDispatchMetadata {
+  retryAttempt?(): Promise<{ kind: 'result'; value: unknown } | { kind: 'unavailable' }>
   name: string; args: unknown; exec: ToolExec; tool: Tool
   registry: ToolRegistry; bindingGeneration?: number; validateBinding(): boolean
   commandDialect?: "posix" | "powershell" | "cmd"

@@ -59,7 +59,7 @@ Configure custom endpoints, models, context windows and output limits, and chang
 
 ### Extend tools and delegate work
 
-Connect MCP servers, use Skills, manage plugins and run workflows. Subagents and Teams support division of work, messages, status and cancellation. Tools follow the current role, access scope and approval configuration.
+Connect MCP servers, use Skills, manage plugins and run workflows. Subagents support division of work, messages, status and cancellation. Tools follow the current role, access scope and approval configuration.
 
 Plugin sources and declarations normalize into IH's unified runtime format. Existing sources, Skills, Commands, MCP, Agents and native hooks retain the shared mounting and authorization path; supported Claude synchronous command hooks use that path too. See [plugin compatibility](docs/PLUGIN-COMPATIBILITY.md) for events, limits and executable prerequisites.
 

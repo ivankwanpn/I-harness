@@ -83,12 +83,26 @@ type ProcessUpdate = { kind: 'unchanged'; highWater: number } | { kind: 'suffix'
 type ManagedProcessCapture = { readonly initial: SessionView; take(): ProcessUpdate; assertHealthy(): void; assertDrained(): void; markVerified(): void; close(): void };
 const executionStatuses = new WeakMap<ManagedDocument, () => 'available' | 'unavailable' | 'retired'>();
 type ExecutionState=Awaited<ReturnType<typeof restoreManagedExecutionState>>;
-const privateExecutionOwners=new WeakMap<ManagedDocument,{core:ExecutionState;held:HeldFactOwner;ownership:Ownership;assertCurrent():void;retainTask(domain:ManagedExecutionDomain,history:object,onRevoke:()=>void):ManagedTaskSourceRead;materialize(events:readonly import('@i-harness/core-session').SessionEventView[]):ManagedDocument&{assertObservable():void};invalidateMetadata(revision:object):void;beginTaskMetadata():TaskMetadataUpdate;captureTaskParent():Omit<TaskParentReadiness,'view'>;captureRequiredParent(source:import('@i-harness/core-session').SettlementFacts):RequiredTaskParentReadiness;parent():{assertOriginal():void;assertCurrent():void;assertTask14Ready():void}}>();
+const privateExecutionOwners=new WeakMap<ManagedDocument,{core:ExecutionState;held:HeldFactOwner;ownership:Ownership;assertCurrent():void;retainTask(domain:ManagedExecutionDomain,history:object,onRevoke:()=>void):ManagedTaskSourceRead;materialize(events:readonly import('@i-harness/core-session').SessionEventView[]):ManagedDocument&{assertObservable():void};invalidateMetadata(revision:object):void;beginTaskMetadata():TaskMetadataUpdate;captureTaskParent():Omit<TaskParentReadiness,'view'>;captureRequiredParent(source:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>):RequiredTaskParentReadiness;parent():{assertOriginal():void;assertCurrent():void;assertTask14Ready():void}}>();
 export function originalManagedExecution(document:ManagedDocument,ownership:Ownership){const original=privateExecutionOwners.get(document);if(!original||original.ownership!==ownership)throw TypeError('Original private execution owner required');return original}
 export function managedExecutionStatus(document: ManagedDocument): 'available' | 'unavailable' | 'retired' {
     return executionStatuses.get(document)?.() ?? 'unavailable';
 }
-const readyOwners = new WeakMap<object, { ownership: Ownership; invalidateMetadata(revision:object):void; captureTaskParent():TaskParentReadiness;beginTaskMetadata():TaskMetadataUpdate; capture(): ManagedReadyObservation; retainSelected(onRevoke:()=>void):SelectedSourceRead; captureRequiredParent(source: import('@i-harness/core-session').SettlementFacts): Readonly<{view:SessionView;assertCurrent():void;assertOriginal():void;assertTask14Ready():void;joinIssuedWriter():Promise<void>;acquireWriter():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>>}>; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void; assertOriginal():void; assertTask14Ready(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
+const readyOwners = new WeakMap<object, { ownership: Ownership; ownerToken(): HeldFactOwner['owner']; invalidateMetadata(revision:object):void; captureTaskParent():TaskParentReadiness;beginTaskMetadata():TaskMetadataUpdate; capture(): ManagedReadyObservation; retainSelected(onRevoke:()=>void):SelectedSourceRead; captureRequiredParent(source: import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>): Readonly<{view:SessionView;assertCurrent():void;assertOriginal():void;assertTask14Ready():void;joinIssuedWriter():Promise<void>;acquireWriter():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>>}>; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void; assertOriginal():void; assertTask14Ready(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
+/** Same original document/ownership lookup; no incoming token or callback is enrolled. */
+export function originalManagedDocumentOwner(document: ManagedDocument, ownership: Ownership): HeldFactOwner['owner'] {
+  const execution = privateExecutionOwners.get(document)
+  if (execution) {
+    if (execution.ownership !== ownership) throw TypeError('Original document ownership required')
+    execution.assertCurrent()
+    execution.core.observe().assertCurrent()
+    return execution.held.owner
+  }
+  const original = readyOwners.get(document)
+  if (!original || original.ownership !== ownership) throw TypeError('Original document ownership required')
+  return original.ownerToken()
+}
+
 type RestoredStage = (events: readonly import('@i-harness/core-session').SessionEventView[], readCurrentEvent:(index:number)=>import('@i-harness/core-session').SessionEventView|undefined)=>{install(batch:ReturnType<typeof encodeFactBatch>,receipt:FactReceipt):void}
 const restoredStages = new WeakMap<ManagedDocument, RestoredStage>()
 /** Only the actual managed constructor/ownership association may bind its read fold. */
@@ -106,7 +120,7 @@ export function captureManagedParentReadiness(document: ManagedDocument, ownersh
     if (!original || original.ownership !== ownership) throw new FactRecoveryRequiredError();
     return original.captureParent();
 }
-export function captureManagedRequiredParent(document:ManagedDocument,ownership:Ownership,source:import('@i-harness/core-session').SettlementFacts) {
+export function captureManagedRequiredParent(document:ManagedDocument,ownership:Ownership,source:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>) {
  const execution=privateExecutionOwners.get(document);if(execution){if(execution.ownership!==ownership)throw new FactRecoveryRequiredError();return execution.captureRequiredParent(source)}
  const original=readyOwners.get(document);if(!original||original.ownership!==ownership)throw new FactRecoveryRequiredError();return original.captureRequiredParent(source)
 }
@@ -793,7 +807,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
         const revision=taskRevision;taskMetadataPending++;let done=false,before:string|undefined,after:string|undefined,invalid=false;
         return Object.freeze({before(meta:unknown){if(done)throw TypeError('Metadata operation finished');try{before=taskParentMetadataProjection(meta)}catch{invalid=true}},after(meta:unknown){if(done)throw TypeError('Metadata operation finished');try{after=taskParentMetadataProjection(meta)}catch{invalid=true}},finish(success:boolean){if(done)return;done=true;taskMetadataPending--;try{held.assertHeld()}catch{success=false}if(!success||invalid||before===undefined||after===undefined||before!==after||revision!==taskRevision||closed||closing){taskRevision={};taskMetadataStale=true}}});
     }
-    function captureRequiredWriterProof<T extends object>(source:import('@i-harness/core-session').SettlementFacts,checkIdentity:()=>void,check:()=>void,extra:T) {
+    function captureRequiredWriterProof<T extends object>(source:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>,checkIdentity:()=>void,check:()=>void,extra:T) {
         const joinableWriter=()=>{ownership.assertOutsideSessionOperation(id);checkIdentity();const batch=pending;if(batch){if(batch.settlementSettled||(!batch.issued&&(!batch.issuer||!canJoinOriginalNativePrewrite(backend,id,batch.issuer,batch.batch)))||batch.entries.some(entry=>entry.authorization.source===source)||batch.receipt||batch.installationFailure)throw Object.assign(new FactRecoveryRequiredError(),{cause:{originalBatchIssued:batch.issued,sameRequiredSource:batch.entries.some(entry=>entry.authorization.source===source),receipt:!!batch.receipt,installationFailure:!!batch.installationFailure,eventTypes:batch.events.map(event=>event.type)}});}return batch};
         const joinIssuedWriter=async()=>{const batch=joinableWriter();if(batch)await batch.settlement.promise;check()};
         const result=Object.freeze({...extra,assertOriginal(){if(this!==result)throw new TypeError('Invalid required parent');checkIdentity()},async acquireWriter(){
@@ -807,9 +821,9 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
           });await lease.resume();return lease
         },async joinIssuedWriter(){if(this!==result)throw new TypeError('Invalid required parent');await joinIssuedWriter()},assertCurrent(){if(this!==result)throw new TypeError('Invalid required parent');check()},assertTask14Ready(){if(this!==result)throw new TypeError('Invalid required parent');check();if(formatVersion!==14)throw new FactRecoveryRequiredError()}});return result;
     }
-    function privateTaskParent(source:import('@i-harness/core-session').SettlementFacts):RequiredTaskParentReadiness;
+    function privateTaskParent(source:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>):RequiredTaskParentReadiness;
     function privateTaskParent():Omit<TaskParentReadiness,'view'>;
-    function privateTaskParent(source?:import('@i-harness/core-session').SettlementFacts) {
+    function privateTaskParent(source?:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>) {
       const original=source&&sourceDrains.get(source);
       if(source&&(!original?.action||original.action.stopped||original.closeRequested||!original.sourceMethods||!original.deliveryMethods||formatVersion!==14))throw new FactRecoveryRequiredError();
       const originalReady=originalPrivateReady,revision=taskRevision;
@@ -854,7 +868,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
     if(!Object.hasOwn(document,'view'))Object.defineProperty(document,'view',{value:state.view,enumerable:true,writable:false,configurable:false});
     for(const source of sourceDrains.keys())if('delivery'in source)bindFactSettlementSource(state.view,document,source,id);
     const originalReady = document.assertReady, originalView = state!.view;
-    readyOwners.set(document, { ownership, invalidateMetadata(revision){metadataRevision=revision;metadataStale=true;invalidateSelected()}, captureProcess(documentKeys, checkEntry) {
+    readyOwners.set(document, { ownership, ownerToken(){assertAuthorized(rootAuthorization);if(metadataStale)throw new FactRecoveryRequiredError();return owner}, invalidateMetadata(revision){metadataRevision=revision;metadataStale=true;invalidateSelected()}, captureProcess(documentKeys, checkEntry) {
         if (!processLatches) throw new FactRecoveryRequiredError();
         const latch = processLatches.capture({ sessionId: id, documentKeys, mode: 'managed', managedOwner: owner });
         const view = state.view, header = view.header, events = view.events;

@@ -9,8 +9,11 @@ import type { TaskDocumentConfiguration } from '../coordinator/task-document-ope
 import { CommitLogConflictError } from '@i-harness/session-commit-log'
 import type { BootstrapCaptureRequest, BootstrapGuards, BootstrapOutcome, BootstrapRequest } from '../coordinator/bootstrap-types.ts'
 import { createHash } from 'node:crypto'
+import { canonicalJsonData } from '@i-harness/core-session'
+import { captureBootstrapInvocation, captureBootstrapRequest } from '../coordinator/bootstrap-header.ts'
 import type { CommitCoordinator } from './coordinator.ts'
 import { createCommitTaskOperations } from './capabilities.ts'
+import { taskDocumentStorageContract } from '../task-state-internal.ts'
 
 export type CommitFacadeOptions = {
   readonly taskDocument?: { readonly validator: TaskDocumentConfiguration['validator']; readonly empty?: () => unknown }
@@ -18,80 +21,81 @@ export type CommitFacadeOptions = {
 
 /**
  * Present the commit coordinator as the existing SessionCoordinator surface.
- * Everything the SCL core implements is forwarded; the stage-based bootstrap
- * entry points are explicitly unsupported until the fork/team call sites move
- * to intents, so a caller fails loudly instead of silently degrading.
+ * The semantic bootstrap entry points use the same original native child
+ * commit and its exact stored receipt. Resume without the original payload is
+ * a passive refusal; it never invents a stage or a replacement birth.
  * The managed-execution, ordering, revocation and task-document capabilities are
  * registered on this exact facade object, which is what the executor passes in.
  */
 export function asSessionCoordinator(coordinator: CommitCoordinator, options: CommitFacadeOptions = {}): SessionCoordinator {
-  const unsupported = <T>(): Promise<T> => Promise.reject(Object.assign(new Error('commit-log coordinator does not support the stage bootstrap API'), { code: 'TASK_TRANSITION_UNSUPPORTED' }))
-  const inspectTarget = async (invocation: import('../coordinator/bootstrap-types.ts').BootstrapInvocation): Promise<import('../coordinator/bootstrap-types.ts').BootstrapInspection> => {
+  const taskDocument = options.taskDocument ?? { validator: taskDocumentStorageContract, empty: taskDocumentStorageContract.empty }
+  const initialTaskDocument = () => {
+    if (!taskDocument.empty) return undefined
+    const value = taskDocument.empty()
+    if (value === undefined) throw new TypeError('Initial Task document must be JSON data')
+    taskDocument.validator.validate(value)
+    return value
+  }
+  const inspectTarget = coordinator.inspectBirth.bind(coordinator)
+  const bootstrap = async (request: BootstrapRequest, guards: BootstrapGuards): Promise<BootstrapOutcome> => {
+    guards.assertCurrent()
     try {
-      const { meta } = await coordinator.profile(invocation.targetSessionId)
-      const seed = (meta as { semanticSeed?: { operationId?: string; requestDigest?: string } }).semanticSeed
-      const matching = seed?.operationId === invocation.operationId && (seed.requestDigest === undefined || seed.requestDigest === invocation.requestDigest)
-      return { kind: matching ? 'ready' : 'conflict', invocation, needsConfirmation: false }
+      const created = await coordinator.createChildSession(request, { closure: request.seed.dependencyDigest, initialTaskDocument: initialTaskDocument() })
+      return { kind: 'ready', receipt: created.receipt, document: created.document }
     } catch (error) {
-      if ((error as { code?: string }).code === 'COMMIT_LOG_NOT_FOUND') return { kind: 'absent', invocation, needsConfirmation: false }
+      if ((error as { code?: string } | null | undefined)?.code === 'COMMIT_EXISTING_EMPTY_UNSUPPORTED') return { kind: 'not-issued', reason: 'unsupported' }
+      if (error instanceof CommitLogConflictError) return { kind: 'refused', reason: 'conflict' }
       throw error
     }
+  }
+  const bootstrapChild: NonNullable<SessionCoordinator['bootstrapChildTargetWithCapture']> = async (request, guards, capture) => {
+    guards.assertCurrent()
+    const payload = captureBootstrapRequest(await capture())
+    guards.assertCurrent()
+    if (canonicalJsonData(payload.invocation) !== canonicalJsonData(request.invocation)) return { kind: 'refused', reason: 'manifest-invalid' }
+    return bootstrap(payload, guards)
   }
   const coldWrites = createColdExecutionWrites()
   const ports = coordinator.capabilities()
   const facade: SessionCoordinator & Pick<CommitCoordinator, 'acquireExecution'> = {
     ...coordinator,
-    create: async (meta?: Parameters<typeof coordinator.create>[0]) => {
-      const result = await coordinator.create(meta)
-      // The task registry loads the parent's task document before any save, so a
-      // fresh session starts with the composition's empty document.
-      if (options.taskDocument?.empty) await coordinator.putDocument('task-' + result.id, options.taskDocument.empty())
-      return result
-    },
+    create: async (meta?: Parameters<typeof coordinator.create>[0]) => coordinator.create(meta, initialTaskDocument()),
     append: async (id: string, events: Parameters<typeof coordinator.append>[1]) => {
       const result = await coordinator.append(id, events)
       coldWrites.committed(id)
       return result
     },
-    bootstrapSemanticTarget: () => unsupported(),
-    // SCL birth is a single committed child creation; the legacy staged resume
-    // protocol has no counterpart, so a passive replay is a clean refusal.
-    resumeSemanticTarget: async () => ({ kind: 'not-issued' as const, reason: 'unsupported' as const }),
-    async bootstrapSemanticTargetWithCapture(_request: BootstrapCaptureRequest, guards: BootstrapGuards, capture: () => Promise<BootstrapRequest>): Promise<BootstrapOutcome> {
+    bootstrapSemanticTarget: bootstrap,
+    async resumeSemanticTarget(invocation, guards, originalPayload) {
+      if (!originalPayload) return { kind: 'not-issued', reason: 'unsupported' }
+      const request = captureBootstrapRequest(originalPayload), expected = captureBootstrapInvocation(invocation)
+      if (canonicalJsonData(request.invocation) !== canonicalJsonData(expected)) return { kind: 'refused', reason: 'manifest-invalid' }
+      return bootstrap(request, guards)
+    },
+    async bootstrapSemanticTargetWithCapture(request: BootstrapCaptureRequest, guards: BootstrapGuards, capture: () => Promise<BootstrapRequest>): Promise<BootstrapOutcome> {
       // SCL creates the child directly: the capture is the only source of the
       // seed, and the receipt is verified by the caller against it.
-      const captured = await capture()
       guards.assertCurrent()
-      try {
-        const created = await coordinator.createChildSession(captured, { closure: captured.seed.dependencyDigest })
-        // A fork child is a full session: its task registry needs the same empty
-        // document a created session gets (never overwrite an existing one).
-        if (options.taskDocument?.empty && await coordinator.getDocument('task-' + created.id) === undefined) await coordinator.putDocument('task-' + created.id, options.taskDocument.empty())
-        // The capture's project intent also names the target's binding, which
-        // the fork host re-reads before handing the target to the caller.
-        const project = (_request as { requestIntent?: { project?: { kind?: string; projectId?: string } } }).requestIntent?.project
-        if (project?.kind === 'project' && typeof project.projectId === 'string') {
-          const key = 'desktop-session-project-' + createHash('sha256').update(captured.invocation.targetSessionId).digest('hex')
-          if (await coordinator.getDocument(key) === undefined) await coordinator.putDocument(key, Object.freeze({ version: 1, projectId: project.projectId }))
-        }
-        return { kind: 'ready' as const, receipt: created.receipt, document: created.document }
-      } catch (error) {
-        if (error instanceof CommitLogConflictError) return { kind: 'refused' as const, reason: 'conflict' as const }
-        throw error
+      const captured = captureBootstrapRequest(await capture())
+      guards.assertCurrent()
+      if (canonicalJsonData(captured.invocation) !== canonicalJsonData(request.invocation)) return { kind: 'refused', reason: 'manifest-invalid' }
+      const result = await bootstrap(captured, guards)
+      if (result.kind !== 'ready' && result.kind !== 'already-ready') return result
+      // Preserve the original capture intent's project binding independently
+      // from the immutable semantic birth; never overwrite an existing binding.
+      const project = (request as { requestIntent?: { project?: { kind?: string; projectId?: string } } }).requestIntent?.project
+      if (project?.kind === 'project' && typeof project.projectId === 'string') {
+        const key = 'desktop-session-project-' + createHash('sha256').update(captured.invocation.targetSessionId).digest('hex')
+        if (await coordinator.getDocument(key) === undefined) await coordinator.putDocument(key, Object.freeze({ version: 1, projectId: project.projectId }))
       }
+      return result
     },
-    resumeChildTarget: coordinator.resumeChildTarget.bind(coordinator),
-    bootstrapChildTargetWithCapture: coordinator.bootstrapChildTargetWithCapture.bind(coordinator),
+    resumeChildTarget: (request, guards, payload) => payload
+      ? bootstrapChild(request, guards, async () => payload)
+      : coordinator.resumeChildTarget(request, guards, payload),
+    bootstrapChildTargetWithCapture: bootstrapChild,
     inspectBootstrap: inspectTarget,
-    inspectChildBootstrap: async (request: { invocation: { targetSessionId: string; operationId: string } }) => {
-      const invocation = request.invocation as never
-      try {
-        const { meta } = await coordinator.profile(request.invocation.targetSessionId)
-        const seed = (meta as { semanticSeed?: { operationId?: string } }).semanticSeed
-        const kind = seed?.operationId === request.invocation.operationId ? 'ready' as const : 'conflict' as const
-        return { kind, invocation, needsConfirmation: false }
-      } catch (error) { if ((error as { code?: string }).code === 'COMMIT_LOG_NOT_FOUND') return { kind: 'absent' as const, invocation, needsConfirmation: false }; throw error }
-    },
+    inspectChildBootstrap: request => inspectTarget(request.invocation),
     inspectBootstrapCapture: async request => {
       const result = await inspectTarget(request.invocation)
       if (result.kind === 'absent') return { kind: 'absent' }
@@ -106,13 +110,13 @@ export function asSessionCoordinator(coordinator: CommitCoordinator, options: Co
   // Retained bindings validate against the coordinator that issued them; the
   // observations instance owns the reference ledger.
   ports.observations.associateRetainedCoordinator(facade as never)
-  if (options.taskDocument) {
+  if (taskDocument) {
     associateTaskDocumentOperations(facade as never, createCommitTaskOperations(ports, {
-      putDocument: (key, data) => coordinator.putDocument(key, data),
-      getDocument: key => coordinator.getDocument(key),
+      putDocument: ports.documents.putDocument,
+      getDocument: ports.documents.getDocument,
     }, {
-      validator: options.taskDocument.validator,
-      ...(options.taskDocument.empty ? { empty: options.taskDocument.empty } : {}),
+      validator: taskDocument.validator,
+      ...(taskDocument.empty ? { empty: taskDocument.empty } : {}),
       sessionOfDocument: document => coordinator.sessionOfDocument(document),
     }) as never)
   }

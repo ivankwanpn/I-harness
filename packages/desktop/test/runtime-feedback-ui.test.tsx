@@ -224,14 +224,6 @@ it("does not clear a replacement retry from an older logical recovery", () => {
   expect(screen.getByRole("status").textContent).toContain("重新連線中")
 })
 
-it('retries only the same session recovery through the existing queue resume action',async()=>{
- const f=fixture();render(<RuntimeFeedback bridge={f.bridge} workspaceId="w" sessionId="a" onOpenLog={()=>{}} />)
- f.entry({id:'team-recovery',kind:'session/error',level:'error',code:'TEAM_RECOVERY_REQUIRED',message:'The task needs recovery.',retry:undefined})
- const retry=screen.getByRole('button',{name:'重試'});await act(async()=>{fireEvent.click(retry);await Promise.resolve()})
- expect(f.bridge.request).toHaveBeenCalledWith({kind:'desktop/session/input/resume',workspaceId:'w',sessionId:'a'})
- expect(screen.queryByRole('alert')).toBeNull()
-})
-
 it("shows a projection warning for the selected session and can dismiss or open the log", () => {
   const f = fixture(); const onOpenLog = vi.fn()
   render(<RuntimeFeedback bridge={f.bridge} workspaceId="w" sessionId="a" onOpenLog={onOpenLog} />)
@@ -254,4 +246,11 @@ it("offers an explicit workspace repair for a recovery-gated failure", async () 
   fireEvent.click(screen.getByRole("button", { name: "修復工作區" }))
   await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/workspace/repair", workspaceId: "w" }))
   await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/session/reload", workspaceId: "w", sessionId: "a" }))
+})
+it('shows old Team errors without offering a removed recovery action', () => {
+ const f=fixture();render(<RuntimeFeedback bridge={f.bridge} workspaceId="w" sessionId="a" onOpenLog={()=>{}} />)
+ f.entry({id:'old-team',kind:'session/error',level:'error',code:'TEAM_RECOVERY_REQUIRED',message:'Historical Team failure',retry:undefined})
+ expect(screen.getByRole('alert').textContent).toContain('Historical Team failure')
+ expect(screen.queryByRole('button',{name:'重試'})).toBeNull()
+ expect(f.bridge.request).not.toHaveBeenCalledWith(expect.objectContaining({kind:'desktop/session/input/resume'}))
 })

@@ -11,7 +11,7 @@ import type { ResidentInboxActivation } from './activation.ts'
 // fresh AbortController is minted per turn so interrupt_agent targets the
 // current turn, and each turn re-opens the entry's job (running -> completed /
 // killed / error) so wait_agent/job_output observe the followup lifecycle.
-// Exported for the agent-team scheduler (M19 Ruling 28): the team wakeup
+// Serialized callers share this original child wakeup
 // policy is the SAME serialized drain, shared instead of vendored.
 export interface FollowupDeps {
   activation?: ResidentInboxActivation
@@ -23,7 +23,7 @@ export interface FollowupDeps {
   // M23 (Minor 4): optional lazy rebuild — called when the resident agent is
   // missing (e.g. a restored entry after resume) so the wakeup drive recovers
   // it instead of silently no-oping. Backward-compatible: absent (the default,
-  // e.g. the agent-team scheduler without the seam) keeps the old no-op.
+  // an embedder without the generation seam) keeps the old no-op.
   rebuild?: (entry: ChildAgentEntry, controller: AbortController, executionCurrent?: () => boolean) => Promise<boolean>
   openGeneration?: (entry: ChildAgentEntry, input: Extract<SessionEventView, { type: 'subagent/inbox' }>, controller: AbortController, originalIntent?: FollowupGenerationIntent, executionCurrent?: () => boolean) => Promise<FollowupGeneration>
 }

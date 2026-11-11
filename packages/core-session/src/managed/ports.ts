@@ -1,6 +1,6 @@
 import type { SessionEvent } from '../events/types.ts'
 import type { FactOutcome, SeqRef } from './types.ts'
-import type { AcceptedDraft, LifecycleFact, MetadataFact, UsageDraft, TeamFact, GenerationAcceptanceDraft, GenerationRecoveryDraft } from './groups.ts'
+import type { AcceptedDraft, LifecycleFact, MetadataFact, UsageDraft, GenerationAcceptanceDraft, GenerationRecoveryDraft } from './groups.ts'
 import type { GenerationEvent, GenerationAttemptEvent, GenerationActionEvent } from '../events/generation.ts'
 import type { InputPreparationEvent, PreparedInputResult } from '../events/input-preparation.ts'
 
@@ -32,7 +32,7 @@ export interface CodeFacts<Outcome = FactOutcome> {
   dispatch(cellId: string, callId: string, reference: SeqRef<'code/call'>): Promise<Outcome>
 }
 export interface DeliveryFacts<Outcome = FactOutcome> {
-  record(event: Event<'subagent/start' | 'subagent/end' | 'subagent/inbox' | 'job/status' | 'team/member' | 'team/task' | 'team/message/queued' | 'team/message/delivered' | 'exec/end' | 'code/end' | 'workflow/end' | 'agent/delivery-handoff'>): Promise<Outcome>
+  record(event: Event<'subagent/start' | 'subagent/end' | 'subagent/inbox' | 'job/status' | 'exec/end' | 'code/end' | 'workflow/end' | 'agent/delivery-handoff'>): Promise<Outcome>
 }
 export type DeliverySettlementFact = Exclude<Parameters<DeliveryFacts['record']>[0], Event<'subagent/start'>>
 export type RequiredLifecycleFact = Event<'step/end' | 'turn/end' | 'step/failed' | 'reasoning'>
@@ -98,7 +98,6 @@ export interface ReceivedInputSource<Outcome = ProducerFactOutcome> {
   captureDeliveryClose(event:Extract<import("../events/delivery.ts").DeliveryGenerationEvent,{op:"close"}>):CapturedSettlementFact<Outcome>
   close(): Promise<void>
   captureAdmitted(event: Event<'agent/input/admitted'>): CapturedSettlementFact<Outcome>
-  captureTeamAdmission?(domain:import('./execution-types.ts').ManagedExecutionDomain,evidence:import('./team-provisioning.ts').OriginalTeamDeliveryEvidence,generationId:string):CapturedSettlementFact<Outcome>
   captureCancellation(event: Event<'agent/input/cancelled'>): CapturedSettlementFact<Outcome>
 }
 export interface ManagedAction<Outcome = FactOutcome> {
@@ -122,7 +121,6 @@ export interface ManagedAction<Outcome = FactOutcome> {
   captureContextReduction?(draft: import('./groups.ts').ContextReductionDraft, checkCurrent: () => boolean): CapturedActionFact<Outcome>
   captureCodeCall?(event: Event<'code/call'>, source:SettlementFacts<Outcome>): CapturedActionFact<Outcome>
   captureCodeStore(event: Event<'code/store'>): CapturedActionFact<Outcome>
-  captureTeamTransaction(events: readonly TeamFact[]): CapturedActionFact<Outcome>
   captureSubagentStart(event: Event<'subagent/start'>, binding?:import('../events/delivery.ts').SubagentDeliveryLaunchDraft): CapturedActionFact<Outcome>
   captureWorkflowDeliverySource(event: import('../events/workflow-delivery.ts').WorkflowDeliverySourceEvent, checkCurrent: () => boolean): CapturedActionFact<Outcome>
   captureCodeDeliverySource(event: import('../events/code-delivery.ts').CodeDeliverySourceEvent, checkCurrent: () => boolean): CapturedActionFact<Outcome>

@@ -12,7 +12,6 @@ import type { SessionQuery } from "@i-harness/session-query"
 import type { ParentInputAdmission, SubagentStateSnapshot } from "@i-harness/subagent"
 import type { McpServerConfig } from "@i-harness/mcp-client"
 import type { LspServerConfig } from "@i-harness/lsp"
-import type { TeamConfig } from "@i-harness/agent-team"
 import { dirname, join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { createPromptCommand, registerCommand, registerPromptCommand } from "@i-harness/interaction"
@@ -259,7 +258,6 @@ export interface HeadlessOptions {
   webCacheRoot?: string
   mcp?: McpServerConfig[] // M17: MCP servers to mount for the run (stdio or streamable-http)
   lsp?: LspServerConfig[] // M18: LSP servers to mount for the run (stdio)
-  team?: Partial<TeamConfig> // M19: mount the agent-team domain (10 team tools replace the colliding subagent surface)
   telemetry?: "jsonl" // M25: enable the independent host event stream as JSONL on stdout (default off)
   planMode?: boolean // R-A7: start in plan mode (proposal = the task text; exit_plan_mode tool mounted; prompt fragment appended)
   guardian?: { policy?: string; timeoutMs?: number; model?: ModelClient } // R-A9: auto-approval guardian reviewer
@@ -323,7 +321,7 @@ function isSubagentStateSnapshot(doc: unknown): doc is SubagentStateSnapshot {
   if (typeof doc !== "object" || doc === null) return false
   const d = doc as Record<string, unknown>
   return (
-    d.formatVersion === 1 &&
+    (d.formatVersion === 1 || d.formatVersion === 2) &&
     Array.isArray(d.jobs) &&
     Array.isArray(d.agentTable) &&
     Array.isArray(d.roles)
@@ -333,7 +331,7 @@ function isSubagentStateSnapshot(doc: unknown): doc is SubagentStateSnapshot {
 // Headless single-agent run for the CLI. R-C0 (engine-owned): the run-level
 // environment assembly (ctx/tools/shell+sandbox/fs/approval/guards/terminal/
 // web/ask-user-input/tool-search/fs-search/session-query/subagent/workflow/
-// mcp/lsp/teams mounts + agent) lives in @i-harness/session-executor —
+// mcp/lsp mounts + agent) lives in @i-harness/session-executor —
 // createSessionAssembly. run.ts owns ONE-TURN orchestration only: the per-
 // session serial lane (A's executor), the session/* command surface, resume/
 // restore/title/flush/close, and the result vocabulary. The assembly's
@@ -485,11 +483,15 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   let initialInput: Awaited<ReturnType<typeof openCliInput>> | undefined
   const cleanup = async (inputClose?: Promise<void>) => {
     ownedInstructions?.dispose()
-    const outcomes = await Promise.allSettled([inputClose ?? initialInput?.close(), assembly?.dispose()])
-    const failures = outcomes.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
-    // The assembly owns the instruction borrowers. An input-close failure
-    // alone must not skip safe environment cleanup after those borrowers close.
-    if (outcomes[1]!.status === 'fulfilled') try { await ownedInstructions?.close() } catch (error) { failures.push(error) }
+    // The literal ingress still owns cancellation of an unpromoted receipt.
+    // Its assembly only borrows that received source and must not close the
+    // document first. Unknown ingress cleanup retains those dependencies.
+    const input = await Promise.allSettled([Promise.resolve().then(() => inputClose ?? initialInput?.close())])
+    const failures = input.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+    if (failures.length) throw new AggregateError(failures, 'Headless input owner prerequisites incomplete')
+    const assemblyClose = await Promise.allSettled([Promise.resolve().then(() => assembly?.dispose())])
+    for (const result of assemblyClose) if (result.status === 'rejected') failures.push(result.reason)
+    if (assemblyClose[0]!.status === 'fulfilled') try { await ownedInstructions?.close() } catch (error) { failures.push(error) }
     if (failures.length) throw new AggregateError(failures, 'Headless instruction owner prerequisites incomplete')
   }
   // M72 Ⅱ / M73: the session model's resolved pair, read where the binding
@@ -728,7 +730,6 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       ...(pluginMcp.configs.length > 0 ? { pluginMcp: pluginMcp.configs } : {}),
       ...(pluginAgents.roles.length > 0 ? { pluginAgents: pluginAgents.roles } : {}),
       ...(opts.lsp !== undefined ? { lsp: opts.lsp } : {}),
-      ...(opts.team !== undefined ? { team: opts.team } : {}),
       ...(opts.compact !== undefined ? { compact: opts.compact } : {}),
       ...(opts.sessionQuery !== undefined ? { sessionQuery: opts.sessionQuery } : {}),
       ...(opts.coordinator !== undefined ? { coordinator: opts.coordinator } : {}),

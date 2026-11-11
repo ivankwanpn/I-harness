@@ -10,8 +10,6 @@ import { openInitialChildGeneration, type InitialChildInput } from './child/gene
 import { captureChildInstructionContext } from './child/instruction-context.ts'
 import { invokeOriginal } from './followup/resident-lifetime.ts'
 import {claimTaskChildBirth,markTaskChildAdopted} from './child/task-birth.ts'
-import {claimTeamChildBirth,markTeamChildAdopted,bindOriginalTeamChildEntry} from './child/team-birth.ts'
-import {bindOriginalTeamCleanup} from './team-cleanup.ts'
 
 export { SUBAGENT_PROMPT_CONTRACT, composeSubagentPrompt, estimateChildOverhead } from "./child/prompt.ts"
 export { resolveRoleTools } from "./child/role-tools.ts"
@@ -29,12 +27,14 @@ function dataMethod<T extends (...args: any[]) => any>(owner: object, name: stri
 }
 
 export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jobId: string; sessionId?: string; modelLabel?: string }> {
+  const childOrigin:unknown=opts.childSessions?.origin
+  if(childOrigin==='team')throw Object.assign(new Error('Team execution has been removed'),{code:'TEAM_EXECUTION_REMOVED'})
   const originalFactory = dataMethod<NonNullable<SpawnOptions['createInstructionContext']>>(opts, 'createInstructionContext')
   const createInstruction = originalFactory?.bind(opts)
   const failedSettlement = originalFactory && dataMethod<NonNullable<import('./child/instruction-context.ts').ChildInstructionContextFactory['settleFailed']>>(originalFactory, 'settleFailed')?.bind(originalFactory)
   const retainInitial = dataMethod<NonNullable<SpawnOptions['retainInitialSetup']>>(opts, 'retainInitialSetup')?.bind(opts)
   // Pure role gates precede any child document or executable model resolution.
-  const committed=opts.childStart?.kind==='committed-child-birth'?claimTaskChildBirth(opts.childStart.birth):opts.childStart?.kind==='committed-team-child-birth'?claimTeamChildBirth(opts.childStart.birth,opts):undefined
+  const committed=opts.childStart?.kind==='committed-child-birth'?claimTaskChildBirth(opts.childStart.birth):undefined
   const declared = committed?committed.declared:declaredRoleModel(opts.role, opts)
   if (subagentModelSelectionGated(opts, declared)) throw subagentModelSelectionDisabled(opts.role.name)
   if (opts.childSessions && !opts.childSessions.coordinator.openManagedDocument) throw Object.assign(new Error('Durable child requires the owned fact capability'), { code: 'FACT_OWNER_UNSUPPORTED' })
@@ -129,7 +129,6 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   document = opened.document
   if (document) { const close = dataMethod<() => Promise<void>>(document, 'close'), revoke = dataMethod<() => void>(document, 'revokeNewWork'); if (!close || !revoke) throw new TypeError('Original child document cleanup unavailable'); closeDocument = close.bind(document); revokeDocument = revoke.bind(document) }
   if(committed&&opts.childStart?.kind==='committed-child-birth')markTaskChildAdopted(opts.childStart.birth)
-  if(committed&&opts.childStart?.kind==='committed-team-child-birth')markTeamChildAdopted(opts.childStart.birth)
   controller.signal.throwIfAborted()
   if (createInstruction) {
     const input = { session: childSession, factOwner, lifetime: { available: () => instructionAvailable } }
@@ -171,7 +170,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     if (failures.length) throw failures[0]
   })
   controller.signal.throwIfAborted()
-  const published = await publishChild(opts, childCtx, childSession, factOwner, document, sessionId, childPath, childReg, codeModeMount, controller, agent, modelLabel, initial, () => model, instruction, () => { instructionAvailable = false }, entry => { publishedEntry = entry;if(opts.childStart?.kind==='committed-team-child-birth'){bindOriginalTeamChildEntry(opts.childStart.birth,entry,opts);bindOriginalTeamCleanup(opts.table,childPath,entry)}transferred = true; releaseSetup?.(); releaseSetup = undefined; setupExit.resolve() }, () => { if (!instructionAvailable) throw Object.assign(new Error('Child setup retired'), { code: 'FACT_CLOSED' }) }, { unmount: unmountContext, revokeDocument, closeDocument, closeInitial, cancelMount: cancelRuntime, disposeMount: disposeRuntime })
+  const published = await publishChild(opts, childCtx, childSession, factOwner, document, sessionId, childPath, childReg, codeModeMount, controller, agent, modelLabel, initial, () => model, instruction, () => { instructionAvailable = false }, entry => { publishedEntry = entry;transferred = true; releaseSetup?.(); releaseSetup = undefined; setupExit.resolve() }, () => { if (!instructionAvailable) throw Object.assign(new Error('Child setup retired'), { code: 'FACT_CLOSED' }) }, { unmount: unmountContext, revokeDocument, closeDocument, closeInitial, cancelMount: cancelRuntime, disposeMount: disposeRuntime })
   // Existing background-child lifetime begins at publication. The launching
   // turn's temporary cancellation fence applies to preparation only.
   opts.signal?.removeEventListener('abort', abort)
