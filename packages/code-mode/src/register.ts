@@ -75,15 +75,37 @@ export function captureOriginalCodeCompletion(mount:object,cellId:string):Comple
   return handle
 }
 
-function declareObservationReplan(exec: ToolExec, out: import('./types.ts').CodeModeObservation) {
-  const error = originalObservationReplan(out)
-  if (error) { declareInstructionReplan(exec, error); declareToolResultOutcome(exec, 'failed') }
+type ObservationOperation = 'exec' | 'wait'
+function declareObservationOutcome(exec: ToolExec, out: import('./types.ts').CodeModeObservation, operation: ObservationOperation): void {
+  const replan = originalObservationReplan(out)
+  if (replan) {
+    declareInstructionReplan(exec, replan)
+    declareToolResultOutcome(exec, 'failed')
+    return
+  }
+  // Waiting is a successful query even when the observed cell failed or was
+  // canceled. Executing retains the original cell's execution disposition.
+  const outcome = operation === 'wait' ? 'succeeded'
+    : out.status === 'failed' ? 'failed' : out.status === 'terminated' ? 'canceled' : 'succeeded'
+  declareToolResultOutcome(exec, outcome)
 }
 
-function retainedObservation(exec: ToolExec, refresh: () => Promise<void>): (NonNullable<import('./types.ts').CodeModeObserveOptions['retained']>&{readyCaptured(output:unknown):void})|undefined {
+function retainedObservation(exec: ToolExec, refresh: () => Promise<void>, operation: ObservationOperation): (NonNullable<import('./types.ts').CodeModeObserveOptions['retained']> & {
+  readyCaptured(output: unknown, observation: import('./types.ts').CodeModeObservation): void
+}) | undefined {
   const retained = exec.retainOutcome?.()
   retained?.beforeRead(refresh)
-  return retained && { ...retained, ready: output => { declareObservationReplan(exec, output); retained.ready(observationOutput(output)) },readyCaptured(output){retained.ready(output)} }
+  return retained && {
+    ...retained,
+    ready(observation) {
+      declareObservationOutcome(exec, observation, operation)
+      retained.ready(observationOutput(observation))
+    },
+    readyCaptured(output, observation) {
+      declareObservationOutcome(exec, observation, operation)
+      retained.ready(output)
+    },
+  }
 }
 
 /** Assembly-owned orchestration capability. Nested authority is registry-owned. */
@@ -269,14 +291,13 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
       let producer:Producer|undefined,delegation:import('@i-harness/core-tools/internal/code-origin').PrivateCodeCellDelegation|undefined
       try {
       if(claim && finalOutputFactory && !nondurable && (privateMode ? privateObservation!.formatVersion : session!.formatVersion)===14){claim.consume();if(privateMode){if(!claim.retainPrivateCell)throw Error('Original private Code claim required');delegation=claim.retainPrivateCell()}const issuer=claim.takeCodeSourceIssuer();if(!issuer&&privateMode)throw Error('Original private Code issuer required');if(issuer){producer=createCodeDeliveryProducer(issuer,privateMode?privateOptions!.domain:session!,refreshObservation,async id=>{if(liveCells.has(id)&&!originalCells.get(id)?.closedObserved)await runtime.terminate(id,"Original Code source closing")},()=>{if(producer)producers.delete(producer)});producers.add(producer)}}
-      const retained = retainedObservation(exec, refreshObservation)
+      const retained = retainedObservation(exec, refreshObservation, 'exec')
       await ready
       const out = await admission.run(producer?{producer,delegation}:undefined,()=>runtime.exec(args as CodeModeExecInput, { sessionId: sessionId ?? exec.sessionId, callId: exec.callId ?? randomUUID(), callEventSeq: exec.callEventSeq, abortSignal: exec.abortSignal, generationLineage: exec.modelGeneration?.codeLineage, bindInstructionCell: (cellId:string) => retainInstructionCell(exec, cellId) }, { userSteer: userSteerForTool(exec), backgroundEvent: backgroundEventForTool(exec), retained }))
       let capturedOutput:unknown
-      if(privateMode&&producer&&out.status==='running'){const captured=captureLegacyFact(observationOutput(out));if(captured.kind!=='captured')throw new FactRecoveryRequiredError();capturedOutput=captured.value;if(!retained)throw new FactRecoveryRequiredError();producer.rememberObservation(()=>retained.readyCaptured(captured.value))}
+      if(privateMode&&producer&&out.status==='running'){const captured=captureLegacyFact(observationOutput(out));if(captured.kind!=='captured')throw new FactRecoveryRequiredError();capturedOutput=captured.value;if(!retained)throw new FactRecoveryRequiredError();producer.rememberObservation(()=>retained.readyCaptured(captured.value, out))}
       await producer?.observed(out.status==='running')
-      declareObservationReplan(exec, out)
-      declareToolResultOutcome(exec, out.status === 'failed' ? 'failed' : out.status === 'terminated' ? 'canceled' : 'succeeded')
+      declareObservationOutcome(exec, out, 'exec')
       return capturedOutput??observationOutput(out)
       }catch(error){delegation?.revoke();producer?.failed();throw error}
     },
@@ -286,10 +307,10 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
     inputSchema: { type: "object", properties: { cell_id: { type: "string" }, yield_time_ms: { type: "integer", minimum: 0, maximum: 60_000 }, max_tokens: { type: "integer", minimum: 0, maximum: 4096 }, terminate: { type: "boolean" } }, required: ["cell_id"], additionalProperties: false },
     async execute(args, exec) {
       if (disposed || mode === "off") throw new Error("Code Mode unavailable")
-      const retained = retainedObservation(exec, refreshObservation)
+      const retained = retainedObservation(exec, refreshObservation, 'wait')
       await ready
       const out = await runtime.wait(args as CodeModeWaitInput, exec.abortSignal, { userSteer: userSteerForTool(exec), backgroundEvent: backgroundEventForTool(exec), retained })
-      declareObservationReplan(exec, out)
+      declareObservationOutcome(exec, out, 'wait')
       return observationOutput(out)
     },
   }
