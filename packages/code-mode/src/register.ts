@@ -166,6 +166,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
             await fence.promise
             await runtimeOwner.settle()
             await cell.broker?.settle()
+            facts.releaseAdmissionNotifications(event.cellId)
             if (originalCells.get(event.cellId) === cell) originalCells.delete(event.cellId)
           })
           void terminal.promise.then(() => finalization.settle()).catch(() => {})

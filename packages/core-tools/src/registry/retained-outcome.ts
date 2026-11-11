@@ -17,7 +17,7 @@ export interface RetainedToolOutcome {
 }
 interface ValueSource { observed: number; state: 'unknown' | 'progress' | 'ready' | 'consumed'; output?: unknown; refresh?: () => Promise<void>; changed: ReturnType<typeof Promise.withResolvers<void>> }
 type Scope = {exec:ToolExec;source:SettlementFacts<ProducerFactOutcome>}&({view:SessionView;domain?:never}|{domain:ManagedExecutionDomain;view?:never})
-interface Dispatch { scope: Scope; sources: ValueSource[]; references: Set<CapturedSettlementFact<ProducerFactOutcome>>; open: boolean; ordinal: number }
+interface Dispatch { scope: Scope; sources: ValueSource[]; references: Set<CapturedSettlementFact<ProducerFactOutcome>>; open: boolean; ordinal: number; bodyIndex: number }
 const preparedScopes = new WeakMap<PreparedCall, Scope>(), dispatches = new WeakMap<ToolExec, Dispatch>()
 const recoveries = new WeakMap<object, { prepared: PreparedCall; outcome: RetainedToolOutcome }>()
 
@@ -39,7 +39,12 @@ function isRecovery(error: unknown): boolean {
   return error instanceof Error && ['FACT_RECOVERY_REQUIRED', 'FACT_CAPTURE_FAILED', 'FACT_INSTALL_FAILED'].includes(String((error as { code?: string }).code ?? ''))
 }
 function selected(dispatch: Dispatch): ValueSource | undefined {
-  return dispatch.sources.filter(source => source.observed).sort((a, b) => b.observed - a.observed)[0]
+  let latest: ValueSource | undefined
+  for (let index = dispatch.bodyIndex; index < dispatch.sources.length; index++) {
+    const source = dispatch.sources[index]!
+    if (source.observed && (!latest || source.observed > latest.observed)) latest = source
+  }
+  return latest
 }
 export function hasRetainedToolBody(exec: ToolExec, error: unknown): boolean {
   const dispatch = dispatches.get(exec)
@@ -67,7 +72,7 @@ export function beginRetainedDispatch(prepared: PreparedCall) {
   const scope = preparedScopes.get(prepared)
   if (!scope) return undefined
   assertScope(scope, prepared)
-  const dispatch: Dispatch = { scope, sources: [], references: new Set(), open: true, ordinal: 0 }
+  const dispatch: Dispatch = { scope, sources: [], references: new Set(), open: true, ordinal: 0, bodyIndex: 0 }
   dispatches.set(prepared.exec, dispatch)
   const register = (): RetainedOutcomeSink => {
     assertScope(scope, prepared)
@@ -105,18 +110,18 @@ export function beginRetainedDispatch(prepared: PreparedCall) {
     dispatch.references.delete(fact)
   } })
   const body = register()
-  let bodyValue=dispatch.sources[0]!
   const finish = () => { dispatch.open = false; delete prepared.exec.retainOutcome; delete prepared.exec.retainResultReference }
   return {
     body,
     nextBody() {
       const next = register()
-      bodyValue = dispatch.sources.at(-1)!
+      dispatch.bodyIndex = dispatch.sources.length - 1
       return next
     },
     success() { finish(); dispatches.delete(prepared.exec); for (const source of dispatch.sources) { source.output = undefined; source.state = 'consumed' } },
     failure(error: unknown) {
       finish()
+      const bodyValue = dispatch.sources[dispatch.bodyIndex]!
       const source = isRecovery(error) ? selected(dispatch) : scope.domain&&bodyValue.observed&&bodyValue.state==='ready'?bodyValue:undefined
       if (!source) { dispatches.delete(prepared.exec); return error }
       // This genuinely observed original outcome precedes registry finalization.

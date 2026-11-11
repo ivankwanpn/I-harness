@@ -4,13 +4,12 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createContext, captureExecutionHookChannel } from '@i-harness/core-plugin';
 import { createToolRegistryWithModelOrigin } from '@i-harness/core-tools/model-origin';
-import { committedFactSeqs } from '@i-harness/core-session';
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts';
 import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts';
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts';
 import { acquireManagedExecution } from '../../session-persistence/src/execution-internal.ts';
 import { createExecutionGenerationLifecycle } from '../../session-executor/src/lifecycle/generation-actions.ts';
-import { createRuntimeContextSource } from '../../session-executor/src/lifecycle/action-facts.ts';
+import { createExecutionRuntimeContext } from '../../session-executor/src/lifecycle/execution-runtime-context.ts';
 import { createMainInstructionManager, isOriginalAcceptedInstructionOrigin } from '../../session-executor/src/context/instructions/manager.ts';
 import { createProjectInstructionEnvironment } from '../../session-executor/src/context/instructions/host.ts';
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts';
@@ -21,15 +20,10 @@ const wire = (tool: boolean) => `data: ${JSON.stringify({ choices: [{ delta: too
 it.each([false, true])('genuine instructed batch owns exact handoff pin through drain and release retry (%s)', async (failRelease) => {
     const cwd = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'agent-real-instructions-'));
     await writeFile(join(cwd, 'AGENTS.md'), 'Genuine original project instruction for this controlled read.');
-    const backend = createJsonlBackend(join(cwd, 'sessions')), c = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract), { id } = await c.create(), execution = await acquireManagedExecution(c, id), ctx = createContext(), origin = createManagedAgentModelOriginOwner(ctx, execution), environment = createProjectInstructionEnvironment(), runtime = createRuntimeContextSource(execution.owner);
+    const backend = createJsonlBackend(join(cwd, 'sessions')), c = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract), { id } = await c.create(), execution = await acquireManagedExecution(c, id), ctx = createContext(), origin = createManagedAgentModelOriginOwner(ctx, execution), environment = createProjectInstructionEnvironment(), runtime = createExecutionRuntimeContext(execution, origin.domain);
     let effects = 0, faultEnabled = failRelease;
-    const manager = createMainInstructionManager({ domain: origin.domain, environment, cwd, authority: () => ({ kind: 'unbound', revision: 'actual', workspaceRoot: cwd }), available: () => true, async publish(signal, retain) { const pin = retain(), source = runtime(signal); try {
-            committedFactSeqs(await source.captureRuntimeContext({ type: 'runtime/context', version: 1, sections: [{ name: 'instructions', text: manager.text() }] }, () => { origin.domain.assertCurrent(); return true; }).admit());
-        }
-        finally {
-            source.finish();
-            await pin.release();
-        } } });
+    const manager = createMainInstructionManager({ domain: origin.domain, environment, cwd, authority: () => ({ kind: 'unbound', revision: 'actual', workspaceRoot: cwd }), available: () => true, publish: (signal, retain) => runtime.render(signal, retain) });
+    runtime.registerSection('instructions', () => manager.text());
     const server = await createLoopbackProvider('/v1/chat/completions', [async (response) => { response.end(wire(true)); }, async (response) => { response.end(wire(false)); }]);
     const retained: {
         pin: RequestContextPin;
@@ -48,6 +42,7 @@ it.each([false, true])('genuine instructed batch owns exact handoff pin through 
     const pair = createToolRegistryWithModelOrigin(ctx, { executionOwner: { kind: 'managed-execution', domain: origin.domain, context: ctx, sessionId: id }, instructionsRequired: true, instructionOriginVerifier: isOriginalAcceptedInstructionOrigin }, origin.verifier);
     pair.registry.register({ name: 'read_probe', description: 'actual instructed read', inputSchema: { type: 'object' }, captureNativePlan() { return { operation: 'read', targets: [] }; }, async execute() { effects++; return 'original instructed body result'; } });
     const agent = createManagedAgent(ctx, { execution, domain: origin.domain, hooks: captureExecutionHookChannel(ctx), modelCallOrigin: origin.bind(pair.registry, pair.driver), requestContext: manager, tools: pair.registry, model: createOpenAICompatibleClient({ apiKey: 'loopback', model: 'fixture', baseUrl: server.baseUrl }), systemPrompt: () => manager.text(), budget: { contextWindow: 16000 }, maxOutputTokens: 128, generationFactory: (action, deps) => createExecutionGenerationLifecycle(execution, id, action, undefined, deps) });
+    let primaryFailure: unknown, failed = false;
     try {
         const result = await agent.run('Use the genuine instructed read').then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error }));
         expect(effects).toBe(1);
@@ -61,14 +56,21 @@ it.each([false, true])('genuine instructed batch owns exact handoff pin through 
         expect((await backend.read(id)).events.filter(event => event.type === 'tool/result')).toHaveLength(1);
         await manager.close();
     }
+    catch (error) {
+        failed = true;
+        primaryFailure = error;
+        throw error;
+    }
     finally {
         faultEnabled = false;
-        for (const pin of retained)
-            if (!pin.released)
-                await pin.pin.release();
-        await manager.close();
-        await environment.close();
-        await c.close();
-        await server.close();
+        const cleanupErrors: unknown[] = [];
+        for (const pin of retained) {
+            if (!pin.released) try { await pin.pin.release(); } catch (error) { cleanupErrors.push(error); }
+        }
+        for (const close of [() => manager.close(), () => runtime.close(), () => environment.close(), () => c.close(), () => server.close()]) {
+            try { await close(); } catch (error) { cleanupErrors.push(error); }
+        }
+        if (cleanupErrors.length) throw new AggregateError(failed ? [primaryFailure, ...cleanupErrors] : cleanupErrors,
+            'Instruction pin assertion and original cleanup failed', failed ? { cause: primaryFailure } : undefined);
     }
 }, 30000);

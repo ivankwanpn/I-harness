@@ -60,18 +60,28 @@ export function createStartCall(session: BatchSource, tools: ToolRegistry, batch
         records.setSlot(index, { name: call.name, callId: call.callId, prepared, output })
       })
       .catch((err: unknown) => {
-        if (isInstructionReplan(err) && resultExecution(prepared).dispatch === 'not-dispatched') {
+        let execution: ReturnType<typeof resultExecution>
+        try { execution = resultExecution(prepared) }
+        catch {
+          // Invalid prepared identity cannot authorize a synthetic execution.
+          // Preserve the original refusal instead of replacing it here.
+          cancellation.disqualify()
+          cancellation.recordFailure(index, err)
+          cancellation.stopForRefusal(err)
+          return
+        }
+        if (isInstructionReplan(err) && execution.dispatch === 'not-dispatched') {
           if (replan && !replan.value) replan.value = err.data
           records.setSlot(index, { name: call.name, callId: call.callId, synthetic: true, execution: { outcome: 'failed', dispatch: 'not-dispatched' }, output: err.data })
           return
         }
-        if(isManagedBatchSource(session)&&resultExecution(prepared).dispatch==='not-dispatched'){
+        if(isManagedBatchSource(session)&&execution.dispatch==='not-dispatched'){
           cancellation.recordFailure(index,err);cancellation.stopForRefusal(err);return
         }
         // A canceled real dispatch may subsequently receive an ordinary
         // synthetic failure fill. The fill cannot prove its effects known.
-        try { const execution = resultExecution(prepared); if (execution.outcome === 'unknown' || execution.dispatch === 'unknown') cancellation.disqualify() }
-        catch { cancellation.disqualify() }
+        const unknownEffects = execution.dispatch === 'unknown' || execution.dispatch === 'dispatched' && execution.outcome === 'unknown'
+        if (unknownEffects) cancellation.disqualify()
         const retained = retainedToolOutcome(err, prepared)
         if (retained) {
           cancellation.recordCheckpoint({ site: 'retained-dispatch', index, error: err, prepared, retained })
@@ -88,7 +98,7 @@ export function createStartCall(session: BatchSource, tools: ToolRegistry, batch
         if (isPolicyRefusal(err)) cancellation.stopForRefusal(err)
         else if (!opts.signal?.aborted) {
           records.setSlot(index, { name: call.name, callId: call.callId, synthetic: true,
-            execution: { outcome: resultExecution(prepared).outcome === 'unknown' ? 'unknown' : 'failed', dispatch: 'dispatched' },
+            execution: { outcome: unknownEffects ? 'unknown' : 'failed', dispatch: execution.dispatch },
             output: { error: err instanceof Error ? err.message : String(err), code: TOOL_FAILED } })
         }
         try {

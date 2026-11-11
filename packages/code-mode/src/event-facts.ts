@@ -12,8 +12,9 @@ export function createCodeModeEventFacts(owner: CodeModeFactOwner, drainProducer
   const admissionHolds = new Map<string, { action?: ManagedAction<ProducerFactOutcome> }>()
   type Notification = { state: 'running' | 'succeeded' | 'failed'; reason?: unknown }
   const held = new Set<CellFacts>(), failedAdmissions = new Map<string, WeakMap<() => void, Notification>>()
-  // Only unresolved joins retain listeners. Settled admissions keep the existing
-  // scalar deduplication marker; weak callback bookkeeping retains no payload.
+  // Only unresolved joins retain listeners. Settled admissions keep a scalar
+  // deduplication marker until original cell finalization retires their late
+  // joins; weak callback bookkeeping retains no payload.
   type Notice = { settled: boolean; listeners: Set<() => void>; failure?: { reason: unknown } }
   const admissionNotices = new Map<string, Notice>()
   const notify = (cellId: string, listener: () => void) => {
@@ -237,6 +238,14 @@ export function createCodeModeEventFacts(owner: CodeModeFactOwner, drainProducer
      * original finalization cannot complete until the fact is reconciled
      * externally. Reported instead of waited on: the hold is resumable. */
     recoveryPending() { return stickyRecovery || pending.size > 0 || admissionHolds.size > 0 },
+    /** The mount calls this after the original runtime and broker have joined,
+     * so every admission notification has completed its possible late joins. */
+    releaseAdmissionNotifications(cellId: string): boolean {
+      if (cells.has(cellId) || admissionHolds.has(cellId) || admissionNotices.has(cellId)) {
+        throw new FactRecoveryRequiredError()
+      }
+      return failedAdmissions.delete(cellId)
+    },
     async close() { if (!retired) { retired = true; changed() }; await source.close(); off() },
   }
 }

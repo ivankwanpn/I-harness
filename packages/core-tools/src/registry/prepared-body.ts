@@ -202,7 +202,7 @@ export function bindPreparedShellLeaf(tool: Tool, leaf: Tool['execute']) {
     const context=body.context??body.managed
     if(!context||!body.source||!frame.domain||body.exec.resultConsumer==='code'&&!body.codeInvocation?.takeExecSourceIssuer)return
     for(let parent=frame.parent;parent;parent=parent.parent)if(parent.domain===frame.domain)return
-    body.claimed=true;let consumed=false
+    body.claimed=true;let consumed=false, issuerTaken=false
     const claim:PreparedShellBodyClaim=Object.freeze({ context,source:body.source,exec:body.exec,
       assertCurrent(){if(this!==claim)throw new Error('Foreign body claim receiver');check(body,frame)},
       consume(){if(this!==claim)throw new Error('Foreign body claim receiver');check(body,frame);if(consumed)throw new Error('Prepared Shell body already consumed');consumed=true},
@@ -210,6 +210,8 @@ export function bindPreparedShellLeaf(tool: Tool, leaf: Tool['execute']) {
       takeExecSourceIssuer(){
         if(this!==claim)throw new Error('Foreign body claim receiver');check(body,frame)
         if(!consumed)throw new Error('Consume original Shell claim first')
+        if(issuerTaken)throw new Error('Original Shell issuer already taken')
+        issuerTaken=true
         const original=body.execIssuer??opaqueBody(body,()=>((body.permit as import('../model-origin.ts').OriginalModelMemberPermit|undefined)??body.codeInvocation)?.takeExecSourceIssuer?.())
         body.execIssuer=original
         if(!original)return

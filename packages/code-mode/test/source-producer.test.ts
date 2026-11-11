@@ -460,6 +460,7 @@ it('joins pending and already-settled original interrupted notifications once wi
     journal.holdUnknown = true;
     try {
         await expect(f.facts.optional(f.started)).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' });
+        expect(() => f.facts.releaseAdmissionNotifications(f.started.cellId)).toThrow();
         const joined = f.facts.required(f.terminal, undefined, settled);
         void joined.catch(() => { });
         journal.holdUnknown = false;
@@ -473,6 +474,8 @@ it('joins pending and already-settled original interrupted notifications once wi
         expect([calls, lateCalls]).toEqual([1, 1]);
         expect(f.document.view.events.filter(e => e.type === 'code/cell').map(e => e.state)).toEqual(['started', 'interrupted']);
         expect(f.facts.observationState()).toBe('available');
+        expect(f.facts.releaseAdmissionNotifications(f.started.cellId)).toBe(true);
+        expect(f.facts.releaseAdmissionNotifications(f.started.cellId)).toBe(false);
         await f.facts.close();
     }
     finally {
@@ -528,6 +531,7 @@ it.each(['pending', 'settled'] as const)('retains a falsey %s original interrupt
         expect(calls).toBe(1);
         expect(f.document.view.events.filter(e => e.type === 'code/cell' && e.state === 'interrupted')).toHaveLength(1);
         expect(f.facts.observationState()).toBe('unavailable');
+        expect(() => f.facts.releaseAdmissionNotifications(f.started.cellId)).toThrow();
         await expect(f.facts.close()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' });
     }
     finally {

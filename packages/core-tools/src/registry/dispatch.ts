@@ -58,7 +58,6 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
           throw Object.assign(new Error(error instanceof Error ? error.message : String(error), { cause: error }), { policyRefusal: true as const })
         }
         dispatchResultStarted(prepared.exec)
-        attemptBody?.observed()
         const result = await withToolResultProducer(prepared.exec, () => runInstructionBody(prepared.exec, () => invokePrepared(prepared)))
         settleUndeclaredDispatch(prepared.exec, 'succeeded')
         bodyReturned=true
@@ -74,9 +73,13 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
       const flight = Promise.resolve().then(async () => {
         if (!dispatchOpen) throw new Error('Original dispatch is closed')
         const previousBody = bodyFlight
-        bodyReturned=false
-        retainedBody=retained?.nextBody()
-        if (!await preparePreparedRetry(prepared, previousBody, () => { bodyReturned=false; validatePrepared(prepared) })) return { kind: 'unavailable' } as const
+        if (!await preparePreparedRetry(prepared, previousBody, () => {
+          // Previous native cleanup and the full dispatcher body have joined.
+          // Fresh validation belongs to the next attempt, even if it refuses.
+          bodyReturned = false
+          retainedBody = retained?.nextBody()
+          validatePrepared(prepared)
+        })) return { kind: 'unavailable' } as const
         if (!dispatchOpen) throw new Error('Original dispatch is closed')
         return { kind: 'result', value: await cascade('tools/execute', metadata, invokeAttempt) } as const
       })

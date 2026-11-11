@@ -109,13 +109,14 @@ it.each(['self','parallel-cycle','healthy-dag'] as const)('keeps exact original 
  const {id}=await coordinator.create(),document=await coordinator.openManagedDocument(id),ctx=createContext(),tools=createToolRegistry(ctx)
  const ready=Promise.withResolvers<void>(),release=Promise.withResolvers<void>(),entered=Promise.withResolvers<void>()
  const handles:ReturnType<typeof captureOriginalCodeCompletion>[]=[],errors:unknown[]=[];let calls=0
+ const cycleRefused=Promise.withResolvers<void>()
  const mount=registerCodeMode(ctx,tools,{session:document.view,sessionId:id,factOwner:document,config:{mode:'mixed'},finalOutput:()=>{
   const ordinal=calls++
   return {async append(){},seal(){},async finish(){
    await ready.promise;entered.resolve()
    if(kind==='healthy-dag'&&ordinal===1)return {kind:'unavailable' as const,reason:'unsupported-owner' as const}
    const target=handles[kind==='self'?ordinal:1-ordinal]!
-   const wait=target.settle().catch(error=>{errors.push(error)})
+   const wait=target.settle().catch(error=>{errors.push(error);cycleRefused.resolve()})
    await Promise.race([wait,release.promise])
    return {kind:'unavailable' as const,reason:'unsupported-owner' as const}
   }}
@@ -125,8 +126,10 @@ it.each(['self','parallel-cycle','healthy-dag'] as const)('keeps exact original 
   await tools.get('code_exec')!.execute({code:'text("one")',yield_time_ms:60000},{session:document.view,sessionId:id})
   if(kind!=='self')await tools.get('code_exec')!.execute({code:'text("two")',yield_time_ms:60000},{session:document.view,sessionId:id})
   await entered.promise
-  await new Promise<void>(resolve=>setImmediate(resolve))
-  release.resolve() // Break the old cycle explicitly; a timeout is never proof.
+  // A first entered finish is only a DAG edge. Wait for the actual
+  // reciprocal/self wait refusal, rather than releasing it after one turn.
+  if(kind!=='healthy-dag')await cycleRefused.promise
+  release.resolve() // Cleanup fallback; the original refusal is already observed.
   expect(await Promise.all(handles.map(handle=>handle.settle()))).toEqual(handles.map(()=>expect.objectContaining({kind:'unqualified',eligible:false})))
   if(kind==='healthy-dag')expect(errors).toEqual([])
   else{expect(errors.length).toBeGreaterThan(0);expect(errors[0]).toMatchObject({code:'FACT_RECOVERY_REQUIRED'})}

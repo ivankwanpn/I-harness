@@ -133,7 +133,14 @@ it.each(['native', 'memory'] as const)('enqueues a failed admission interrupted 
     return action
   })
   await expect(f.facts.optional({ type: 'code/cell', cellId: 'failed', state: 'started' }, signal.signal)).rejects.toThrow()
-  await f.facts.required({ type: 'code/cell', cellId: 'failed', state: 'interrupted', error: 'caller repeats original failed admission' })
+  let notifications = 0
+  const notified = () => { notifications++ }
+  const terminal = { type: 'code/cell' as const, cellId: 'failed', state: 'interrupted' as const, error: 'caller repeats original failed admission' }
+  await f.facts.required(terminal, undefined, notified)
+  await f.facts.required(terminal, undefined, notified)
+  expect(notifications).toBe(1)
+  expect(f.facts.releaseAdmissionNotifications('failed')).toBe(true)
+  expect(f.facts.releaseAdmissionNotifications('failed')).toBe(false)
   await f.cleanup()
   expect(f.sources).toHaveLength(2)
   expect(f.owner.view.events.filter(e => e.type === 'code/cell').map(e => e.state)).toEqual(['interrupted'])

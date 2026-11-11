@@ -72,6 +72,7 @@ it.each([{captureWholeBatch:false,interference:'none'},{captureWholeBatch:true,i
     continuation = gate.promise.then(async () => {
       const run = agent.run('Use the original Shell once', controller.signal)
       if (interference === 'stop') await expect(run).rejects.toThrow()
+      else if (interference === 'identity') await expect(run).rejects.toThrow('Prepared exec identity changed')
       else await run
       const manual = await pair.registry.prepare({ name: 'shell', args: {} }, undefined, { session: document.view, sessionId: id, settlementSource: source })
       await pair.registry.dispatch(manual)
@@ -83,7 +84,7 @@ it.each([{captureWholeBatch:false,interference:'none'},{captureWholeBatch:true,i
     await outer.dispatch(prepared)
     gate.resolve()
     await continuation
-    expect(server.requests).toHaveLength(interference === 'stop' ? 1 : 2)
+    expect(server.requests).toHaveLength(interference === 'stop' || interference === 'identity' ? 1 : 2)
     expect(origins).toEqual(interference === 'stop' || interference === 'identity' ? [false] : [true, false])
     const accepted = document.view.events.find(event => event.type === 'context/action' && event.op === 'close' && event.disposition === 'accepted')
     expect(accepted).toBeDefined()
