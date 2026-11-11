@@ -53,6 +53,13 @@ export const probe = {
   phase<T>(phase: string, work: () => Promise<T>, bodyHash = false): Promise<T> {
     return this.run(context.getStore()?.scope ?? 'unscoped', phase, work, bodyHash)
   },
+  sync<T>(name: string, work: () => T): T {
+    const captured = context.getStore(), started = performance.now()
+    try { return work() } finally {
+      this.add(name, 1, captured)
+      this.add(`${name}.elapsedMs`, performance.now() - started, captured)
+    }
+  },
   total(name: string, scope?: string) {
     return Object.entries(this.counts).reduce((sum, [key, values]) => sum + (!scope || key.startsWith(scope + '/') ? values[name] ?? 0 : 0), 0)
   },
@@ -91,6 +98,7 @@ export function observeFs(native: typeof Fs): typeof Fs {
       return observe(native.readdir(...args), 'readdir', result => { probe.add('readdirEntries', result.length, captured) })
     }) as typeof native.readdir,
     lstat: ((...args: Parameters<typeof native.lstat>) => observe(native.lstat(...args), 'lstat')) as typeof native.lstat,
+    realpath: ((...args: Parameters<typeof native.realpath>) => observe(native.realpath(...args), 'realpath')) as typeof native.realpath,
     readFile: ((...args: Parameters<typeof native.readFile>) => {
       const captured = context.getStore(), category = kind(String(args[0]))
       return observe(native.readFile(...args), `${category}.readFile`, result => { probe.add(`${category}.readBytes`, bytes(result), captured) })

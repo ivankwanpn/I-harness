@@ -188,7 +188,7 @@ it('conditionally uses the exact prospective allowance with one producer while i
   const put = ContextStore.prototype.put
   const storeSpy = vi.spyOn(ContextStore.prototype, 'put').mockImplementation(function(this: ContextStore, ...args) { current = this; return put.apply(this, args) })
   const admissionSpy = vi.spyOn(LegacyIndexLifecycle.prototype, 'admitCapture').mockImplementation(async function(this: LegacyIndexLifecycle, ...args) {
-    const result = await admit.apply(this, args); admissions.push(result); allocations.push(args[3]); return result
+    const result = await admit.apply(this, args); admissions.push(result.kind); allocations.push(args[3]); return result
   })
   const fallbackSpy = vi.spyOn(LegacyIndexLifecycle.prototype, 'beginCaptureReplacement').mockImplementation(async function(this: LegacyIndexLifecycle, ...args) {
     prospective = args[5].ref.id
@@ -396,6 +396,8 @@ it('keeps one exclusive preparation generation across actual reset, stage and re
   } finally { resume.resolve(); await Promise.allSettled([preparing, clearing]); vi.restoreAllMocks(); await f.close() }
 })
 
+// Actual fork, expiry, quota reconfiguration and native recapture take ~6.5s
+// in isolation; this one multi-phase fixture needs more than the 5s default.
 it('describes and funds the actual tracked recapture allocation without reviving historical target authority', async () => {
   const f = await legacyFixture(), clock = vi.spyOn(Date, 'now')
   try {
@@ -413,7 +415,7 @@ it('describes and funds the actual tracked recapture allocation without reviving
     expect(await physicalBytes(directory)).toBeLessThanOrEqual(full + 128 * 1024)
     describe.mockRestore()
   } finally { clock.mockRestore(); vi.restoreAllMocks(); await f.close() }
-})
+}, 15000)
 
 
 it('keeps a consumed native close uncertain and retains the original lifetime without a no-op disposal proof', async () => {

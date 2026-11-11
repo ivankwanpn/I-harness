@@ -36,6 +36,12 @@ export type IndexedLegacyContext = { store: ContextStore; lease: LegacyUseLease;
 export type IndexIssue = { code: 'CONTEXT_INDEX_UNAVAILABLE'; message: string; scope: 'artifact-index' | 'legacy-hints' }
 export interface RebuildSink { add(ref: ContextResultRef, bytes: Buffer): void }
 export interface PendingCaptureIndex { commit(): void; publish(): void; discard(cause: unknown): Promise<void> }
+export interface CaptureIndexAdmission {
+  readonly kind: 'incremental' | 'fresh'
+  /** Consume this operation's canonical + SQLite rollback allocation once. The
+   * original capture owner must inspect final physical bytes before publishing. */
+  write(use: IndexUse, work: (sql: IndexWrite) => void): void
+}
 type Handle = { db: DatabaseSync; generation: symbol; closed: boolean; uncertain: boolean; disposition: 'retain'|'remove'; failure?: unknown }
 type State = 'absent' | 'ready' | 'building' | 'invalid' | 'debt' | 'retained'
 const unavailable = (message: string) => Object.assign(new Error(message), { code: 'CONTEXT_INDEX_UNAVAILABLE' })
@@ -167,31 +173,44 @@ export class LegacyIndexLifecycle {
       db.exec('PRAGMA temp_store=MEMORY; PRAGMA foreign_keys=ON')
       if (Number(this.scalar(db, 'temp_store')) !== 2 || Number(this.scalar(db, 'foreign_keys')) !== 1) throw Error('Retained native settings unavailable')
       const pages = Number(this.scalar(db, 'page_count'))
-      if (!Number.isSafeInteger(pages) || pages < 1 || await this.ports.physicalBytes() > quota) throw Error('Retained derived quota unavailable')
+      const physical = await this.ports.physicalBytes()
+      if (!Number.isSafeInteger(pages) || pages < 1 || physical > quota) throw Error('Retained derived quota unavailable')
       this.assert(turn, lease)
-      this.install(db, Math.max(pages, Math.floor((quota - await this.ports.physicalBytes() + (await stat(this.path)).size) / 4096)))
+      const indexBytes = (await stat(this.path)).size
+      this.assert(turn, lease)
+      this.install(db, Math.max(pages, Math.floor((quota - physical + indexBytes) / 4096)))
       this.assert(turn, lease); original.disposition = 'retain'; this.state = 'ready'; this.retained = undefined
       return true
     } catch (failure) { this.invalidate(failure); throw failure }
   }
-  private async envelope(quota: number, growth: number): Promise<{ ceiling: number; current: number }> {
+  private async envelope(quota: number, growth: number, observedTotal?: number): Promise<{ ceiling: number; current: number }> {
     safe(quota); safe(growth)
     const original = this.handle
     if (!original || this.state !== 'ready') return { ceiling: -1, current: 0 }
     const db = original.db, p = Number(this.scalar(db, 'page_size')), n0 = Number(this.scalar(db, 'page_count'))
     const installed = Number(this.scalar(db, 'max_page_count'))
     if (p !== 4096 || !Number.isSafeInteger(n0) || n0 < 1 || !Number.isSafeInteger(installed) || installed < n0) throw Error('Incompatible derived index page geometry')
-    const index = (await stat(this.path)).size, total = await this.ports.physicalBytes()
+    const index = (await stat(this.path)).size, total = observedTotal === undefined ? await this.ports.physicalBytes() : safe(observedTotal)
     const journal = safe(safe(n0 * (p + 8)) + safe((2 * n0 + 3) * 4096))
     safe(safe(total - index) + safe(journal + growth))
     const available = quota - (total - index) - journal - growth
     return { ceiling: Math.floor(available / p), current: n0 }
   }
-  async admitCapture(turn: WorkspaceMutationTurn, lease: LegacyUseLease, quota: number, canonicalPeakGrowth: number): Promise<'incremental' | 'fresh'> {
+  async admitCapture(turn: WorkspaceMutationTurn, lease: LegacyUseLease, quota: number, canonicalPeakGrowth: number, observedTotal?: number): Promise<CaptureIndexAdmission> {
     this.assert(turn, lease)
     try {
-      const bound = await this.envelope(quota, canonicalPeakGrowth); this.assert(turn, lease)
-      return bound.ceiling >= bound.current && bound.current > 0 ? 'incremental' : 'fresh'
+      const bound = await this.envelope(quota, canonicalPeakGrowth, observedTotal); this.assert(turn, lease)
+      const original = this.handle, kind = bound.ceiling >= bound.current && bound.current > 0 ? 'incremental' : 'fresh'
+      let consumed = false
+      const owner = this
+      const admission: CaptureIndexAdmission = Object.freeze({ kind, write(use: IndexUse, work: (sql: IndexWrite) => void) {
+        if (this !== admission || consumed || kind !== 'incremental' || !original || owner.handle !== original || owner.state !== 'ready') throw unavailable('Stale capture index admission')
+        owner.assert(turn, lease); use.assertCurrent()
+        if (Number(owner.scalar(original.db, 'page_count')) !== bound.current) throw unavailable('Capture index generation changed')
+        consumed = true
+        owner.write(turn, lease, use, bound, work)
+      } })
+      return admission
     } catch (failure) {
       const failures = [failure]
       if (this.retirementPending()) try { await this.retire(turn, lease) } catch (cleanup) { failures.push(cleanup) }
@@ -212,6 +231,14 @@ export class LegacyIndexLifecycle {
       else this.hintProblems.set(hintBinding, issue)
       throw unavailable(issue.message)
     }
+    this.write(turn, lease, use, bound, work)
+    try {
+      if (await this.ports.physicalBytes() > quota) throw Error('Derived index physical quota exceeded')
+      this.assert(turn, lease); use.assertCurrent()
+    } catch (failure) { this.invalidate(failure); throw failure }
+  }
+  private write(turn: WorkspaceMutationTurn, lease: LegacyUseLease, use: IndexUse, bound: { ceiling: number; current: number }, work: (sql: IndexWrite) => void): void {
+    this.assert(turn, lease); if (!this.uses.has(use)) throw unavailable('Foreign derived context index use'); use.assertCurrent()
     const db = this.handle!.db
     let active = false
     const assertWrite = () => { this.assert(turn, lease); use.assertCurrent(); if (!active) throw Error('Stale derived index write port') }
@@ -222,8 +249,7 @@ export class LegacyIndexLifecycle {
     }
     try {
       this.install(db, bound.ceiling); db.exec('BEGIN IMMEDIATE'); active = true
-      work(sql); active = false; db.exec('COMMIT')
-      if (await this.ports.physicalBytes() > quota) throw Error('Derived index physical quota exceeded')
+      work(sql); this.assert(turn, lease); use.assertCurrent(); active = false; db.exec('COMMIT')
       this.assert(turn, lease); use.assertCurrent()
     } catch (failure) {
       active = false; this.invalidate(failure)

@@ -58,6 +58,16 @@ async function implementation() {
   return module!.createWin32ArtifactPathOwnerWithApi
 }
 
+it('keeps injected native APIs immediate when checks share an artifact batch', async () => {
+  const create = await implementation(), f = fixture(), owner = create('C:\\store', f.api)
+  const a = owner.capture('C:\\store\\a.jsonl'), b = owner.capture('C:\\store\\b.jsonl')
+  f.calls.length = 0
+  const { checkWin32ArtifactPaths } = await import('../src/win32-artifact-path.ts')
+  checkWin32ArtifactPaths([{ capture: a, method: a.assertCurrent }, { capture: b, method: b.assertCurrent }])
+  expect(f.calls).toEqual(['C:\\store', 'C:\\store', 'C:\\store', 'C:\\store'])
+  expect(f.handles.size).toBe(0)
+})
+
 it('uses actual directory ID, policy and exact UTF16 leaf rather than a globally folded path', async () => {
   const create = await implementation(), f = fixture(), owner = create('C:\\store', f.api)
   const lower = owner.capture('C:\\store\\name.doc.jsonl'), upper = owner.capture('C:\\store\\NAME.doc.jsonl')

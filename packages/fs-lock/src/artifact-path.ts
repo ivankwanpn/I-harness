@@ -1,6 +1,7 @@
 import { lstatSync, realpathSync } from 'node:fs'
 import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path'
-import { createWin32ArtifactPathOwner } from './win32-artifact-path.ts'
+import { createWin32ArtifactPathOwner, checkWin32ArtifactPaths } from './win32-artifact-path.ts'
+export { checkWin32ArtifactPaths as checkOriginalArtifactPaths }
 export type ArtifactPathCapture = Readonly<{kind:'ready';key:string;assertCurrent():void}|{kind:'needs-parents';assertCurrent():void}|{kind:'needs-root';preparation:Readonly<{kind:'root-only';path:string}>;assertCurrent():void}>
 /** Original platform namespace evidence only; no existence/read/launch authority. */
 export function createArtifactPathOwner(root:string):{capture(path:string):ArtifactPathCapture;settleResources():void}{

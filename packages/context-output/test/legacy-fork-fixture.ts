@@ -10,7 +10,8 @@ import { createProjectScopeBroker } from '../../desktop-gateway/src/project-scop
 import { createBootstrapRequestIntent } from '../../session-persistence/src/coordinator/bootstrap-intent.ts'
 import { createSession, append, exportConversationSeed } from '@i-harness/core-session'
 
-export async function legacyFixture(options: { observations?: number; disabled?: boolean; f0Warm?: boolean; path?: string; mixed?: boolean; distinct?: number; summary?: boolean; retentionDays?: number } = {}) {
+export async function legacyFixture(options: { observations?: number; disabled?: boolean; f0Warm?: boolean; path?: string; mixed?: boolean; distinct?: number; summary?: boolean; retentionDays?: number; concurrentPrepare?: boolean; observeCurrent?: (name: string, check: () => void) => void } = {}) {
+  if (options.concurrentPrepare && (options.distinct ?? 1) > 1001) throw Error('Concurrent scale preparation is bounded to 1001 actual refs')
   const evidence = process.env.IH_LEGACY_FORK_EVIDENCE_ROOT
   if (evidence) await mkdir(evidence, { recursive: true })
   const root = await mkdtemp(join(evidence ?? tmpdir(), 'ih-l1-')), workspace = join(root, 'workspace'); await mkdir(workspace)
@@ -36,11 +37,35 @@ export async function legacyFixture(options: { observations?: number; disabled?:
   }
   const [visible, hidden, future] = refs as [NonNullable<typeof refs[number]>, NonNullable<typeof refs[number]>, NonNullable<typeof refs[number]>]
   const selectedRefs = [visible]
-  for (let i = 1; i < (options.distinct ?? 1); i++) {
+  const captureDistinct = async (i: number, grant = true) => {
     const ref = await service.capture({ sessionId: 'creator', callId: `VISIBLE-${i}`, label: 'visible', text: `VISIBLE retained text ${i}`, complete: true, source: { sourceId } })
     if (!ref) throw Error('Distinct actual capture refused')
-    await service.grant({ sessionId: 'creator' }, [ref.id], 'source'); selectedRefs.push(ref)
+    if (grant) await service.grant({ sessionId: 'creator' }, [ref.id], 'source')
+    return ref
   }
+  if (options.concurrentPrepare) {
+    // These are genuine overlapping public producer jobs. The existing service
+    // job owner joins their lifetime, while the original gate still serializes
+    // every native mutation and makes its own per-operation quota decisions.
+    const captured = await Promise.allSettled(Array.from({ length: Math.max(0, (options.distinct ?? 1) - 1) }, (_, i) => captureDistinct(i + 1, false)))
+    const failures = captured.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+    if (!failures.length) {
+      const ids = captured.flatMap(result => result.status === 'fulfilled' ? [result.value.id] : [])
+      // grant owns an atomic write of at most 100 refs. The existing service job
+      // owner joins these bounded batches, avoiding one handoff per reference.
+      const grants: Promise<void>[] = []
+      for (let first = 0; first < ids.length; first += 100) grants.push(service.grant({ sessionId: 'creator' }, ids.slice(first, first + 100), 'source'))
+      const granted = await Promise.allSettled(grants)
+      for (const result of granted) if (result.status === 'rejected') failures.push(result.reason)
+    }
+    if (failures.length) {
+      for (const close of [() => service.close(), () => broker.close(), () => coordinator.close()]) {
+        try { await close() } catch (failure) { failures.push(failure) }
+      }
+      throw new AggregateError(failures, 'Original concurrent fixture preparation failed')
+    }
+    for (const result of captured) if (result.status === 'fulfilled') selectedRefs.push(result.value)
+  } else for (let i = 1; i < (options.distinct ?? 1); i++) selectedRefs.push(await captureDistinct(i))
   let managed: { catalog: import('@i-harness/core-session').ManagedArtifactRef; member: import('@i-harness/core-session').ManagedArtifactRef } | undefined
   if (options.mixed) {
     const scope = service.registerResultScope({ operationId: 'member-original', sessionId: 'source', callId: 'exec', source: { sourceId } }, () => true), sink = await service.beginResult(scope, 'exec-frames-v1')
@@ -80,7 +105,11 @@ export async function legacyFixture(options: { observations?: number; disabled?:
   let phase: LegacyPreparationRequest | undefined, actualFacts: import('@i-harness/core-session').BootstrapPreparationFacts | undefined
   if (options.disabled) await service.configure({ enabled: false })
   async function run(passive = false, changeCapture?: (capture: LegacyForkCapture) => void, beforeConfirm?: (facts: import('@i-harness/core-session').BootstrapPreparationFacts) => void, ownerOnly = false, afterAttempt?: (scope: import('../src/index.ts').LegacyForkTransferScope) => Promise<void>) {
-      const current = () => { if (passive) throw Error('Passive scope cannot issue B2 work'); document.assertReady(); if (!alive || view !== document.view || view.events.length !== eventCount) throw Error('Original source changed') }
+      const current = () => {
+        const check = () => { if (passive) throw Error('Passive scope cannot issue B2 work'); document.assertReady(); if (!alive || view !== document.view || view.events.length !== eventCount) throw Error('Original source changed') }
+        if (options.observeCurrent) options.observeCurrent('sourceCurrent', check)
+        else check()
+      }
       const preparation = broker.prepareBootstrapInheritance({ invocation, requestIntent: intent, sourceSessionId: 'source', sourceAvailable: () => { sourceCalls++; return !passive && alive }, assertNewWorkCurrent: current, targetAvailable: () => true })
       let managedScope: import('../src/index.ts').SeedDependencyTransferScope | undefined
       const dependencyScope = (input: import('@i-harness/core-session').BootstrapDependencyRequest) => managedScope ??= service.registerSeedDependencyTransfer({

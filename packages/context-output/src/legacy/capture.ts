@@ -32,8 +32,8 @@ export async function captureLegacy(
     await current.prune(turn, lease)
     checkAbort(owned)
     if (await current.ensureIndex(turn, lease, getConfig().maxDiskBytes) !== 'ready') throw Error(current.indexIssue()?.message ?? 'Derived context index unavailable')
-    const available = Math.max(0, Math.floor((getConfig().maxDiskBytes - await current.diskBytes() - 32768) / 3))
-    const bytes = prefix(original, Math.min(getConfig().maxCaptureBytes, available))
+    const budget = await current.captureBudget(turn, lease, getConfig().maxDiskBytes)
+    const bytes = prefix(original, Math.min(getConfig().maxCaptureBytes, budget.available))
     if (original.length > 0 && bytes.length === 0) return undefined
     const revision = digest(bytes)
     // The canonical JSON manifest omits undefined optional source fields. Keep
@@ -47,6 +47,6 @@ export async function captureLegacy(
       expiresAt: Date.now() + getConfig().retentionDays * 86400000,
       ...(source ? { source } : {}),
     }
-    return current.put(turn, lease, { ref, ...(source ? { source } : {}) }, bytes, getConfig().maxDiskBytes, owned)
+    return budget.put({ ref, ...(source ? { source } : {}) }, bytes, owned)
   })
 }

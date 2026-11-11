@@ -5,6 +5,24 @@ vi.mock('node:crypto', async original => {
   const native = await original<typeof import('node:crypto')>()
   return { ...native, createHash: observeHash(native.createHash) }
 })
+vi.mock('@i-harness/fs-lock/internal/artifact-path', async original => {
+  const native = await original<typeof import('@i-harness/fs-lock/internal/artifact-path')>()
+  return { ...native, createArtifactPathOwner(...args: Parameters<typeof native.createArtifactPathOwner>) {
+    const owner = native.createArtifactPathOwner(...args)
+    if (process.env.IH_PROFILE_NATIVE_PATHS !== '1') return owner
+    return Object.freeze({
+      capture(path: string) {
+        const capture = probe.sync('nativePathCapture', () => owner.capture(path))
+        return Object.freeze({ ...capture, assertCurrent() {
+          probe.add(`nativePathCurrent.path.${path}`)
+          const category = /[/\\]\.locks[/\\]/.test(path) ? 'lock' : /[/\\]documents[/\\]/.test(path) ? 'document' : 'session'
+          probe.sync(`nativePathCurrent.${category}`, () => probe.sync('nativePathCurrent', () => capture.assertCurrent()))
+        } })
+      },
+      settleResources() { return owner.settleResources() },
+    })
+  } }
+})
 vi.mock('../src/legacy/observed-read.ts', async original => {
   const native = await original<typeof import('../src/legacy/observed-read.ts')>()
   return { ...native, loadPlan(...args: Parameters<typeof native.loadPlan>) {
@@ -37,8 +55,13 @@ import { createWorkspaceMutationOwner, type WorkspaceMutationTurn } from '../src
 import { physicalBytes } from '../src/artifact/quota.ts'
 import { legacyFixture } from './legacy-fork-fixture.ts'
 import { OwnerLedger } from '../src/legacy/owner-ledger.ts'
+import { LegacyFundingBatchOwner } from '../src/legacy/funding-batch.ts'
 
 const evidence = process.env.IH_LEGACY_FORK_EVIDENCE_ROOT!
+const allocationCurrent = LegacyFundingBatchOwner.prototype.assertAllocation
+vi.spyOn(LegacyFundingBatchOwner.prototype, 'assertAllocation').mockImplementation(function(this: LegacyFundingBatchOwner, ...args) {
+  return probe.sync('allocationCurrent', () => allocationCurrent.apply(this, args))
+})
 const nativeExec = DatabaseSync.prototype.exec
 vi.spyOn(DatabaseSync.prototype, 'exec').mockImplementation(function(this: DatabaseSync, sql: string) { const result = nativeExec.call(this, sql); observeSql(sql); return result })
 const nativePrepare = DatabaseSync.prototype.prepare
@@ -95,7 +118,7 @@ it('uses one actual physical snapshot for a read-only capture admission and inst
     const lifecycle = (store as unknown as { index: LegacyIndexLifecycle }).index
     probe.reset()
     try {
-      await probe.run('admission-control', 'index-admission', () => owner.mutate(async turn => { expect(await lifecycle.admitCapture(turn, lease, quota, growth)).toBe('incremental') }))
+      await probe.run('admission-control', 'index-admission', () => owner.mutate(async turn => { expect(await lifecycle.admitCapture(turn, lease, quota, growth)).toMatchObject({ kind: 'incremental' }) }))
       expect(probe.total('inventories', 'admission-control')).toBe(1)
       expect(probe.ceilings).toEqual([])
       expect(probe.total('lstat')).toBeGreaterThan(0)
@@ -117,7 +140,7 @@ it('chooses fresh before mutation on incremental headroom shortage and rejects u
     probe.reset()
     try {
       await probe.run('refusal-controls', 'index-admission', () => owner.mutate(async turn => {
-        expect(await lifecycle.admitCapture(turn, lease, total + journal - 1, 0)).toBe('fresh')
+        expect(await lifecycle.admitCapture(turn, lease, total + journal - 1, 0)).toMatchObject({ kind: 'fresh' })
         await expect(lifecycle.admitCapture(turn, lease, NaN, 0)).rejects.toThrow(/Unsafe/)
         await expect(lifecycle.admitCapture(turn, lease, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER + 1)).rejects.toThrow(/Unsafe/)
       }))
@@ -139,7 +162,7 @@ it.each([
 ])('records original I/O and resources for $name without substituting inventory or native work', async ({ name, distinct, observations }) => {
   probe.reset()
   let f: Awaited<ReturnType<typeof legacyFixture>>
-  try { f = await probe.run('fixture-setup', 'capture-and-grant', () => legacyFixture({ distinct, observations, summary: true })) }
+  try { f = await probe.run('fixture-setup', 'capture-and-grant', () => legacyFixture({ distinct, observations, summary: true, concurrentPrepare: true, observeCurrent: (name, check) => probe.sync(name, check) })) }
   catch (failure) { await receipt(name, { distinct, observations: distinct * observations, setupFailed: true }); throw failure }
   let assertionMs = 0
   try {

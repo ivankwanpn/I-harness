@@ -1,4 +1,5 @@
 import { win32 as path } from 'node:path'
+import { types } from 'node:util'
 import { win32ArtifactApi, type Win32ArtifactApi } from './win32-artifact-api.ts'
 
 type Directory = Readonly<{ volume: string; id: string; sensitive: boolean; final: string }>
@@ -6,6 +7,56 @@ type Evidence = Readonly<{ path: string; directory: Directory }>
 type Snapshot = { kind: 'ready'; key: string; evidence: Evidence[] } | { kind: 'needs-parents' | 'needs-root'; evidence: Evidence[] }
 export type Win32ArtifactPathCapture = Readonly<{ kind: 'ready'; key: string; assertCurrent(): void } | { kind: 'needs-parents'; assertCurrent(): void } | { kind: 'needs-root'; preparation: Readonly<{ kind: 'root-only'; path: string }>; assertCurrent(): void }>
 type Handle = { value?: bigint; unknown: boolean; closed?: boolean; cause?: unknown }
+type CurrentCheck = Readonly<{ capture: object; method: () => void }>
+const nativeChecks = new WeakMap<object, { method: () => void; retire(): void }>()
+type Sample = { value: Directory; verify(): void }
+type Samples = [Map<string, Sample>, Map<string, Sample>]
+let validationSamples: Map<Win32ArtifactApi, Samples> | undefined
+/** Called only by the existing synchronous original-guard flush. Unknown
+ * callbacks divide intervals; neither directory samples nor success escape it. */
+export function checkWin32ArtifactPaths(checks: readonly CurrentCheck[]): void {
+  const outer = validationSamples
+  validationSamples = undefined
+  try {
+    if (types.isProxy(checks) || !Array.isArray(checks)) throw TypeError('Original artifact checks required')
+    const copied: CurrentCheck[] = []
+    for (let index = 0; index < checks.length; index++) {
+      const field = Object.getOwnPropertyDescriptor(checks, index)
+      if (!field || !('value' in field) || !field.value || types.isProxy(field.value)) throw TypeError('Original artifact checks required')
+      const fields = Object.getOwnPropertyDescriptors(field.value)
+      if (!fields.capture || !('value' in fields.capture) || !fields.method || !('value' in fields.method)) throw TypeError('Original artifact checks required')
+      copied.push({ capture: fields.capture.value, method: fields.method.value })
+    }
+    validationSamples = new Map()
+    let participating: { retire(): void }[] = []
+    const finish = () => {
+      const samples = validationSamples
+      validationSamples = undefined
+      try {
+        // Bracket every leaf sample: roots sampled by an earlier capture must
+        // still name the same directory after the last capture has completed.
+        if (samples) for (const pair of samples.values()) {
+          const paths = new Map([...pair[0], ...pair[1]])
+          for (const sample of paths.values()) sample.verify()
+        }
+      } catch (failure) { for (const check of participating) check.retire(); throw failure }
+      participating = []
+    }
+    for (const { capture, method } of copied) {
+      const assertMethod = () => {
+        const field = Object.getOwnPropertyDescriptor(capture, 'assertCurrent')
+        if (!field || !('value' in field) || field.value !== method) throw TypeError('Changed original artifact assertion')
+      }
+      const native = nativeChecks.get(capture)
+      if (native?.method === method) { participating.push(native); assertMethod(); Reflect.apply(method, capture, []) }
+      else {
+        finish()
+        try { assertMethod(); Reflect.apply(method, capture, []) } finally { validationSamples = new Map() }
+      }
+    }
+    finish()
+  } finally { validationSamples = outer }
+}
 const MAX_UNITS = 32_768
 class NativeIdentityError extends Error {
   constructor(readonly operation: string, readonly code: number) { super(`${operation} failed (Win32 ${code})`); this.name = 'NativeIdentityError' }
@@ -18,11 +69,14 @@ function absolute(value: string): string {
 }
 
 export function createWin32ArtifactPathOwner(root: string) {
-  return createWin32ArtifactPathOwnerWithApi(root, win32ArtifactApi())
+  return createOwner(root, win32ArtifactApi(), true)
 }
 
 /** Internal injected boundary. Production construction uses the original DLL owner. */
 export function createWin32ArtifactPathOwnerWithApi(root: string, input: Win32ArtifactApi) {
+  return createOwner(root, input, false)
+}
+function createOwner(root: string, input: Win32ArtifactApi, native: boolean) {
   root = absolute(root)
   const names = ['createFileW', 'getFileInformationByHandleEx', 'getFinalPathNameByHandleW', 'lcMapStringEx', 'closeHandle', 'getLastError'] as const
   const api = Object.fromEntries(names.map(name => [name, input[name].bind(input)])) as unknown as Win32ArtifactApi
@@ -94,12 +148,28 @@ export function createWin32ArtifactPathOwnerWithApi(root: string, input: Win32Ar
     if (flags & ~1) throw new Error('Unknown directory case policy')
     return Object.freeze({ volume: identity.subarray(0, 8).toString('hex'), id: identity.subarray(8, 24).toString('hex'), sensitive: flags === 1, final: finalPath(handle) })
   }
+  let pass: 0 | 1 | undefined
+  let finalSample = false
   function directory(name: string, rootCapture = false): Directory {
+    let samples: Map<string, Sample> | undefined
+    if (native && pass !== undefined && validationSamples) {
+      let pair = validationSamples.get(input)
+      if (!pair) { pair = [new Map(), new Map()]; validationSamples.set(input, pair) }
+      samples = pair[pass]
+      const saved = samples.get(name)
+      if (saved) {
+        if (rootCapture) { if (boundRoot && !same(boundRoot, saved.value)) throw Error('Original artifact root changed'); boundRoot ??= saved.value }
+        return saved.value
+      }
+    }
     const handle = open(name)
     let result: Directory | undefined, failed = false, failure: unknown
     try {
       result = details(handle.value!)
-      if (!same(result, details(handle.value!))) throw new Error('Artifact directory changed during capture')
+      // An enrolled currentness batch compares two independently opened full
+      // samples with its existing expected identity. Initial captures and
+      // injected APIs retain their additional same-handle observation.
+      if (!samples && !finalSample && !same(result, details(handle.value!))) throw new Error('Artifact directory changed during capture')
       if (rootCapture) {
         if (boundRoot && !same(boundRoot, result)) throw new Error('Original artifact root changed')
         boundRoot ??= result
@@ -108,6 +178,14 @@ export function createWin32ArtifactPathOwnerWithApi(root: string, input: Win32Ar
     try { close(handle) }
     catch (cleanup) { if (failed) throw new AggregateError([failure, cleanup], 'Directory capture and cleanup failed', { cause: failure }); throw cleanup }
     if (failed) throw failure
+    if (samples) {
+      const value = result!
+      samples.set(name, { value, verify() {
+        finalSample = true
+        try { if (!same(value, directory(name, rootCapture))) throw Error('Original artifact path changed') }
+        finally { finalSample = false }
+      } })
+    }
     return result!
   }
   function fold(leaf: string): string {
@@ -122,7 +200,7 @@ export function createWin32ArtifactPathOwnerWithApi(root: string, input: Win32Ar
     if (result.includes('\0')) throw new Error('Invalid native case-map data')
     return result
   }
-  function snapshot(target: string): Snapshot {
+  function snapshot(target: string, readyKey?: string): Snapshot {
     const evidence: Evidence[] = []
     let missingAllowed = boundRoot === undefined
     const parts = (value: string) => value.slice(path.parse(value).root.length).split('\\').filter(Boolean)
@@ -147,6 +225,10 @@ export function createWin32ArtifactPathOwnerWithApi(root: string, input: Win32Ar
         containing = directory(current)
         evidence.push(Object.freeze({ path: current, directory: containing }))
       }
+      // For an original native currentness check, basename is constructor-owned
+      // and immutable. Directory ID, case policy and final spelling are still
+      // sampled and compared; their matching evidence implies the same key.
+      if (readyKey !== undefined) return { kind: 'ready', key: readyKey, evidence }
       const leaf = path.basename(target), encoded = Buffer.from(containing.sensitive ? leaf : fold(leaf), 'utf16le')
       return { kind: 'ready', key: `artifact-dir-v1:${containing.volume}:${containing.id}:${containing.sensitive ? 'S' : 'I'}:${encoded.length}:${encoded.toString('hex')}`, evidence }
     } catch (cause) {
@@ -170,14 +252,17 @@ export function createWin32ArtifactPathOwnerWithApi(root: string, input: Win32Ar
       throw cause
     }
   }
-  function captureSnapshot(target: string): Snapshot {
+  function captureSnapshot(target: string, readyKey?: string): Snapshot {
     if (busy || handles.size) throw new Error('Artifact identity has active or unresolved native work')
     busy = true
     try {
-      const before = snapshot(target), after = snapshot(target)
+      pass = 0
+      const before = snapshot(target, readyKey)
+      pass = 1
+      const after = snapshot(target, readyKey)
       if (before.kind !== after.kind || !sameEvidence(before.evidence, after.evidence) || before.kind === 'ready' && (after.kind !== 'ready' || before.key !== after.key)) throw new Error('Artifact path changed during capture')
       return before
-    } finally { busy = false }
+    } finally { pass = undefined; busy = false }
   }
   const owner = Object.freeze({
     capture(target: string): Win32ArtifactPathCapture {
@@ -189,7 +274,7 @@ export function createWin32ArtifactPathOwnerWithApi(root: string, input: Win32Ar
       function assertCurrent(this: Win32ArtifactPathCapture) {
         if (this !== result || retired) throw new Error('Artifact path capture unavailable')
         try {
-          const current = captureSnapshot(target)
+          const current = captureSnapshot(target, native && original.kind === 'ready' ? original.key : undefined)
           if (current.kind !== original.kind || !sameEvidence(current.evidence, original.evidence) || original.kind === 'ready' && (current.kind !== 'ready' || original.key !== current.key)) throw new Error('Original artifact path changed')
         } catch (cause) { retired = true; throw cause }
       }
@@ -198,6 +283,7 @@ export function createWin32ArtifactPathOwnerWithApi(root: string, input: Win32Ar
         : original.kind === 'needs-root'
           ? Object.freeze({ kind: 'needs-root' as const, preparation: Object.freeze({ kind: 'root-only' as const, path: root }), assertCurrent })
           : Object.freeze({ kind: 'needs-parents' as const, assertCurrent })
+      if (native) nativeChecks.set(result, { method: assertCurrent, retire() { retired = true } })
       return result
     },
     settleResources() {

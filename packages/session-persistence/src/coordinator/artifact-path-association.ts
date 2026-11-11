@@ -1,6 +1,6 @@
 import { types } from 'node:util'
 import type { PersistenceBackend } from './types.ts'
-import {createArtifactPathOwner,type ArtifactPathCapture} from '@i-harness/fs-lock/internal/artifact-path'
+import {createArtifactPathOwner,checkOriginalArtifactPaths,type ArtifactPathCapture} from '@i-harness/fs-lock/internal/artifact-path'
 import {isOriginalCanonicalPathOwner} from './canonical-path-resolution.ts'
 import {associateOriginalCurrentnessGuard,associateOriginalCurrentnessReader,associateOriginalCurrentnessFactory,type OriginalCurrentnessExecutor,type OriginalCurrentnessDescriptorRecipe} from '../../../core-session/src/managed/currentness-guards.ts'
 export interface OriginalArtifactPaths {root():string;session(id:string):string;document(key:string):string;taskForParent(id:string):string;prepareRoot():Promise<void>;prepareDocumentParents(key:string):Promise<void>;assertOriginal():void}
@@ -60,8 +60,8 @@ function flushArtifactChecks(work: Map<ArtifactPathCapture, ArtifactAssertion>):
   for (const {capture, method} of work.values()) {
     if(immutableCaptureMethods.get(capture)!==method){const descriptor = Object.getOwnPropertyDescriptor(capture, 'assertCurrent')
     if (!descriptor || !('value' in descriptor) || descriptor.value !== method) throw new TypeError('Changed original artifact assertion')}
-    Reflect.apply(method, capture, [])
   }
+  checkOriginalArtifactPaths([...work.values()])
 }
 export function withImmediateArtifactCurrentChecks(check: () => void): void {
   const outer = assertionWork

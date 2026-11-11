@@ -278,25 +278,29 @@ export class OwnerLedger {
     return { description, files, prior, intent: { version: 1, kind: 'legacy-owner-rewrite', refId: basename(path, '.json'), operation, prior: prior.identity, next: desired, capacity } as Intent, journalBytes }
   }
   async fundInBatch(owner: LegacyFundingBatchOwner, scope: FundingBatchScope, path: string, next: ReadonlySet<string>, operation: string, current: () => void, retained?: (description: FundingDescription) => void): Promise<FundingDescription> {
-    const state = await this.transferFunding(path, next, operation, current), allocation = owner.enter(scope, state.description)
+    const state = await this.transferFunding(path, next, operation, current)
+    current()
+    const allocation = owner.enter(scope, state.description)
     retained?.(state.description)
     if (state.description.phase !== 'pending-prior') await this.fundNative(path, state.prior, state.intent, state.journalBytes, current, { ...state, owner, allocation })
-    owner.finish(allocation); return state.description
+    current(); owner.finish(allocation); return state.description
   }
   private async fundNative(path: string, prior: Awaited<ReturnType<typeof readLedger>>, intent: Intent, journalBytes: number, current: () => void, batch?: { owner: LegacyFundingBatchOwner; allocation: FundingAllocation; files: { canonical: FundingFile; rewrite: FundingFile; journal: FundingFile }; description: FundingDescription }): Promise<void> {
     const { journal, rewrite, previous } = names(path), capacity = intent.capacity
     const checkCanonical = async () => {
       current(); await ownedPath(this.root, path); current()
       if (batch) {
-        const now = await snapshotFundingFile(this.root, path, current, this.retire)
+        const now = await snapshotFundingFile(this.root, path, current, this.retire); current()
         if (!same(now, batch.files.canonical)) throw Error('Legacy funding canonical drift')
         batch.owner.issued(batch.allocation, 'alias', 0)
+        current()
       }
     }
-    await checkCanonical()
+    await checkCanonical(); current()
     await link(path, previous); current()
     await predecessorPair(path, previous); current()
     if (batch) batch.owner.issued(batch.allocation, 'alias', 0)
+    current()
     await unlink(previous); current()
     if (batch) {
       await this.padInBatch(path, capacity, batch.files.canonical, 'canonical', batch, current)
@@ -321,6 +325,7 @@ export class OwnerLedger {
     const peak = batch.description.primitives.find(p => p.key === primitive)!.peakGrowth
     batch.owner.assertAllocation(batch.allocation, batch.description.key); current(); await fundingParents(this.root, path, current); current()
     if (prior.kind === 'absent') batch.owner.issued(batch.allocation, primitive, peak)
+    current()
     const handle = await open(path, prior.kind === 'absent' ? 'wx+' : 'r+')
     await withFundingFile(handle, this.retire, async () => {
       current(); const info = await handle.stat({ bigint: true }); current(); requireOne(info)
@@ -339,13 +344,15 @@ export class OwnerLedger {
         await assertFundingFile(this.root, path, handle, file, offset, current)
         // Canonical/rewrite retain exact entry and final hashes; only journal
         // rechecks the growing prefix before each bounded append (LPF01).
-        if (primitive === 'journal') await checkPrefix()
+        if (primitive === 'journal') { await checkPrefix(); current() }
         batch.owner.issued(batch.allocation, primitive, peak)
+        current()
         const length = Math.min(spaces.length, capacity - offset), result = await handle.write(spaces, 0, length, offset); current()
         if (result.bytesWritten <= 0) throw Error('Artifact write made no progress')
         expected.update(spaces.subarray(0, result.bytesWritten)); offset = sum(offset, result.bytesWritten)
       }
-      await assertFundingFile(this.root, path, handle, file, capacity, current); await checkPrefix(); batch.owner.issued(batch.allocation, primitive, 0)
+      await assertFundingFile(this.root, path, handle, file, capacity, current); await checkPrefix(); current(); batch.owner.issued(batch.allocation, primitive, 0)
+      current()
       await handle.sync(); current()
       await assertFundingFile(this.root, path, handle, file, capacity, current)
       await checkPrefix()
@@ -372,6 +379,7 @@ export class OwnerLedger {
         if (!actual.equals(expected)) throw Error('Legacy funding journal prefix drift')
         requireOne(await handle.stat({ bigint: true })); current()
         batch.owner.issued(batch.allocation, 'journal', 0)
+        current()
         const result = await handle.write(wanted, offset, wanted.length - offset, offset); current()
         if (result.bytesWritten <= 0) throw Error('Artifact write made no progress')
         offset = sum(offset, result.bytesWritten)
@@ -380,6 +388,7 @@ export class OwnerLedger {
       if ((await fundingHash(handle, JOURNAL_CAPACITY, current)).digest('hex') !== createHash('sha256').update(wanted).digest('hex')) throw Error('Legacy funding journal prefix drift')
       requireOne(await handle.stat({ bigint: true })); current()
       batch.owner.issued(batch.allocation, 'journal', 0)
+      current()
       await handle.sync(); current()
       const readback = Buffer.alloc(JOURNAL_CAPACITY); let position = 0
       while (position < readback.length) { const r = await handle.read(readback, position, readback.length - position, position); current(); if (!r.bytesRead) throw Error('Owner journal short read'); position += r.bytesRead }

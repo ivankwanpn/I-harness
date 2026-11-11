@@ -64,20 +64,27 @@ export class LegacyFundingBatchOwner {
   private readonly directory: string
   constructor(directory: string, private readonly assertContext: (context: FundingBatchContext) => void, private readonly assertRetirement: (context: FundingBatchContext) => void, private readonly inventory: () => Promise<number>, private readonly joinFiles: () => Promise<void>) { this.directory = resolve(directory) }
   private current(run: Run): void {
+    this.lifetime(run)
+    run.context.guard()
+  }
+  /** Token accounting has no I/O or caller effects. Policy is checked by the
+   * native caller at its actual asynchronous and physical boundaries. */
+  private lifetime(run: Run): void {
     if (run.owner !== this || this.active !== run || activeRuns.getStore() !== run || run.stage !== 'effect') throw Error('Stale or foreign legacy funding scope')
     this.assertContext(run.context)
   }
   async run(context: FundingBatchContext, describe: () => Promise<FundingPassSummary>, allocate: (scope: FundingBatchScope) => Promise<FundingPassSummary>): Promise<void> {
     if (this.active) throw Error('Legacy funding batch reentry')
     this.assertContext(context)
+    context.guard()
     const run: Run = { owner: this, context, stage: 'describe', order: 'root', ceiling: 0, issued: 0, allocationIssued: false, recoveryIssued: false }, scope = Object.freeze({}) as FundingBatchScope
     this.active = run; scopes.set(scope, run)
     return activeRuns.run(run, async () => {
       const failures: unknown[] = []
       try {
-        const prepared = await describe(); this.assertContext(context)
-        await this.joinFiles(); this.assertContext(context)
-        const total = await this.inventory(); this.assertContext(context)
+        const prepared = await describe(); this.assertContext(context); context.guard()
+        await this.joinFiles(); this.assertContext(context); context.guard()
+        const total = await this.inventory(); this.assertContext(context); context.guard()
         const expected = admit(total, prepared.additionalBytes, context.quota)
         run.ceiling = prepared.additionalBytes; run.stage = 'effect'
         const effected = await allocate(scope); this.current(run)
@@ -101,7 +108,7 @@ export class LegacyFundingBatchOwner {
   enter(scope: FundingBatchScope, description: FundingDescription): FundingAllocation {
     const run = scopes.get(scope)
     if (!run) throw Error('Stale or foreign legacy funding scope')
-    this.current(run)
+    this.lifetime(run)
     if (run.allocation) throw Error('Overlapping legacy funding allocation')
     let growth = 0
     const keys = new Set<string>()
@@ -125,7 +132,7 @@ export class LegacyFundingBatchOwner {
   assertAllocation(allocation: FundingAllocation, key: string): void {
     const entry = allocations.get(allocation)
     if (!entry?.active || entry.description.key !== key || entry.run.allocation !== allocation) throw Error('Stale or foreign legacy funding allocation')
-    this.current(entry.run)
+    this.lifetime(entry.run)
   }
   issued(allocation: FundingAllocation, primitiveKey: string, peakGrowth: number): void {
     const entry = allocations.get(allocation)
@@ -220,9 +227,12 @@ function applicationDescription(final: string, bytes: Buffer, file: FundingFile)
 }
 export async function describeApplicationFunding(directory: string, final: string, bytes: Buffer, guard: () => void, retire?: RetireFile): Promise<FundingDescription> { return applicationDescription(final, bytes, await inspectApplication(directory, final, bytes, guard, retire)) }
 export async function fundApplicationInBatch(owner: LegacyFundingBatchOwner, scope: FundingBatchScope, directory: string, final: string, bytes: Buffer, guard: () => void, retire?: RetireFile, issuance?:import('../artifact/io.ts').OriginalPublicationStaging): Promise<FundingDescription> {
-  const prior = await inspectApplication(directory, final, bytes, guard, retire), description = applicationDescription(final, bytes, prior), allocation = owner.enter(scope, description), pending = applicationPending(final, bytes)
+  const prior = await inspectApplication(directory, final, bytes, guard, retire)
+  guard()
+  const description = applicationDescription(final, bytes, prior), allocation = owner.enter(scope, description), pending = applicationPending(final, bytes)
   owner.assertAllocation(allocation, final); guard()
   if (prior.kind === 'absent') owner.issued(allocation, 'pending', bytes.length)
+  guard()
   const handle = await open(pending, prior.kind === 'absent' ? 'wx+' : 'r+')
   await withFundingFile(handle, issuance?.retire ?? retire, async () => {
     if (issuance) {
@@ -234,23 +244,23 @@ export async function fundApplicationInBatch(owner: LegacyFundingBatchOwner, sco
     const size = prior.kind === 'file' ? prior.size : 0
     await assertFundingFile(directory, pending, handle, file, size, guard)
     if (!(await readExact(handle, size, 0)).equals(bytes.subarray(0, size))) throw Error('Original application staging conflict')
-    guard(); owner.issued(allocation, 'pending', bytes.length - size)
+    owner.issued(allocation, 'pending', bytes.length - size); guard()
     await assertFundingFile(directory, pending, handle, file, size, guard)
     let offset = size
     while (offset < bytes.length) {
       await assertFundingFile(directory, pending, handle, file, offset, guard)
       if (!(await readExact(handle, offset, 0)).equals(bytes.subarray(0, offset))) throw Error('Original application staging conflict')
-      guard(); owner.issued(allocation, 'pending', bytes.length - size)
+      owner.issued(allocation, 'pending', bytes.length - size); guard()
       const result = await handle.write(bytes, offset, bytes.length - offset, offset); guard()
       if (result.bytesWritten <= 0) throw Error('Artifact write made no progress')
       offset = sum(offset, result.bytesWritten)
     }
     await assertFundingFile(directory, pending, handle, file, bytes.length, guard)
     if (!(await readExact(handle, bytes.length, 0)).equals(bytes)) throw Error('Original application staging conflict')
-    guard(); owner.issued(allocation, 'pending', 0)
+    owner.issued(allocation, 'pending', 0); guard()
     await handle.sync(); guard()
     if (!(await readExact(handle, bytes.length, 0)).equals(bytes)) throw Error('Original application funding readback conflict')
     await assertFundingFile(directory, pending, handle, file, bytes.length, guard)
   })
-  owner.finish(allocation); return description
+  guard(); owner.finish(allocation); return description
 }

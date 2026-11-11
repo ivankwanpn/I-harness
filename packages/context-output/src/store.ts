@@ -59,6 +59,7 @@ async function atomicJson(path: string, value: unknown): Promise<void> {
 }
 
 export class ContextStore {
+  private captureAllocationBudget?: { turn: WorkspaceMutationTurn; lease: LegacyUseLease; quota: number; total: number; use: IndexUse; claimed: boolean }
   private readonly index: LegacyIndexLifecycle
   private artifacts = new Map<string, Artifact>()
   private owners = new Map<string, Set<string>>()
@@ -110,7 +111,7 @@ export class ContextStore {
     this.root = resolve(root)
     this.directory = resolve(root, 'context-output', digest(workspaceId))
     this.ledger = new OwnerLedger(this.directory, this.retireLegacyFile)
-    this.fundingBatch = new LegacyFundingBatchOwner(this.directory, context => this.assertFundingContext(context), context => { this.assertRetirementTurn(context.turn); this.assertLease(context.lease, 'exclusive') }, () => this.diskBytes(), () => this.joinLegacyFiles())
+    this.fundingBatch = new LegacyFundingBatchOwner(this.directory, context => this.assertFundingLifetime(context), context => { this.assertRetirementTurn(context.turn); this.assertLease(context.lease, 'exclusive') }, () => this.diskBytes(), () => this.joinLegacyFiles())
     this.index = new LegacyIndexLifecycle({ directory: this.directory, assertTurn: turn => this.assertRetirementTurn(turn), assertLease: this.assertLease, physicalBytes: () => this.diskBytes(), witness: (path, guard) => originalFileWitness(this, path, guard) })
   }
   async acquireLifetime(signal?: AbortSignal): Promise<void> {
@@ -179,6 +180,18 @@ export class ContextStore {
     await this.acquireLifetime(signal)
     if (!this.suspended) return
     await this.owner!.mutate(async turn => {
+      // Quiescence already qualified these exact original bytes and names.
+      // Re-read their full witness before reusing the maps; a changed namespace
+      // still takes the complete cold inspection and revocation path below.
+      if (this.originalsLoaded && this.retainedAuthority !== undefined) {
+        const identity = await originalNamespaceWitness(this, ['artifacts', 'owners', 'legacy-fork-v1', 'legacy-expiry-v1'], () => this.assertTurn(turn))
+        this.assertTurn(turn)
+        if (identity === this.retainedAuthority) {
+          await this.index.reopenRetained(turn, lease, quota)
+          this.assertTurn(turn); this.suspended = false
+          return
+        }
+      }
       const inventory = await this.passiveInventory(turn)
       await this.resumeOriginalInventory(turn, lease, quota, inventory)
       this.suspended = false
@@ -296,10 +309,13 @@ export class ContextStore {
     use.assertCurrent(); return this.currency
   }
   assertCurrency(original: object): void { if (original !== this.currency) throw Error('Original legacy currency changed') }
-  private assertFundingContext(context: FundingBatchContext): void {
+  private assertFundingLifetime(context: FundingBatchContext): void {
     this.assertTurn(context.turn); this.assertLease(context.lease, 'exclusive')
     if (this.indexLeases.get(context.use) !== context.lease) throw Error('Foreign legacy funding index use or creating lease')
-    context.use.assertCurrent(); context.guard()
+    context.use.assertCurrent()
+  }
+  private assertFundingContext(context: FundingBatchContext): void {
+    this.assertFundingLifetime(context); context.guard()
   }
   indexIssue() { return this.index.issue() }
   indexReady(): boolean { return this.index.ready() }
@@ -620,8 +636,34 @@ export class ContextStore {
     if (!Number.isSafeInteger(peakGrowth) || peakGrowth < 0) throw Error('Unsafe prospective canonical allocation')
     return { peakGrowth, manifestBytes, ownerBytes }
   }
+  async captureBudget(turn: WorkspaceMutationTurn, lease: LegacyUseLease, maxDiskBytes: number) {
+    this.assertTurn(turn); this.assertLease(lease, 'exclusive')
+    const use = this.index.use(lease), total = await this.diskBytes()
+    this.assertTurn(turn); use.assertCurrent()
+    let consumed = false
+    const owner = this
+    const budget = Object.freeze({
+      available: Math.max(0, Math.floor((maxDiskBytes - total - 32768) / 3)),
+      async put(artifact: Artifact, bytes: Buffer, signal: AbortSignal) {
+        if (this !== budget || consumed) throw Error('Stale capture budget')
+        owner.assertTurn(turn); owner.assertLease(lease, 'exclusive'); use.assertCurrent()
+        consumed = true
+        if (owner.captureAllocationBudget) throw Error('Capture budget reentry')
+        const allocation = { turn, lease, quota: maxDiskBytes, total, use, claimed: false }
+        owner.captureAllocationBudget = allocation
+        try { return await owner.put(turn, lease, artifact, bytes, maxDiskBytes, signal) }
+        finally { if (owner.captureAllocationBudget === allocation) owner.captureAllocationBudget = undefined }
+      },
+    })
+    return budget
+  }
   async put(turn: WorkspaceMutationTurn, lease: LegacyUseLease, artifact: Artifact, bytes: Buffer, maxDiskBytes: number, signal: AbortSignal): Promise<ContextResultRef|undefined> {
     this.assertTurn(turn); this.assertLease(lease, 'exclusive')
+    const allocationBudget = this.captureAllocationBudget
+    let observedTotal: number | undefined
+    if (allocationBudget && !allocationBudget.claimed && allocationBudget.turn === turn && allocationBudget.lease === lease && allocationBudget.quota === maxDiskBytes) {
+      allocationBudget.use.assertCurrent(); allocationBudget.claimed = true; observedTotal = allocationBudget.total
+    }
     const id = artifact.ref.id, existing = this.get(id)
     if (existing) {
       const facts = (ref: ContextResultRef) => JSON.stringify([ref.label, ref.originalBytes, ref.complete,
@@ -632,10 +674,10 @@ export class ContextStore {
     }
     checkAbort(signal)
     const allocation = await this.captureAllocation(turn, lease, artifact, bytes)
-    const admission = await this.index.admitCapture(turn, lease, maxDiskBytes, allocation.peakGrowth)
+    const admission = await this.index.admitCapture(turn, lease, maxDiskBytes, allocation.peakGrowth, observedTotal)
     let replacement: PendingCaptureIndex | undefined
     let use: IndexUse | undefined
-    if (admission === 'fresh') replacement = await this.index.beginCaptureReplacement(turn, lease, maxDiskBytes, allocation.peakGrowth, sink => this.feedIndex(sink), { ref: artifact.ref, bytes })
+    if (admission.kind === 'fresh') replacement = await this.index.beginCaptureReplacement(turn, lease, maxDiskBytes, allocation.peakGrowth, sink => this.feedIndex(sink), { ref: artifact.ref, bytes })
     else use = this.index.use(lease)
     let bodyConfirmed = false
     this.pending.add(id)
@@ -653,7 +695,7 @@ export class ContextStore {
       checkAbort(signal)
       await atomicJson(this.path('artifacts', id), allocation.manifestBytes)
       if (replacement) replacement.commit()
-      else await this.index.mutate(turn, lease, use!, maxDiskBytes, sql => {
+      else admission.write(use!, sql => {
         sql.run('INSERT INTO refs VALUES (?,?,?)', [id, artifact.ref.expiresAt, artifact.ref.complete ? 1 : 0])
         for (const chunk of lexicalChunks(bytes)) {
           const row = sql.run('INSERT INTO chunks_fts(ref_id,offset,text) VALUES (?,?,?)', [id, chunk.offset, chunk.text.toLowerCase()])

@@ -79,12 +79,15 @@ async function slotFunding(directory: string, base: string, tuple: Terminal, gua
 }
 export async function describeSlotFunding(directory: string, base: string, tuple: Terminal, guard: () => void, retire?: RetireFile): Promise<FundingDescription> { return (await slotFunding(directory, base, tuple, guard, retire)).description }
 export async function fundSlotsInBatch(owner: LegacyFundingBatchOwner, scope: FundingBatchScope, directory: string, base: string, tuple: Terminal, guard: () => void, retire?: RetireFile): Promise<FundingDescription> {
-  const { capacity, files, description } = await slotFunding(directory, base, tuple, guard, retire), allocation = owner.enter(scope, description)
+  const { capacity, files, description } = await slotFunding(directory, base, tuple, guard, retire)
+  guard()
+  const allocation = owner.enter(scope, description)
   owner.assertAllocation(allocation, base); guard(); await ownedMkdir(directory, dirname(base), guard)
   for (const generation of [0, 1] as const) {
     const path = `${base}.${generation}`, prior = files[generation], wanted = generation === 0 ? encoded(0, tuple, capacity) : Buffer.alloc(capacity)
     owner.assertAllocation(allocation, base); guard()
     if (prior.kind === 'absent') owner.issued(allocation, String(generation), capacity)
+    guard()
     const handle = await open(path, prior.kind === 'absent' ? 'wx+' : 'r+')
     await withFundingFile(handle, retire, async () => {
       guard(); await originalSlot(directory, path, handle); guard()
@@ -98,6 +101,7 @@ export async function fundSlotsInBatch(owner: LegacyFundingBatchOwner, scope: Fu
         if (!(await readExact(handle, offset, 0)).equals(wanted.subarray(0, offset))) throw Error('Original disposition funding conflict')
         guard()
         owner.issued(allocation, String(generation), description.primitives[generation]!.peakGrowth)
+        guard()
         const result = await handle.write(wanted, offset, capacity - offset, offset); guard()
         if (result.bytesWritten <= 0) throw Error('Artifact write made no progress')
         offset = sum(offset, result.bytesWritten)
@@ -105,6 +109,7 @@ export async function fundSlotsInBatch(owner: LegacyFundingBatchOwner, scope: Fu
       await assertFundingFile(directory, path, handle, file, capacity, guard)
       if (!(await readExact(handle, capacity, 0)).equals(wanted)) throw Error('Original disposition funding conflict')
       guard(); owner.issued(allocation, String(generation), 0)
+      guard()
       await handle.sync(); guard()
       if (!(await readExact(handle, capacity, 0)).equals(wanted)) throw Error('Original disposition funding readback conflict')
       await assertFundingFile(directory, path, handle, file, capacity, guard)
@@ -112,7 +117,7 @@ export async function fundSlotsInBatch(owner: LegacyFundingBatchOwner, scope: Fu
   }
   const state = await readSlots(directory, base, tuple, retire); guard()
   if (state !== 'live') throw Error('Disposition is not live: ' + state)
-  owner.finish(allocation); return description
+  guard(); owner.finish(allocation); return description
 }
 export async function readSlots(directory: string, base: string, tuple: Terminal, retire?: RetireFile): Promise<'live' | 'terminal' | 'unknown' | 'missing'> {
   const capacity = slotCapacity(tuple)
