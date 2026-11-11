@@ -237,7 +237,15 @@ it('joins every created close after failures while retaining busy through genera
   } finally { release.resolve(); await pending }
   const errors = (error: unknown): unknown[] => error instanceof AggregateError ? error.errors.flatMap(errors) : [error]
   expect(errors((await pending).error)).toEqual([primary, preparationFailure, finishFailure, drainFailure])
-  expect(order).toEqual(['preparation', 'finish', 'source', 'drain'])
+  // Each retry belongs to the same failed source. Setup/finish stay single-shot,
+  // and the original operation and final drain errors are reported once above.
+  expect(order).toEqual([
+    'preparation', 'finish',
+    'source', 'drain',
+    'source', 'drain',
+    'source', 'drain',
+    'source', 'drain',
+  ])
 })
 
 it('keeps the actual managed source through held acceptance and refuses new work after an unresolved owner drain', async () => {

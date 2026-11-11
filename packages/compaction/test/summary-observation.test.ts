@@ -49,6 +49,7 @@ it('cannot clear an earlier refused completion with a contradictory clean end', 
   await expect(summarizeFixture(model('conflicting-end'), 'input', 128, undefined, undefined, 1, undefined, undefined, { maxOutputTokens: 64, onPieceAccepted: o => accepted.push(o) })).rejects.toThrow(/completion/)
   expect(accepted).toEqual([])
 })
+// Force the 50k-token source through pages before exercising publication recovery.
 it('reconciles unknown whole-group publication after accepted pages once without repeating recorded tool work', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-page-unknown-'))
   let key: any, issued = 0, reconciles = 0
@@ -66,7 +67,7 @@ it('reconciles unknown whole-group publication after accepted pages once without
   const document = await coordinator.openManagedDocument(id), originalResults = document.view.events.filter(event => event.type === 'tool/result')
   let pieces = 0
   try {
-    const result = await createCompactionHarness({ model: model(), factOwner: document, config: { contextWindow: 100000, prune: false, summaryMaxOutputTokens: 64 }, telemetry: { emit(event) { if (event.type === 'provider/context' && event.data.operation === 'summary-piece-accepted') pieces++ }, close() {} } }).compact(document.view)
+    const result = await createCompactionHarness({ model: model(), factOwner: document, config: { contextWindow: 32000, prune: false, summaryMaxOutputTokens: 64 }, telemetry: { emit(event) { if (event.type === 'provider/context' && event.data.operation === 'summary-piece-accepted') pieces++ }, close() {} } }).compact(document.view)
     expect(result).toMatchObject({ compacted: false, publication: 'recovery-required' }); expect(pieces).toBeGreaterThan(1); expect(pieces).toBeLessThanOrEqual(8)
     expect(document.view.events.filter(event => event.type === 'compaction/replacement')).toHaveLength(0)
     expect(key).toBeDefined(); await document.reconcile(key!)
@@ -78,5 +79,5 @@ it('reconciles unknown whole-group publication after accepted pages once without
   } finally { await coordinator.close() }
 })
 it('unconfirmed provider-backed page output cannot certify received coverage', async () => {
-  await expect(summarizeFixture(model(false, false), '中'.repeat(50000), 1024, undefined, undefined, 500, undefined, undefined, { contextWindow: 100000 })).rejects.toMatchObject({ kind: 'opaque' })
+  await expect(summarizeFixture(model(false, false), '中'.repeat(50000), 1024, undefined, undefined, 500, undefined, undefined, { contextWindow: 32000 })).rejects.toMatchObject({ kind: 'opaque' })
 })

@@ -10,8 +10,9 @@ import type { ModelClient, LLMRequest, PreparedModelRequest } from '@i-harness/l
 import { append, createSession } from '@i-harness/core-session'
 import { createCompactionHarness } from './fixtures/engine.ts'
 
+// CJK costs one token per character; the full source must exceed the 32k window.
 it('pages every byte of one oversized closed group, including emoji and empty text', async () => {
-  const content = '𠜎中\u0000'.repeat(12000), fixture = spyModel()
+  const content = '𠜎中\u0000'.repeat(24000), fixture = spyModel()
   const source = summarySource([{ role: 'assistant', content: '', toolCalls: [{ id: 'read', name: 'read', args: { path: 'large' } }] }, { role: 'tool', toolCallId: 'read', content }])
   const result = await generateSelectedSummary(fixture.model, source, { maxTokens: 1024, minSummaryChars: 500, inherited: false }, { contextWindow: 32000 })
   expect(result.groupIds).toEqual(['literal-0'])
@@ -67,10 +68,11 @@ it('exhausts eight physical calls without returning partial group coverage', asy
   await expect(generateSelectedSummary(fixture.model, source, { maxTokens: 1024, minSummaryChars: 500, inherited: false }, { contextWindow: 100000 })).rejects.toMatchObject({ kind: 'call-limit' })
   expect(fixture.requests).toHaveLength(8); expect(source.attempts.count).toBe(8)
 })
+// A 50k-character CJK source exceeds 32k tokens; each 64 KiB page still fits.
 it('one malformed page retry reuses exactly the uncovered range and the shared call allowance', async () => {
   const requests: LLMRequest[] = [], source = summarySource([{ role: 'user', content: '中'.repeat(50000) }])
   const model: ModelClient = { prepare: prepareTextFixture, async *stream(request) { requests.push(request); yield { type: 'text/chunk', text: requests.length === 1 ? 'bad' : checkpointOfLength(600) }; yield { type: 'end' } } }
-  await generateSelectedSummary(model, source, { maxTokens: 1024, minSummaryChars: 500, inherited: false }, { contextWindow: 100000 })
+  await generateSelectedSummary(model, source, { maxTokens: 1024, minSummaryChars: 500, inherited: false }, { contextWindow: 32000 })
   expect(requests[0]!.messages[0]).toEqual(requests[1]!.messages[0]); expect(requests[2]!.messages[0]).not.toEqual(requests[1]!.messages[0])
   expect(source.attempts.count).toBe(requests.length)
 })
@@ -78,7 +80,7 @@ it.each(['stale', 'stop'] as const)('rejects a held successful page after %s wit
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), abort = new AbortController(), source = summarySource([{ role: 'user', content: '中'.repeat(50000) }])
   let current = true, calls = 0, accepted = 0
   const model: ModelClient = { prepare: prepareTextFixture, async *stream() { calls++; entered.resolve(); await release.promise; yield { type: 'text/chunk', text: checkpointOfLength(600) }; yield { type: 'end' } } }
-  const promise = generateSelectedSummary(model, { ...source, current: () => current, signal: abort.signal }, { maxTokens: 1024, minSummaryChars: 500, inherited: false }, { contextWindow: 100000, onPieceAccepted: () => { accepted++ } })
+  const promise = generateSelectedSummary(model, { ...source, current: () => current, signal: abort.signal }, { maxTokens: 1024, minSummaryChars: 500, inherited: false }, { contextWindow: 32000, onPieceAccepted: () => { accepted++ } })
   await entered.promise; if (mode === 'stop') abort.abort(Error('held Stop')); else current = false; release.resolve()
   await expect(promise).rejects.toThrow(mode === 'stop' ? 'held Stop' : 'Selected summary source changed')
   expect(calls).toBe(1); expect(accepted).toBe(0)
@@ -90,7 +92,7 @@ it('confirmed page overflow consumes physical budget, failed usage, and one meas
     if (requests.length === 1) throw Object.assign(Error('confirmed'), { code: 'CONTEXT_WINDOW_EXCEEDED' })
     yield { type: 'text/chunk', text: checkpointOfLength(600) }; yield { type: 'end' }
   } }
-  await generateSelectedSummary(model, source, { maxTokens: 1024, minSummaryChars: 500, inherited: false }, { contextWindow: 100000, onPreparation: facts => { preparations.push(facts) }, onUsage: value => { usage.push(value) } })
+  await generateSelectedSummary(model, source, { maxTokens: 1024, minSummaryChars: 500, inherited: false }, { contextWindow: 32000, onPreparation: facts => { preparations.push(facts) }, onUsage: value => { usage.push(value) } })
   expect(requests.length).toBeGreaterThan(3); expect(source.attempts.count).toBe(requests.length); expect(usage).toHaveLength(requests.length)
   const pages = preparations.filter(facts => facts.mode === 'page')
   expect(pages[1].sourceBytes).toBeLessThan(pages[0].sourceBytes); expect(pages.at(-1).sizingCorrections).toBe(1)
@@ -110,7 +112,7 @@ it('two sizing corrections are invocation-wide even after successfully accepted 
 it('does not give each page another malformed-output corrective round', async () => {
   const source = summarySource([{ role: 'user', content: '中'.repeat(50000) }]); let calls = 0
   const model: ModelClient = { prepare: prepareTextFixture, async *stream() { calls++; yield { type: 'text/chunk', text: calls % 2 ? 'bad' : checkpointOfLength(600) }; yield { type: 'end' } } }
-  await expect(generateSelectedSummary(model, source, { maxTokens: 1024, minSummaryChars: 500, inherited: false }, { contextWindow: 100000 })).rejects.toMatchObject({ kind: 'retention-output' })
+  await expect(generateSelectedSummary(model, source, { maxTokens: 1024, minSummaryChars: 500, inherited: false }, { contextWindow: 32000 })).rejects.toMatchObject({ kind: 'retention-output' })
   expect(calls).toBe(3)
 })
 it('a source rebuild preserves previously spent local sizing corrections', async () => {
@@ -118,7 +120,7 @@ it('a source rebuild preserves previously spent local sizing corrections', async
   const attempts = { count: 0, staleRebuilds: 1, summarySizingCorrections: 2 }
   let calls = 0
   const model: ModelClient = { prepare: prepareTextFixture, async *stream() { calls++; throw Object.assign(Error('confirmed'), { code: 'CONTEXT_WINDOW_EXCEEDED' }) } }
-  await expect(generateSelectedSummary(model, { ...source, attempts }, { maxTokens: 1024, minSummaryChars: 500, inherited: false }, { contextWindow: 100000 })).rejects.toMatchObject({ kind: 'shrink-limit' })
+  await expect(generateSelectedSummary(model, { ...source, attempts }, { maxTokens: 1024, minSummaryChars: 500, inherited: false }, { contextWindow: 32000 })).rejects.toMatchObject({ kind: 'shrink-limit' })
   expect(attempts.count).toBe(1); expect(calls).toBe(1); expect(attempts.summarySizingCorrections).toBe(2)
 })
 it('the actual reduction transaction publishes no group when eight pages leave uncovered source', async () => {
@@ -142,7 +144,7 @@ it('a deliberately omitted middle-fact fragment cannot publish a replacement', a
     }
     return prepareTextFixture.call(this, request)
   }, async *stream() { yield { type: 'text/chunk', text: checkpointOfLength(600) }; yield { type: 'end' } } }
-  const result = await createCompactionHarness({ model, config: { contextWindow: 100000, prune: false } }).compact(session)
+  const result = await createCompactionHarness({ model, config: { contextWindow: 32000, prune: false } }).compact(session)
   expect(removed).toBe(true); expect(result).toMatchObject({ compacted: false, blockedReason: 'source-unrepresentable' })
   expect(JSON.stringify(session.events)).toBe(before)
 })
@@ -174,7 +176,7 @@ it('does not send a page whose final preparation cannot establish capacity', asy
     })
     return unknown(prepared)
   }, async *stream() { sends++; yield { type: 'text/chunk', text: checkpointOfLength(600) }; yield { type: 'end' } } }
-  await expect(generateSelectedSummary(model, source, { maxTokens: 1024, minSummaryChars: 500, inherited: false }, { contextWindow: 100000 })).rejects.toMatchObject({ kind: 'opaque' })
+  await expect(generateSelectedSummary(model, source, { maxTokens: 1024, minSummaryChars: 500, inherited: false }, { contextWindow: 32000 })).rejects.toMatchObject({ kind: 'opaque' })
   expect(sends).toBe(0)
 })
 it.each(['human', 'rules'] as const)('actual %s changes during paging preserve originals and stop after three stale rebuilds', async kind => {

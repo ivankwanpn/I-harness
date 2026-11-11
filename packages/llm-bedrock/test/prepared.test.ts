@@ -53,7 +53,8 @@ it("refuses stale signed order, counts valid native bytes and preserves model-sp
   const prepared = await client.prepare!(request)
   expect(prepared.measurement.input.components.replayedReasoning.textUtf8Bytes).toBe(4)
   expect(prepared.measurement.packet.signatureBytes).toBe(3)
-  expect(prepared.measurement.input.components.opaqueContinuation.binaryBytes).toBe(6)
+  expect(prepared.measurement.input.components.opaqueContinuation.binaryBytes).toBe(3)
+  expect(prepared.measurement.input.components.opaqueContinuation.textUtf8Bytes).toBe(3)
   const message = request.messages[0]!
   if (message.role !== "assistant")
     throw new Error("fixture")

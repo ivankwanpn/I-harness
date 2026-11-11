@@ -10,7 +10,7 @@ it("excludes only produced cache wrappers and preserves old prefixes and unit pr
   expect(a.measurement.input.semanticIdentity).toBeDefined()
   expect(b.measurement.input.semanticIdentity).toEqual(a.measurement.input.semanticIdentity)
   expect(b.measurement.input.units[0]).toEqual(a.measurement.input.units[0])
-  expect(b.measurement.input.units[0]!.heuristicTokens).toBe(19)
+  expect(b.measurement.input.units[0]!.heuristicTokens).toBe(17) // 12 framing + 4 text block + one CJK character.
   expect(b.measurement.packet.cacheMetadataBytes).toBeGreaterThan(0)
   expect(b.measurement.payloadIdentity?.id).not.toBe(a.measurement.payloadIdentity?.id)
   const appended = await cached.prepare!({ ...request, messages: [...request.messages, { role: "assistant", content: "ok" }, { role: "user", content: "next" }] })

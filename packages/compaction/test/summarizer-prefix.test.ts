@@ -36,8 +36,17 @@ it('alternate summary client receives its own output/effort/window, with no main
   expect(summary.requests[0]).toMatchObject({ systemPrompt: '', tools: [], maxOutputTokens: 4096, reasoningEffort: 'low' })
   expect(JSON.stringify(summary.requests[0])).not.toContain('main-only system')
 })
-it('charges actual fixed system before any summary generation instead of inventing an overhead discount', async () => {
+it('reports reduced-over-target after reducing history under an oversized fixed system', async () => {
   const f = spyModel()
   const result = await createCompactionHarness({ model: f.model, config: autoConfig, requestShape: () => ({ systemPrompt: 'fixed '.repeat(14000), tools: [] }) }).compact(history())
-  expect(result).toMatchObject({ compacted: false, outcome: 'blocked', blockedReason: 'fixed-input' }); expect(f.requests).toEqual([])
+  expect(result).toMatchObject({ compacted: true, outcome: 'reduced-over-target' })
+  expect(f.requests).toHaveLength(1)
+  expect(f.requests[0]).toMatchObject({ systemPrompt: '', tools: [] })
+})
+
+it('blocks an oversized fixed system when fewer than 512 reducible tokens remain', async () => {
+  const f = spyModel()
+  const result = await createCompactionHarness({ model: f.model, config: autoConfig, requestShape: () => ({ systemPrompt: 'fixed '.repeat(14000), tools: [] }) }).compact(history(2, 10))
+  expect(result).toMatchObject({ compacted: false, outcome: 'blocked', blockedReason: 'fixed-input' })
+  expect(f.requests).toEqual([])
 })
