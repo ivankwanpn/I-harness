@@ -12,7 +12,7 @@ it('wires the actual fresh Gateway host to its original durable artifact owner',
   const root = await mkdtemp(join(tmpdir(), 'result-host-')), workspace = join(root, 'workspace'), sessionDir = join(root, 'sessions'), settingsPath = join(root, 'settings.json')
   await mkdir(workspace); await mkdir(sessionDir); await writeFile(settingsPath, '{}')
   const coordinator = createSessionCoordinator(createJsonlBackend(sessionDir), { lock: { enabled: true } })
-  await coordinator.create({ sessionId: 'conversation' }); await coordinator.create({ sessionId: 'hidden', origin: 'subagent', parentSession: 'conversation' }); await coordinator.flush('conversation')
+  await coordinator.create({ sessionId: 'conversation' }); await coordinator.create({ sessionId: 'hidden', origin: 'subagent', parentSession: 'conversation', seedLength: 0 }); await coordinator.flush('conversation')
   const location = await contextWorkspaceLocation(workspace, sessionDir)
   const owner = createContextOutputService({ root: location.serviceRoot, workspaceId: location.workspaceKey, authorizeResult: async () => true })
   const scope = owner.registerResultScope({ operationId: 'host-original', sessionId: 'conversation', callId: 'c', source: { sourceId: contextSourceIdentity(location.workspaceKey, location.canonical) } }, () => true)

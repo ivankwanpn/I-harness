@@ -267,8 +267,8 @@ describe("trusted project scope broker", () => {
   it("rejects inherited ownership cycles before waiting on ancestor operations", async () => {
     const { coordinator, broker } = await setup()
     try {
-      await coordinator.create({ sessionId: "cycle-a", parentSession: "cycle-b", origin: "subagent" })
-      await coordinator.create({ sessionId: "cycle-b", parentSession: "cycle-a", origin: "team" })
+      await coordinator.create({ sessionId: "cycle-a", parentSession: "cycle-b", origin: "subagent", seedLength: 0 })
+      await coordinator.create({ sessionId: "cycle-b", parentSession: "cycle-a", origin: "team", seedLength: 0 })
       await expect(broker.projectFor("cycle-a")).rejects.toThrow(/lineage/)
       await expect(broker.forSession("cycle-a")).rejects.toThrow(/lineage/)
       await expect(broker.bind("cycle-b")).rejects.toThrow(/lineage/)
@@ -318,7 +318,7 @@ it('keeps independently bound child read authority after ancestor loss and check
   const { coordinator, broker, project } = await setup()
   try {
     await broker.configure(project); await broker.bind('s1', project.id)
-    await coordinator.create({ sessionId: 'child', parentSession: 's1', origin: 'subagent' })
+    await coordinator.create({ sessionId: 'child', parentSession: 's1', origin: 'subagent', seedLength: 0 })
     await broker.inherit('s1', 'child')
     await coordinator.updateMeta('s1', { archived: true })
     const get = (await broker.resultReadScopeFor('child'))!

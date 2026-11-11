@@ -11,7 +11,7 @@ import { createDesktopRouter } from '../src/router.ts'
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'ih-i6-lifetime-'))
   const coordinator = createSessionCoordinator(createJsonlBackend(root))
-  const { id } = await coordinator.create(), { id: child } = await coordinator.create({ origin: 'subagent', parentSession: id, subagentProtocolVersion: 1 })
+  const { id } = await coordinator.create(), { id: child } = await coordinator.create({ origin: 'subagent', parentSession: id, subagentProtocolVersion: 1, seedLength: 0 })
   let live = true
   const owner = { read: () => ({ state: 'ready' as const }), subscribe: () => () => {} }
   const assembly = { instructionDiagnostics: () => live ? owner : undefined, subagentState: () => ({ agentTable: [{ sessionId: child, path: '/root/child', status: 'waiting' }] }), liveChildSession: () => ({}) } as unknown as SessionAssembly

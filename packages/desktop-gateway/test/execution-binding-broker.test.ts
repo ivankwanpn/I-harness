@@ -40,7 +40,7 @@ it('rejects foreign and cloned references and applies the actual conversation po
       ['team', 'team', undefined, true], ['child', 'subagent', 'root', false],
       ['review', 'approval-review', 'root', false], ['team-child', 'team', 'root', false],
     ] as const) {
-      await coordinator.create({ sessionId: id, ...(origin ? { origin } : {}), ...(parentSession ? { parentSession } : {}) }); await coordinator.releaseOwnership(id)
+      await coordinator.create({ sessionId: id, ...(origin ? { origin } : {}), ...(parentSession ? { parentSession, seedLength: 0 } : {}) }); await coordinator.releaseOwnership(id)
       const ref = await coordinator.retainExistingSessionBindingObservation!({ sessionId: id }, () => {})
       if (accepted) { const observation = broker.observeExecutionBinding(ref, () => {}); observation.assertCurrent(); observation.release() }
       else expect(() => broker.observeExecutionBinding(ref, () => {})).toThrow()

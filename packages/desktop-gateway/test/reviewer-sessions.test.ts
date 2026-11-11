@@ -23,7 +23,7 @@ it("omits new and legacy approval reviews from conversation navigation without r
   await create("review-archived", { origin: "approval-review", parentSession: "main", seedLength: 0, archived: true }, reviewPrompt)
   await create("normal-child", { origin: "subagent", parentSession: "main", seedLength: 0 }, "ordinary delegated work")
   await create("user-copy", {}, reviewPrompt)
-  await create("user-fork", { origin: "fork", parentSession: "main" }, "a user-created fork")
+  await create("user-fork", { origin: "fork", parentSession: "main", seedLength: 0 }, "a user-created fork")
   await create("user-archived", { archived: true }, "archived user work")
   await coordinator.close()
   const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Read-only navigation must not call a provider"))

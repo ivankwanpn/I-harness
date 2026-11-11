@@ -32,7 +32,7 @@ it('uses the actual held broker metadata/binding and complete inherited lineage 
   const broker = createProjectScopeBroker(c, workspace), project = { id: 'p', name: 'Project', roots: [workspace], primaryRoot: workspace }
   let escaped!: () => unknown
   try {
-    await c.create({ sessionId: 'source' }); await c.create({ sessionId: 'child', origin: 'subagent', subagentProtocolVersion: 1, parentSession: 'source' })
+    await c.create({ sessionId: 'source' }); await c.create({ sessionId: 'child', origin: 'subagent', subagentProtocolVersion: 1, parentSession: 'source', seedLength: 0 })
     await broker.configure(project); await broker.bind('source', 'p')
     await c.withExistingSessionBindingObservation!({ sessionIds: ['child', 'source'] }, observation => observed(broker, ['child', 'source'], observation, async () => {
       const profile = vi.spyOn(c, 'profile').mockRejectedValue(new Error('observed source profile recursion'))
