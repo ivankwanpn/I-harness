@@ -1,0 +1,52 @@
+{
+  "recordVersion": 1,
+  "helperSha256": "c8e8f3354c1ca42f1971b2fc0dbf5da0ec1b7112b23cd39dde327be9c59c7392",
+  "protocolSha256": "e795fc9cae6e26d45ecdba592e13f84eccc803bae141ffc37f6acd3d0bd2912c",
+  "windowsRelease": "10.0.26200",
+  "observationScope": "historical-one-host",
+  "applicabilityInputs": [
+    "windows-release",
+    "helper-sha256",
+    "protocol-sha256"
+  ],
+  "assurance": "experimental",
+  "result": "incomplete",
+  "observed": {
+    "passed": 39,
+    "failed": 0,
+    "unsupported": 4
+  },
+  "sourceFamilies": {
+    "gitMsysBash": {
+      "psec": "unsupported",
+      "unrestricted": "observed-pass"
+    },
+    "nodeAndTsxPipes": {
+      "psec": "observed-pass",
+      "unrestricted": "observed-pass"
+    },
+    "cmdAndPowerShellPipes": {
+      "psec": "observed-pass",
+      "unrestricted": "observed-pass"
+    },
+    "conPty": {
+      "psec": "unsupported",
+      "unrestricted": "observed-pass"
+    },
+    "msysPty": {
+      "psec": "unsupported",
+      "unrestricted": "observed-pass"
+    }
+  },
+  "observedAt": "2026-10-25T09:22:45.380Z",
+  "msysPtyTemplateSha256": "334994eec6217a985841b65b3d81553556f406ac6baf7de8893bb123805b8b6d",
+  "evidence": {
+    "sha256": "d68fbeb08604e50aa089578eaef2355e200241e4cc69fc84b80065955bb8bf44",
+    "scope": "original-standard-control-matrix",
+    "limits": [
+      "One historical host; no current installed-runtime or policy certification.",
+      "Advanced MSYS external-program TTY/proc compatibility and event-owner pathological/fault gates remain separate; this standard matrix does not qualify them.",
+      "PSEC MSYS routes remain unsupported; PSEC PTY remains refused."
+    ]
+  }
+}

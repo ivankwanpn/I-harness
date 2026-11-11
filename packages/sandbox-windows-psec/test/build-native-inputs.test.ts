@@ -28,9 +28,10 @@ function buildFixture() {
   cpSync(resolve(root, "artifacts"), resolve(pkg, "artifacts"), { recursive: true })
   return { fixture, pkg, output: resolve(fixture, ".tmp/controlled-output"), sdk: resolve(fixture, "absent-sdk") }
 }
-function invoke(f: ReturnType<typeof buildFixture>) {
+function invoke(f: ReturnType<typeof buildFixture>, compilerSetup?: string) {
   const args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/build-native.ps1", "-BridgeOnly",
-    "-ControlledOutputDirectory", f.output, "-MsysSdkDirectory", f.sdk]
+    "-ControlledOutputDirectory", f.output, "-MsysSdkDirectory", f.sdk,
+    ...(compilerSetup ? ["-CompilerSetup", compilerSetup] : [])]
   const result = spawnSync("powershell.exe", args, { cwd: f.pkg, encoding: "utf8", windowsHide: true, timeout: 15_000 })
   writeFileSync(resolve(f.fixture, "stdout.log"), result.stdout ?? "")
   writeFileSync(resolve(f.fixture, "stderr.log"), result.stderr ?? "")
@@ -61,8 +62,22 @@ describe.skipIf(process.platform !== "win32")("native build canonical input boun
     const before = snapshot(f.pkg), result = invoke(f)
     expect(result.error).toBeUndefined()
     expect(result.status).not.toBe(0)
-    expect(result.stderr).toContain("Pinned MSYS build dependency is absent or changed")
+    const vcvars = /^\$vcvars = '([^']+)'/m.exec(readFileSync(resolve(f.pkg, "scripts/build-native.ps1"), "utf8"))?.[1]
+    expect(vcvars).toBeDefined()
+    expect(result.stderr).toContain(existsSync(vcvars!)
+      ? "Pinned MSYS build dependency is absent or changed"
+      : "Installed VS2022 BuildTools vcvars64.bat is required")
     expect(result.stderr).not.toContain("Canonical LF required")
+    expect(existsSync(f.output)).toBe(true)
+    expect(snapshot(f.pkg)).toEqual(before)
+  }, 20_000)
+  const communitySetup = "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Auxiliary/Build/vcvars64.bat"
+  it.runIf(existsSync(communitySetup))("uses an explicitly selected installed compiler setup without rewriting canonical inputs", () => {
+    const f = buildFixture(), before = snapshot(f.pkg), result = invoke(f, communitySetup)
+    expect(result.error).toBeUndefined()
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain("Pinned MSYS build dependency is absent or changed")
+    expect(result.stderr).not.toContain("Installed VS2022 BuildTools vcvars64.bat is required")
     expect(existsSync(f.output)).toBe(true)
     expect(snapshot(f.pkg)).toEqual(before)
   }, 20_000)

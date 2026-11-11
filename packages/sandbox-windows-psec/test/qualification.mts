@@ -113,7 +113,7 @@ function settled(result: Awaited<ReturnType<typeof run>>) {
   assert.equal(result.diagnostics?.discardedOutputBytes, 0)
 }
 const self = (...args: string[]) => [helper, "--self-child", ...args]
-const node = resolve(process.env.ProgramFiles ?? "C:/Program Files", "nodejs/node.exe")
+const node = process.execPath
 const git = resolve(process.env.ProgramFiles ?? "C:/Program Files", "Git/cmd/git.exe")
 const bash = resolve(process.env.ProgramFiles ?? "C:/Program Files", "Git/bin/bash.exe")
 const bashDirect = resolve(process.env.ProgramFiles ?? "C:/Program Files", "Git/usr/bin/bash.exe")

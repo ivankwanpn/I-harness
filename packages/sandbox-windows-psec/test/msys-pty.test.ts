@@ -165,8 +165,26 @@ suite("owned MSYS PTY production acceptance", () => {
           } catch (error) { if (!String(error).includes("input-backpressure") || Date.now() >= deadline) throw error; await pause(5) }
         }
       }
-      const settlement = await t.execution.handle.cancel("cancelled")
-      expect(settlement).toMatchObject({ kind: "settled", treeEmpty: true, ioSettled: true, resourcesReleased: true })
+      const handle = t.execution.handle, release = handle.release, pid = handle.pid
+      let settlement = await handle.cancel("cancelled")
+      expect(await handle.rootExited).toEqual({ exitCode: 137 })
+      await t.drained
+      const expected = "PRESSURE_READY\n" + ("0".repeat(255) + "X").repeat(8192) + "OUTPUT_PROGRESS\n"
+      expect(t.bytes()).toBe(Buffer.byteLength(expected))
+      expect(createHash("sha256").update(t.text()).digest("hex")).toBe(createHash("sha256").update(expected).digest("hex"))
+      if (settlement.kind === "incomplete") {
+        console.warn("MSYS pressure first cleanup acknowledgment", JSON.stringify({ pid, settlement }))
+        // An incomplete native deletion remains owned by this exact handle.
+        // Retry only that acknowledged-work cleanup, never the workload.
+        expect(settlement.phase).toBe("release")
+        expect(settlement.detail).toBe("native release incomplete: native-failure at SetFileInformationByHandle(owned adapter) (5): SetFileInformationByHandle(owned adapter) failed (0x00000005)")
+        expect(t.execution.handle).toBe(handle)
+        expect(handle.release).toBe(release)
+        settlement = await release.call(handle)
+      }
+      expect(settlement, JSON.stringify(settlement)).toMatchObject({ kind: "settled", treeEmpty: true, ioSettled: true, resourcesReleased: true })
+      expect(handle.pid).toBe(pid)
+      expect(await release.call(handle)).toEqual(settlement)
       await Promise.all(requests)
     } finally { await f.close(); await Promise.all(requests) }
   }, 15_000)

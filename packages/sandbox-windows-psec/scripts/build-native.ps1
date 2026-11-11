@@ -1,4 +1,4 @@
-param([switch]$Test, [string]$MsysSdkDirectory, [switch]$BridgeOnly, [string]$ControlledOutputDirectory, [switch]$ControlledTrace, [switch]$ControlledSkipChildRestore, [switch]$ControlledSeedChildPolicy, [switch]$ControlledRawChild)
+param([switch]$Test, [string]$MsysSdkDirectory, [string]$CompilerSetup, [switch]$BridgeOnly, [string]$ControlledOutputDirectory, [switch]$ControlledTrace, [switch]$ControlledSkipChildRestore, [switch]$ControlledSeedChildPolicy, [switch]$ControlledRawChild)
 $ErrorActionPreference = 'Stop'
 $packageRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $manifestPath = Join-Path $packageRoot 'native/Cargo.toml'
@@ -33,6 +33,10 @@ if ($BridgeOnly) {
   New-Item -ItemType Directory -Path $ControlledOutputDirectory | Out-Null
 }
 $vcvars = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat'
+if ($CompilerSetup) {
+  $vcvars = [IO.Path]::GetFullPath($CompilerSetup)
+  if ([IO.Path]::GetFileName($vcvars) -ne 'vcvars64.bat') { throw 'CompilerSetup must name an installed x64 vcvars64.bat; this script never installs a compiler.' }
+}
 if (!(Test-Path -LiteralPath $vcvars)) { throw 'Installed VS2022 BuildTools vcvars64.bat is required; this script never installs a compiler.' }
 if (!$Test) {
   if (!$MsysSdkDirectory) { $MsysSdkDirectory = Join-Path $packageRoot '../../build/pty-msys-sdk' }

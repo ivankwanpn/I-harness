@@ -1,6 +1,6 @@
 use crate::{
     error::{Error, Result},
-    ffi::Handle,
+    ffi::{Handle, wide},
     protocol::{Policy, Protection, Spec},
 };
 use process_security_environment_spec::process_security_environment_layout::*;
@@ -15,6 +15,8 @@ use std::{
     path::Path,
 };
 use windows_sys::Win32::Storage::FileSystem::*;
+use windows_sys::Win32::System::WindowsProgramming::{DRIVE_CDROM, DRIVE_REMOVABLE};
+use windows_sys::Win32::Foundation::{GetLastError, ERROR_INVALID_DRIVE, ERROR_NOT_READY, ERROR_NO_MEDIA_IN_DRIVE};
 
 pub fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -515,11 +517,33 @@ pub fn volume_roots() -> Result<Vec<String>> {
     if n == 0 || n >= buffer.len() {
         return Err(Error::native("GetLogicalDriveStringsW"));
     }
-    Ok(buffer[..n]
+    let roots = buffer[..n]
         .split(|c| *c == 0)
         .filter(|s| !s.is_empty())
         .map(String::from_utf16_lossy)
-        .collect())
+        .collect::<Vec<_>>();
+    let mut readable = Vec::with_capacity(roots.len());
+    for root in roots {
+        let path = wide(&root);
+        let kind = unsafe { GetDriveTypeW(path.as_ptr()) };
+        // GetLogicalDriveStrings includes empty optical/removable slots. PSEC
+        // rejects such a root with ERROR_INVALID_DRIVE. No access exists to
+        // preserve until media is mounted; omission retains default denial.
+        let media = kind == DRIVE_CDROM || kind == DRIVE_REMOVABLE;
+        let ready = !media || unsafe {
+            GetVolumeInformationW(path.as_ptr(), std::ptr::null_mut(), 0,
+                std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(),
+                std::ptr::null_mut(), 0) != 0
+        };
+        let error = if ready { 0 } else { unsafe { GetLastError() } };
+        if readable_volume(kind, ready, error)? { readable.push(root); }
+    }
+    Ok(readable)
+}
+fn readable_volume(kind: u32, ready: bool, error: u32) -> Result<bool> {
+    if ready || kind != DRIVE_CDROM && kind != DRIVE_REMOVABLE { return Ok(true); }
+    if matches!(error, ERROR_NOT_READY | ERROR_NO_MEDIA_IN_DRIVE | ERROR_INVALID_DRIVE) { return Ok(false); }
+    Err(Error::native_code("GetVolumeInformationW(readable media)", error))
 }
 pub fn serialize(write: &[String], read: &[String], deny: &[String]) -> Vec<u8> {
     let mut egress = EndpointPolicyT::default();
@@ -544,6 +568,21 @@ pub fn serialize(write: &[String], read: &[String], deny: &[String]) -> Vec<u8> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows_sys::Win32::System::WindowsProgramming::{DRIVE_FIXED, DRIVE_REMOTE, DRIVE_UNKNOWN, DRIVE_NO_ROOT_DIR};
+    #[test]
+    fn unmounted_media_is_not_a_read_grant_and_other_failures_remain_errors() {
+        for kind in [DRIVE_CDROM, DRIVE_REMOVABLE] {
+            assert!(readable_volume(kind, true, 0).unwrap());
+            for error in [ERROR_NOT_READY, ERROR_NO_MEDIA_IN_DRIVE, ERROR_INVALID_DRIVE] {
+                assert!(!readable_volume(kind, false, error).unwrap());
+            }
+            assert!(readable_volume(kind, false, 5).is_err());
+            assert!(readable_volume(kind, false, 0).is_err());
+        }
+        for kind in [DRIVE_FIXED, DRIVE_REMOTE, DRIVE_UNKNOWN, DRIVE_NO_ROOT_DIR] {
+            assert!(readable_volume(kind, false, ERROR_NOT_READY).unwrap());
+        }
+    }
     #[test]
     fn hidden_console_is_confined_to_trusted_unrestricted_pipes() {
         assert!(validate_console("unrestricted", "pipe", "hidden-console").is_ok());

@@ -22,6 +22,8 @@ Run `pnpm --filter @i-harness/sandbox-windows-psec qualify:windows` on a Windows
 
 Prior frozen observations remain in `qualification-history/`. The current record was regenerated from fresh owned qualification controls for the current helper and protocol; unsupported source families remain explicit.
 
+The 2026-11-11 rebuild handles empty optical and removable media slots during policy construction. Native volume queries identify the known not-ready, no-media and invalid-drive conditions. The policy retains default denial for omitted volumes, verified by an actual child that could write its allowed C: fixture and was denied both reading and writing an omitted D: fixture. The current standard matrix records 39 passing controls, zero failures and four unsupported source-family controls in `qualification.json`.
+
 On Windows 11 build 26200 with helper SHA256 `421d4a0ed72600d593f5cd1afe8012f49aa0e7ff1ab590486666cf5839e3d395`, PSEC passed the listed filesystem, Node/tsx, CMD, PowerShell, Git executable, Job, pipe and local loopback denial controls. **Git/MSYS Bash failed under PSEC during MSYS initialization** with `NtCreateDirectoryObject(\BaseNamedObjects\msys-...): 0xC0000022`; the same argv, cwd, explicit environment and pipe input succeeded under explicitly selected unrestricted execution. The same failure occurred using Git's direct `usr/bin/bash.exe` image and retain-tree lifetime. This is an observed compatibility limit, so do not route Bash to PSEC or claim the original Bash issue fixed. Unrestricted ConPTY passed real input, resize and descendant retention; PSEC PTY remains rejected before workload launch.
 
 See [the qualification audit](../../docs/audit/2026-10-07-windows-psec-qualification.md) for the exact host, results and limitations. These checks support only the observed cases. PSEC remains opt-in and experimental; production exec/terminal selection and GUI/packaged application checks are separate work. The existing Windows default must not change on this qualification alone.
@@ -35,6 +37,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File packages/sandbox-windows-pse
 powershell -NoProfile -ExecutionPolicy Bypass -File packages/sandbox-windows-psec/scripts/build-native.ps1
 node packages/sandbox-windows-psec/test/native-helper-smoke.mjs
 ```
+
+Use `-CompilerSetup` to select an installed x64 Visual Studio environment, and `-MsysSdkDirectory` to select the directory containing the pinned MSYS build inputs listed in the artifact manifest. For a Community installation, the compiler setup path is `C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat`.
 
 The build uses `cargo --locked`, writes only this package's native target and artifact directories, copies the release executable to `artifacts/win32-x64/`, and records hashes/tool versions in `manifest.json`. Runtime consumers ship and verify that existing executable; they do not invoke Cargo or download a helper. The only Git dependency is generated `process_security_environment_spec` at Microsoft/mxc `6cd3d58f05d3447e67109cfb75e042803b843ca4`; flatbuffers 25.12.19 and windows-sys 0.61.2 are exact pins. Cargo.lock records all transitive versions.
 
