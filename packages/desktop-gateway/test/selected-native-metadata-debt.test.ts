@@ -1,4 +1,13 @@
 import { it,expect,vi } from 'vitest'
+const nativeLeases = vi.hoisted(() => ({ paths: new Set<string>(), handles: [] as import('@i-harness/fs-lock').SessionLock[] }))
+vi.mock('@i-harness/fs-lock', async importOriginal => {
+ const actual = await importOriginal<typeof import('@i-harness/fs-lock')>()
+ return { ...actual, async acquireSessionLock(...args: Parameters<typeof actual.acquireSessionLock>) {
+  const original = await actual.acquireSessionLock(...args)
+  if(nativeLeases.paths.has(args[0].lockPath))nativeLeases.handles.push(original)
+  return original
+ } }
+})
 const fault=vi.hoisted(()=>({read:false,close:false,opens:0,handle:undefined as undefined|{fd:number},attempts:[] as object[],multiple:false,handles:[] as import('node:fs/promises').FileHandle[],reads:0,release:undefined as Promise<void>|undefined,entered:undefined as (()=>void)|undefined,allowed:new Set<object>()}))
 vi.mock('node:fs/promises',async original=>{
  const fs=await original<typeof import('node:fs/promises')>()
@@ -23,6 +32,11 @@ import { join } from 'node:path'
 import * as core from '../../context-output/src/service.ts'
 import * as locks from '@i-harness/fs-lock'
 import { createHash } from 'node:crypto'
+import { artifactPathsFor } from '../../session-persistence/src/coordinator/artifact-path-association.ts'
+// One genuine native fork measured 13.3 seconds before metadata acquisition.
+// Two-fork cases also retain and retry two real descriptors and binding leases.
+const SINGLE_FORK_CASE_MS = 30_000
+const TWO_FORK_CASE_MS = 60_000
 it.each(['operation','service'] as const)('hands lower metadata acquisition debt to the original operation with %s cleanup',async cleanupOwner=>{
  fault.opens=0;fault.attempts=[];fault.handle=undefined
  const f=await createGatewayForkFixture()
@@ -36,21 +50,35 @@ it.each(['operation','service'] as const)('hands lower metadata acquisition debt
   fault.close=false;if(cleanupOwner==='service')await f.runtime.contextOutput.close();await cleanup!.retry();expect(fault.handle!.fd).toBe(-1);expect(fault.opens).toBe(1);expect(fault.attempts.every(handle=>handle===fault.handle)).toBe(true)
   await cleanup!.retry();await f.runtime.close()
  }finally{fault.read=fault.close=false;await f.close()}
-})
+}, SINGLE_FORK_CASE_MS)
 
 it.each(['retry','service'] as const)('retains both actual lower acquisition errors and binding dependencies until %s settles their two descriptors',async settlement=>{
  const f=await createGatewayForkFixture(),entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>(),lookup=core.selectedMetadataCleanupFor,captured:Array<{error:unknown;cleanup:NonNullable<ReturnType<typeof lookup>>}>=[]
- let spy:{mockRestore():void}|undefined,lockSpy:{mockRestore():void}|undefined
- const bindingLocks:import('@i-harness/fs-lock').SessionLock[]=[]
+ let spy:{mockRestore():void}|undefined
+ const acquisitions: Promise<unknown>[] = []
+ const bindingLocks=nativeLeases.handles
+ nativeLeases.paths.clear();bindingLocks.length=0
  try{
   await f.runtime.contextOutput.configure({enabled:true});const source=await f.runtime.sourceFor('source'),ref=await f.runtime.contextOutput.capture({sessionId:'source',callId:'concurrent-debt',label:'x',text:'retained',complete:true,source});if(!ref)throw Error('capture failed')
   await f.coordinator.append('source',[{type:'turn/start'},{type:'user/message',text:'question'},{type:'context/result-ref',ref},{type:'turn/end'}])
   for(const id of ['targetA','targetB'])expect((await f.execute(await f.prepare('source',id,'debt-'+id))).kind).toBe('ready')
-  const paths=['targetA','targetB'].map(id=>locks.lockPathFor(f.sessions,'doc:desktop-session-project-'+createHash('sha256').update(id).digest('hex'))),acquire=locks.acquireSessionLock
-  lockSpy=vi.spyOn(locks,'acquireSessionLock').mockImplementation(async options=>{const original=await acquire(options);if(paths.includes(options.lockPath))bindingLocks.push(original);return original})
+  for(const id of ['targetA','targetB']){
+   const key='desktop-session-project-'+createHash('sha256').update(id).digest('hex')
+   const capture=artifactPathsFor(f.backend)!.document(key)
+   if(capture.kind!=='ready')throw Error('Original project document parent unavailable')
+   capture.assertCurrent()
+   nativeLeases.paths.add(locks.lockPathFor(f.sessions,'artifact-document-lease:'+capture.key))
+  }
   spy=vi.spyOn(core,'selectedMetadataCleanupFor').mockImplementation((service,error)=>{const cleanup=lookup(service,error);if(service===f.runtime.contextOutput&&cleanup)captured.push({error,cleanup});return cleanup})
   fault.handles=[];fault.attempts=[];fault.reads=0;fault.allowed.clear();fault.release=leave.promise;fault.entered=()=>entered.resolve();fault.multiple=true
-  const acquisitions=['targetA','targetB'].map(id=>f.runtime.acquireSelectedSourceObservation(id).catch(error=>error));await entered.promise;expect(fault.handles.length).toBe(2);leave.resolve()
+  for (const id of ['targetA', 'targetB']) {
+   const flight = Promise.resolve().then(() => f.runtime.acquireSelectedSourceObservation(id)).catch(error => error)
+   acquisitions.push(flight)
+  }
+  await Promise.race([entered.promise, ...acquisitions.map(flight => flight.then(value => {
+   throw value instanceof Error ? value : new Error('Original acquisition settled before both read gates', { cause: value })
+  }))])
+  expect(fault.handles.length).toBe(2);leave.resolve()
   const errors=await Promise.all(acquisitions);expect(captured.length).toBe(2);expect(captured[0]!.error).not.toBe(captured[1]!.error)
   for(const entry of captured)expect(lookup(f.runtime.contextOutput,entry.error)).toBe(entry.cleanup)
   const operations=errors.map(error=>observationCleanupFor(f.coordinator,error));expect(operations.every(Boolean)).toBe(true)
@@ -59,11 +87,17 @@ it.each(['retry','service'] as const)('retains both actual lower acquisition err
   expect(bindingLocks.every(lock=>lock.held)).toBe(true)
   fault.allowed.add(fault.handles[1]!);if(settlement==='service')await f.runtime.contextOutput.close();else await captured[0]!.cleanup.retry();expect(fault.handles.map(handle=>handle.fd)).toEqual([-1,-1]);const attempts=fault.attempts.length;await captured[0]!.cleanup.retry();await captured[1]!.cleanup.retry();expect(fault.attempts.length).toBe(attempts)
   for(const cleanup of operations)await cleanup!.retry()
-  expect(bindingLocks.every(lock=>!lock.held)).toBe(true);lockSpy.mockRestore();lockSpy=undefined
+  expect(bindingLocks.every(lock=>!lock.held)).toBe(true);nativeLeases.paths.clear()
   for(const id of ['targetA','targetB'])expect(await f.coordinator.withExistingSessionBindingObservation!({sessionIds:[id]},async()=>true)).toBe(true)
   expect(fault.handles.length).toBe(2);expect(fault.attempts.every(handle=>fault.handles.includes(handle as import('node:fs/promises').FileHandle))).toBe(true)
- }finally{leave.resolve();fault.multiple=false;for(const handle of fault.handles)fault.allowed.add(handle);spy?.mockRestore();lockSpy?.mockRestore();await f.close()}
-})
+ }finally{
+  leave.resolve();fault.multiple=false
+  for(const handle of fault.handles)fault.allowed.add(handle)
+  nativeLeases.paths.clear()
+  try { await Promise.allSettled(acquisitions); await f.close() }
+  finally { spy?.mockRestore() }
+ }
+}, TWO_FORK_CASE_MS)
 
 it('preserves the original metadata owner and exact close debt when its bridge retires during acquisition',async()=>{
  const f=await legacyFixture();let bridge:ReturnType<typeof createProcessAwareResultService>|undefined,handle:Awaited<ReturnType<typeof open>>|undefined,fail=true,injected=false,attempts=0
@@ -77,4 +111,4 @@ it('preserves the original metadata owner and exact close debt when its bridge r
   const error=await bridge.acquireSelectedMetadata(observation).catch(error=>error);expect(error).toMatchObject({message:'retired original close debt'});expect(handle!.fd).toBeGreaterThanOrEqual(0)
   const cleanup=bridge.selectedMetadataCleanupFor(error);expect(cleanup).toBeDefined();fail=false;await cleanup!.retry();expect(handle!.fd).toBe(-1);expect(attempts).toBe(2);await cleanup!.retry();expect(attempts).toBe(2)
  }finally{fail=false;canonicalSpy?.mockRestore();joinSpy?.mockRestore();await bridge?.service.close();await f.close()}
-})
+}, SINGLE_FORK_CASE_MS)
