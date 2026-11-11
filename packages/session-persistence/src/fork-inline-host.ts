@@ -1,3 +1,5 @@
+import { captureOriginalManagedReadyGuard } from './coordinator/managed-document.ts'
+import { associateArtifactCurrentnessReader, createArtifactCurrentGuard, isArtifactCurrentGuard } from './coordinator/artifact-path-association.ts'
 import type { SessionCoordinator, SessionMeta } from './coordinator/types.ts'
 import type { SessionView, ResultEnvelope } from '@i-harness/core-session'
 import { sameBootstrapData } from './coordinator/bootstrap-header.ts'
@@ -17,6 +19,15 @@ function requiresResultHost(view: SessionView): boolean {
 export function createForkSourceWitness(document: ForkSourceWitness['document']): ForkSourceWitness {
   document.assertReady()
   const view = document.view, events = view.events, eventCount = events.length
+  const original = captureOriginalManagedReadyGuard(document)
+  if (original && isArtifactCurrentGuard(original)) {
+    const witness = { document, view, events, eventCount, assertUnchanged: createArtifactCurrentGuard(() => {
+      original()
+      if (document.view !== view || view.events !== events || events.length !== eventCount) throw new ForkAdmissionError('stale-source')
+    }) }
+    associateArtifactCurrentnessReader(witness, 'assertUnchanged')
+    return witness
+  }
   return { document, view, events, eventCount,
     assertUnchanged() { document.assertReady(); if (document.view !== view || view.events !== events || events.length !== eventCount) throw new ForkAdmissionError('stale-source') } }
 }

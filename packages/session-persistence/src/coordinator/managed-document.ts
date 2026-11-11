@@ -88,7 +88,7 @@ export function originalManagedExecution(document:ManagedDocument,ownership:Owne
 export function managedExecutionStatus(document: ManagedDocument): 'available' | 'unavailable' | 'retired' {
     return executionStatuses.get(document)?.() ?? 'unavailable';
 }
-const readyOwners = new WeakMap<object, { ownership: Ownership; ownerToken(): HeldFactOwner['owner']; invalidateMetadata(revision:object):void; captureTaskParent():TaskParentReadiness;beginTaskMetadata():TaskMetadataUpdate; capture(): ManagedReadyObservation; retainSelected(onRevoke:()=>void):SelectedSourceRead; captureRequiredParent(source: import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>): Readonly<{view:SessionView;assertCurrent():void;assertOriginal():void;assertTask14Ready():void;joinIssuedWriter():Promise<void>;acquireWriter():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>>}>; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void; assertOriginal():void; assertTask14Ready(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
+const readyOwners = new WeakMap<object, { ownership: Ownership; ownerToken(): HeldFactOwner['owner']; invalidateMetadata(revision:object):void; captureTaskParent():TaskParentReadiness;beginTaskMetadata():TaskMetadataUpdate; capture(): ManagedReadyObservation; captureOriginalReady(): (() => void) | undefined; retainSelected(onRevoke:()=>void):SelectedSourceRead; captureRequiredParent(source: import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>): Readonly<{view:SessionView;assertCurrent():void;assertOriginal():void;assertTask14Ready():void;joinIssuedWriter():Promise<void>;acquireWriter():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>>}>; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void; assertOriginal():void; assertTask14Ready(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
 /** Same original document/ownership lookup; no incoming token or callback is enrolled. */
 export function originalManagedDocumentOwner(document: ManagedDocument, ownership: Ownership): HeldFactOwner['owner'] {
   const execution = privateExecutionOwners.get(document)
@@ -129,6 +129,10 @@ export function captureManagedReadyObservation(document: ManagedDocument, owners
     const original = readyOwners.get(document);
     if (!original || original.ownership !== ownership) throw new FactRecoveryRequiredError();
     return original.capture();
+}
+/** Only the original ready-owner record can compose this synchronous proof. */
+export function captureOriginalManagedReadyGuard(document: object): (() => void) | undefined {
+    return readyOwners.get(document)?.captureOriginalReady();
 }
 export function retainSelectedSourceRead(document:ManagedDocument,ownership:Ownership,onRevoke:()=>void):SelectedSourceRead {
     const original=readyOwners.get(document);
@@ -195,10 +199,10 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
     let pump: Promise<void> = Promise.resolve();
     let requiredWriter: { released: Promise<void>; release(): void } | undefined;
     let settlingFinished: Promise<void> | undefined;
-    const held = execution?.held??heldFactOwner(owner, ownership, () => {
+    const held = execution?.held??heldFactOwner(owner, ownership, createArtifactCurrentGuard(() => {
         if (closed)
             throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' });
-    });
+    }));
     const actionMembers=new Set<{source:object;finished():boolean}>();
     const releaseFinishedMembers=()=>{if(pending||queue.length)return;for(const record of actionMembers)if(record.finished()){core?.releaseSource(record.source);actionMembers.delete(record)}};
     const executionStatus = (): 'available' | 'unavailable' | 'retired' => {
@@ -794,8 +798,8 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
     const heldField=!types.isProxy(held)?Object.getOwnPropertyDescriptor(held,'assertHeld'):undefined
     const executionGuard=executionField&&'value'in executionField&&typeof executionField.value==='function'&&isArtifactCurrentGuard(executionField.value)?executionField.value as ()=>void:undefined
     const heldGuard=heldField&&'value'in heldField&&typeof heldField.value==='function'&&isArtifactCurrentGuard(heldField.value)?heldField.value as ()=>void:undefined
-    const originalGuardDependencies=executionGuard&&heldGuard
-    const assertGuardMethods=()=>{if(Object.getOwnPropertyDescriptor(execution!,'assertCurrent')?.value!==executionGuard||Object.getOwnPropertyDescriptor(held,'assertHeld')?.value!==heldGuard)throw new FactRecoveryRequiredError()}
+    const originalGuardDependencies=(!execution||executionGuard)&&heldGuard
+    const assertGuardMethods=()=>{if(execution&&Object.getOwnPropertyDescriptor(execution,'assertCurrent')?.value!==executionGuard||Object.getOwnPropertyDescriptor(held,'assertHeld')?.value!==heldGuard)throw new FactRecoveryRequiredError()}
     if(originalGuardDependencies){
       const originalReady=document.assertReady
       document.assertReady=createArtifactCurrentGuard(()=>{assertGuardMethods();Reflect.apply(originalReady,document,[])})
@@ -868,7 +872,28 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
     if(!Object.hasOwn(document,'view'))Object.defineProperty(document,'view',{value:state.view,enumerable:true,writable:false,configurable:false});
     for(const source of sourceDrains.keys())if('delivery'in source)bindFactSettlementSource(state.view,document,source,id);
     const originalReady = document.assertReady, originalView = state!.view;
-    readyOwners.set(document, { ownership, ownerToken(){assertAuthorized(rootAuthorization);if(metadataStale)throw new FactRecoveryRequiredError();return owner}, invalidateMetadata(revision){metadataRevision=revision;metadataStale=true;invalidateSelected()}, captureProcess(documentKeys, checkEntry) {
+    readyOwners.set(document, { ownership, captureOriginalReady() {
+        // Custom dependencies retain the ordinary opaque witness path. No public
+        // getters are consulted to decide whether this factory can compose it.
+        if (!originalGuardDependencies || !isArtifactCurrentGuard(originalReady)) return;
+        const assertNamespace = () => {
+            const viewProperty = Object.getOwnPropertyDescriptor(document, 'view');
+            const readyProperty = Object.getOwnPropertyDescriptor(document, 'assertReady');
+            if (!viewProperty || !('value' in viewProperty) || viewProperty.value !== originalView
+                || !readyProperty || !('value' in readyProperty) || readyProperty.value !== originalReady) throw new FactRecoveryRequiredError();
+        };
+        assertNamespace();
+        const observation = captureManagedReadyObservation(document, ownership);
+        if (observation.view !== originalView) throw new FactRecoveryRequiredError();
+        const assertCurrent = createArtifactCurrentGuard(() => {
+            assertGuardMethods(); assertNamespace();
+            Reflect.apply(originalReady, document, []);
+            observation.assertCurrent();
+            assertNamespace();
+        });
+        assertCurrent();
+        return assertCurrent;
+    }, ownerToken(){assertAuthorized(rootAuthorization);if(metadataStale)throw new FactRecoveryRequiredError();return owner}, invalidateMetadata(revision){metadataRevision=revision;metadataStale=true;invalidateSelected()}, captureProcess(documentKeys, checkEntry) {
         if (!processLatches) throw new FactRecoveryRequiredError();
         const latch = processLatches.capture({ sessionId: id, documentKeys, mode: 'managed', managedOwner: owner });
         const view = state.view, header = view.header, events = view.events;

@@ -12,4 +12,4 @@ export { eligibleCodeTerminal, codeTerminalRef } from './events/code-delivery.ts
 export { assertDeliveryIssue } from './managed/delivery-control.ts'
 
 // Constructor-owned synchronous currentness composition; unknown callbacks stay opaque.
-export { bindOriginalCurrentnessDescriptors, callOriginalCurrentnessMethod, runOriginalCurrentnessRead, runOpaqueCurrentnessRead, wrapOriginalSourceCurrentness } from './managed/currentness-guards.ts'
+export { bindOriginalCurrentnessDescriptors, bindOriginalCurrentnessMethod, originalCurrentnessFactoryMatches, callOriginalCurrentnessMethod, runOriginalCurrentnessRead, runOpaqueCurrentnessRead, wrapOriginalSourceCurrentness } from './managed/currentness-guards.ts'

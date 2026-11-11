@@ -1,4 +1,4 @@
-import { runOriginalCurrentnessRead, runOpaqueCurrentnessRead, wrapOriginalSourceCurrentness } from '@i-harness/core-session/internal/execution'
+import { bindOriginalCurrentnessMethod, runOriginalCurrentnessRead, runOpaqueCurrentnessRead, wrapOriginalSourceCurrentness, originalCurrentnessFactoryMatches } from '@i-harness/core-session/internal/execution'
 import { canonicalJsonData, captureBootstrapPreparationFacts } from '@i-harness/core-session'
 import { contextSourceIdentity, contextWorkspaceIdentity, type LegacyForkTransferScope } from '@i-harness/context-output'
 import { ForkAdmissionError, ForkTargetPolicyDeniedError, type ForkHost, type ForkSourceWitness, type SessionCoordinator } from '@i-harness/session-persistence'
@@ -106,14 +106,17 @@ export function createGatewayForkHost(options: {
           }
           if (lineageGuard) runOriginalCurrentnessRead(lineageGuard, checkLineage)
           else checkLineage()
-          if (lineageGuard) runOpaqueCurrentnessRead(lineageGuard, () => source!.assertUnchanged())
+          const sourceGuard = bindOriginalCurrentnessMethod(source, 'assertUnchanged')
+          if (lineageGuard && sourceGuard) runOriginalCurrentnessRead(lineageGuard, sourceGuard)
+          else if (lineageGuard) runOpaqueCurrentnessRead(lineageGuard, () => source!.assertUnchanged())
           else source.assertUnchanged()
           if (getter) {
             const checkProject = () => {
               const selected = getter!(), project = operation.prepared.requestIntent.project
               if (project.kind === 'project' ? selected.projectId !== project.projectId : selected.projectId !== undefined) throw new ForkAdmissionError('policy')
             }
-            if (lineageGuard) runOpaqueCurrentnessRead(lineageGuard, checkProject)
+            if (lineageGuard && originalCurrentnessFactoryMatches(getter, observation, 'metadata')) runOriginalCurrentnessRead(lineageGuard, checkProject)
+            else if (lineageGuard) runOpaqueCurrentnessRead(lineageGuard, checkProject)
             else checkProject()
           }
         }

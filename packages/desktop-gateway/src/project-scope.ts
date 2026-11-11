@@ -1,5 +1,8 @@
 import { projectBindingDocumentKey, parseSessionProjectBinding } from './session-navigation.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { types } from 'node:util'
+import { bindOriginalCurrentnessDescriptors, bindOriginalCurrentnessMethod, wrapOriginalSourceCurrentness } from '@i-harness/core-session/internal/execution'
+import { associateArtifactCurrentnessFactory } from '@i-harness/session-persistence/internal/artifact-path'
 import { realpath, stat } from "node:fs/promises"
 import { isAbsolute, resolve } from "node:path"
 import type { SessionCoordinator, SessionMeta, ExistingSessionBindingObservation, SessionBindingObservation } from "@i-harness/session-persistence"
@@ -20,6 +23,21 @@ export interface ProjectMoveOptions { assertIdle?(id: string): Promise<void>; dr
 export interface ColdTargetPolicy {
   qualify(): Promise<void>; sealWhileActive(): void; settle(): Promise<void>; assertSettledCurrent(): void
   targetScope(): BootstrapTargetScope; revoke(): void; close(): Promise<void>
+}
+
+/** Reader association is receiver-specific; copied functions and accessors do
+ * not establish original observation provenance. No classifier invokes them. */
+function originalProjectObservationGuard(observation: ExistingSessionBindingObservation): (() => void) | undefined {
+  if (types.isProxy(observation) || !bindOriginalCurrentnessMethod(observation, 'metadata')
+    || !bindOriginalCurrentnessMethod(observation, 'binding')) return
+  const current = Object.getOwnPropertyDescriptor(observation, 'assertCurrent')
+  const metadata = Object.getOwnPropertyDescriptor(observation, 'metadata')
+  const binding = Object.getOwnPropertyDescriptor(observation, 'binding')
+  if (!current || !('value' in current) || typeof current.value !== 'function'
+    || !metadata || !('value' in metadata) || !binding || !('value' in binding)) return
+  const fields = [['assertCurrent', current.value], ['metadata', metadata.value], ['binding', binding.value]] as const
+  return bindOriginalCurrentnessDescriptors({ receiver: observation, method: current.value,
+    before: fields, after: fields, message: 'Original project observation methods changed' })
 }
 
 interface Binding { bound: boolean; projectId?: string }
@@ -218,9 +236,22 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
   }
   async function observedResultGetter(id:string,captured:BindingObservation) {
     await resolveOwner(id,undefined,true);captured.assertCurrent();observed.add(id)
-    const get=()=>{captured.assertCurrent();const projectId=liveOwner(id),context=projectId?projects.get(projectId):undefined;return {...(projectId?{projectId}:{}),...(context?{scope:{id:context.id,name:context.name,primaryRoot:context.primaryRoot!,roots:[...context.roots]}}:{}),revision:`${authority(id).revision}:binding:${bindingRevisions.get(id)??0}`}}
-    get();return get
+    const field = Object.getOwnPropertyDescriptor(captured, 'assertCurrent')
+    const guard = field && 'value' in field && typeof field.value === 'function'
+      ? bindOriginalCurrentnessDescriptors({ receiver: captured, method: field.value,
+        before: [['assertCurrent', field.value]], after: [['assertCurrent', field.value]],
+        message: 'Original project scope guard changed' }) : undefined
+    const current = guard ?? (() => captured.assertCurrent())
+    const get = () => {
+      current()
+      const projectId = liveOwner(id), context = projectId ? projects.get(projectId) : undefined
+      return { ...(projectId ? { projectId } : {}), ...(context ? { scope: { id: context.id, name: context.name, primaryRoot: context.primaryRoot!, roots: [...context.roots] } } : {}),
+        revision: authority(id).revision + ':binding:' + (bindingRevisions.get(id) ?? 0) }
+    }
+    if (guard) associateArtifactCurrentnessFactory(get)
+    get(); return get
   }
+
   function scopeSchema(value: unknown): ConfirmedProjectScope {
     if (!object(value)) throw new Error("Invalid project scope")
     const id = identifier(value.id)
@@ -609,8 +640,11 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
       const stamp = () => canonicalJsonData([...ids].map(id => [id, bindingRevisions.get(id) ?? 0, authority(id).revision, liveOwner(id) ?? null]))
       const original = stamp()
       let active = true
-      const captured: BindingObservation = { ids, observation, assertCurrent() {
-        assertOpen(); observation.assertCurrent()
+      const originalObservation = originalProjectObservationGuard(observation)
+      const check = () => {
+        assertOpen()
+        if (originalObservation) originalObservation()
+        else observation.assertCurrent()
         if (!active) throw new Error('Project binding observation expired')
         if (original !== stamp()) throw new Error('Project binding observation changed')
         for (const id of ids) {
@@ -619,7 +653,9 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
           if (referenceFailure || referenceUpdates || scopeUpdates.has(projectId ?? '') || pendingChanges.has(projectId ?? '')) throw new Error('Project scope changed')
           assertAvailable(projectId)
         }
-      } }
+      }
+      const captured: BindingObservation = { ids, observation,
+        assertCurrent: originalObservation ? wrapOriginalSourceCurrentness(originalObservation, check) ?? check : check }
       try {
         return await bindingObservations.run([...(bindingObservations.getStore() ?? []), captured], async () => {
           captured.assertCurrent()
