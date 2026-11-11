@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./internal/artifact-path": "./src/artifact-path.ts",
-    "./internal/held-state": "./src/held-state-internal.ts"
+    "./internal/held-state": "./src/held-state-internal.ts",
+    "./internal/lease-retirement": "./src/lease-retirement.ts"
   },
   "scripts": {
     "test": "vitest run",

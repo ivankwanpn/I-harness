@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { acquireSessionLock, lockPathFor, type SessionLock } from '@i-harness/fs-lock'
+import { LeaseRetirement } from '@i-harness/fs-lock/internal/lease-retirement'
+export { LeaseRetirement }
 
 export interface WorkspaceMutationTurn { assertCurrent(): void }
 export interface WorkspaceMutationCleanup { assertSettled(): void; close(): Promise<void> }
@@ -10,29 +12,6 @@ export interface WorkspaceMutationOwner {
   assertTurn(turn: WorkspaceMutationTurn): void
   join(): Promise<void>
   close(): Promise<void>
-}
-
-/** A failed native release is debt on the original handle. In particular, a
- * consumed held bit cannot turn a subsequent no-op into confirmed disposal. */
-export class LeaseRetirement {
-  private failure: unknown
-  private uncertain = false
-  private retired = false
-  constructor(readonly lease: SessionLock) {}
-  assertSettled(): void { if (!this.retired) throw new Error('Original workspace lease cleanup unresolved') }
-  async close(): Promise<void> {
-    if (this.retired) return
-    if (this.uncertain) throw this.failure
-    try {
-      await this.lease.release()
-      if (this.lease.held) throw new Error('Ownership lease release left the original lease held')
-      this.retired = true
-    } catch (failure) {
-      this.failure = failure
-      this.uncertain = !this.lease.held
-      throw failure
-    }
-  }
 }
 
 /** Preserve a sole callback failure literally only after clean retirement. Two

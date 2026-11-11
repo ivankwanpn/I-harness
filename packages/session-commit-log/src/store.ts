@@ -7,6 +7,7 @@ import { foldCommits, type CommitDocument, type CommitView } from './fold.ts'
 import { acquireCommitLease, acquireCommitSnapshotLease, type CommitLease } from './lease.ts'
 import { SessionLockConflictError } from '@i-harness/fs-lock'
 import { documentCheckpoint } from './document-checkpoint.ts'
+import { CommitLogCleanupError, CommitLogResources } from './resources.ts'
 import { generationPath, sessionDirectory, sidecarDirectory, sidecarPath, temporaryPath } from './paths.ts'
 import { isAlreadyExists, isNotFound, nodeIo, type CommitLogIo } from './io.ts'
 import { scanCommitLog } from './scanner.ts'
@@ -80,10 +81,10 @@ type State = {
   view: CommitView
   size: number
   handle?: FileHandle
-  lease?: CommitLease
-  snapshotLease?: CommitLease
   closed: boolean
 }
+
+type CommitLogLocation = { readonly root: string; readonly sessionId: string; readonly io: CommitLogIo }
 
 function sha256Hex(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex')
@@ -93,11 +94,13 @@ function nowIso(options: CommitLogOptions): string {
   return (options.now?.() ?? new Date()).toISOString()
 }
 
-async function syncDirectory(io: CommitLogIo, directory: string): Promise<void> {
-  try {
-    const handle = await io.open(directory, 'r')
-    try { await handle.sync() } catch { /* directory sync is diagnostic */ } finally { await handle.close().catch(() => {}) }
-  } catch { /* Windows cannot open a directory as a file */ }
+async function syncDirectory(io: CommitLogIo, directory: string, resources: CommitLogResources): Promise<void> {
+  let handle: FileHandle
+  try { handle = await io.open(directory, 'r') }
+  catch { return } // Directory handles are unavailable on some platforms.
+  await resources.withFile(handle, async () => {
+    try { await handle.sync() } catch { /* Directory sync remains diagnostic. */ }
+  })
 }
 
 async function writeAll(handle: FileHandle, text: string, position: number): Promise<void> {
@@ -113,18 +116,16 @@ async function writeAll(handle: FileHandle, text: string, position: number): Pro
 /** Publish a brand-new session generation atomically: temp write + fsync, then a
  *  no-overwrite link. A crash before the link leaves only a temporary file, so the
  *  session never existed; the link itself is the single commit point. */
-async function publish(io: CommitLogIo, root: string, sessionId: string, line: string, expectedGeneration?: string): Promise<void> {
+async function publish(io: CommitLogIo, root: string, sessionId: string, line: string, resources: CommitLogResources, expectedGeneration?: string): Promise<void> {
   const directory = sessionDirectory(root, sessionId)
   await io.mkdir(directory)
   const finalPath = generationPath(root, sessionId, COMMIT_LOG_GENERATION)
   const temporary = temporaryPath(root, sessionId, randomUUID().slice(0, 8))
   const handle = await io.open(temporary, 'wx')
-  try {
+  await resources.withFile(handle, async () => {
     await writeAll(handle, line, 0)
     await handle.sync()
-  } finally {
-    await handle.close().catch(() => {})
-  }
+  })
   try {
     if (expectedGeneration !== undefined) {
       const deadline = performance.now() + 500
@@ -151,7 +152,7 @@ async function publish(io: CommitLogIo, root: string, sessionId: string, line: s
   } finally {
     await io.unlink(temporary).catch(() => {})
   }
-  await syncDirectory(io, directory)
+  await syncDirectory(io, directory, resources)
 }
 
 async function readGeneration(io: CommitLogIo, path: string): Promise<Buffer | undefined> {
@@ -165,22 +166,24 @@ function openState(records: readonly CommitRecord[], view: CommitView, size: num
 export async function createCommitLog(options: CommitLogOptions, first: CreateInput): Promise<CommitLog> {
   const io = options.io ?? nodeIo
   const { root, sessionId } = options
-  const lease = await acquireCommitLease(sessionId, { lockRoot: options.lockRoot ?? root, retryMs: options.lease?.retryMs, deadlineMs: options.lease?.deadlineMs })
+  const location = { root, sessionId, io }, captured = structuredClone(first), recreateDeleted = options.recreateDeleted
+  const resources = new CommitLogResources()
+  resources.retain(await acquireCommitLease(sessionId, { lockRoot: options.lockRoot ?? root, retryMs: options.lease?.retryMs, deadlineMs: options.lease?.deadlineMs }))
   try {
-    const ops = parseOps([{ kind: 'header', value: first.header }, ...(first.ops ?? [])])
+    const ops = parseOps([{ kind: 'header', value: captured.header }, ...(captured.ops ?? [])])
     const payload: CommitPayload = {
       v: COMMIT_FORMAT_VERSION,
       seq: 1,
       prev: GENESIS_PREV,
       at: nowIso(options),
-      entries: [...(first.entries ?? [])],
+      entries: [...(captured.entries ?? [])],
       ops,
     }
     const line = encodeCommit(payload) + '\n'
     const record = decodeCommit(line.slice(0, -1))
     const view = foldCommits([record])
     let deletedGeneration: string | undefined
-    if (options.recreateDeleted) {
+    if (recreateDeleted) {
       const existing = await readGeneration(io, generationPath(root, sessionId, COMMIT_LOG_GENERATION))
       if (existing) {
         if (!foldCommits(scanCommitLog(existing).records).deleted) throw new CommitLogConflictError(sessionId)
@@ -188,14 +191,15 @@ export async function createCommitLog(options: CommitLogOptions, first: CreateIn
       }
     }
     // Atomic file replacement keeps the durable tombstone until new birth commits.
-    await publish(io, root, sessionId, line, deletedGeneration)
+    await publish(io, root, sessionId, line, resources, deletedGeneration)
     const handle = await io.open(generationPath(root, sessionId, COMMIT_LOG_GENERATION), 'r+')
+    resources.file(handle)
     const state = openState([record], view, Buffer.byteLength(line))
     state.handle = handle
-    state.lease = lease
-    return makeLog(options, 'write', state, lease)
+    return makeLog(options, 'write', state, resources, location)
   } catch (error) {
-    await lease.release().catch(() => {})
+    try { await resources.close() }
+    catch (cleanup) { throw new CommitLogCleanupError([error, cleanup], resources) }
     throw error
   }
 }
@@ -212,19 +216,19 @@ function cacheScan(key: string, fingerprint: string, records: readonly CommitRec
 export async function openCommitLog(options: CommitLogOptions, mode: CommitLogMode): Promise<CommitLog> {
   const io = options.io ?? nodeIo
   const { root, sessionId } = options
+  const location = { root, sessionId, io }, lockRoot = options.lockRoot ?? root, compactDocuments = options.compactDocuments
+  const resources = new CommitLogResources()
   const path = generationPath(root, sessionId, COMMIT_LOG_GENERATION)
-  let lease: CommitLease | undefined
-  let snapshotLease: CommitLease | undefined
   let handle: FileHandle | undefined
   try {
-    if (mode === 'write') lease = await acquireCommitLease(sessionId, { lockRoot: options.lockRoot ?? root, retryMs: options.lease?.retryMs, deadlineMs: options.lease?.deadlineMs })
+    if (mode === 'write') resources.retain(await acquireCommitLease(sessionId, { lockRoot, retryMs: options.lease?.retryMs, deadlineMs: options.lease?.deadlineMs }))
     else {
       // An absent read stays passive. Read the actual generation only after
       // its retention lease is held, so concurrent maintenance stays ordered.
       try { handle = await io.open(path, 'r') }
       catch (error) { if (isNotFound(error)) throw new CommitLogNotFoundError(sessionId); throw error }
-      await handle.close(); handle = undefined
-      snapshotLease = await acquireCommitSnapshotLease(sessionId, { lockRoot: options.lockRoot ?? root, retryMs: options.lease?.retryMs, deadlineMs: options.lease?.deadlineMs }, 'shared')
+      await resources.release(resources.file(handle)); handle = undefined
+      resources.retain(await acquireCommitSnapshotLease(sessionId, { lockRoot, retryMs: options.lease?.retryMs, deadlineMs: options.lease?.deadlineMs }, 'shared'))
     }
     let bytes = await readGeneration(io, path)
     if (!bytes) throw new CommitLogNotFoundError(sessionId)
@@ -238,26 +242,27 @@ export async function openCommitLog(options: CommitLogOptions, mode: CommitLogMo
     let view = foldCommits(scan.records)
     if (mode === 'write') {
       let maintenance: CommitLease | undefined
-      try { maintenance = await acquireCommitSnapshotLease(sessionId, { lockRoot: options.lockRoot ?? root, deadlineMs: 0 }, 'exclusive') }
+      try { maintenance = resources.retain(await acquireCommitSnapshotLease(sessionId, { lockRoot, deadlineMs: 0 }, 'exclusive')) }
       catch (error) { if (!(error instanceof SessionLockConflictError)) throw error }
       if (maintenance) {
-        try {
-          const checkpoint = options.compactDocuments && documentCheckpoint(scan.records, view)
+        await resources.withResource(maintenance, async () => {
+          const checkpoint = compactDocuments && documentCheckpoint(scan.records, view)
           if (checkpoint) {
-            await publish(io, root, sessionId, checkpoint.line, fingerprint)
+            await publish(io, root, sessionId, checkpoint.line, resources, fingerprint)
             bytes = Buffer.from(checkpoint.line)
             scan = { records: [checkpoint.record], tornBytes: 0 }
             view = checkpoint.view
           }
-        } finally { await maintenance.release() }
+        })
         // New readers observe this generation. The writer lease prevents a
         // concurrent mutation from creating a reference during this cleanup.
-        await collectGarbage(options, scan.records)
+        await collectGarbage(location, scan.records)
       }
     }
     let size = bytes.length
     if (mode === 'write') {
       handle = await io.open(path, 'r+')
+      resources.file(handle)
       if (scan.tornBytes > 0) {
         size = bytes.length - scan.tornBytes
         await handle.truncate(size)
@@ -266,14 +271,11 @@ export async function openCommitLog(options: CommitLogOptions, mode: CommitLogMo
     }
     const state = openState(scan.records, view, size)
     state.handle = handle
-    state.lease = lease
-    state.snapshotLease = snapshotLease
-    const log = makeLog(options, mode, state, lease)
+    const log = makeLog(options, mode, state, resources, location)
     return log
   } catch (error) {
-    await handle?.close().catch(() => {})
-    if (snapshotLease) await snapshotLease.release().catch(() => {})
-    if (lease) await lease.release().catch(() => {})
+    try { await resources.close() }
+    catch (cleanup) { throw new CommitLogCleanupError([error, cleanup], resources) }
     throw error
   }
 }
@@ -292,21 +294,21 @@ async function collectGarbage(options: CommitLogOptions, records: readonly Commi
   }
 }
 
-function makeLog(options: CommitLogOptions, mode: CommitLogMode, state: State, lease: CommitLease | undefined): CommitLog {
-  const io = options.io ?? nodeIo
-  const path = generationPath(options.root, options.sessionId, COMMIT_LOG_GENERATION)
+function makeLog(options: CommitLogOptions, mode: CommitLogMode, state: State, resources: CommitLogResources, location: CommitLogLocation): CommitLog {
+  const { root, sessionId, io } = location
+  const path = generationPath(root, sessionId, COMMIT_LOG_GENERATION)
   let latestBatch: string | undefined
   for (const value of state.view.batches.values()) latestBatch = value
   let poisoned = false
   let snapshot: CommitView | undefined
   let recordSnapshot: readonly CommitRecord[] | undefined
   const invalidate = () => { snapshot = undefined; recordSnapshot = undefined }
-  const assertOpen = () => { if (state.closed) throw new CommitLogClosedError() }
+  const assertOpen = () => { if (state.closed) throw new CommitLogClosedError(); resources.assertHealthy() }
   const assertWrite = () => { assertOpen(); if (poisoned) throw new Error('commit log writer requires reopening after failed rollback'); if (mode !== 'write' || !state.handle) throw new CommitLogReadOnlyError() }
   let queue: Promise<unknown> = Promise.resolve()
   const serialize = <T>(op: () => Promise<T>): Promise<T> => { const result = queue.then(op); queue = result.catch(() => {}); return result }
   const log: CommitLog = {
-    sessionId: options.sessionId,
+    sessionId,
     mode,
     get open() { return !state.closed },
     header: () => state.view.header,
@@ -316,7 +318,7 @@ function makeLog(options: CommitLogOptions, mode: CommitLogMode, state: State, l
     async refresh() {
       assertOpen()
       const bytes = await readGeneration(io, path)
-      if (!bytes) throw new CommitLogNotFoundError(options.sessionId)
+      if (!bytes) throw new CommitLogNotFoundError(sessionId)
       const scan = scanCommitLog(bytes)
       const view = foldCommits(scan.records)
       invalidate()
@@ -361,12 +363,12 @@ function makeLog(options: CommitLogOptions, mode: CommitLogMode, state: State, l
     async writeSidecar(bytes: Uint8Array) {
       assertWrite()
       const digest = sha256Hex(bytes)
-      const directory = sidecarDirectory(options.root, options.sessionId)
+      const directory = sidecarDirectory(root, sessionId)
       await io.mkdir(directory)
-      const path = sidecarPath(options.root, options.sessionId, digest)
+      const path = sidecarPath(root, sessionId, digest)
       try {
         const handle = await io.open(path, 'wx')
-        try {
+        await resources.withFile(handle, async () => {
           let offset = 0
           while (offset < bytes.length) {
             const result = await handle.write(bytes, offset, bytes.length - offset, offset)
@@ -374,7 +376,7 @@ function makeLog(options: CommitLogOptions, mode: CommitLogMode, state: State, l
             offset += result.bytesWritten
           }
           await handle.sync()
-        } finally { await handle.close().catch(() => {}) }
+        })
       } catch (error) {
         if (!isAlreadyExists(error)) throw error
         // Content addressing: an existing sidecar must hold these exact bytes.
@@ -385,19 +387,16 @@ function makeLog(options: CommitLogOptions, mode: CommitLogMode, state: State, l
     },
     async readSidecar(digest: string) {
       assertOpen()
-      const bytes = new Uint8Array(await io.readFile(sidecarPath(options.root, options.sessionId, digest)))
+      const bytes = new Uint8Array(await io.readFile(sidecarPath(root, sessionId, digest)))
       const doc = [...state.view.documents.values()].find(value => value.digest === digest)
       if (sha256Hex(bytes) !== digest || (doc && doc.bytes !== bytes.byteLength)) throw new CommitFormatError('corrupt', 'sidecar integrity verification failed')
       return bytes
     },
     async close() {
       if (state.closed) return
-      if (state.handle) {
-        await state.handle.close()
-        state.handle = undefined
-      }
-      if (lease) await lease.release()
-      if (state.snapshotLease) await state.snapshotLease.release()
+      try { await resources.close() }
+      catch (error) { throw new CommitLogCleanupError([error], { close: () => log.close() }) }
+      state.handle = undefined
       state.closed = true
     },
   }

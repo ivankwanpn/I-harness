@@ -1,4 +1,5 @@
 import { acquireSessionLock, lockPathFor, type SessionLock } from '@i-harness/fs-lock'
+import { LeaseRetirement } from '@i-harness/fs-lock/internal/lease-retirement'
 
 export type CommitLeaseOptions = {
   readonly lockRoot: string
@@ -6,7 +7,7 @@ export type CommitLeaseOptions = {
   readonly deadlineMs?: number
 }
 
-export type CommitLease = { readonly held: boolean; release(): Promise<void> }
+export type CommitLease = LeaseRetirement
 
 /** Exclusive writer lease keyed to the commit-log namespace, so a legacy
  *  coordinator lease and a commit-log lease never mask each other. */
@@ -31,9 +32,5 @@ export async function acquireCommitSnapshotLease(sessionId: string, options: Com
 }
 
 function retainLease(lock: SessionLock): CommitLease {
-  let released = false
-  return {
-    get held() { return !released && lock.held },
-    async release() { if (released) return; await lock.release(); released = true },
-  }
+  return new LeaseRetirement(lock)
 }
