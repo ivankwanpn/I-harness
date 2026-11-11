@@ -30,9 +30,10 @@ vi.mock('node:fs/promises',async original=>{
  const fs=await original<typeof import('node:fs/promises')>()
  return{...fs,async lstat(...args:Parameters<typeof fs.lstat>){const info=await fs.lstat(...args);return identityInput.read?identityInput.read(String(args[0]),info,args[1]):info},async rm(...args:Parameters<typeof fs.rm>){if(input.removeHook)return input.removeHook(String(args[0]),()=>fs.rm(...args));return fs.rm(...args)},async open(...args:Parameters<typeof fs.open>){const name=String(args[0]);if(/(?:[\\/](?:body|index|leaves)|blobs[\\/]|index.sqlite$)/.test(name))input.bodyOpens++;const handle=await fs.open(...args),close=handle.close.bind(handle);handle.close=()=>input.fileClose?input.fileClose(name,close):close();return handle}}
 })
-vi.mock('@i-harness/fs-lock/internal/artifact-path',async()=>{
+vi.mock('@i-harness/fs-lock/internal/artifact-path',async original=>{
+ const module=await original<typeof import('@i-harness/fs-lock/internal/artifact-path')>()
  const {createWin32ArtifactPathOwnerWithApi}=await import('../../fs-lock/src/win32-artifact-path.ts')
- return{createArtifactPathOwner:(root:string)=>createWin32ArtifactPathOwnerWithApi(root,input.api!)}
+ return{...module,createArtifactPathOwner:(root:string)=>createWin32ArtifactPathOwnerWithApi(root,input.api!)}
 })
 vi.mock('@i-harness/fs-lock',async()=>{
  const {createHash}=await import('node:crypto')
@@ -188,7 +189,7 @@ it('recognizes original false distinctly and refuses copied proxy or replaced ge
  const lock=heldLock({createFileW(){throw Error('No real acquisition in injected held-constructor control')},lockFileEx(){throw Error('No real acquisition in injected held-constructor control')},unlockFileEx:()=>0,closeHandle:()=>{closes++;return 1},getLastError:()=>5},1n,'original',2n)
  const state=originalHeldStateFor(lock)!
  expect(state.read()).toBe(true);expect(originalHeldStateFor({...lock})).toBeUndefined();expect(originalHeldStateFor(new Proxy(lock,{}))).toBeUndefined()
- expect(()=>lock.release()).toThrow(/UnlockFileEx/);expect(originalHeldStateFor(lock)!.read()).toBe(false);lock.release();expect(closes).toBe(1)
+ expect(()=>lock.release()).not.toThrow();expect(originalHeldStateFor(lock)!.read()).toBe(false);lock.release();expect(closes).toBe(1)
  Object.defineProperty(lock,'held',{get(){substitutes++;return true}})
  expect(()=>originalHeldStateFor(lock)).toThrow(/Changed original/);expect(()=>state.read()).toThrow(/Changed original/);expect(substitutes).toBe(0)
 })

@@ -46,8 +46,6 @@ const LOCK_EX = 2
 const LOCK_SH = 1
 /** LOCK_NB: non-blocking — fail with EAGAIN instead of waiting (sys/file.h). */
 const LOCK_NB = 4
-/** LOCK_UN: release an existing lock (sys/file.h). */
-const LOCK_UN = 8
 /** EAGAIN: flock(LOCK_NB) conflict — EWOULDBLOCK === EAGAIN on Linux, so one check covers both (errno.h). */
 const EAGAIN = 11
 
@@ -109,37 +107,31 @@ function bindings(): FsLockBindings {
 }
 
 /**
- * Build the lease object for an ACQUIRED lock: flock(LOCK_UN) + close on
- * release (idempotent — the first call wins, later calls are no-ops). Closing
- * the fd alone would also drop the flock; the explicit unlock precedes it so
- * a locked-close never happens silently.
- * @param api - the binding table.
+ * A successful close releases this original flock open-file-description.
+ * An error retires admission and is retained; close must not be retried on a
+ * descriptor number that the OS may already have reused.
  * @param fd - the OPEN lock-file descriptor that HOLDS the flock.
- * @param lockPath - the lock file path (error reporting).
  * @returns the held lease.
  */
-function heldLock(api: FsLockBindings, fd: number, lockPath: string, mode: 'shared' | 'exclusive' = 'exclusive'): SessionLock {
-  let held = true
+function heldLock(fd: number, mode: 'shared' | 'exclusive' = 'exclusive'): SessionLock {
+  let state: 'held' | 'closing' | 'closed' | 'failed' = 'held'
+  let failure: unknown
   const lock:SessionLock = {
     get held(): boolean {
-      return held
+      return state === 'held'
     },
     release(): void {
-      if (!held) return // idempotent: already released → no-op
-      held = false
-      // Capture errno IMMEDIATELY after the failing flock call so the next
-      // native call cannot clobber it.
-      const unlockErrno = api.flock(fd, LOCK_UN) !== 0 ? api.lastErrno() : 0
-      let closeError: unknown = null
+      if (state === 'closed') return
+      if (state === 'failed') throw failure
+      if (state === 'closing') throw new Error('Native lease release is already in progress')
+      state = 'closing'
       try {
+        // flock ownership follows this original open file description. Its
+        // successful close is disposal; retrying close after an error can
+        // target an unrelated reused descriptor (Linux close(2)).
         closeSync(fd)
-      } catch (error) {
-        closeError = error
-      }
-      if (unlockErrno !== 0) throw new Error(`flock(LOCK_UN) failed (errno ${unlockErrno}) for ${lockPath}`)
-      if (closeError !== null) {
-        throw new Error(`close failed for ${lockPath}: ${closeError instanceof Error ? closeError.message : String(closeError)}`)
-      }
+        state = 'closed'
+      } catch (error) { failure = error; state = 'failed'; throw error }
     },
   }
   if (mode === 'exclusive') associateOriginalHeldState(lock)
@@ -175,7 +167,7 @@ export async function acquireLinux(opts: AcquireOptions, mode: 'shared' | 'exclu
       }
 
       if (api.flock(fd, (mode === 'shared' ? LOCK_SH : LOCK_EX) | LOCK_NB) === 0) {
-        return heldLock(api, fd, opts.lockPath, mode)
+        return heldLock(fd, mode)
       }
       const code = api.lastErrno()
       if (!isConflictCode(code)) {

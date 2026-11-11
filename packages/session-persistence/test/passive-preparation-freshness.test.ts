@@ -3,9 +3,10 @@ import {win32 as windows,join,resolve,sep} from 'node:path'
 import {mkdtemp,rm} from 'node:fs/promises'
 import type {Win32ArtifactApi} from '../../fs-lock/src/win32-artifact-api.ts'
 const native=vi.hoisted(()=>({api:undefined as Win32ArtifactApi|undefined,locks:new Set<string>()}))
-vi.mock('@i-harness/fs-lock/internal/artifact-path',async()=>{
+vi.mock('@i-harness/fs-lock/internal/artifact-path',async original=>{
+ const module=await original<typeof import('@i-harness/fs-lock/internal/artifact-path')>()
  const {createWin32ArtifactPathOwnerWithApi}=await import('../../fs-lock/src/win32-artifact-path.ts')
- return{createArtifactPathOwner:(root:string)=>createWin32ArtifactPathOwnerWithApi(root,native.api!)}
+ return{...module,createArtifactPathOwner:(root:string)=>createWin32ArtifactPathOwnerWithApi(root,native.api!)}
 })
 vi.mock('@i-harness/fs-lock',async()=>{
  const {createHash}=await import('node:crypto'),{heldLock}=await import('../../fs-lock/src/win32.ts')

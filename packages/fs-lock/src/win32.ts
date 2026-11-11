@@ -1,15 +1,15 @@
 /**
  * Win32 binding for the session ownership lease: koffi-bound CreateFileW +
- * LockFileEx/UnlockFileEx in NON-BLOCKING mode
+ * LockFileEx in NON-BLOCKING mode
  * (LOCKFILE_FAIL_IMMEDIATELY with the selected lock mode) with the retry/backoff
  * loop in JS, so the event loop is never blocked by a synchronous FFI wait.
  *
  * Attribution: the binding-table shape and call pattern are absorbed from
  * `@i-harness/sandbox-windows-acl` (`ffi.ts` win32Bindings — CreateFileW /
- * LockFileEx / UnlockFileEx / CloseHandle signatures verified against the
+ * LockFileEx / CloseHandle signatures verified against the
  * MinGW Windows headers there; `acl.ts:75-110` withPathLock). CRITICAL gotcha
  * carried over: koffi 3.1.x CRASHES on a NULL lpOverlapped, so every
- * LockFileEx/UnlockFileEx call passes a zeroed 32-byte OVERLAPPED (offset 0,
+ * LockFileEx call passes a zeroed 32-byte OVERLAPPED (offset 0,
  * hEvent NULL — the documented equivalent on a synchronous file handle).
  * Fail-closed conflict semantics follow codex `thread-store/src/local/
  * writer_lock.rs` (try_lock + WouldBlock→Conflict). MIT attribution in
@@ -35,7 +35,8 @@ interface FsLockBindings {
     creationDisposition: number, flagsAndAttributes: number, templateFile: null,
   ): NativePtr
   lockFileEx(file: NativePtr, flags: number, reserved: number, bytesLow: number, bytesHigh: number, overlapped: NativePtr): number
-  unlockFileEx(file: NativePtr, reserved: number, bytesLow: number, bytesHigh: number, overlapped: NativePtr): number
+  /** Accepted by existing constructor test adapters; release never calls it. */
+  unlockFileEx?(file: NativePtr, reserved: number, bytesLow: number, bytesHigh: number, overlapped: NativePtr): number
   closeHandle(handle: NativePtr): number
   getLastError(): number
 }
@@ -120,9 +121,8 @@ function bindings(): FsLockBindings {
     cachedBindings = {
       // fileapi.h: HANDLE CreateFileW(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE)
       createFileW: bind(kernel32, "CreateFileW", PVOID, ["str16", "uint32", "uint32", PVOID, "uint32", "uint32", PVOID]),
-      // fileapi.h: BOOL LockFileEx(HANDLE, DWORD, DWORD, DWORD, DWORD, LPOVERLAPPED) / UnlockFileEx(...)
+      // fileapi.h: BOOL LockFileEx(HANDLE, DWORD, DWORD, DWORD, DWORD, LPOVERLAPPED)
       lockFileEx: bind(kernel32, "LockFileEx", "int", [PVOID, "uint32", "uint32", "uint32", "uint32", PVOID]),
-      unlockFileEx: bind(kernel32, "UnlockFileEx", "int", [PVOID, "uint32", "uint32", "uint32", PVOID]),
       closeHandle: bind(kernel32, "CloseHandle", "int", [PVOID]),
       getLastError: bind(kernel32, "GetLastError", "uint32", []),
     } as unknown as FsLockBindings
@@ -135,31 +135,33 @@ function bindings(): FsLockBindings {
 }
 
 /**
- * Build the lease object for an ACQUIRED lock: UnlockFileEx + CloseHandle on
- * release (idempotent — the first call wins, later calls are no-ops). Closing
- * the handle alone would also drop the byte-range lock; the explicit unlock
- * precedes it so a locked-close never happens silently.
+ * Closing the original handle releases its byte-range lock (LockFileEx docs).
+ * Only a successful CloseHandle acknowledges disposal. An unsuccessful or
+ * unknown close retires admission and remains uncertain: never close the same
+ * numeric handle again, because it may already have been reused.
  * @param api - the binding table.
  * @param handle - the OPEN lock-file handle that HOLDS the byte-range lock.
  * @param lockPath - the lock file path (error reporting).
- * @param overlapped - the zeroed OVERLAPPED used for lock/unlock.
  * @returns the held lease.
  */
-export function heldLock(api: FsLockBindings, handle: NativePtr, lockPath: string, overlapped: NativePtr, mode: 'shared' | 'exclusive' = 'exclusive'): SessionLock {
-  let held = true
+export function heldLock(api: FsLockBindings, handle: NativePtr, lockPath: string, _overlapped?: NativePtr, mode: 'shared' | 'exclusive' = 'exclusive'): SessionLock {
+  let state: 'held' | 'closing' | 'closed' | 'failed' = 'held'
+  let failure: unknown
   const lock:SessionLock = {
     get held(): boolean {
-      return held
+      return state === 'held'
     },
     release(): void {
-      if (!held) return // idempotent: already released → no-op
-      held = false
-      // Capture each error code IMMEDIATELY after its failing call so the next
-      // Win32 call cannot clobber GetLastError.
-      const unlockCode = api.unlockFileEx(handle, 0, 1, 0, overlapped) === 0 ? api.getLastError() : 0
-      const closeCode = api.closeHandle(handle) === 0 ? api.getLastError() : 0
-      if (unlockCode !== 0) throw new Error(`UnlockFileEx failed (Win32 ${unlockCode}) for ${lockPath}`)
-      if (closeCode !== 0) throw new Error(`CloseHandle failed (Win32 ${closeCode}) for ${lockPath}`)
+      if (state === 'closed') return
+      if (state === 'failed') throw failure
+      if (state === 'closing') throw new Error('Native lease release is already in progress')
+      state = 'closing'
+      try {
+        const result = api.closeHandle(handle)
+        if (!Number.isInteger(result) || result < -0x80000000 || result > 0x7fffffff) throw new Error(`CloseHandle returned an invalid BOOL for ${lockPath}`)
+        if (result === 0) throw new Error(`CloseHandle failed (Win32 ${api.getLastError()}) for ${lockPath}`)
+        state = 'closed'
+      } catch (error) { failure = error; state = 'failed'; throw error }
     },
   }
   if (mode === 'exclusive') associateOriginalHeldState(lock)
@@ -213,7 +215,7 @@ export async function acquireWin32(opts: AcquireOptions, mode: 'shared' | 'exclu
 
       const flags = LOCKFILE_FAIL_IMMEDIATELY | (mode === 'exclusive' ? LOCKFILE_EXCLUSIVE_LOCK : 0)
       if (api.lockFileEx(handle, flags, 0, 1, 0, overlapped) !== 0) {
-        return heldLock(api, handle, opts.lockPath, overlapped, mode)
+        return heldLock(api, handle, opts.lockPath, undefined, mode)
       }
       const code = api.getLastError()
       if (!isConflictCode(code)) {
@@ -232,5 +234,8 @@ export async function acquireWin32(opts: AcquireOptions, mode: 'shared' | 'exclu
     // returned SessionLock, not this scope).
     if (handle !== null && !isInvalidHandle(handle)) api.closeHandle(handle)
     throw error
+  } finally {
+    // Synchronous handles and FAIL_IMMEDIATELY leave no pending native request.
+    koffiModule().free(overlapped)
   }
 }
