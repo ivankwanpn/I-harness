@@ -23,6 +23,9 @@ function dataValue(value: unknown): unknown {
   return value
 }
 
+// Even six-byte escapes plus quotes stay below the existing 24 KiB chunk bound.
+const shortStringUnits = 4095
+
 function* quote(value: string): Generator<string> {
   yield '"'
   for (let offset = 0; offset < value.length;) {
@@ -72,7 +75,10 @@ export function* streamJsonData(input: unknown, options: JsonStreamOptions = {})
       if (value === undefined || typeof value === 'function' || typeof value === 'symbol') return undefined
       if (value === null || typeof value !== 'object') {
         if (options.emit !== false) {
-          if (typeof value === 'string') yield* quote(value)
+          if (typeof value === 'string') {
+            if (value.length <= shortStringUnits) yield JSON.stringify(value)
+            else yield* quote(value)
+          }
           else yield JSON.stringify(value)
         }
       } else {
@@ -116,7 +122,11 @@ export function* streamJsonData(input: unknown, options: JsonStreamOptions = {})
       value = null
     }
     if (frame.emitted++ && options.emit !== false) yield ','
-    if (!frame.array && options.emit !== false) { yield* quote(key); yield ':' }
+    if (!frame.array && options.emit !== false) {
+      if (key.length <= shortStringUnits) yield JSON.stringify(key)
+      else yield* quote(key)
+      yield ':'
+    }
     pending = { value, target: frame.target, key }
   }
   return root

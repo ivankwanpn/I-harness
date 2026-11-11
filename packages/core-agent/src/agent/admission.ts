@@ -56,7 +56,7 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
       const { prepared, snapshot } = finalAssessment
       assertCurrentRepresentable(captured, prepared)
       const needsReduction = finalAssessment.decision.disposition === 'reduce' || snapshot.recoveryRequired && recoveryAdmission !== 'authorized'
-      if (current() && finalAssessment.disposition) context.ownedBudget.retire(finalAssessment.disposition)
+      if (finalAssessment.disposition && current()) context.ownedBudget.retire(finalAssessment.disposition)
       deps.telemetry?.emit({ type: "provider/context", ts: Date.now(), data: {
         systemBytes: prepared.measurement.input.components.system.textUtf8Bytes,
         schemaBytes: prepared.measurement.input.components.toolSchemas.structuredBytes,

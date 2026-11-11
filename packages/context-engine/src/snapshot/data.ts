@@ -1,5 +1,9 @@
 import type { Captured } from "../contracts/snapshot.ts"
 
+// Only nodes constructed and deeply frozen by this module may be reused.
+// Frozen caller objects and proxies carry no ownership evidence.
+const capturedNodes = new WeakSet<object>()
+
 export class UnsupportedData extends Error {
   constructor() { super("CONTEXT_SNAPSHOT_UNSUPPORTED") }
 }
@@ -15,7 +19,7 @@ export function captureData<T>(input: T): Captured<T> {
   const tasks: Task[] = [{ value: input, put: value => { result = value } }]
   while (tasks.length) {
     const task = tasks.pop()!
-    if ("finish" in task) { Object.freeze(task.finish); ancestors.delete(task.original); continue }
+    if ("finish" in task) { Object.freeze(task.finish); capturedNodes.add(task.finish); ancestors.delete(task.original); continue }
     const value = task.value
     if (value === null || typeof value === "string" || typeof value === "boolean") { task.put(value); continue }
     if (typeof value === "number") {
@@ -23,6 +27,7 @@ export function captureData<T>(input: T): Captured<T> {
       task.put(value); continue
     }
     if (typeof value !== "object") throw new UnsupportedData()
+    if (capturedNodes.has(value)) { task.put(value); continue }
     if (ancestors.has(value)) throw new UnsupportedData()
     const array = Array.isArray(value), prototype = Object.getPrototypeOf(value)
     if (array && prototype !== Array.prototype) throw new UnsupportedData()
