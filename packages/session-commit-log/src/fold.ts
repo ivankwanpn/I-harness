@@ -37,7 +37,7 @@ export function foldCommits(records: readonly CommitRecord[], previous?: CommitV
         case 'doc-clear': documents.delete(op.key); break
         case 'intent': intents.set(op.id, op.intent); break
         case 'batch': batches.set(op.id, op.prefixDigest); break
-        case 'seed': seed ??= { parent: op.parent, cut: op.cut, digest: op.digest }; break
+        case 'seed': seed ??= Object.freeze({ parent: op.parent, cut: op.cut, digest: op.digest }); break
         case 'intent-done': intents.delete(op.id); break
         case 'rewind':
           if (op.toSeq > entries.length) throw new CommitFormatError('ops', `rewind toSeq ${op.toSeq} exceeds ${entries.length} committed entries`)

@@ -24,5 +24,5 @@ export function scanCommitLog(bytes: Uint8Array): CommitScan {
     records.push(record)
     start = index + 1
   }
-  return { records, tornBytes: bytes.length - start }
+  return Object.freeze({ records: Object.freeze(records), tornBytes: bytes.length - start })
 }

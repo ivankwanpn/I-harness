@@ -20,6 +20,24 @@ describe('commit codec', () => {
     expect(decoded.ops[0]).toEqual({ kind: 'header', value: header })
   })
 
+  it('owns and freezes the verified JSON tree without freezing the encoder caller input', () => {
+    const input = { ...first(), ops: [{ kind: 'header' as const, value: { sessionId: 's', nested: { values: ['admitted'] } } }] }
+    const encoded = encodeCommit(input), decoded = decodeCommit(encoded)
+    input.ops[0]!.value.nested.values.push('caller edit')
+    expect(Object.isFrozen(input.ops[0]!.value.nested.values)).toBe(false)
+    const header = decoded.ops[0]!
+    if (header.kind !== 'header') throw Error('Missing actual decoded header')
+    const nested = header.value.nested as { values: string[] }
+    expect(() => nested.values.push('decoded edit')).toThrow(TypeError)
+    expect(nested.values).toEqual(['admitted'])
+    const { digest, ...verifiedPayload } = decoded
+    expect(commitDigest(verifiedPayload)).toBe(digest)
+    expect(encodeCommit(verifiedPayload)).toBe(encoded)
+    const scanned = scanCommitLog(Buffer.from(encoded + '\n'))
+    expect(Object.isFrozen(scanned.records)).toBe(true)
+    expect(Object.isFrozen(scanned.records[0])).toBe(true)
+  })
+
   it('rejects a record whose digest does not match its content', () => {
     const line = JSON.parse(encodeCommit(first())) as Record<string, unknown>
     line.at = '2026-01-01T00:00:00.001Z'

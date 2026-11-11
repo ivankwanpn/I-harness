@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { canonicalJsonData, type SessionEvent } from '@i-harness/core-session'
+import { canonicalJsonData, freezeJsonData, type SessionEvent } from '@i-harness/core-session'
 import { CommitFormatError } from './errors.ts'
 
 /** Current commit-log format; a generation file's name carries the same number. */
@@ -63,7 +63,12 @@ export function decodeCommit(line: string): CommitRecord {
   const payload: CommitPayload = { v: COMMIT_FORMAT_VERSION, seq: record.seq as number, prev: record.prev, at: record.at, entries: record.entries as SessionEvent[], ops }
   const digest = commitDigest(payload)
   if (digest !== record.digest) throw new CommitFormatError('digest', 'commit digest does not match its content')
-  return { ...payload, digest }
+  const verified: CommitRecord = { ...payload, digest }
+  // This JSON.parse-owned tree has passed shape and digest verification.
+  // Freeze it once so lazy views, append results and the verified scan cache
+  // can share records without a caller changing another reader's history.
+  freezeJsonData(verified)
+  return verified
 }
 
 export function parseOps(value: unknown): CommitOp[] {
