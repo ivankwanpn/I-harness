@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createSessionCoordinator, createControlledJsonlBackend as createJsonlBackend, backendControls, ownedControls } from './helpers/composed.ts'
 import * as p from '../src/index.ts'
+import { createJsonlBackend as createNativeJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { bootstrapPathsForRoute } from '../../session-persistence-jsonl/src/backend/bootstrap-stage.ts'
 import { buildBootstrapHeader } from '../src/coordinator/bootstrap-header.ts'
 import { createSession, append, exportConversationSeed } from '@i-harness/core-session'
@@ -22,9 +23,28 @@ afterEach(async()=>{for(const c of coordinators.splice(0))await c.close().catch(
 import { pair, guards } from './child-bootstrap-fixture.ts'
 async function setup(root?:string){root??=await mkdtemp(join(tmpdir(),'ih-child-'));if(!roots.includes(root))roots.push(root);const backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(coordinator);return{root,backend,coordinator}}
 it('exposes all three child methods only with the complete routed capability',async()=>{
- const {backend,coordinator}=await setup();expect(typeof (coordinator as any).inspectChildBootstrapCapture).toBe('function');expect(typeof (coordinator as any).bootstrapChildTargetWithCapture).toBe('function');expect(typeof (coordinator as any).resumeChildTarget).toBe('function')
- for(const missing of ['readState','readCapture','reserveCapture','resolveBirth']){const partial={...backend,bootstrapRoutes:{...(backend as any).bootstrapRoutes,[missing]:undefined}},c=p.createSessionCoordinator(partial,{lock:{enabled:true}});coordinators.push(c);expect((c as any).inspectChildBootstrapCapture).toBeUndefined();expect((c as any).bootstrapChildTargetWithCapture).toBeUndefined();expect((c as any).resumeChildTarget).toBeUndefined()}
- for(const candidate of [p.createSessionCoordinator(backend),p.createSessionCoordinator({...backend,bootstrapRoutes:undefined},{lock:{enabled:true}}),p.createSessionCoordinator({...backend,settleBootstrapCaptureIO:undefined},{lock:{enabled:true}})]){coordinators.push(candidate);expect(candidate.inspectChildBootstrapCapture).toBeUndefined();expect(candidate.bootstrapChildTargetWithCapture).toBeUndefined();expect(candidate.resumeChildTarget).toBeUndefined()}
+ const {root,backend,coordinator}=await setup();expect(typeof coordinator.inspectChildBootstrapCapture).toBe('function');expect(typeof coordinator.bootstrapChildTargetWithCapture).toBe('function');expect(typeof coordinator.resumeChildTarget).toBe('function')
+ for(const missing of ['readState','readCapture','reserveCapture','resolveBirth'] as const){
+  const copied={...backend,bootstrapRoutes:{...backend.bootstrapRoutes!}}
+  Reflect.deleteProperty(copied.bootstrapRoutes,missing)
+  expect(()=>p.createSessionCoordinator(copied,{lock:{enabled:true}})).toThrow('original writable coordinator factory')
+  const native=createNativeJsonlBackend(root,{wrap(original){
+   const routes={...original.bootstrapRoutes!};Reflect.deleteProperty(routes,missing);original.bootstrapRoutes=routes
+  }})
+  const c=p.createSessionCoordinator(native,{lock:{enabled:true}});coordinators.push(c)
+  expect(c.inspectChildBootstrapCapture).toBeUndefined();expect(c.bootstrapChildTargetWithCapture).toBeUndefined();expect(c.resumeChildTarget).toBeUndefined()
+ }
+ const defaultOwner=p.createSessionCoordinator(backend);coordinators.push(defaultOwner)
+ expect(defaultOwner.inspectChildBootstrapCapture).toBeTypeOf('function');expect(defaultOwner.bootstrapChildTargetWithCapture).toBeTypeOf('function');expect(defaultOwner.resumeChildTarget).toBeTypeOf('function')
+ expect(()=>p.createSessionCoordinator(backend,{lock:{enabled:false}})).toThrow(p.SessionLockUnsupportedError)
+ for(const missing of ['bootstrapRoutes','settleBootstrapCaptureIO'] as const){
+  expect(()=>p.createSessionCoordinator({...backend,[missing]:undefined},{lock:{enabled:true}})).toThrow('original writable coordinator factory')
+  const native=createNativeJsonlBackend(root,{wrap(original){original[missing]=undefined}}),c=p.createSessionCoordinator(native,{lock:{enabled:true}});coordinators.push(c)
+  expect(c.inspectChildBootstrapCapture).toBeUndefined();expect(c.bootstrapChildTargetWithCapture).toBeUndefined();expect(c.resumeChildTarget).toBeUndefined()
+ }
+ const reader=p.createReadOnlySessionCoordinator(backend)
+ try{expect(reader.access).toBe('read');expect('bootstrapChildTargetWithCapture'in reader).toBe(false)}finally{await reader.close()}
+ expect(await readdir(root)).toEqual([])
  const platform=Object.getOwnPropertyDescriptor(process,'platform')!;try{Object.defineProperty(process,'platform',{value:'darwin'});expect(()=>p.createSessionCoordinator(backend,{lock:{enabled:true}})).toThrow('unsupported')}finally{Object.defineProperty(process,'platform',platform)}
 })
 it('reserves none child before callback, reaches actual READY and resumes through ordinary open',async()=>{
@@ -40,11 +60,16 @@ it('reserves none child before callback, reaches actual READY and resumes throug
 })
 it('refuses every public exact-invocation cross-call before joining a suspended child flight and READY',async()=>{
  const {root,coordinator}=await setup(),{request,payload}=pair(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let callbacks=0
- const first=coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>{callbacks++;entered.resolve();await release.promise;return payload});await entered.promise
- const duplicate=coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>{callbacks++;throw Error('duplicate')})
- const publicCore=p.readForkRequestCore({version:1,kind:'session-fork-core',sourceSessionId:'parent',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{}}),publicIntent=p.createBootstrapRequestIntent(publicCore,{kind:'unmanaged'}),publicRequest={invocation:{...request.invocation,requestDigest:publicIntent.requestDigest},core:publicCore,requestIntent:publicIntent.intent}
- const refused=async(operation:Promise<unknown>)=>expect(await Promise.race([operation,new Promise(resolve=>setTimeout(()=>resolve('joined suspended child flight'),100))])).toEqual({kind:'refused',reason:'conflict'})
- try{await refused(coordinator.bootstrapSemanticTarget(payload,guards));await refused(coordinator.resumeSemanticTarget(request.invocation,guards));await refused(coordinator.bootstrapSemanticTargetWithCapture!(publicRequest,guards,async()=>{throw Error('public callback forbidden')}));expect((await coordinator.inspectBootstrap(request.invocation)).kind).toBe('conflict');expect(await coordinator.inspectBootstrapCapture!(publicRequest)).toEqual({kind:'conflict'});expect(()=>coordinator.inspectBootstrapCapture!(request as any)).toThrow()}finally{release.resolve()}
+ const first=coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>{callbacks++;entered.resolve();await release.promise;return payload})
+ let duplicate:typeof first|undefined
+ try{
+  await Promise.race([entered.promise,first.then(()=>{throw Error('Original child completed before its callback gate')})])
+  duplicate=coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>{callbacks++;throw Error('duplicate')})
+  const publicCore=p.readForkRequestCore({version:1,kind:'session-fork-core',sourceSessionId:'parent',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{}}),publicIntent=p.createBootstrapRequestIntent(publicCore,{kind:'unmanaged'}),publicRequest={invocation:{...request.invocation,requestDigest:publicIntent.requestDigest},core:publicCore,requestIntent:publicIntent.intent}
+  const refused=async(operation:Promise<unknown>)=>expect(await Promise.race([operation,new Promise(resolve=>setTimeout(()=>resolve('joined suspended child flight'),100))])).toEqual({kind:'refused',reason:'conflict'})
+  await refused(coordinator.bootstrapSemanticTarget(payload,guards));await refused(coordinator.resumeSemanticTarget(request.invocation,guards));await refused(coordinator.bootstrapSemanticTargetWithCapture!(publicRequest,guards,async()=>{throw Error('public callback forbidden')}));expect((await coordinator.inspectBootstrap(request.invocation)).kind).toBe('conflict');expect(await coordinator.inspectBootstrapCapture!(publicRequest)).toEqual({kind:'conflict'});await expect(coordinator.inspectBootstrapCapture!(request as any)).rejects.toThrow()
+ }finally{release.resolve();await Promise.allSettled([first,duplicate])}
+ if(!duplicate)throw Error('Original duplicate child must be admitted')
  const [a,b]=await Promise.all([first,duplicate]);expect(a.kind).toBe('ready');expect(b).toBe(a);expect(callbacks).toBe(1)
  expect(await coordinator.bootstrapSemanticTarget(payload,guards)).toEqual({kind:'refused',reason:'conflict'});expect(await coordinator.resumeSemanticTarget(request.invocation,guards,payload)).toEqual({kind:'refused',reason:'conflict'})
  await coordinator.close();const cold=await setup(root);expect(await cold.coordinator.bootstrapSemanticTarget(payload,guards)).toEqual({kind:'refused',reason:'conflict'});expect(await cold.coordinator.resumeSemanticTarget(request.invocation,guards)).toEqual({kind:'refused',reason:'conflict'});expect((await cold.coordinator.resumeChildTarget!(request,guards)).kind).toBe('already-ready')

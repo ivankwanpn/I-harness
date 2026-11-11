@@ -1,7 +1,7 @@
-import { createSessionCoordinator as createRawSessionCoordinator } from '../src/index.ts'
+import { createSessionCoordinator as createRawSessionCoordinator, SessionLockUnsupportedError } from '../src/index.ts'
 import { expect, it } from 'vitest'
 import { createSessionCoordinator, createControlledJsonlBackend as createJsonlBackend, ownedControls } from './helpers/composed.ts'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -9,8 +9,15 @@ const terminal = { type: 'context/recovery' as const, version: 1 as const, owner
 
 it('refuses managed activation without actual exclusive ownership and owned batch backend', async () => {
   const backend = { id: 'jsonl', capabilities: { seekableRead: false, rawArtifacts: false } } as any
-  const coordinator = createRawSessionCoordinator(backend)
-  await expect(coordinator.openManagedDocument('s')).rejects.toThrow('TASK_TRANSITION_UNSUPPORTED')
+  expect(()=>createRawSessionCoordinator(backend)).toThrow('original writable coordinator factory')
+  const root=await mkdtemp(join(tmpdir(),'ih-managed-capability-'))
+  try{
+    const native=createJsonlBackend(root)
+    expect(()=>createRawSessionCoordinator(native,{lock:{enabled:false}})).toThrow(SessionLockUnsupportedError)
+    const partial=createJsonlBackend(root,original=>{original.appendOwnedBatch=undefined})
+    expect(()=>createRawSessionCoordinator(partial,{lock:{enabled:true}})).toThrow('Original writable JSONL capability unavailable: appendOwnedBatch')
+    expect(await readdir(root)).toEqual([])
+  }finally{await rm(root,{recursive:true,force:true})}
 })
 
 it('uses the original managed metadata frame for immutable held terminal recovery after Stop', async () => {
