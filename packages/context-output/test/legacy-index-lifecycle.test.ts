@@ -638,16 +638,27 @@ it.each(['sequential', 'queued'] as const)('retains independent real-ledger A an
     await service.grant({ sessionId: 'A' }, [a.id], 'shared'); await service.grant({ sessionId: 'B' }, [b.id], 'shared')
     const directory = new ContextStore(root, 'w').directory, aPath = resolve(directory, 'owners', a.id + '.json'), bPath = resolve(directory, 'owners', b.id + '.json')
     const aFault = new Error('A original survivor owner write refused'), bFault = new Error('B original survivor owner write refused')
-    io.afterWrite = async path => { if (path.startsWith(aPath + '.') && path.endsWith('.tmp')) throw aFault; if (path.startsWith(bPath + '.') && path.endsWith('.tmp')) throw bFault }
+    const failedOwners: string[] = []
+    io.opened = (handle, path) => {
+      const owner = path.startsWith(aPath + '.') ? aPath : path.startsWith(bPath + '.') ? bPath : undefined
+      if (!owner || !path.endsWith('.tmp')) return
+      const write = handle.writeFile.bind(handle)
+      handle.writeFile = async (...args) => {
+        await write(...args)
+        failedOwners.push(owner)
+        throw owner === aPath ? aFault : bFault
+      }
+    }
     if (ordering === 'sequential') {
       await expect(service.clear('A')).rejects.toBe(aFault); await expect(service.clear('B')).rejects.toBe(bFault)
     } else {
       const outcomes = await Promise.allSettled([service.clear('A'), service.clear('B')])
       expect(outcomes).toEqual([{ status: 'rejected', reason: aFault }, { status: 'rejected', reason: bFault }])
     }
+    expect(failedOwners).toEqual([aPath, bPath])
     expect(JSON.parse(await readFile(aPath, 'utf8'))).toEqual(['A', 'shared']); expect(JSON.parse(await readFile(bPath, 'utf8'))).toEqual(['B', 'shared'])
     const bothFailures = service.status()
-    io.afterWrite = undefined
+    io.opened = undefined
     await service.clear('B')
     const afterB = service.status()
     expect(JSON.parse(await readFile(aPath, 'utf8'))).toEqual(['A', 'shared']); expect(JSON.parse(await readFile(bPath, 'utf8'))).toEqual(['shared'])
@@ -656,7 +667,7 @@ it.each(['sequential', 'queued'] as const)('retains independent real-ledger A an
     expect((await service.read({ sessionId: 'shared' }, { refId: a.id })).text).toBe(input.text)
     await service.clear('A')
     expect(JSON.parse(await readFile(aPath, 'utf8'))).toEqual(['shared']); expect(service.status().error).toBeUndefined(); expect(service.status().state).toBe('ready')
-  } finally { io.afterWrite = undefined; await service.close(); await rm(root, { recursive: true, force: true }) }
+  } finally { io.opened = undefined; await service.close(); await rm(root, { recursive: true, force: true }) }
 })
 
 it('keeps an actual A hint refusal visible after quota raise and unrelated B confirmation until A is repaired', async () => {

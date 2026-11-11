@@ -27,8 +27,12 @@ it('cold lookup preserves authentic capturing, staged, refused and committed pha
     await f.service.beginResult(capturing, 'text-utf8-v1')
     const staged = f.service.registerResultScope({ operationId: 'staged', sessionId: 'owner', callId: 'staged' }, () => true)
     const sink = await f.service.beginResult(staged, 'text-utf8-v1'); await sink.write(Buffer.from('staged original'))
-    io.beforeRename = async (_from, to) => { if (to.endsWith('manifest.json')) throw new Error('fixture native manifest rename cut') }
-    expect(await sink.finish('complete')).toEqual({ kind: 'recovery-required', operationId: 'staged' }); io.stop()
+    const publicationFailure = new Error('fixture native manifest rename cut')
+    io.beforeRename = async (_from, to) => { if (to.endsWith('manifest.json')) throw publicationFailure }
+    const stagedResult = await sink.finish('complete')
+    expect(stagedResult).toEqual({ kind: 'recovery-required', operationId: 'staged', cause: publicationFailure })
+    if (stagedResult.kind !== 'recovery-required') throw Error('Original publication failure was lost')
+    expect(stagedResult.cause).toBe(publicationFailure); io.stop()
     const refusedScope = refusal.registerResultScope({ operationId: 'refused', sessionId: 'owner', documentId: 'deleted-doc', callId: 'refused' }, () => true)
     const refusedSink = await refusal.beginResult(refusedScope, 'text-utf8-v1'); await refusedSink.write(Buffer.from('refused original'))
     await deleted(['deleted-doc'])
@@ -38,16 +42,18 @@ it('cold lookup preserves authentic capturing, staged, refused and committed pha
     const renameEntered = Promise.withResolvers<void>(), releaseRename = Promise.withResolvers<void>()
     io.beforeRename = async (_from, to) => { if (to.endsWith('manifest.json')) { renameEntered.resolve(); await releaseRename.promise } }
     const finishing = stagedRefusalSink.finish('complete')
-    const refused = expect(finishing).resolves.toEqual({ kind: 'refused', reason: 'capture-canceled', observedEncodedBytes: 14 })
     let deletion: Promise<void> | undefined
     try {
-      await renameEntered.promise
+      await Promise.race([renameEntered.promise, finishing.then(result => {
+        throw new Error('Original staged publication ended before its manifest rename gate', { cause: result })
+      })])
       // A real host deletion arrives from outside the mutation callback. Its
       // synchronous lifetime fence precedes the paused native publication.
       deletion = deleted(['stage-doc'])
       const deletedOriginal = expect(deletion).resolves.toBeUndefined()
       releaseRename.resolve()
-      await refused; await deletedOriginal
+      await expect(finishing).resolves.toEqual({ kind: 'refused', reason: 'capture-canceled', observedEncodedBytes: 14 })
+      await deletedOriginal
     } finally { releaseRename.resolve(); await Promise.allSettled([finishing, deletion]) }
     io.stop()
     await refusal.close(); await f.reopen()
@@ -138,7 +144,8 @@ it('cold commitment rejects inconsistent original metadata and bounded malformed
   } finally { io.stop(); await f.close() }
 })
 
-it.each(['directory', 'operation.json', 'manifest.json'] as const)('cold lookup never opens metadata through a fixture %s link outside its managed owner', async component => {
+for (const component of ['directory', 'operation.json', 'manifest.json'] as const) {
+it(`cold lookup never opens metadata through a fixture ${component} link outside its managed owner`, async context => {
   const f = await fixture('cold-junction')
   try {
     const a = await commit(f.service, 'original', Buffer.from('original A'))
@@ -146,7 +153,13 @@ it.each(['directory', 'operation.json', 'manifest.json'] as const)('cold lookup 
     expect(io.reads.filter(event => event.path.endsWith('operation.json')).length).toBeGreaterThan(0); io.stop()
     const target = component === 'directory' ? f.directory(a.ref) : resolve(f.directory(a.ref), component), sibling = resolve(f.root, 'outside-managed-owner')
     await contained(f.root, target); await contained(f.root, sibling)
-    await rename(target, sibling); await symlink(sibling, target, component === 'directory' ? 'junction' : 'file')
+    await rename(target, sibling)
+    try { await symlink(sibling, target, component === 'directory' ? 'junction' : 'file') }
+    catch (cause) {
+      if (process.platform === 'win32' && component !== 'directory' && (cause as NodeJS.ErrnoException).code === 'EPERM')
+        context.skip('Windows file symlink privilege is unavailable, confirmed by the actual fixture link creation')
+      throw cause
+    }
     const before = await inventory(f.root); io.reset()
     const actual = await outcome(f.service, 'original', a.ref.id), opens = [...io.opens], reads = [...io.reads]; io.stop()
     await record(`cold-junction-${f.root.split(/[\\/]/).at(-1)}`, { component, actual, opens, reads, foreignMetadataDigest: hash(await readFile(component === 'directory' ? resolve(sibling, 'operation.json') : sibling)) })
@@ -155,6 +168,7 @@ it.each(['directory', 'operation.json', 'manifest.json'] as const)('cold lookup 
     expect(await inventory(f.root)).toEqual(before)
   } finally { io.stop(); await f.close() }
 })
+}
 
 it('cold lookup returns only the operation observation whose original identity was validated', async () => {
   const f = await fixture('cold-two-read')

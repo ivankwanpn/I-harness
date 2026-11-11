@@ -20,19 +20,26 @@ async function childRead(root: string, refId: string) {
   } finally { clearTimeout(watchdog); if (child.exitCode === null) child.kill() }
 }
 
-it('enforces the actual OS lifetime across Node processes and releases for cold read/search', async () => {
+it('enforces the active OS lifetime across Node processes and releases at idle for cold read/search', async () => {
   const root = await mkdtemp(resolve(tmpdir(), 'legacy-child-'))
-  const service = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true } })
+  const entered = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>()
+  const service = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true }, authorize: async () => {
+    entered.resolve(); await resume.promise; return true
+  } })
+  let reading: ReturnType<typeof service.read> | undefined
   try {
     const ref = await service.capture({ sessionId: 's', callId: 'c', label: 'saved', text: 'original needle', complete: true })
     if (!ref) throw Error('capture refused')
+    reading = service.read({ sessionId: 'guest' }, { refId: ref.id })
+    await Promise.race([entered.promise, reading.then(() => { throw Error('Read settled before original policy gate') })])
     const index = resolve(new ContextStore(root, 'w').directory, 'index.sqlite'), before = await readFile(index)
     expect(await childRead(root, ref.id)).toEqual({ error: 'SessionLockConflictError' })
     expect(await readFile(index)).toEqual(before)
-    expect((await service.read({ sessionId: 's' }, { refId: ref.id })).text).toBe('original needle')
+    resume.resolve(); expect((await reading).text).toBe('original needle')
+    expect(await childRead(root, ref.id)).toEqual({ text: 'original needle', hits: [ref.id] })
     await service.close()
     expect(await childRead(root, ref.id)).toEqual({ text: 'original needle', hits: [ref.id] })
-  } finally { await service.close(); await rm(root, { recursive: true, force: true }) }
+  } finally { resume.resolve(); await Promise.allSettled([reading]); await service.close(); await rm(root, { recursive: true, force: true }) }
 }, 20000)
 
 it('allows a managed-only second owner and a different root without opening another legacy index', async () => {
@@ -87,25 +94,35 @@ it('runs the real producer and legacy policy before entering either mutation lan
   } finally { await service.close(); await rm(root, { recursive: true, force: true }) }
 })
 
-it('rejects a competing legacy opener before changing the live index, then cold reopens', async () => {
+it('rejects a competing legacy opener during an active read and permits it after idle retirement', async () => {
   const root = await mkdtemp(resolve(tmpdir(), 'legacy-owner-'))
-  const first = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true } })
+  const entered = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>()
+  const first = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true }, authorize: async () => {
+    entered.resolve(); await resume.promise; return true
+  } })
   const second = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true } })
   const separate = createContextOutputService({ root, workspaceId: 'other', config: { enabled: true } })
+  let reading: ReturnType<typeof first.read> | undefined
   try {
     const ref = await first.capture({ sessionId: 's', callId: 'c', label: 'saved', text: 'original needle', complete: true })
     if (!ref) throw Error('capture refused')
+    reading = first.read({ sessionId: 'guest' }, { refId: ref.id })
+    await Promise.race([entered.promise, reading.then(() => { throw Error('Read settled before original policy gate') })])
     const index = resolve(new ContextStore(root, 'w').directory, 'index.sqlite')
     const before = await readFile(index)
     const conflict = await second.read({ sessionId: 's' }, { refId: ref.id }).then(() => undefined, error => error)
     expect.soft(conflict).toBeInstanceOf(SessionLockConflictError)
     expect.soft(await readFile(index)).toEqual(before)
-    expect.soft((await first.read({ sessionId: 's' }, { refId: ref.id })).text).toBe('original needle')
     expect(await separate.capture({ sessionId: 's', callId: 'c', label: 'independent', text: 'independent', complete: true })).toBeDefined()
-    await first.close()
+    resume.resolve(); expect((await reading).text).toBe('original needle')
     expect((await second.read({ sessionId: 's' }, { refId: ref.id })).text).toBe('original needle')
     expect((await second.search({ sessionId: 's' }, { query: 'needle' })).hits[0]?.ref.id).toBe(ref.id)
-  } finally { await Promise.allSettled([first.close(), second.close(), separate.close()]); await rm(root, { recursive: true, force: true }) }
+    await first.close()
+    expect((await second.read({ sessionId: 's' }, { refId: ref.id })).text).toBe('original needle')
+  } finally {
+    resume.resolve(); await Promise.allSettled([reading])
+    await Promise.all([first.close(), second.close(), separate.close()]); await rm(root, { recursive: true, force: true })
+  }
 }, 15000)
 
 it('serializes actual managed admission behind a held legacy mutation', async () => {

@@ -13,13 +13,14 @@ export function unsealed() {
   if (!process.env.IH_CONFIG_DIR) throw new Error('Set shell IH_CONFIG_DIR before importing result fixtures')
 }
 unsealed()
+// Load the product after isolation checks, during test collection. A cold
+// module graph must not consume the first integrity case's I/O deadline.
+const { createContextOutputService } = await import('../src/index.ts')
 
 export async function fixture(label: string, extra: Partial<Pick<ContextOutputOptions, 'authorizeResult' | 'documentDeletions'>> = {}) {
   unsealed(); await mkdir(evidence, { recursive: true })
   const root = await mkdtemp(resolve(evidence, `${label}-`)), settingsPath = resolve(root, 'settings.json')
   await writeFile(settingsPath, '{}')
-  // Product imports occur only after the final seal and shell isolation checks.
-  const { createContextOutputService } = await import('../src/index.ts')
   const options = { root, workspaceId: 'integrity', ...extra }
   let service = createContextOutputService(options)
   return { root, get service() { return service }, directory: (ref: Pick<ManagedArtifactRef, 'id'>) => resolve(root, 'context-output', hash('integrity'), 'managed-v1', ref.id),

@@ -1,4 +1,14 @@
 import { expect, it, vi } from 'vitest'
+import type { FileHandle } from 'node:fs/promises'
+const nativeIO = vi.hoisted(() => ({ close: undefined as ((handle: FileHandle, close: () => Promise<void>) => Promise<void>) | undefined }))
+vi.mock('node:fs/promises', async original => {
+  const fs = await original<typeof import('node:fs/promises')>()
+  return { ...fs, async open(...args: Parameters<typeof fs.open>) {
+    const handle = await fs.open(...args), close = handle.close.bind(handle)
+    handle.close = () => nativeIO.close ? nativeIO.close(handle, close) : close()
+    return handle
+  } }
+})
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
@@ -7,21 +17,26 @@ import { ContextStore } from '../src/store.ts'
 import { unfinishedResult } from './close-fixture.ts'
 import type { BootstrapDependencyRequest } from '@i-harness/core-session'
 
-it.each(['body', 'leaves'] as const)('shares a failed native %s close and explicitly retries the original fenced owner', async target => {
+it.each([
+  { target: 'body', consumed: false }, { target: 'body', consumed: true },
+  { target: 'leaves', consumed: false }, { target: 'leaves', consumed: true },
+] as const)('retains the original $target close failure after native consumption=$consumed', async ({ target, consumed }) => {
   const root = await mkdtemp(resolve(tmpdir(), 'context-close-'))
   const unsubscribe = vi.fn(), service = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true }, documentDeletions: () => unsubscribe })
   const original = await unfinishedResult(service, root, 'unfinished'), fault = new Error('original native close failed')
   const entered = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>()
-  const nativeClose = original[target].close.bind(original[target])
-  let failed = false
-  const spy = vi.spyOn(original[target], 'close').mockImplementation(async () => {
-    if (!failed) { failed = true; entered.resolve(); await resume.promise; throw fault }
-    await nativeClose()
-  })
+  let attempts = 0
+  nativeIO.close = async (handle, close) => {
+    if (handle !== original[target]) return close()
+    attempts++; entered.resolve(); await resume.promise
+    if (consumed) await close()
+    throw fault
+  }
+  let first: Promise<unknown> | undefined, second: Promise<unknown> | undefined
   try {
-    const first = service.close().then(() => undefined, error => error)
-    await entered.promise
-    const second = service.close().then(() => undefined, error => error)
+    first = service.close().then(() => undefined, error => error)
+    await Promise.race([entered.promise, first.then(() => { throw Error('Close settled before its original native call') })])
+    second = service.close().then(() => undefined, error => error)
     expect(service.status().enabled).toBe(false)
     await expect(service.configure({ enabled: true })).rejects.toThrow(/closed/)
     await expect(service.capture({ sessionId: 's', callId: 'later', label: 'later', text: 'later', complete: true })).rejects.toThrow(/closed/)
@@ -29,9 +44,10 @@ it.each(['body', 'leaves'] as const)('shares a failed native %s close and explic
     resume.resolve()
     expect(await first).toBe(fault)
     expect(await second).toBe(fault)
-    expect(original[target].fd).toBeGreaterThanOrEqual(0)
-    await service.close()
-    expect(original.body.fd).toBe(-1); expect(original.leaves.fd).toBe(-1)
+    if (consumed) expect(original[target].fd).toBe(-1)
+    else expect(original[target].fd).toBeGreaterThanOrEqual(0)
+    expect(original[target === 'body' ? 'leaves' : 'body'].fd).toBe(-1)
+    await expect(service.close()).rejects.toBe(fault)
     expect(unsubscribe).toHaveBeenCalledTimes(1)
     await expect(original.sink.write(Buffer.from('late'))).rejects.toThrow()
     const [workspace] = await readdir(resolve(root, 'context-output'))
@@ -39,9 +55,45 @@ it.each(['body', 'leaves'] as const)('shares a failed native %s close and explic
     const operation = JSON.parse(await readFile(resolve(managed, id!, 'operation.json'), 'utf8'))
     expect(operation).toMatchObject({ phase: 'capturing', encodedBytes: 65536 })
     expect(operation).not.toHaveProperty('ref')
-    await service.close()
-    expect(spy).toHaveBeenCalledTimes(2)
-  } finally { resume.resolve(); spy.mockRestore(); await service.close(); await original.body.close(); await original.leaves.close(); await rm(root, { recursive: true, force: true }) }
+    expect(attempts).toBe(1)
+    nativeIO.close = undefined
+    await original.body.close(); await original.leaves.close()
+    await expect(service.close()).rejects.toBe(fault)
+    expect(attempts).toBe(1)
+  } finally {
+    resume.resolve(); await Promise.allSettled([first, second])
+    nativeIO.close = undefined
+    await original.body.close(); await original.leaves.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+it.each(['body', 'leaves'] as const)('joins a held successful original %s close exactly once', async target => {
+  const root = await mkdtemp(resolve(tmpdir(), 'context-close-held-'))
+  const service = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true } })
+  const original = await unfinishedResult(service, root, 'unfinished')
+  const entered = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>()
+  let attempts = 0, completed = 0
+  nativeIO.close = async (handle, close) => {
+    if (handle !== original[target]) return close()
+    attempts++; entered.resolve(); await resume.promise; await close()
+  }
+  const first = service.close().then(() => { completed++ })
+  let second: Promise<void> | undefined
+  try {
+    await Promise.race([entered.promise, first.then(() => { throw Error('Close settled before its original native call') })])
+    second = service.close().then(() => { completed++ })
+    await Promise.resolve()
+    expect(completed).toBe(0)
+    resume.resolve(); await first; await second
+    expect(completed).toBe(2); expect(attempts).toBe(1)
+    expect(original.body.fd).toBe(-1); expect(original.leaves.fd).toBe(-1)
+    await service.close(); expect(attempts).toBe(1)
+  } finally {
+    resume.resolve(); await Promise.allSettled([first, second])
+    nativeIO.close = undefined
+    await service.close(); await rm(root, { recursive: true, force: true })
+  }
 })
 
 it('retains a later SQLite close failure without repeating completed artifact cleanup', async () => {
@@ -49,7 +101,9 @@ it('retains a later SQLite close failure without repeating completed artifact cl
   const unsubscribe = vi.fn(), service = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true }, documentDeletions: () => unsubscribe })
   const original = await unfinishedResult(service, root, 'unfinished')
   await service.capture({ sessionId: 's', callId: 'legacy', label: 'legacy', text: 'legacy', complete: true })
-  const bodyClose = vi.spyOn(original.body, 'close'), fault = new Error('SQLite close refused')
+  let bodyCloses = 0
+  nativeIO.close = async (handle, close) => { if (handle === original.body) bodyCloses++; await close() }
+  const fault = new Error('SQLite close refused')
   const nativeClose = ContextStore.prototype.close
   let nativeStore: ContextStore | undefined
   let failed = false
@@ -62,9 +116,9 @@ it('retains a later SQLite close failure without repeating completed artifact cl
     await expect(service.close()).rejects.toBe(fault)
     expect(original.body.fd).toBe(-1); expect(original.leaves.fd).toBe(-1)
     await service.close()
-    expect(storeClose).toHaveBeenCalledTimes(2); expect(bodyClose).toHaveBeenCalledTimes(1); expect(unsubscribe).toHaveBeenCalledTimes(1)
+    expect(storeClose).toHaveBeenCalledTimes(2); expect(bodyCloses).toBe(1); expect(unsubscribe).toHaveBeenCalledTimes(1)
     await expect(service.read({ sessionId: 's' }, { refId: 'anything' })).rejects.toThrow(/closed/)
-  } finally { storeClose.mockRestore(); bodyClose.mockRestore(); await service.close(); void nativeStore; await rm(root, { recursive: true, force: true }) }
+  } finally { storeClose.mockRestore(); nativeIO.close = undefined; await service.close(); void nativeStore; await rm(root, { recursive: true, force: true }) }
 })
 
 it.each(['result-scope', 'dependency-scope', 'begin', 'read', 'exec-read', 'transfer-scope', 'transfer-confirm', 'grant'] as const)('fences new %s admission synchronously while a real earlier transition is held', async operation => {

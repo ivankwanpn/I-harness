@@ -43,17 +43,26 @@ it('streams an unbounded source identity into the fixed digest without altering 
   expect(sourceHash(source)).toBe(createHash('sha256').update('ih.legacy-fork.target-source.v1\0').update(JSON.stringify(source)).digest('hex'))
 })
 
-it.each(['symlink', 'hardlink'])('refuses an inactive %s without overwriting the outside original', async kind => {
+for (const kind of ['symlink', 'hardlink'] as const) {
+it(`refuses an inactive ${kind} without overwriting the outside original`, async context => {
   const root = await mkdtemp(join(tmpdir(), 'ih-l1-foreign-slot-')), outside = await mkdtemp(join(tmpdir(), 'ih-l1-outside-'))
   const base = join(root, 'original', 'revoke'), tuple = { version: 1 as const, kind: 'legacy-fork-revoked' as const, bindingDigest: 'a'.repeat(64), planDigest: 'b'.repeat(64) }
   await fundSlots(root, base, tuple, 1_000_000, () => {})
   const bytes = Buffer.alloc(slotCapacity(tuple), 42), target = join(outside, 'protected')
   await writeFile(target, bytes); await unlink(base + '.1')
-  if (kind === 'symlink') await symlink(target, base + '.1', 'file'); else await link(target, base + '.1')
+  if (kind === 'symlink') {
+    try { await symlink(target, base + '.1', 'file') }
+    catch (cause) {
+      if (process.platform === 'win32' && (cause as NodeJS.ErrnoException).code === 'EPERM')
+        context.skip('Windows file symlink privilege is unavailable, confirmed by the actual fixture link creation')
+      throw cause
+    }
+  } else await link(target, base + '.1')
   const result = await terminalSlots(root, base, tuple, () => {}).catch(error => error)
   expect(await readFile(target)).toEqual(bytes)
   expect(result).toBeInstanceOf(Error)
 })
+}
 it('refuses redirected original slot parents without changing either outside slot', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-l1-slots-parent-')), outside = await mkdtemp(join(tmpdir(), 'ih-l1-outside-'))
   const base = join(root, 'original', 'revoke'), tuple = { version: 1 as const, kind: 'legacy-fork-revoked' as const, bindingDigest: 'a'.repeat(64), planDigest: 'b'.repeat(64) }

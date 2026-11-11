@@ -1,10 +1,18 @@
 import { expect, it, vi } from 'vitest'
-const inventoryIo = vi.hoisted(() => ({ failure: undefined as Error | undefined }))
+import type { FileHandle } from 'node:fs/promises'
+const inventoryIo = vi.hoisted(() => ({
+  failure: undefined as Error | undefined,
+  close: undefined as ((handle: FileHandle, close: () => Promise<void>) => Promise<void>) | undefined,
+}))
 vi.mock('node:fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
   return { ...fs, access: async (...args: Parameters<typeof fs.access>) => {
     if (inventoryIo.failure) throw inventoryIo.failure
     return fs.access(...args)
+  }, async open(...args: Parameters<typeof fs.open>) {
+    const handle = await fs.open(...args), close = handle.close.bind(handle)
+    handle.close = () => inventoryIo.close ? inventoryIo.close(handle, close) : close()
+    return handle
   } }
 })
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -40,12 +48,17 @@ it('keeps actual captured bytes and the original quota debt through service clea
   })
   try {
     await expect(service.capture(input)).rejects.toBe(fault)
+    expect(turns).toBe(2); expect(releases).toBe(1); expect(original?.held).toBe(true)
+    const scope = service.registerResultScope({ operationId: 'blocked', sessionId: 's', callId: 'blocked' }, () => true)
+    await expect(service.beginResult(scope, 'text-utf8-v1')).rejects.toThrow(/unresolved/)
     const captured = (await service.search({ sessionId: 's' }, { query: 'needle' })).hits[0]?.ref
     if (!captured) throw Error('committed original bytes lost after release failure')
     expect((await service.read({ sessionId: 's' }, { refId: captured.id })).text).toBe(input.text)
-    const scope = service.registerResultScope({ operationId: 'blocked', sessionId: 's', callId: 'blocked' }, () => true)
-    await expect(service.beginResult(scope, 'text-utf8-v1')).rejects.toThrow(/unresolved/)
-    expect(turns).toBe(2); expect(original?.held).toBe(true)
+    // The successful read's idle cleanup settles this same original lease.
+    expect(releases).toBe(2); expect(original?.held).toBe(false)
+    const admitted = await service.beginResult(scope, 'text-utf8-v1')
+    await admitted.write(Buffer.from('after original quota acknowledgement'))
+    expect((await admitted.finish('complete')).kind).toBe('committed')
     await service.close()
     expect(releases).toBe(2); expect(original?.held).toBe(false)
     const cold = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true } })
@@ -148,7 +161,12 @@ it('joins late lifetime acquisition before close and retires its original lease 
 
 it.each([false, true])('shares lifetime cleanup failure and retries only the original lease (consumed=%s)', async consumed => {
   const root = await mkdtemp(resolve(tmpdir(), 'legacy-lifetime-debt-'))
-  const service = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true } })
+  const policyEntered = Promise.withResolvers<void>(), policyResume = Promise.withResolvers<void>()
+  const service = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true }, authorize: async () => {
+    policyEntered.resolve(); await policyResume.promise; return true
+  } })
+  const ref = await service.capture(input)
+  if (!ref) throw Error('Original capture unavailable')
   const acquire = locking.acquireSessionLock, entered = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>(), fault = new Error('original lifetime release failed')
   const lifetimePath = locking.lockPathFor(root, 'context-output-legacy:w')
   let releases = 0, lifetime: locking.SessionLock | undefined
@@ -163,12 +181,16 @@ it.each([false, true])('shares lifetime cleanup failure and retries only the ori
     } }
   })
   const dbClose = vi.spyOn(DatabaseSync.prototype, 'close')
+  const reading = service.read({ sessionId: 'guest' }, { refId: ref.id }).catch(error => error)
+  let first: Promise<unknown> | undefined, second: Promise<unknown> | undefined
   try {
-    await service.capture(input)
-    const first = service.close().catch(error => error)
-    await entered.promise
-    const second = service.close().catch(error => error)
+    await Promise.race([policyEntered.promise, reading.then(() => { throw Error('Read settled before original policy gate') })])
+    first = service.close().catch(error => error)
+    policyResume.resolve()
+    await Promise.race([entered.promise, first.then(() => { throw Error('Close settled before original lifetime release') })])
+    second = service.close().catch(error => error)
     resume.resolve()
+    expect((await reading).name).toBe('AbortError')
     expect(await first).toBe(fault); expect(await second).toBe(fault)
     const calls = spy.mock.calls.length
     if (consumed) {
@@ -178,20 +200,37 @@ it.each([false, true])('shares lifetime cleanup failure and retries only the ori
     expect(spy).toHaveBeenCalledTimes(calls)
     expect(dbClose).toHaveBeenCalledTimes(1)
     await expect(service.capture(input)).rejects.toThrow(/closed/)
-  } finally { resume.resolve(); spy.mockRestore(); dbClose.mockRestore(); await lifetime?.release(); if (!consumed) await service.close(); await rm(root, { recursive: true, force: true }) }
+  } finally {
+    policyResume.resolve(); resume.resolve(); await Promise.allSettled([reading, first, second])
+    if (!consumed) await service.close()
+    spy.mockRestore(); dbClose.mockRestore(); await lifetime?.release()
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 it('attempts independent original writer cleanup when one writer suspension fails', async () => {
   const root = await mkdtemp(resolve(tmpdir(), 'legacy-writers-close-'))
   const service = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true } })
   const first = await unfinishedResult(service, root, 'first'), second = await unfinishedResult(service, root, 'second')
-  const native = first.body.close.bind(first.body), fault = new Error('first original writer failed')
-  const spy = vi.spyOn(first.body, 'close').mockRejectedValueOnce(fault).mockImplementation(native)
+  const fault = new Error('first original writer failed')
+  let attempts = 0
+  inventoryIo.close = async (handle, close) => {
+    if (handle === first.body) { attempts++; throw fault }
+    await close()
+  }
   try {
     await expect(service.close()).rejects.toBe(fault)
     expect(second.body.fd).toBe(-1); expect(second.leaves.fd).toBe(-1)
-    await service.close()
-    expect(first.body.fd).toBe(-1); expect(first.leaves.fd).toBe(-1)
-    expect(spy).toHaveBeenCalledTimes(2)
-  } finally { spy.mockRestore(); await service.close(); await first.body.close(); await first.leaves.close(); await second.body.close(); await second.leaves.close(); await rm(root, { recursive: true, force: true }) }
+    await expect(service.close()).rejects.toBe(fault)
+    expect(first.body.fd).toBeGreaterThanOrEqual(0); expect(first.leaves.fd).toBe(-1)
+    expect(attempts).toBe(1)
+    inventoryIo.close = undefined
+    await first.body.close()
+    await expect(service.close()).rejects.toBe(fault)
+    expect(attempts).toBe(1)
+  } finally {
+    inventoryIo.close = undefined
+    await first.body.close(); await first.leaves.close(); await second.body.close(); await second.leaves.close()
+    await rm(root, { recursive: true, force: true })
+  }
 })

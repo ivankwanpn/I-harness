@@ -46,7 +46,13 @@ describe("assembly rewind wiring", () => {
     const storeRoot = mkdtempSync(join(tmpdir(), "i-harness-rewind-store-"))
     cleanup.push(workspace, storeRoot)
     await writeFile(join(workspace, "greet.txt"), "hello")
-    const backend = createJsonlBackend(join(workspace, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+    const release = Promise.withResolvers<void>(), closeEntered = Promise.withResolvers<void>()
+    const backend = createJsonlBackend(join(workspace, 'sessions'), { wrapOwnedBatch: original => async (...args) => {
+      if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'agent/delivery-generation' && e.op === 'close' && e.reason === 'rewind')) {
+        closeEntered.resolve(); await release.promise
+      }
+      return original(...args)
+    } }), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
     await coordinator.create({ sessionId: 'r1' })
 
     const assembly = await createSessionAssembly({
@@ -91,18 +97,12 @@ describe("assembly rewind wiring", () => {
       // rewind through the engine: restore file + append the rewind/point
       // event + truncate the journal
       const service = new RewindService({ store, workspace })
-      const release = Promise.withResolvers<void>(), appendBatch = backend.appendOwnedBatch!
-      let closeEntered = false
-      backend.appendOwnedBatch = async (...args) => {
-        if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'agent/delivery-generation' && e.op === 'close' && e.reason === 'rewind')) { closeEntered = true; await release.promise }
-        return appendBatch(...args)
-      }
       const executing = withRewindFacts(assembly.factOwner, appendEvent => service.execute(0, "all", { appendEvent }))
       try {
-        await waitFor(async () => closeEntered)
+        await Promise.race([closeEntered.promise, executing.then(() => { throw Error('Rewind ended before its original generation close') })])
         expect(await readFile(join(workspace, 'greet.txt'), 'utf8')).toBe('goodbye')
         expect(await store.readPoints()).toHaveLength(1)
-      } finally { release.resolve() }
+      } finally { release.resolve(); await executing }
       const result = await executing
       expect(result.truncated).toBe(true)
       expect(result.errors).toEqual([])
@@ -112,6 +112,7 @@ describe("assembly rewind wiring", () => {
       expect(rewindEv.fileOps).toEqual([{ path: "greet.txt", op: "restore" }])
       expect(await store.readPoints()).toEqual([])
     } finally {
+      release.resolve()
       try { await assembly.dispose() } finally { await coordinator.close() }
     }
   }, 60_000)
@@ -197,6 +198,9 @@ describe("assembly rewind wiring", () => {
       return originalAppendPoint.call(this, point)
     }
     let assembly: Awaited<ReturnType<typeof createSessionAssembly>> | undefined
+    let secondRun: Promise<unknown> | undefined
+    const secondController = new AbortController()
+    let secondDeadline: ReturnType<typeof setTimeout> | undefined
     try {
       assembly = await createSessionAssembly({
         workspace,
@@ -212,7 +216,11 @@ describe("assembly rewind wiring", () => {
       const store = assembly.rewind!.store
       await assembly.agent.run("first")
       await waitFor(async () => appendCalls === 1)
-      await assembly.agent.run("second")
+      secondDeadline = setTimeout(() => secondController.abort(new Error('Second turn did not finish while the previous journal append was held')), 15_000)
+      secondRun = assembly.agent.run("second", secondController.signal)
+      await secondRun
+      secondController.signal.throwIfAborted()
+      clearTimeout(secondDeadline)
       await new Promise((resolve) => setTimeout(resolve, 50))
       expect(appendCalls).toBe(1)
       releaseFirst()
@@ -222,9 +230,10 @@ describe("assembly rewind wiring", () => {
       expect(points.map((point) => point.turnIndex)).toEqual([0, 1])
       assembly = undefined
     } finally {
+      clearTimeout(secondDeadline); secondController.abort()
       releaseFirst()
-      RewindStore.prototype.appendPoint = originalAppendPoint
-      await assembly?.dispose()
+      try { await secondRun?.catch(() => {}); await assembly?.dispose() }
+      finally { RewindStore.prototype.appendPoint = originalAppendPoint }
     }
   }, 30_000)
 
