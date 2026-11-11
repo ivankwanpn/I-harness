@@ -73,6 +73,8 @@ export interface ManagedExecutionRuntimeOptions extends Pick<ManagedAgentHost,'m
  autoCompactionEnabled?:ManagedAgentHost['autoCompactionEnabled']
  maxOutputTokens?:number
  requestContext?:ManagedAgentHost['requestContext']
+ /** Constructor-owned model exposure; a host default surface takes priority. */
+ modelToolSchemas?:ManagedAgentHost['modelToolSchemas']
  defaultSurface?:OwnedDefaultSurface
  passiveGeneration?:import('@i-harness/llm-seam/internal/passive-observation').OriginalPassiveObserver
 }
@@ -154,10 +156,13 @@ function finish(options:ManagedExecutionRuntimeOptions,prepared:ReturnType<typeo
  const close=()=>{onClose?.();if(closed)return Promise.resolve();if(closeFlight)return closeFlight;lane?.dispose();const flight=Promise.allSettled(lane?[lane.drain()]:[]).then(()=>{closed=true});closeFlight=flight;return flight}
  registerClose?.(close)
  const surface=options.defaultSurface
- const overhead=options.contextWindow===undefined||surface?.prepareModelSurface?undefined:surface?surface.modelOverheadTokens():approxTokens(typeof options.systemPrompt==='function'?options.systemPrompt():options.systemPrompt)+approxTokens(JSON.stringify(pair.registry.schemas()))
+ const modelToolSchemas = surface ? () => surface.modelToolSchemas() : options.modelToolSchemas ?? (() => pair.registry.schemas())
+ const modelOverheadTokens = surface ? () => surface.modelOverheadTokens() : () =>
+  approxTokens(typeof options.systemPrompt === 'function' ? options.systemPrompt() : options.systemPrompt) + approxTokens(JSON.stringify(modelToolSchemas()))
+ const overhead=options.contextWindow===undefined||surface?.prepareModelSurface?undefined:modelOverheadTokens()
  const compact=composeCompactConfig(options.compact,options.contextWindow,overhead,diagnosticsFor('mount'))
  const inputs=receivedExecutionInputsFor(execution)
- const agent=createManagedAgent(ctx,{execution,domain:origin.domain,hooks:captureExecutionHookChannel(ctx),modelCallOrigin:origin.bind(pair.registry,pair.driver),tools:pair.registry,get model(){return model},systemPrompt:surface?()=>surface.systemPrompt():options.systemPrompt,...surface?{modelToolSchemas:()=>surface.modelToolSchemas(),modelOverheadTokens:()=>surface.modelOverheadTokens(),...surface.prepareModelSurface?{prepareModelSurface:(signal:AbortSignal)=>surface.prepareModelSurface!(signal)}:{}}:{},
+ const agent=createManagedAgent(ctx,{execution,domain:origin.domain,hooks:captureExecutionHookChannel(ctx),modelCallOrigin:origin.bind(pair.registry,pair.driver),tools:pair.registry,get model(){return model},systemPrompt:surface?()=>surface.systemPrompt():options.systemPrompt,modelToolSchemas,modelOverheadTokens,...surface?.prepareModelSurface?{prepareModelSurface:(signal:AbortSignal)=>surface.prepareModelSurface!(signal)}:{},
   ...(options.contextWindow!==undefined?{budget:{contextWindow:options.contextWindow,overheadTokens:overhead}}:{}),...(compact?{compact}:{}),summaryFactory,...(options.autoCompactionEnabled!==undefined?{autoCompactionEnabled:options.autoCompactionEnabled}:{}),maxOutputTokens:options.maxOutputTokens,requestContext,
   modelActionTimeoutMs:options.modelActionTimeoutMs,modelActionMaxAttempts:options.modelActionMaxAttempts,get reasoningEffort(){return reasoningEffort},maxParallelToolCalls:options.maxParallelToolCalls,budgetBinding:options.budgetBinding,contextMetadata:options.contextMetadata,telemetry:options.telemetry,modelBindingIdentity:()=>model,
   stepInputs:{claimAtStepBoundary:(facts,prepare,claim)=>inputs.inbox.claimAtStepBoundary(facts,prepare,claim)},
@@ -182,7 +187,7 @@ function finish(options:ManagedExecutionRuntimeOptions,prepared:ReturnType<typeo
    const budgetBinding=captureBindingData(fields.budgetBinding?.value as ManagedExecutionModelBinding['budgetBinding'])
    const contextMetadata=captureBindingData(fields.contextMetadata?.value as ManagedExecutionModelBinding['contextMetadata'])
    const compactData=captureBindingData(compactRequest,true)
-   const overhead=surface?.prepareModelSurface?undefined:surface?surface.modelOverheadTokens():approxTokens(typeof options.systemPrompt==='function'?options.systemPrompt():options.systemPrompt)+approxTokens(JSON.stringify(pair.registry.schemas()))
+   const overhead=surface?.prepareModelSurface?undefined:modelOverheadTokens()
    const update={budgetBinding,contextMetadata,...(window===undefined?{}:{budget:{contextWindow:window,...overhead===undefined?{}:{overheadTokens:overhead}},...(compactData===undefined?{}:{compact:{...compactData,contextWindow:window,...compactData.overheadTokens!==undefined?{overheadTokens:compactData.overheadTokens}:overhead!==undefined?{overheadTokens:overhead}:{}}})}),...(output===undefined?{}:{maxOutputTokens:output})}
    if(closed||closeFlight)throw TypeError('Original open managed runtime required')
    if(originalLane.isRunning())throw Error('session is busy')
