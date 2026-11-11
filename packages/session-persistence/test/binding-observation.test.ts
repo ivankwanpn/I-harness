@@ -7,7 +7,7 @@ import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { acquireSessionLock, lockPathFor } from '@i-harness/fs-lock'
 import { exportConversationSeed, deriveMessages, legacyPrefixDigest } from '@i-harness/core-session'
 import { createOwnership } from '../src/coordinator/ownership.ts'
-import { createSessionCoordinator as createBareSessionCoordinator, compileSemanticSeed, type SessionCoordinator, type SessionBindingObservation, type PersistenceBackend, type BootstrapRequest } from '../src/index.ts'
+import { createSessionCoordinator as createBareSessionCoordinator, createReadOnlySessionCoordinator, compileSemanticSeed, type SessionCoordinator, type SessionBindingObservation, type PersistenceBackend, type BootstrapRequest } from '../src/index.ts'
 
 import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
@@ -639,25 +639,39 @@ it.each(['add-method', 'add-accessor', 'remove-method', 'remove-accessor', 'abor
     const raw = await nativeAcquire(options); raws.push(raw); live++
     return { get held() { return raw.held }, async release() { if (raw.held) { await raw.release(); live-- } } }
   })
-  const { coordinator: c } = await fixture(), signal = new AbortController().signal
+  const { root, backend, coordinator: c } = await fixture(), signal = new AbortController().signal
+  let reader: ReturnType<typeof createReadOnlySessionCoordinator> | undefined
   const property = kind.startsWith('add') ? 'addEventListener' : kind.startsWith('remove') ? 'removeEventListener' : 'aborted'
   const throwOverride = () => { overrides++; throw new Error(`caller ${property} override`) }
   Object.defineProperty(signal, property, kind.endsWith('accessor') ? { get: throwOverride } : { value: throwOverride })
   try {
     const outcome = await c.withSessionBindingObservation!({ ...request, signal }, async observed => { callbacks++; observed.assertCurrent(); return 'observed' }).then(value => value, error => error)
+    expect(outcome).toBe('observed')
+    // Completing the genuine signal scope leaves the original writer usable.
+    // A completed close retires it; subsequent inspection uses a read facet.
+    await c.updateMeta('source', { title: 'ordinary work still progresses' })
+    const committed = await readFile(join(root, 'source.jsonl'))
     const closing = c.close().then(() => 'closed', error => error)
     const closed = await Promise.race([closing, new Promise(resolve => setTimeout(() => resolve('stranded'), 200))])
     expect(closed).toBe('closed')
-    expect(outcome).toBe('observed')
     expect([overrides, callbacks, live]).toEqual([0, 1, 0])
-    await c.updateMeta('source', { title: 'ordinary work still progresses' })
+    await expect(c.updateMeta('source', { title: 'must not write after close' })).rejects.toMatchObject({ code: 'FACT_CLOSED' })
+    reader = createReadOnlySessionCoordinator(backend)
+    expect(reader.access).toBe('read'); expect('append' in reader).toBe(false)
+    expect((await reader.profile('source')).meta.title).toBe('ordinary work still progresses')
+    expect((await reader.snapshot('source')).session.events).toEqual([])
+    expect(await readFile(join(root, 'source.jsonl'))).toEqual(committed)
     await c.close(); expect(live).toBe(0)
+    expect(raws.every(raw => !raw.held)).toBe(true)
     console.info(JSON.stringify({ control: 'I3 override lifetime', kind, overrides, callbacks, live, close: closed }))
   } finally {
     // A RED on the old listener-install path has an unjoinable scope. Release
     // fixture-native handles explicitly so that regression itself cannot leak.
-    coordinators.splice(coordinators.indexOf(c), 1)
-    for (const raw of raws) await raw.release()
+    try { await reader?.close() }
+    finally {
+      const index = coordinators.indexOf(c); if (index >= 0) coordinators.splice(index, 1)
+      for (const raw of raws) await raw.release()
+    }
   }
 })
 it('fix I3 branded pre-aborted state ignores a shadowed false property before acquisition', async () => {

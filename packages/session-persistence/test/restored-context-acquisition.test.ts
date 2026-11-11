@@ -122,7 +122,7 @@ import { taskDocumentStorageContract } from '../../subagent/src/task/storage-con
 import { acquireRestoredContext } from '../src/restored-context-internal.ts';
 import { captureContextSnapshot } from '../../context-engine/src/index.ts';
 import { captureRestoredContextSnapshot } from '../../context-engine/src/snapshot/build.ts';
-import type { SessionCoordinator } from '../src/index.ts';
+import { createReadOnlySessionCoordinator, type SessionCoordinator } from '../src/index.ts';
 const coordinators: SessionCoordinator[] = [];
 afterEach(async () => {
     probe.resident = false;
@@ -288,23 +288,36 @@ it.each(['before', 'after'] as const)('complete corruption %s the effective cut 
 });
 it('failed postawait publication admission disposes the actual acquired read through its original entry', async () => {
     const f = await fixture(), entered = Promise.withResolvers<unknown>(), release = Promise.withResolvers<void>();
+    const before = await readFile(join(f.root, 'owner.jsonl'));
     probe.replyGate = { entered: read => entered.resolve(read), wait: release.promise };
     const pending = acquireRestoredContext(f.c, 'owner');
     void pending.catch(() => {
     });
-    const original = await entered.promise as {
+    const original = await Promise.race([entered.promise, pending.then(() => { throw Error('Original restored read ended before the reply gate'); })]) as {
         prepare(): Promise<unknown>;
     };
     try {
+        // The constructor seam pauses after the real tracked acquisition has
+        // returned. Its outer reply is not another admitted native IO flight.
         await f.c.close();
     }
     finally {
         release.resolve();
+        // Join the delayed reply and its original-read cleanup even when the
+        // close assertion fails. The expected refusal is asserted below.
+        await Promise.allSettled([pending]);
     }
-    await expect(pending).rejects.toMatchObject({ reason: 'revoked' });
+    await expect(pending).rejects.toMatchObject({ code: 'FACT_CLOSED' });
     expect(f.c.ownerOf('owner')).toBe(false);
     await expect(original.prepare()).rejects.toThrow();
     expect(probe.views).toBe(0);
+    const reader = createReadOnlySessionCoordinator(f.backend);
+    try {
+        expect(reader.access).toBe('read'); expect('openManagedDocument' in reader).toBe(false);
+        expect((await reader.snapshot('owner')).session.events).toHaveLength(13);
+        expect(await readFile(join(f.root, 'owner.jsonl'))).toEqual(before);
+        expect(probe.views).toBe(0);
+    } finally { await reader.close(); }
 });
 import { readRestoredGenerations } from '@i-harness/core-session/internal/restoration'
 it('existing live generation facts retain exact original object identity through private restoration',async()=>{

@@ -63,10 +63,15 @@ it.each(['guard-accessor','dependency-accessor','preparation-accessor','guard-pr
 it('refuses direct callback self bootstrap/resume/open/close/retire/delete before changing admission',async()=>{
  const {coordinator}=await setup(),{request,payload}=pair();let callbacks=0
  const outcome=await coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>{
+  expect(coordinator.ownerOf('target')).toBe(true)
   callbacks++;expect(await coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>payload)).toEqual({kind:'refused',reason:'conflict'});expect(await coordinator.resumeChildTarget!(request,guards)).toEqual({kind:'refused',reason:'conflict'});expect(await coordinator.bootstrapSemanticTarget(payload,guards)).toEqual({kind:'refused',reason:'conflict'});expect(await coordinator.resumeSemanticTarget(request.invocation,guards)).toEqual({kind:'refused',reason:'conflict'})
   for(const action of [()=>coordinator.openManagedDocument('target'),()=>coordinator.closeManagedDocument('target'),()=>coordinator.deleteOwnedSession!('target',{documents:[]}),()=>coordinator.close()])await expect(action()).rejects.toMatchObject({reason:'conflict'})
+  expect(coordinator.ownerOf('target')).toBe(true)
   return payload
- });expect(outcome.kind).toBe('ready');expect(callbacks).toBe(1);await coordinator.withSessionBindingObservation!({existingSessionIds:[],target:{...request.invocation,targetSessionId:'unrelated'}},async observed=>observed.assertCurrent())
+ });expect(outcome.kind).toBe('ready');expect(callbacks).toBe(1)
+ if(outcome.kind!=='ready')throw Error('Original child must remain publishable after refused self-close')
+ expect(await coordinator.openManagedDocument('target')).toBe(outcome.document)
+ await coordinator.withSessionBindingObservation!({existingSessionIds:[],target:{...request.invocation,targetSessionId:'unrelated'}},async observed=>observed.assertCurrent())
 })
 it.each(['root','namespace','reservation','callback','promotion','confirmation'] as const)('external close joins the accepted %s flight and fences fresh child work',async cut=>{
  const {root,backend,coordinator}=await setup(),{request,payload}=pair(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let paused=false,callbacks=0,closed=false,headerAcknowledged=false
