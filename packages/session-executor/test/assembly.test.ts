@@ -24,6 +24,7 @@ import { createTelemetry, type TelemetryEvent } from "@i-harness/telemetry"
 import type { SubagentRole } from "@i-harness/subagent"
 import { createSessionAssembly, ModelUnavailableError, type AssemblyOptions } from "../src/assembly.ts"
 import { controlledModel } from "./controlled-model.ts"
+import { createUnmanagedTaskChildHost } from "../src/lifecycle/task-child-host.ts"
 afterEach(() => vi.unstubAllGlobals())
 
 function textMock(script: MockStep[]) { return Object.assign(createMockClient(script), { prepare: prepareTextFixture }) }
@@ -79,12 +80,21 @@ describe("createSessionAssembly", () => {
     const root = await mkdtemp(join(tmpdir(), "assembly-child-observation-"))
     const coordinator = createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})
     await coordinator.create({ sessionId: "observed-root" })
-    const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: "observed-root", modelPolicy: "test-mock" })
+    let launched = false
+    const model = controlledModel(async function* (request) {
+      if (request.sessionId === "observed-root" && !launched) {
+        launched = true
+        yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "done", task_name: "observed", agent_type: "explore", background: false } } }
+      } else yield { type: "text/chunk", text: "done" }
+      yield { type: "end" }
+    })
+    const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: "observed-root", modelPolicy: "test-mock", model,
+      approveAll: true, prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: "unmanaged" }) })
     const changes: string[] = []
     try {
       expect(assembly.onSubagentsChanged).toBeTypeOf("function")
       assembly.onSubagentsChanged!(change => { changes.push(change.kind) })
-      await assembly.tools.get("spawn_agent")!.execute({ message: "done", task_name: "observed", agent_type: "explore", background: false }, { sessionId: "observed-root" })
+      await assembly.agent.run("Observe one original child")
       const row = assembly.subagentState().agentTable[0]!
       const live = assembly.liveChildSession!(row.sessionId!)!
       expect(live).toBeDefined()
@@ -1212,13 +1222,12 @@ describe("createSessionAssembly — MCP auth refresh-failure binding (M56/M57)",
  * the `tool/result` this session recorded for `name`. M5 T4 block ① moved a
  * tool BODY failure here — the call used to throw out of `agent.run` and end
  * the turn, now it yields a result and the turn continues — so the cases below
- * assert the SAME reason on the channel it travels. Returns the string
- * "undefined" when no such result exists, so a missing result fails the match
- * instead of raising a shape error. */
+ * assert the SAME reason on the actual inline result channel. */
 function toolErrorOf(events: readonly SessionEventView[], name: string): string {
   const result = events.find((e): e is Extract<SessionEvent, { type: "tool/result" }> =>
     e.type === "tool/result" && e.name === name)
-  return String((result?.output as { error?: string } | undefined)?.error)
+  if (result?.envelope?.retention.kind !== "inline") throw new Error("Expected actual inline tool failure: " + name)
+  return String((result.envelope.retention.value as { error?: string }).error)
 }
 
 describe("createSessionAssembly — pluginAgents", () => {

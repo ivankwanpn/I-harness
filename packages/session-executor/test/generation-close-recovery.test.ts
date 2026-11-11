@@ -8,8 +8,22 @@ import { createGenerationLifecycle } from '../src/lifecycle/generation-actions.t
 
 it.each(['unknown', 'throw-after-commit', 'admit-throw-after-commit', 'reentrant', 'committed', 'absent', 'FACT_PRECONDITION_STALE', 'FACT_INVALID_GROUP', 'FACT_CLOSED'] as const)('retains the real required original close receipt for %s', async mode => {
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'receipt-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
-  await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent' })
+  let armed = false, closeAppends = 0, physicalCloseCommits = 0, afterCommitThrows = 0, nativeCloseReconciles = 0
+  const backend = createJsonlBackend(root, { wrapOwnedBatch: original => async (...args) => {
+    const close = armed && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'context/action' && event.op === 'close')
+    if (!close) return original(...args)
+    closeAppends++
+    if (mode.startsWith('FACT_')) return { kind: 'not-issued', code: mode as 'FACT_CLOSED' }
+    if (mode === 'absent') return { kind: 'absent', key: args[3].key }
+    const committed = await original(...args)
+    if (committed.kind === 'committed') physicalCloseCommits++
+    if (mode === 'throw-after-commit') { afterCommitThrows++; throw new Error('original append committed before transport threw') }
+    return mode === 'unknown' ? { kind: 'unknown', key: args[3].key } : committed
+  }, wrapOwnedReconcile: original => async (...args) => {
+    if (armed && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'context/action' && event.op === 'close')) nativeCloseReconciles++
+    return original(...args)
+  } }), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent', seedLength: 0 })
   const document = await coordinator.openManagedDocument('child')
   await document.delivery.record({ type: 'subagent/inbox', messageId: 'saved', message: 'original', provenance: { kind: 'child-report', authority: 'observation', scope: 'turn', producer: 'team.delivery' } })
   const action = document.beginAction(), register = action.registerSettlementSource.bind(action)
@@ -42,19 +56,15 @@ it.each(['unknown', 'throw-after-commit', 'admit-throw-after-commit', 'reentrant
   expect(generation.originalCloseInvoked!()).toBe(false)
   await expect(generation.recoverClose!()).rejects.toMatchObject({ code: 'GENERATION_UNCERTAIN' })
   expect(captures).toBe(0)
-  const append = backend.appendOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => {
-    const close = decodeFactBatch(args[3].bytes).events.some(event => event.type === 'context/action' && event.op === 'close')
-    if (!close) return append(...args)
-    if (mode.startsWith('FACT_')) return { kind: 'not-issued', code: mode as 'FACT_CLOSED' }
-    if (mode === 'absent') return { kind: 'absent', key: args[3].key }
-    const committed = await append(...args)
-    if (mode === 'throw-after-commit') throw new Error('original append committed before transport threw')
-    return mode === 'unknown' ? { kind: 'unknown', key: args[3].key } : committed
-  }
+  armed = true
   const first = await Promise.allSettled([generation.close('failed'), generation.close('stopped')])
   expect(captures).toBe(1); expect(admits).toBe(1); expect(generation.originalCloseInvoked!()).toBe(true)
-  expect(first[0]!.status).toBe(mode === 'committed' || mode === 'reentrant' ? 'fulfilled' : 'rejected')
+  // A thrown backend ACK is reconciled against the original physical journal
+  // by managed-document before admission resolves. It does not replay append.
+  expect(first[0]!.status).toBe(mode === 'committed' || mode === 'reentrant' || mode === 'throw-after-commit' ? 'fulfilled' : 'rejected')
+  if (mode === 'throw-after-commit') {
+    expect([afterCommitThrows, closeAppends, physicalCloseCommits, nativeCloseReconciles]).toEqual([1, 1, 1, 1])
+  }
   expect(first[1]!.status).toBe(first[0]!.status)
   // Replacing aliases cannot redirect recovery away from the original receiver.
   retained!.admit = retained!.observe = retained!.reconcile = async () => { throw Error('replacement alias') }
@@ -69,7 +79,7 @@ it.each(['unknown', 'throw-after-commit', 'admit-throw-after-commit', 'reentrant
     await expect(coordinator.close()).rejects.toBeDefined()
   } else {
     await generation.recoverClose!()
-    expect(reconciles).toBe(mode === 'committed' || mode === 'reentrant' || mode === 'admit-throw-after-commit' ? 0 : 1)
+    expect(reconciles).toBe(mode === 'committed' || mode === 'reentrant' || mode === 'throw-after-commit' || mode === 'admit-throw-after-commit' ? 0 : 1)
     expect(observes).toBe(mode === 'admit-throw-after-commit' ? 1 : 0)
     expect(captures).toBe(1); expect(admits).toBe(1)
     expect(document.view.events.filter(event => event.type === 'context/action' && event.op === 'close')).toHaveLength(1)
@@ -81,7 +91,7 @@ it.each(['unknown', 'throw-after-commit', 'admit-throw-after-commit', 'reentrant
 it.each([undefined, null, false, 0, ''])('retains capture construction failure %s without recapture or clock renewal', async failure => {
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'capture-'))
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
-  await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent' })
+  await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent', seedLength: 0 })
   const document = await coordinator.openManagedDocument('child')
   await document.delivery.record({ type: 'subagent/inbox', messageId: 'saved', message: 'original', provenance: { kind: 'child-report', authority: 'observation', scope: 'turn', producer: 'team.delivery' } })
   const action = document.beginAction(), register = action.registerSettlementSource.bind(action)
@@ -102,22 +112,22 @@ it.each([undefined, null, false, 0, ''])('retains capture construction failure %
 
 it('recovers the same real required nonissued close after Stop while ordinary aliases retain rejection', async () => {
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'close-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
-  await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent' })
+  const drafts: unknown[] = []
+  let blocked = true, armed = false
+  const backend = createJsonlBackend(root, { wrapOwnedBatch: original => async (...args) => {
+    if (armed && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'context/action' && event.op === 'close')) {
+      drafts.push(decodeFactBatch(args[3].bytes).events)
+      if (blocked) return { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' }
+    }
+    return original(...args)
+  } }), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent', seedLength: 0 })
   const document = await coordinator.openManagedDocument('child')
   await document.delivery.record({ type: 'subagent/inbox', messageId: 'saved', message: 'original', provenance: { kind: 'child-report', authority: 'observation', scope: 'turn', producer: 'team.delivery' } })
   const controller = new AbortController(), action = document.beginAction(controller.signal)
   const lifecycle = createGenerationLifecycle(document.view, 'child', action)
   const generation = await lifecycle.open('main', { kind: 'delegated-input', ref: 'inbox', seq: 0, messageId: 'saved' })
-  const append = backend.appendOwnedBatch!, drafts: unknown[] = []
-  let blocked = true
-  backend.appendOwnedBatch = (...args) => {
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'context/action' && event.op === 'close')) {
-      drafts.push(decodeFactBatch(args[3].bytes).events)
-      if (blocked) return Promise.resolve({ kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' })
-    }
-    return append(...args)
-  }
+  armed = true
   try {
     const expiresAt = document.view.events.find(event => event.type === 'context/action' && event.op === 'open')!
     const original = generation.close('failed')
@@ -139,7 +149,7 @@ it('recovers the same real required nonissued close after Stop while ordinary al
 it('accepts ordinary early success for a handle whose original state is already closed without creating a recovery intent', async () => {
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'closed-'))
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
-  await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent' })
+  await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent', seedLength: 0 })
   const document = await coordinator.openManagedDocument('child')
   await document.delivery.record({ type: 'subagent/inbox', messageId: 'saved', message: 'original', provenance: { kind: 'child-report', authority: 'observation', scope: 'turn', producer: 'team.delivery' } })
   const action = document.beginAction(), lifecycle = createGenerationLifecycle(document.view, 'child', action)
