@@ -2,8 +2,10 @@ import { isNondurableSession, type SessionEventView, type FactOwner, type Manage
 import type { AgentInputOptions, AgentGenerationLifecycle } from '@i-harness/core-agent'
 import type { ChildAgentEntry } from '../agent-table.ts'
 import type { SubagentToolDeps } from '../tools/types.ts'
+import type { TaskResultProjection } from '../task/result.ts'
+import type { TaskOutcome } from '../task/types.ts'
 import { childFactOwner } from '../child/document.ts'
-import { residentOwnerFor, inOriginalInvocation, invokeOriginal, refusedReentry, type RetainedResidentResource } from './resident-lifetime.ts'
+import { residentOwnerFor, inOriginalInvocation, invokeOriginal, refusedReentry, type RetainedResidentResource, type OriginalFollowupPublication } from './resident-lifetime.ts'
 
 type Inbox = Extract<SessionEventView, { type: 'subagent/inbox' }>
 export interface FollowupGenerationIntent {
@@ -52,6 +54,9 @@ class OriginalGeneration implements RetainedResidentResource {
   previousResult?: ChildAgentEntry['resultCapture']
   private previousSettlement?: OriginalResult
   private resultSettlement?: OriginalResult
+  private resultCapture?: NonNullable<ChildAgentEntry['resultCapture']>
+  private publication?: { value: TaskResultProjection; outcome: TaskOutcome; acknowledged: boolean }
+  private resultFlight?: Promise<void>
   private action?: ManagedAction<ProducerFactOutcome>
   private lifecycle?: AgentGenerationLifecycle
   private generation?: NonNullable<AgentInputOptions['generation']>
@@ -76,10 +81,12 @@ class OriginalGeneration implements RetainedResidentResource {
   private sourceAdmitted = false
   private cleanupAcknowledged = false
   private readonly generationFactory: SubagentToolDeps['generationFactoryFor']
+  private readonly publishOriginal?: OriginalFollowupPublication
   bodyOutcome: { occurred: false } | { occurred: true; value: unknown } = { occurred: false }
   constructor(readonly deps: SubagentToolDeps, readonly entry: ChildAgentEntry, readonly input: Inbox, readonly intent: FollowupGenerationIntent) {
     this.view = entry.session; this.ownerAtCapture = entry.factOwner
     this.generationFactory = deps.generationFactoryFor?.bind(deps)
+    this.publishOriginal = residentOwnerFor(deps).captureResultPublication(entry)
   }
   matches(entry: ChildAgentEntry, input: Inbox): boolean {
     return entry === this.entry && entry.session === this.view && entry.factOwner === this.ownerAtCapture && input.seq === this.input.seq && input.messageId === this.input.messageId
@@ -98,30 +105,62 @@ class OriginalGeneration implements RetainedResidentResource {
   }
   retire(): void { this.retired = true; this.controller?.abort() }
   invoke<T>(work: () => T): T { return invokeOriginal(this, work) }
+  publishResult(value: TaskResultProjection, outcome: TaskOutcome, fallback: () => void): void {
+    if (!this.hasBody || this.exited || this.entry.session !== this.view || this.entry.factOwner !== this.ownerAtCapture) throw Error('Original followup publication unavailable')
+    if (!this.publishOriginal) { fallback(); return }
+    if (this.publication && this.publication.outcome !== outcome) throw Error('Original followup outcome changed')
+    this.publication ??= { value, outcome, acknowledged: false }
+    this.invoke(() => this.publishOriginal!(value, outcome))
+    if (value.result?.kind !== 'pending') this.publication.acknowledged = true
+  }
   settlePrevious(handle: ChildAgentEntry['resultCapture']): Promise<unknown> {
     if (!handle) return Promise.resolve()
     if (!this.previousSettlement) {
       this.previousResult = handle; this.previousSettlement = new OriginalResult(handle, this)
       residentOwnerFor(this.deps).retainResult(handle, this.previousSettlement.settle.bind(this.previousSettlement))
     }
-    return this.previousSettlement.settle()
+    return residentOwnerFor(this.deps).settleResult(this.previousResult!)
   }
   retainResult(handle: NonNullable<ChildAgentEntry['resultCapture']>): void {
+    this.resultCapture = handle
     this.resultSettlement = new OriginalResult(handle, this)
     residentOwnerFor(this.deps).retainResult(handle, this.resultSettlement.settle.bind(this.resultSettlement))
   }
-  settleResult(): Promise<import('../task/result.ts').TaskResultProjection> { return this.resultSettlement!.settle() }
-  async settleResults(): Promise<void> {
+  settleResult(): Promise<TaskResultProjection> { return residentOwnerFor(this.deps).settleResult(this.resultCapture!) }
+  get publicationSettlement(): Promise<void> | undefined { return this.resultFlight }
+  settleResults(): Promise<void> {
+    return residentOwnerFor(this.deps).joinPublicationSettlement(this, () => this.settleOriginalResults())
+  }
+  private settleOriginalResults(): Promise<void> {
+    if (this.resultFlight) return this.resultFlight
+    const flight = this.settleResultPublication()
+    this.resultFlight = flight
+    void flight.finally(() => { if (this.resultFlight === flight) this.resultFlight = undefined }).catch(() => {})
+    return flight
+  }
+  private async settleResultPublication(): Promise<void> {
     if (this.hasBody) await this.bodyExit.promise
-    const results = await Promise.allSettled([this.previousSettlement?.settle(), this.resultSettlement?.settle()])
+    const owner = residentOwnerFor(this.deps)
+    const results = await Promise.allSettled([this.previousResult ? owner.settleResult(this.previousResult) : undefined, this.resultCapture ? owner.settleResult(this.resultCapture) : undefined])
     const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
     if (failures.length) throw new AggregateError(failures, 'Original inbox result settlement incomplete')
+    if (this.publication && !this.publication.acknowledged && this.publishOriginal) {
+      const final = results[1]
+      this.invoke(() => {
+        this.publishOriginal!(this.publication!.value, this.publication!.outcome)
+        if (final?.status === 'fulfilled' && final.value) this.publishOriginal!(final.value, this.publication!.outcome)
+      })
+      this.publication.acknowledged = true
+    }
     this.releaseIfClean()
   }
   private releaseIfClean(): void {
     const fenced = this.retired || this.deps.table.get(this.entry.path) !== this.entry || this.entry.session !== this.view || this.entry.factOwner !== this.ownerAtCapture
     if (this.cleanupAcknowledged && this.previousSettlement?.acknowledged !== false && this.resultSettlement?.acknowledged !== false
-      && (fenced || (this.entry.lastInboxSeq ?? -1) >= (this.input.seq ?? 0))) residentOwnerFor(this.deps).records.delete(this)
+      && (!this.publication || this.publication.acknowledged) && (fenced || (this.entry.lastInboxSeq ?? -1) >= (this.input.seq ?? 0))) {
+      residentOwnerFor(this.deps).records.delete(this)
+      this.previousResult = undefined; this.previousSettlement = undefined
+    }
   }
   admitSource(current?: () => boolean): void { this.sourceAdmitted = true; this.sourceAdmissionCurrent = current }
   retainSource(source: import('../task/result.ts').TaskResultStore): void {

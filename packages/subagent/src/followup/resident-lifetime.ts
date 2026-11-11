@@ -2,6 +2,10 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import type { ChildAgentEntry } from '../agent-table.ts'
 import type { SubagentToolDeps } from '../tools/types.ts'
 import { isNondurableSession } from '@i-harness/core-session'
+import type { TaskResultProjection } from '../task/result.ts'
+import type { TaskOutcome } from '../task/types.ts'
+
+export type OriginalFollowupPublication = (value: TaskResultProjection, outcome: TaskOutcome) => void
 
 export interface RetainedResidentResource {
   readonly entry: ChildAgentEntry
@@ -9,6 +13,7 @@ export interface RetainedResidentResource {
   retire(): void
   close(): Promise<void>
   readonly generationCleanup?: Promise<void>
+  readonly publicationSettlement?: Promise<void>
   settleResults?(): Promise<void>
   rawNext?: Promise<void>
 }
@@ -27,15 +32,16 @@ class ResidentLifetime {
   retired = false
   readonly records = new Set<RetainedResidentResource>()
   private readonly initialSetups = new Set<import('../child/instruction-context.ts').InitialChildSetup>()
-  private readonly results = new WeakMap<NonNullable<ChildAgentEntry['resultCapture']>, () => Promise<unknown>>()
+  private readonly results = new WeakMap<NonNullable<ChildAgentEntry['resultCapture']>, () => Promise<TaskResultProjection>>()
+  private resultPublication?: (entry: ChildAgentEntry) => OriginalFollowupPublication
   private flight?: Promise<void>
-  private cleanupAttempt?: { borrowers: number; generations: Map<RetainedResidentResource, Promise<void>>; publications: Map<ResidentPreparation, Promise<void>> }
+  private cleanupAttempt?: { borrowers: number; generations: Map<RetainedResidentResource, Promise<void>>; publications: Map<object, Promise<unknown>> }
   /** Keep rejected generation joins alive through every alias participating
    * in one external close. A later explicit close gets a fresh attempt. */
   beginCleanupAttempt(): () => void {
     if (!this.cleanupAttempt) {
       const generations = new Map<RetainedResidentResource, Promise<void>>()
-      const publications = new Map<ResidentPreparation, Promise<void>>()
+      const publications = new Map<object, Promise<unknown>>()
       // A normal finally may already own the flight before a direct entry
       // disposer starts. Snapshot that admission without starting new work.
       for (const record of this.records) {
@@ -43,7 +49,7 @@ class ResidentLifetime {
         if (record.kind === 'generation' && original) generations.set(record, original)
         // A normal finally may already be settling this preparation before
         // the outer scope exists. Preserve that outcome across delayed records.
-        if (record instanceof ResidentPreparation && record.publicationSettlement) publications.set(record, record.publicationSettlement)
+        if (record.publicationSettlement) publications.set(record, record.publicationSettlement)
       }
       this.cleanupAttempt = { borrowers: 0, generations, publications }
     }
@@ -63,12 +69,13 @@ class ResidentLifetime {
     if (!original) { original = close(); attempt.generations.set(record, original) }
     return original
   }
-  joinPublicationSettlement(record: ResidentPreparation, settle: () => Promise<void>): Promise<void> {
+  joinPublicationSettlement<T>(record: object, settle: () => Promise<T>): Promise<T> {
     const scope = this.cleanupAttempt
     if (!scope) return settle()
     const original = scope.publications.get(record)
-    if (original) return original
-    const attempt = Promise.withResolvers<void>()
+    // Each original object is enrolled by one constructor-owned settle method.
+    if (original) return original as Promise<T>
+    const attempt = Promise.withResolvers<T>()
     // Admission precedes callbacks, and rejection remains in the scope until
     // its final borrower exits. A later explicit attempt gets a new map.
     scope.publications.set(record, attempt.promise)
@@ -86,14 +93,25 @@ class ResidentLifetime {
   }
   retire(): void { if (this.retired) return; this.retired = true; for (const record of this.records) record.retire(); for (const setup of this.initialSetups) setup.retire() }
   inInvocation(): boolean { return inOriginalInvocation(this) || [...this.records, ...this.initialSetups].some(record => inOriginalInvocation(record)) }
-  retainResult(handle: NonNullable<ChildAgentEntry['resultCapture']>, settle: () => Promise<unknown>): void {
-    if (!this.results.has(handle)) this.results.set(handle, settle)
+  retainResult(handle: NonNullable<ChildAgentEntry['resultCapture']>, settle: () => Promise<TaskResultProjection>): void {
+    if (!this.results.has(handle)) this.results.set(handle, () => this.joinPublicationSettlement(handle, settle))
   }
-  settleEntryResult(entry: ChildAgentEntry): Promise<unknown> {
-    const handle = entry.resultCapture
-    if (!handle) return Promise.resolve()
+  bindResultPublication(capture: (entry: ChildAgentEntry) => OriginalFollowupPublication): void {
+    if (this.resultPublication) throw Error('Original followup publisher already installed')
+    this.resultPublication = capture
+  }
+  captureResultPublication(entry: ChildAgentEntry): OriginalFollowupPublication | undefined {
+    if (this.retired) throw Object.assign(Error('Resident owner retired'), { code: 'FACT_CLOSED' })
+    return this.resultPublication?.(entry)
+  }
+  settleResult(handle: NonNullable<ChildAgentEntry['resultCapture']>): Promise<TaskResultProjection> {
     const original = this.results.get(handle)
     return original ? original() : handle.settle()
+  }
+  settleEntryResult(entry: ChildAgentEntry): Promise<TaskResultProjection | undefined> {
+    const handle = entry.resultCapture
+    if (!handle) return Promise.resolve(undefined)
+    return this.settleResult(handle)
   }
   generations(entry: ChildAgentEntry): RetainedResidentResource[] { return [...this.records].filter(r => r.kind === 'generation' && r.entry === entry) }
   preparation(entry: ChildAgentEntry, view: ChildAgentEntry['session'], owner: ChildAgentEntry['factOwner']): ResidentPreparation | undefined {

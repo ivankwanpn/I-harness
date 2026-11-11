@@ -1,7 +1,7 @@
 import {isOriginalRequiredSpawnJob,isOriginalRequiredSpawnEntry} from './tools/source-run.ts'
 import {associateJobProjection,inheritOriginalJobProjection,inheritOriginalTableProjection,assertJobProjectionCurrent,waitJobProjectionCurrent,originalJobProjectionFor,captureJobProjection,associateTableProjection,captureTableProjection,persistProjection} from './runtime-projection.ts'
 import type { SessionCoordinator } from "@i-harness/session-persistence"
-import { append, CURRENT_FORMAT_VERSION, createNondurableFactOwner, isNondurableSession, isManagedFactOwner, validRetainedResultRevision, type SessionView, type FactOwner, type SessionEvent } from "@i-harness/core-session"
+import { append, CURRENT_FORMAT_VERSION, captureLegacyFact, createNondurableFactOwner, isNondurableSession, isManagedFactOwner, validRetainedResultRevision, type SessionView, type FactOwner, type SessionEvent } from "@i-harness/core-session"
 import { retainedResultWitness, unknownResult, validResultPublication, type ResultPublication, type AuxiliaryResultStatus } from './result-publication.ts'
 import { createJobFacts } from './job-facts.ts'
 import type { JobRegistry, JobStatus, JobSnapshot } from "./jobs.ts"
@@ -414,18 +414,56 @@ export function persistentRoleRegistry(
 export function wireSubagentPersistence(
   state: { jobs: JobRegistry; table: AgentTable; roles: RoleRegistry },
   persist: SubagentPersistence,
+  assertOriginalSnapshot?: () => void,
 ): { jobs: JobRegistry; table: AgentTable; roles: RoleRegistry; observe?: JobTransitionObserver; flushFacts(): Promise<void>; closeFacts(): Promise<void> } {
-  const auxiliarySaves=new Set<Promise<void>>()
-  const saveAll=()=>{
-    const pending=(async()=>{await persist.coordinator.putDocument(persist.stateId,snapshotState(state))})()
-    auxiliarySaves.add(pending)
-    void pending.then(()=>auxiliarySaves.delete(pending),()=>{})
-    return pending
+  type AuxiliarySave = { snapshot?: unknown; failure?: { error: unknown }; done: PromiseWithResolvers<void> }
+  const auxiliarySaves = new Set<AuxiliarySave>()
+  const putDocument = persist.coordinator.putDocument.bind(persist.coordinator)
+  let saving: Promise<void> | undefined
+  const driveAuxiliary = (): Promise<void> => {
+    if (saving) return saving
+    const accepted = [...auxiliarySaves]
+    if (!accepted.length) return Promise.resolve()
+    const flight = (async () => {
+      try {
+        for (const original of accepted) {
+          if (original.failure) throw original.failure.error
+          assertOriginalSnapshot?.()
+          await putDocument(persist.stateId, original.snapshot!)
+          // This is the actual original call's ACK. A later owner change cannot
+          // turn it into uncertain IO or authorize replay of the memory effect.
+          auxiliarySaves.delete(original)
+          original.done.resolve()
+        }
+      } catch (error) {
+        for (const original of auxiliarySaves) original.done.reject(error)
+        throw error
+      }
+    })()
+    saving = flight
+    void flight.then(() => {
+      if (saving === flight) saving = undefined
+      if (auxiliarySaves.size) void driveAuxiliary().catch(() => {})
+    }, () => { if (saving === flight) saving = undefined })
+    return flight
   }
-  const flushAuxiliary=async()=>{
-    const settled=await Promise.allSettled([...auxiliarySaves])
-    const failures=settled.flatMap(result=>result.status==='rejected'?[result.reason]:[])
-    if(failures.length)throw new AggregateError(failures,'Auxiliary subagent projections require recovery')
+  const saveAll = (): Promise<void> => {
+    const original: AuxiliarySave = { done: Promise.withResolvers<void>() }
+    try {
+      assertOriginalSnapshot?.()
+      const captured = captureLegacyFact(snapshotState(state))
+      if (captured.kind !== 'captured') throw Error('Subagent snapshot cannot be captured')
+      original.snapshot = captured.value
+    } catch (error) { original.failure = { error } }
+    auxiliarySaves.add(original)
+    void original.done.promise.catch(() => {})
+    void driveAuxiliary().catch(() => {})
+    return original.done.promise
+  }
+  const flushAuxiliary = async () => {
+    // A failed native write retains this exact immutable snapshot. Later
+    // snapshots remain ordered behind it; explicit flush retries only that IO.
+    while (auxiliarySaves.size) await driveAuxiliary()
   }
   // Task 4.4: the transition observer is wired ONLY when the caller handed the
   // live parent session (web path) — otherwise zero events (additive-only).

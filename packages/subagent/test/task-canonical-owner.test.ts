@@ -11,31 +11,128 @@ vi.mock('node:fs/promises', async load => {
 import { mkdtemp, writeFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { createControlledJsonlBackend, createSessionCoordinator as composeControlledCoordinator, ownedControls, backendControls } from '../../session-persistence/test/helpers/composed.ts'
 import { captureOwnedTaskContext, TaskPersistence, originalTaskAcknowledgmentRecovery } from '@i-harness/session-persistence/internal/task-persistence'
 import { taskDocumentStorageContract } from '@i-harness/session-persistence/internal/task-state'
 import { TaskPersistence as LegacyTaskPersistence, originalTaskAcknowledgmentRecovery as legacyAcknowledgmentRecovery } from '../src/task/persistence.ts'
 import { taskDocumentStorageContract as legacyContract } from '../src/task/storage-contract.ts'
 import { acquireManagedExecution } from '../../session-persistence/src/execution-internal.ts'
 import { createManagedExecutionDomain } from '@i-harness/core-session/internal/execution'
+import type { BatchKey } from '@i-harness/core-session'
 import { createContext } from '@i-harness/core-plugin'
 import { createTaskRegistry } from '../src/task/registry.ts'
 import { lastOriginalTaskSave } from '../src/task/save-owner.ts'
 import { SHIPPING_REPORT_POLICY } from '../src/report-policy.ts'
-import { bindRequiredTaskSettlement, captureTaskNotificationProgress, type RequiredTaskSettlement, type TaskNotificationProgress } from '../src/task/required-settlement.ts'
+import { bindRequiredTaskSettlement, captureTaskNotificationProgress, captureOriginalTaskRuntimeData, captureOriginalTaskAuxiliaryData, type RequiredTaskSettlement, type TaskNotificationProgress } from '../src/task/required-settlement.ts'
+import { wireSubagentPersistence } from '../src/persist.ts'
+import { createAgentTable } from '../src/agent-table.ts'
+import { createJobRegistry } from '../src/jobs.ts'
+import { createRoleRegistry } from '../src/roles.ts'
 
-async function fixture() {
+async function fixture(controlled = false, compatibilityParent = false) {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'canonical-task-'))
-  const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true }, acquireDeadlineMs: 40, acquireRetryMs: 5 }, taskDocumentStorageContract)
+  const backend = controlled ? createControlledJsonlBackend(root) : undefined
+  const coordinator = backend
+    ? composeControlledCoordinator(backend, { lock: { enabled: true }, acquireDeadlineMs: 40, acquireRetryMs: 5 })
+    : createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true }, acquireDeadlineMs: 40, acquireRetryMs: 5 }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: 'parent' })
-  const execution = await acquireManagedExecution(coordinator,'parent'), document = execution.owner
-  const domain = createManagedExecutionDomain(execution.identity,document,createContext())
-  const ownedTask = captureOwnedTaskContext(coordinator, document, domain, 'parent')!
+  const execution = compatibilityParent ? undefined : await acquireManagedExecution(coordinator,'parent')
+  const document = await coordinator.openManagedDocument('parent')
+  const context = execution ? createManagedExecutionDomain(execution.identity, execution.owner, createContext()) : document.view
+  const ownedTask = captureOwnedTaskContext(coordinator, document, context, 'parent')!
   const registries: ReturnType<typeof createTaskRegistry>[] = []
   const registry = async (results?:import('../src/task/result.ts').TaskResultStore) => { const value = createTaskRegistry({ coordinator, stateId: 'parent', ownedTask, reportPolicy: SHIPPING_REPORT_POLICY,results }); registries.push(value); await value.ready; return value }
   io.target = join(root, 'task-parent.doc.jsonl'); io.renames = 0; io.loseAck = false;io.blockRead=false
-  return { root, coordinator, document, ownedTask, registry, async close() { io.loseAck = false;io.blockRead=false; for (const value of registries.reverse()) await value.closeOwnedLoad(); await coordinator.close(); io.target = '' } }
+  return { root, backend, coordinator, document, ownedTask, registry, async close() { io.loseAck = false;io.blockRead=false; for (const value of registries.reverse()) await value.closeOwnedLoad(); await coordinator.close(); io.target = '' } }
 }
 const submission = (name: string) => ({ identity: { parentSessionId: 'parent', toolCallId: name }, agentPath: name, description: name, prompt: 'complete original prompt ' + name, agent: 'general', delivery: 'tool' as const })
+
+it('keeps admitted publication current across another canonical Task ACK and Stop without granting fresh work', async () => {
+  const f = await fixture()
+  try {
+    const tasks = await f.registry(), current = captureOriginalTaskRuntimeData(tasks)
+    tasks.submit(submission('other-task'))
+    await tasks.flushPersistence()
+    expect(() => current()).not.toThrow()
+    f.coordinator.revokeManagedDocumentNewWork('parent')
+    expect(() => tasks.assertReady()).toThrow()
+    expect(() => current()).not.toThrow()
+    expect(() => captureOriginalTaskRuntimeData({ ...tasks })).toThrow('Original Task runtime owner unavailable')
+  } finally { await f.close() }
+})
+
+it('refuses an admitted publisher after genuine canonical Task owner replacement', async () => {
+  const f = await fixture()
+  try {
+    const tasks = await f.registry(), current = captureOriginalTaskRuntimeData(tasks)
+    expect(() => current()).not.toThrow()
+    const next = await f.registry()
+    next.submit(submission('replacement-task'))
+    await next.flushPersistence()
+    expect(() => current()).toThrow('Original Task runtime data retired or replaced')
+    expect(() => captureOriginalTaskRuntimeData(next)()).not.toThrow()
+  } finally { await f.close() }
+})
+
+it('joins an already admitted original auxiliary write before replacing its canonical data owner', async () => {
+  const f = await fixture(true), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const backend = backendControls(f.backend!), put = backend.original.putDocument!
+  let held = true, replacementReady = false, nativeWrites = 0
+  backend.methods.putDocument = async (...args) => {
+    if (args[0] === 'parent') {
+      if (held) { entered.resolve(); await release.promise }
+      nativeWrites++
+    }
+    return put.call(f.backend, ...args)
+  }
+  try {
+    const old = await f.registry(), auxiliary = captureOriginalTaskAuxiliaryData(old)
+    const state = { table: createAgentTable(), jobs: createJobRegistry(), roles: createRoleRegistry() }
+    const wired = wireSubagentPersistence(state, { coordinator: f.coordinator, stateId: 'parent', parentSessionId: 'parent' }, auxiliary)
+    wired.roles.register({ name: 'old-original', description: '', systemPrompt: '', tools: [] })
+    await entered.promise
+    const replacing = f.registry().then(value => { replacementReady = true; return value })
+    // The real Task read/installation is queued behind the original native
+    // document write, not authorized merely by a pre-await incarnation check.
+    expect(() => old.assertReady()).toThrow()
+    expect(replacementReady).toBe(false)
+    held = false; release.resolve()
+    await replacing
+    await wired.flushFacts()
+    expect(nativeWrites).toBe(1)
+    expect(() => auxiliary()).toThrow()
+    wired.roles.register({ name: 'stale-must-not-write', description: '', systemPrompt: '', tools: [] })
+    await expect(wired.flushFacts()).rejects.toThrow()
+    expect(nativeWrites).toBe(1)
+    const snapshot = await f.coordinator.getDocument('parent') as { roles: { name: string }[] }
+    expect(snapshot.roles.map(role => role.name)).toEqual(['old-original'])
+  } finally { held = false; release.resolve(); await f.close() }
+})
+
+it.each([false, true])('refuses retained publication while its original parent journal is quarantined by a genuine unknown ACK (compatibility=$0)', async compatibility => {
+  const f = await fixture(true, compatibility)
+  const controls = ownedControls(f.backend!)
+  let unknown = true
+  let pendingKey: BatchKey | undefined
+  controls.append = async (...args) => {
+    const outcome = await controls.originalAppend(...args)
+    return unknown && args[0] === 'parent' ? { kind: 'unknown', key: args[3].key } : outcome
+  }
+  controls.reconcile = async (...args) => unknown && args[0] === 'parent'
+    ? { kind: 'unknown', key: args[3].key } : controls.originalReconcile(...args)
+  const action = f.document.beginAction()
+  try {
+    const tasks = await f.registry(), current = captureOriginalTaskRuntimeData(tasks)
+    const outcome = await action.facts.metadata.admit({ type: 'session/title', title: 'same parent uncertain', source: 'user', messageSeqs: [] })
+    expect(outcome.kind).toBe('unknown')
+    if (outcome.kind !== 'unknown') throw Error('Original parent unknown ACK required')
+    pendingKey = outcome.key
+    expect(() => current()).toThrow()
+    unknown = false
+    await f.document.reconcile(pendingKey)
+    expect(() => current()).not.toThrow()
+  } finally { unknown = false; if (pendingKey) await f.document.reconcile(pendingKey); action.finish(); await f.close() }
+})
 
 it('shares canonical Task codec, save class and acknowledgment registry through compatibility paths',()=>{
   expect(TaskPersistence).toBe(LegacyTaskPersistence)

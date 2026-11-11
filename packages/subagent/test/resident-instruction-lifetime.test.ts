@@ -1,5 +1,20 @@
 import { expect, it, vi } from 'vitest'
 const observations = vi.hoisted(() => ({ executions: [] as NonNullable<ReturnType<typeof import('../src/followup/generation.ts').beginFollowupExecution>>[] }))
+const readiness = vi.hoisted(() => ({ fail: false, calls: 0 }))
+vi.mock('../src/task/registry.ts', async load => {
+  const actual = await load<typeof import('../src/task/registry.ts')>()
+  return { ...actual, createTaskRegistry(...args: Parameters<typeof actual.createTaskRegistry>) {
+    const owner = actual.createTaskRegistry(...args)
+    if (!readiness.fail) return owner
+    const qualify = owner.qualifyRestoredResults.bind(owner)
+    owner.qualifyRestoredResults = async () => {
+      readiness.calls++
+      if (readiness.fail) throw false
+      return qualify()
+    }
+    return owner
+  } }
+})
 vi.mock('../src/followup/generation.ts', async original => {
   const native = await original<typeof import('../src/followup/generation.ts')>()
   return { ...native, beginFollowupExecution(...args: Parameters<typeof native.beginFollowupExecution>) {
@@ -36,7 +51,7 @@ async function harness(control: {
   observations.executions = []
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'own-'))
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
-  await coordinator.create({ sessionId: 'parent' }); await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent' })
+  await coordinator.create({ sessionId: 'parent' }); await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent', seedLength: 0 })
   const parent = await coordinator.openManagedDocument('parent'), document = await coordinator.openManagedDocument('child')
   await document.delivery.record({ type: 'subagent/inbox', messageId: 'original', message: 'original inbox', provenance: { kind: 'child-report', authority: 'observation', scope: 'turn', producer: 'team.delivery' } })
   const begin = document.beginAction.bind(document)
@@ -69,7 +84,7 @@ async function harness(control: {
 it.each(['generation', 'drain', 'finish'].flatMap(phase => [undefined, null, false, 0, ''].map(failure => ({ phase, failure }))))('retains failed $phase with $failure and retries only remaining original phases', async ({ phase, failure }) => {
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'rl-'))
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
-  await coordinator.create({ sessionId: 'child', origin: 'subagent', parentSession: 'parent' })
+  await coordinator.create({ sessionId: 'child', origin: 'subagent', parentSession: 'parent', seedLength: 0 })
   const document = await coordinator.openManagedDocument('child')
   await document.delivery.record({ type: 'subagent/inbox', messageId: 'inbox', message: 'original', provenance: { kind: 'child-report', authority: 'observation', scope: 'turn', producer: 'team.delivery' } })
   const ctx = createContext(), tools = createToolRegistry(ctx)
@@ -207,7 +222,7 @@ it('retains original mount callbacks and their receiver across a failed close in
   }
 })
 
-it.each([false, true])('retains the original rejected result settlement with one cleanup attempt (removed=%s)', async removed => {
+it.each([false, true, 'replaced', 'removed-unknown'] as const)('retains the original rejected result settlement with one cleanup attempt (removed=%s)', async removed => {
   let fail = true, captures = 0, settlements = 0, replacementSettlements = 0
   const debt = new Error('original result settlement')
   const f = await harness({ results: {
@@ -224,11 +239,32 @@ it.each([false, true])('retains the original rejected result settlement with one
     const handle = f.entry.resultCapture!, settle = handle.settle.bind(handle)
     handle.settle = async () => { replacementSettlements++; return settle() }
     if (removed) f.sub.table.remove(f.entry.path)
+    if (removed === 'removed-unknown') {
+      await expect(f.sub.dispose()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+      expect([captures, settlements]).toEqual([1, 2])
+      expect(f.sub.table.get(f.entry.path)).toBeUndefined()
+    }
+    let replacement: ChildAgentEntry | undefined
+    if (removed === 'replaced') {
+      replacement = { ...f.entry, controller: new AbortController(), finalText: 'replacement must stay unchanged' }
+      f.sub.table.add(f.entry.path, replacement)
+    }
+    if (replacement) {
+      const originalProjection = replacement.result
+      fail = false
+      await expect(f.sub.dispose()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+      expect(f.sub.table.get(f.entry.path)).toBe(replacement)
+      expect(replacement.finalText).toBe('replacement must stay unchanged')
+      expect(replacement.result).toBe(originalProjection)
+      f.sub.table.remove(f.entry.path)
+    }
     fail = false; await f.sub.dispose()
-    expect([captures, settlements]).toEqual([1, 2])
+    const expectedSettlements = removed === 'removed-unknown' ? 3 : 2
+    expect([captures, settlements]).toEqual([1, expectedSettlements])
     expect(replacementSettlements).toBe(0)
-    await f.sub.dispose(); expect([captures, settlements]).toEqual([1, 2])
-  } finally { fail = false; await f.close() }
+    if (removed) expect(f.sub.table.get(f.entry.path)).toBeUndefined()
+    await f.sub.dispose(); expect([captures, settlements]).toEqual([1, expectedSettlements])
+  } finally { fail = false; if (removed) f.sub.table.remove(f.entry.path); await f.close() }
 })
 
 it('refuses reentrant owner close from its original generation-open callback without joining that raw drive', async () => {
@@ -273,13 +309,20 @@ it('delivers a falsey readiness failure once while still closing siblings and al
   await coordinator.create({ sessionId: 'parent' })
   const parent = await coordinator.openManagedDocument('parent')
   const ctx = createContext(), tools = createToolRegistry(ctx)
-  const sub = registerSubagent(ctx, tools, { parentSession: parent.view, factOwner: parent, parentModel: createMockClient([]), resolveModel: async () => ({ status: 'unconfigured', reason: 'unused' }), exec: registerExec(ctx), persist: { coordinator, stateId: 'parent', parentSessionId: 'parent' } })
-  sub.tasks.qualifyRestoredResults = async () => { throw false }
+  readiness.fail = true; readiness.calls = 0
+  const sub = registerSubagent(ctx, tools, { parentSession: parent.view, factOwner: parent, parentModel: createMockClient([]), resolveModel: async () => ({ status: 'unconfigured', reason: 'unused' }), exec: registerExec(ctx), persist: { coordinator, stateId: 'parent', parentSessionId: 'parent' },
+    restoredState: { formatVersion: 1, jobs: [], roles: [], agentTable: [{ path: 'root/sibling', status: 'completed', mailbox: [] }] } })
+  const sibling = sub.table.get('root/sibling')!
+  let siblingsClosed = 0
+  sibling.dispose = async () => { siblingsClosed++ }
   try {
+    expect(Object.isFrozen(sub.tasks)).toBe(true)
     await expect(sub.ready).rejects.toBe(false)
     await expect(sub.dispose()).rejects.toBeInstanceOf(AggregateError)
+    expect(siblingsClosed).toBe(1); expect(sibling.controller.signal.aborted).toBe(true)
     await sub.dispose()
-  } finally { await sub.dispose().catch(() => {}); await coordinator.close(); await ctx.scope.unmount() }
+    expect(readiness.calls).toBe(1); expect(siblingsClosed).toBe(1)
+  } finally { readiness.fail = false; await sub.dispose().catch(() => {}); await coordinator.close(); await ctx.scope.unmount() }
 })
 
 it('refuses a registry-missing entry with an original unknown disposer without overwriting, closing or launching it', async () => {
@@ -312,6 +355,22 @@ it('retries the same original entry disposer after failure rather than adopting 
     fail = false; await f.sub.dispose()
     expect([originalCalls, replacementCalls]).toEqual([2, 0])
   } finally { fail = false; f.entry.dispose = original; await f.close() }
+})
+
+it('reports a terminal followup chain failure once while finishing independent entry cleanup', async () => {
+  const f = await harness({ resident: true })
+  let disposals = 0
+  f.entry.followupChain = Promise.reject(false)
+  void f.entry.followupChain.catch(() => {})
+  f.entry.dispose = async () => { disposals++; await f.document.close() }
+  try {
+    const failure = await f.sub.dispose().then(() => undefined, error => error)
+    expect(failure).toBeInstanceOf(AggregateError)
+    expect(failure.errors.some((error: unknown) => error instanceof AggregateError && error.errors.includes(false))).toBe(true)
+    expect(disposals).toBe(1)
+    await f.sub.dispose()
+    expect(disposals).toBe(1)
+  } finally { await f.close() }
 })
 
 it.each(['prior-failure', 'normal-finally-overlap', 'entry-alias-overlap'].flatMap(mode => [undefined, null, false, 0, ''].map(failure => ({ mode, failure }))))('shares one rejected generation cleanup through held resident cancellation ($mode, $failure)', async ({ mode, failure }) => {

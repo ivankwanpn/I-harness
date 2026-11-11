@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { createSession, isNondurableSession, type SessionEvent } from "@i-harness/core-session"
+import { append, createSession, createNondurableFactOwner, CURRENT_FORMAT_VERSION, isNondurableSession, type SessionEvent } from "@i-harness/core-session"
 import { createJobRegistry, type JobRegistry } from "../src/jobs.ts"
 import { createAgentTable, type AgentTable } from "../src/agent-table.ts"
 import { createRoleRegistry, builtinRoles, type RoleRegistry } from "../src/roles.ts"
@@ -88,11 +88,23 @@ describe("subagent state snapshot", () => {
     expect(fresh.table.get("root/helper")?.status).toBe("completed")
     expect(fresh.table.get("root/running")?.status).toBe("error") // running → error
     expect(fresh.roles.get("custom")).toBeDefined()
-    // restored entries have fresh (non-persisted) session/controller
+    // Serialized auxiliary rows supply empty readonly placeholders. Durable
+    // resume attaches the original document before execution.
     const restored = fresh.table.get("root/helper")!.session
-    expect(isNondurableSession(restored)).toBe(true)
-    if (!isNondurableSession(restored)) throw new Error('Expected standalone restored fixture')
-    expect(typeof restored.events.push).toBe("function")
+    expect(restored).toEqual({ formatVersion: CURRENT_FORMAT_VERSION, events: [] })
+    expect(Object.isFrozen(restored)).toBe(true)
+    expect(Object.isFrozen(restored.events)).toBe(true)
+    expect(isNondurableSession(restored)).toBe(false)
+    // @ts-expect-error The runtime negative control deliberately passes a readonly witness.
+    expect(() => createNondurableFactOwner(restored)).toThrow('requires its owned fact capability')
+    // @ts-expect-error The readonly witness also rejects the writable-session API at runtime.
+    expect(() => append(restored, { type: 'turn/start' })).toThrow()
+    // @ts-expect-error Verify the actual frozen array rejects a direct mutation.
+    expect(() => restored.events.push({ type: 'turn/start' })).toThrow(TypeError)
+    expect(Reflect.set(restored, 'formatVersion', 1)).toBe(false)
+    expect(restored.events).toEqual([])
+    expect(fresh.table.get('root/running')!.session).not.toBe(restored)
+    expect(fresh.table.get('root/helper')!.controller).not.toBe(fresh.table.get('root/running')!.controller)
   })
 
   it("snapshotState/restoreState round-trip the child sessionId link", () => {
@@ -232,7 +244,7 @@ describe("persistent wrappers", () => {
     expect(save).toHaveBeenCalledTimes(2)
   })
 
-  it("wireSubagentPersistence returns wrapped registries that save the full snapshot on any mutation", async () => {
+  it("wireSubagentPersistence serializes captured full snapshots and flushes every admitted mutation", async () => {
     const s = makeState()
     const saved: SubagentStateSnapshot[] = []
     const persist: SubagentPersistence = {
@@ -248,6 +260,7 @@ describe("persistent wrappers", () => {
     expect(saved).toHaveLength(1)
     expect(saved[0]!.jobs).toHaveLength(1)
     wired.roles.register({ name: "custom", description: "d", systemPrompt: "p", tools: [] })
+    await wired.flushFacts()
     expect(saved).toHaveLength(2)
     expect(saved[1]!.roles.map((r) => r.name)).toContain("custom")
   })

@@ -914,7 +914,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
         const revision=taskRevision;
         const checkOriginal=()=>{
             const ready=Object.getOwnPropertyDescriptor(document,'assertReady'),view=Object.getOwnPropertyDescriptor(document,'view');
-            if(closed||taskMetadataPending||taskMetadataStale||revision!==taskRevision||!ready||!('value'in ready)||ready.value!==originalReady||!view||!('value'in view)||view.value!==originalView||state.view!==originalView)throw new FactRecoveryRequiredError();
+            if(closed||quarantined||sourceFault||taskMetadataPending||taskMetadataStale||revision!==taskRevision||!ready||!('value'in ready)||ready.value!==originalReady||!view||!('value'in view)||view.value!==originalView||state.view!==originalView)throw new FactRecoveryRequiredError();
             held.assertHeld();
         };
         const check=()=>{checkOriginal();Reflect.apply(originalReady,document,[])};check();

@@ -1,7 +1,7 @@
 import {committedFactSeqs,type ProducerFactOutcome,type CapturedSettlementFact,type SettlementFacts} from '@i-harness/core-session'
 import {readManagedTaskResult,readManagedSourceTaskDelivery} from '@i-harness/core-session/internal/execution'
 import {canonicalJsonData} from '@i-harness/core-session'
-import {associateRequiredTaskRegistry,prepareOriginalTaskDataReplacement,isInstalledRequiredTaskData,releaseOriginalTaskData,type RequiredTaskSettlement,type TaskNotificationProgress,type NotificationTaskAccess} from './required-settlement.ts'
+import {associateRequiredTaskRegistry,prepareOriginalTaskDataReplacement,isInstalledRequiredTaskData,isOriginalTaskDataIncarnation,releaseOriginalTaskData,type RequiredTaskSettlement,type TaskNotificationProgress,type NotificationTaskAccess} from './required-settlement.ts'
 import {types as nativeTypes} from 'node:util'
 import {callOriginalCurrentnessMethod,propagateOriginalCurrentnessReader,runOpaqueCurrentnessRead} from '../../../core-session/src/managed/currentness-guards.ts'
 import { observeColdExecutionWrites } from '../../../session-persistence/src/coordinator/cold-execution-writes.ts'
@@ -47,6 +47,17 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   function assertReady() {
     if (currentState.phase !== 'ready') throw Object.assign(new Error('Task registry ' + currentState.phase, { cause: currentState.failure?.cause }), { code: 'TASK_REGISTRY_UNAVAILABLE' })
     if (ownedTask) {if(!isInstalledRequiredTaskData(ownedTask.operations,opts.stateId!,installedData))throw Error('Original Task registry data replaced');if(launchGuard)callOriginalCurrentnessMethod(launchGuard,ownedTask.operations,'assertParentSession',[ownedTask.parent,taskStateId()!]);else ownedTask.operations.assertParentSession(ownedTask.parent, opts.stateId!)}
+  }
+  function captureRuntimeData(originalData = isInstalledRequiredTaskData): () => void {
+    assertReady()
+    const records = currentState.records, notifications = currentState.notifications
+    return () => {
+      if ((currentState.phase !== 'ready' && currentState.phase !== 'retired') || currentState.records !== records || currentState.notifications !== notifications ||
+        ownedTask && !originalData(ownedTask.operations, opts.stateId!, installedData)) {
+        throw Error('Original Task runtime data retired or replaced')
+      }
+      if (ownedTask) ownedTask.operations.assertOriginalParentSession(ownedTask.parent, opts.stateId!)
+    }
   }
   const resultOwner = opts.results ? new TaskResultOwner(opts.results) : undefined
   const listeners = new Map<string, Set<(record: Readonly<TaskRecord>) => void>>()
@@ -730,7 +741,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       async release(){if(this!==result)throw Error('Invalid required Task receiver');if(!consumed)throw Error('Original required Task acknowledgment unavailable');if(!released){await ownedTask.operations.releaseRequiredParent(parent!);released=true;requiredTerminalRoutes.delete(task);requiredClaimRoutes.delete(task);requiredTasks.delete(task)}}
     })
     try{await readyParent;check();return result}catch(error){requiredTerminalRoutes.delete(task);requiredClaimRoutes.delete(task);throw error}
-  },{recover:recoverCanonicalPublications,closeAfter:closeOwnedLoad,notification:captureNotificationProgress,children:canonicalChildren})
+  },{recover:recoverCanonicalPublications,closeAfter:closeOwnedLoad,notification:captureNotificationProgress,children:canonicalChildren,runtimeData:captureRuntimeData,auxiliaryData:()=>captureRuntimeData(isOriginalTaskDataIncarnation)})
   if (ownedTask && opts.launchContext) {
    const launchHooks:Parameters<typeof createTaskLaunchPort>[2]={
     beforeResultIssue(record,before){assertReady();if(currentState.records.get(record.id)!==record)throw Error('Original task replaced');retentionPrerequisites.set(record,before)},

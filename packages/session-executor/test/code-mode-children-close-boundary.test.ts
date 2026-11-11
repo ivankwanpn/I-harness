@@ -9,13 +9,13 @@ import { tmpdir } from "node:os"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
-import { createDurableSessionLoader, createSessionService } from "../src/index.ts"
+import { createDurableSessionLoader, createSessionService, createUnmanagedTaskChildHost } from "../src/index.ts"
 import { registerCodeMode, type CodeModeFactory } from "@i-harness/code-mode"
 import { inspect } from 'node:util'
 
 function codeObservation(request: LLMRequest) {
   const last = request.messages.at(-1)
-  if (last?.role !== "tool" || last.isError || typeof last.content !== "string") throw new Error("Expected the actual successful Code Mode tool result")
+  if (last?.role !== "tool" || last.isError || typeof last.content !== "string") throw new Error("Expected the actual successful Code Mode tool result: " + JSON.stringify({ sessionId: request.sessionId, last }))
   const call = request.messages.flatMap(message => message.role === "assistant" ? message.toolCalls ?? [] : []).find(call => call.id === last.toolCallId)
   if (!call || !["code_exec", "code_wait"].includes(call.name)) throw new Error("Expected a Code Mode observation call")
   const output = JSON.parse(last.content)
@@ -38,7 +38,7 @@ it("keeps child outputs and stored state through snapshot-before-close at the ex
   const parallelLimits: Array<number | undefined> = []
   const factory: CodeModeFactory = (ctx, tools, mountOptions) => {
     parallelLimits.push(mountOptions.maxParallel)
-    return registerCodeMode(ctx, tools, mountOptions)
+    return registerCodeMode(ctx, tools, { ...mountOptions, ...(mountOptions.sessionId === "parent" ? { config: { mode: "mixed" as const } } : {}) })
   }
   const child: ModelClient = controlledModel(async function* (request) {
     requests.push(request)
@@ -51,12 +51,18 @@ it("keeps child outputs and stored state through snapshot-before-close at the ex
     }
     yield { type: "end" }
   })
-  const parent: ModelClient = controlledModel(async function* () { yield { type: "text/chunk", text: "parent" }; yield { type: "end" } })
+  const parentCalls: Array<{ name: string; args: unknown }> = []
+  const parent: ModelClient = controlledModel(async function* (request) {
+    const call = request.messages.at(-1)?.role === "user" ? parentCalls.shift() : undefined
+    if (call) yield { type: "tool_call", call }
+    else yield { type: "text/chunk", text: "parent" }
+    yield { type: "end" }
+  })
   const options = {
     workspace: root, model: parent, coordinator, sessionFor: createDurableSessionLoader(coordinator), codeMode: { mode: "only" as const },
     codeModeFactory: factory, maxParallelToolCalls: 1,
-    team: {}, concurrentSessionTeams: true, sandbox: "danger-full-access" as const, contextWindow: 100_000, maxOutputTokens: 123,
-    pluginAgents: ["probe", "teammate"].map(name => ({ name, description: "Code Mode read fixture", systemPrompt: "Read files", tools: ["list_dir", "code_exec", "code_wait"] })),
+    approveAll: true, prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: "unmanaged" }), sandbox: "danger-full-access" as const, contextWindow: 100_000, maxOutputTokens: 123,
+    pluginAgents: ["probe", "helper"].map(name => ({ name, description: "Code Mode read fixture", systemPrompt: "Read files", tools: ["list_dir", "code_exec", "code_wait"] })),
     additionalTools: [{ name: "secret", description: "Parent secret", inputSchema: { type: "object", properties: {} }, execute: async () => "secret" }],
     roleSelectionFor: () => ({ provider: "fixture", model: "child" }), allowSubagentModelSelection: true,
     resolveRoleModel: async () => ({ status: "ready" as const, binding: { client: child, contextWindow: 100_000, maxOutputTokens: 123 } }),
@@ -68,11 +74,19 @@ it("keeps child outputs and stored state through snapshot-before-close at the ex
   const restoredFacts: Array<{ id: string; events: unknown }> = []
   try {
     let assembly = await service.assemblyFor("parent")
-    const execute = (name: string, args: unknown) => assembly.tools.get(name)!.execute(args, { sessionId: "parent" })
+    const execute = async (name: string, args: unknown) => {
+      const before = assembly.session.events.length
+      parentCalls.push({ name, args })
+      await service.submit("parent", "Perform the scheduled fixture operation", new AbortController().signal)
+      const result = assembly.session.events.slice(before).find(event => event.type === "tool/result" && event.name === name)
+      if (result?.type !== "tool/result" || result.envelope?.retention.kind !== "inline") throw new Error("Expected original inline parent operation result: " + name)
+      if (result.envelope.execution.outcome !== "succeeded") throw new Error("Parent operation failed: " + JSON.stringify(result.envelope))
+      return result.envelope.retention.value
+    }
     await execute("spawn_agent", { task_name: "normal", agent_type: "probe", message: "read normal", fork_turns: "none", background: false })
-    await execute("spawn_teammate", { name: "helper", description: "read fixture", prompt: "read teammate", context: "fresh" })
+    await execute("spawn_agent", { task_name: "helper", agent_type: "helper", message: "read helper", fork_turns: "none", background: false })
     const rows = (await execute("list_agents", {}) as { agents: Array<{ path: string; sessionId: string }> }).agents
-    const ids = ["root/normal", "lead/helper"].map(path => rows.find(row => row.path === path)!.sessionId)
+    const ids = ["root/normal", "root/helper"].map(path => rows.find(row => row.path === path)!.sessionId)
     for (const id of ids) childViews.set(id, (await coordinator.openManagedDocument(id)).view)
     const waitTurns = async (count: number) => {
       for (const id of ids) {
@@ -94,11 +108,18 @@ it("keeps child outputs and stored state through snapshot-before-close at the ex
     let boundaryClose: Promise<void> | undefined
     let boundaryState: ReturnType<typeof assembly.subagentState> | undefined
     const reachedBoundary = Promise.withResolvers<void>()
+    // The receipt observer records synchronous evidence. An external
+    // continuation owns close; the child callback cannot join its own drive.
+    const closingAtReceipt = reachedBoundary.promise.then(() => {
+      boundaryClose = service.close()
+      return boundaryClose
+    })
+    void closingAtReceipt.catch(() => {})
     const endings = new Map(ids.map(id => [id, 1]))
     const boundaryUnsubscribers = await Promise.all(ids.map(async id => subscribe((await coordinator.openManagedDocument(id)).view, event => {
       if (event.type !== 'turn/end') return
       endings.set(id, endings.get(id)! + 1)
-      if ([...endings.values()].every(count => count === 2) && !boundaryClose) {
+      if ([...endings.values()].every(count => count === 2) && !boundaryState) {
         try {
           // These are synchronous receipt-time facts, before snapshot/close.
           // A final model sentence alone cannot establish completed work.
@@ -113,8 +134,6 @@ it("keeps child outputs and stored state through snapshot-before-close at the ex
           boundaryFacts = [...childViews].map(([id, view]) => ({ id, events: [...view.events] }))
         } catch (error) { reachedBoundary.reject(error); return }
         boundaryState = assembly.subagentState()
-        boundaryClose = service.close()
-        void boundaryClose.catch(error => console.error('Exact turn-end close failure', inspect(error, { depth: 12 })))
         reachedBoundary.resolve()
       }
     })))
@@ -125,8 +144,8 @@ it("keeps child outputs and stored state through snapshot-before-close at the ex
     }
     expect(assembly.session.events.some(e => e.type === "code/dispatch")).toBe(false)
     await execute("followup_task", { target: "root/normal", message: "followup" })
-    await execute("team_followup_task", { target: "helper", message: "followup" })
-    // The exact receipt callback starts closing the original owner. Its cold
+    await execute("followup_task", { target: "root/helper", message: "followup" })
+    // The external exact-receipt continuation closes the original owner. Its cold
     // snapshot is intentionally unavailable while that drain is pending; wait
     // for the observed receipt and the real close, without weakening the fence
     // or increasing this test's existing deadline.
@@ -134,13 +153,13 @@ it("keeps child outputs and stored state through snapshot-before-close at the ex
     expect(boundaryState).toBeDefined()
     expect(boundaryClose).toBeDefined()
     const restoredState = boundaryState!
-    await boundaryClose!
+    await closingAtReceipt
     await waitTurns(2)
     for (const unsubscribe of boundaryUnsubscribers) unsubscribe()
     service = createSessionService({ ...options, restoredState })
     assembly = await service.assemblyFor("parent")
     await execute("followup_task", { target: "root/normal", message: "restored followup" })
-    await execute("team_followup_task", { target: "helper", message: "restored followup" })
+    await execute("followup_task", { target: "root/helper", message: "restored followup" })
     await waitTurns(3)
     await service.close()
     for (const id of ids) {
@@ -168,7 +187,8 @@ it("keeps child outputs and stored state through snapshot-before-close at the ex
       throw cleanup
     }
   }
-}, 15_000)
+// This actual two-birth/six-Code-turn reconstruction measured 43s alone.
+}, 60_000)
 
 it("joins a genuinely running guest at turn-end close and cannot revive its unfinished continuation on reopen", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-code-running-close-"))

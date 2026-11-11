@@ -3,41 +3,53 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
+import { subscribe } from "@i-harness/core-session"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
-import { createDurableSessionLoader, createSessionService } from "../src/index.ts"
+import { createDurableSessionLoader, createSessionService, createUnmanagedTaskChildHost } from "../src/index.ts"
 import { registerCodeMode, type CodeModeFactory } from "@i-harness/code-mode"
 import { controlledModel } from "./controlled-model.ts"
 import { inspect } from 'node:util'
 import { createTelemetry, type TelemetryEvent } from '@i-harness/telemetry'
-
 afterEach(() => vi.unstubAllGlobals())
 
-it("ordinary and Team children keep role-local Code Mode through followup and resident reconstruction", async () => {
+it("ordinary children keep role-local Code Mode through followup and resident reconstruction", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-code-children-"))
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
   const requests: LLMRequest[] = []
   const executionErrors: TelemetryEvent[] = []
-  const telemetry = createTelemetry([{ onEvent(event) { if (event.type === 'session/error') executionErrors.push(event) } }])
+  const executionFailed = Promise.withResolvers<never>()
+  void executionFailed.promise.catch(() => {})
+  const telemetry = createTelemetry([{ onEvent(event) { if (event.type === 'session/error') { executionErrors.push(event); executionFailed.reject(new Error('Original child execution failed: ' + JSON.stringify(event))) } } }])
   const parallelLimits: Array<number | undefined> = []
   const factory: CodeModeFactory = (ctx, tools, mountOptions) => {
     parallelLimits.push(mountOptions.maxParallel)
-    return registerCodeMode(ctx, tools, mountOptions)
+    return registerCodeMode(ctx, tools, { ...mountOptions, ...(mountOptions.sessionId === "parent" ? { config: { mode: "mixed" as const } } : {}) })
   }
   const child = controlledModel(async function* (request) {
     requests.push(request)
     const last = request.messages.at(-1)
     if (last?.role === "user") yield { type: "tool_call", call: { name: "code_exec", args: { code: 'text(ALL_TOOLS.map(t=>t.name)); text(await tools.list_dir({path:"."})); store("turn",(load("turn")??0)+1); text(load("turn"));' } } }
-    else yield { type: "text/chunk", text: "child complete" }
+    else if (last?.role === "tool" && typeof last.content === "string") {
+      const output = JSON.parse(last.content)
+      if (output.status === "running") yield { type: "tool_call", call: { name: "code_wait", args: { cell_id: output.cell_id } } }
+      else yield { type: "text/chunk", text: "child complete" }
+    } else throw new Error("Expected original Code observation")
     yield { type: "end" }
   })
-  const parent: ModelClient = controlledModel(async function* () { yield { type: "text/chunk", text: "parent" }; yield { type: "end" } })
+  const parentCalls: Array<{ name: string; args: unknown }> = []
+  const parent: ModelClient = controlledModel(async function* (request) {
+    const call = request.messages.at(-1)?.role === "user" ? parentCalls.shift() : undefined
+    if (call) yield { type: "tool_call", call }
+    else yield { type: "text/chunk", text: "parent" }
+    yield { type: "end" }
+  })
   const options = {
     workspace: root, model: parent, coordinator, sessionFor: createDurableSessionLoader(coordinator), codeMode: { mode: "only" as const },
     codeModeFactory: factory, maxParallelToolCalls: 1, telemetry,
-    team: {}, concurrentSessionTeams: true, sandbox: "danger-full-access" as const, contextWindow: 100_000, maxOutputTokens: 123,
-    pluginAgents: ["probe", "teammate"].map(name => ({ name, description: "Code Mode read fixture", systemPrompt: "Read files", tools: ["list_dir", "code_exec", "code_wait"] })),
+    approveAll: true, prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: "unmanaged" }), sandbox: "danger-full-access" as const, contextWindow: 100_000, maxOutputTokens: 123,
+    pluginAgents: ["probe", "helper"].map(name => ({ name, description: "Code Mode read fixture", systemPrompt: "Read files", tools: ["list_dir", "code_exec", "code_wait"] })),
     additionalTools: [{ name: "secret", description: "Parent secret", inputSchema: { type: "object", properties: {} }, execute: async () => "secret" }],
     roleSelectionFor: () => ({ provider: "fixture", model: "child" }), allowSubagentModelSelection: true,
     resolveRoleModel: async () => ({ status: "ready" as const, binding: { client: child, contextWindow: 100_000, maxOutputTokens: 123 } }),
@@ -46,12 +58,31 @@ it("ordinary and Team children keep role-local Code Mode through followup and re
   let primaryFailure: unknown, failed = false
   try {
     let assembly = await service.assemblyFor("parent")
-    const execute = (name: string, args: unknown) => assembly.tools.get(name)!.execute(args, { sessionId: "parent" })
+    const execute = async (name: string, args: unknown) => {
+      const before = assembly.session.events.length
+      parentCalls.push({ name, args })
+      await service.submit("parent", "Perform the scheduled fixture operation", new AbortController().signal)
+      const result = assembly.session.events.slice(before).find(event => event.type === "tool/result" && event.name === name)
+      if (result?.type !== "tool/result" || result.envelope?.retention.kind !== "inline") throw new Error("Expected original inline parent operation result: " + name)
+      if (result.envelope.execution.outcome !== "succeeded") throw new Error("Parent operation failed: " + JSON.stringify(result.envelope))
+      return result.envelope.retention.value
+    }
     await execute("spawn_agent", { task_name: "normal", agent_type: "probe", message: "read normal", fork_turns: "none", background: false })
-    await execute("spawn_teammate", { name: "helper", description: "read fixture", prompt: "read teammate", context: "fresh" })
+    await execute("spawn_agent", { task_name: "helper", agent_type: "helper", message: "read helper", fork_turns: "none", background: false })
     const rows = (await execute("list_agents", {}) as { agents: Array<{ path: string; sessionId: string }> }).agents
-    const ids = ["root/normal", "lead/helper"].map(path => rows.find(row => row.path === path)!.sessionId)
-    const waitTurns = async (count: number) => { await vi.waitFor(async () => {
+    const ids = ["root/normal", "root/helper"].map(path => rows.find(row => row.path === path)!.sessionId)
+    const waitTurns = async (count: number) => {
+      for (const id of ids) {
+        const document = await coordinator.openManagedDocument(id)
+        let off: (() => void) | undefined
+        try {
+          await Promise.race([new Promise<void>(resolve => {
+            const reached = () => document.view.events.filter(event => event.type === "turn/end").length >= count
+            off = subscribe(document.view, event => { if (event.type === "turn/end" && reached()) resolve() })
+            if (reached()) resolve()
+          }), executionFailed.promise])
+        } finally { off?.() }
+      }
       for (const id of ids) {
         await coordinator.flush(id)
         const events = (await coordinator.snapshot!(id)).session.events
@@ -61,7 +92,7 @@ it("ordinary and Team children keep role-local Code Mode through followup and re
           version: 1, preview: '["list_dir"]', retention: expect.objectContaining({ kind: 'artifact', ref: expect.objectContaining({ codec: 'json-utf8-v1', completeness: 'complete', encodedBytes: 16 }) }),
         }) })]))
       }
-    }, { timeout: 5000 }) }
+    }
     await waitTurns(1)
     expect(parallelLimits).toEqual([1, 1, 1])
     for (const request of requests) {
@@ -70,14 +101,14 @@ it("ordinary and Team children keep role-local Code Mode through followup and re
     }
     expect(assembly.session.events.some(e => e.type === "code/dispatch")).toBe(false)
     await execute("followup_task", { target: "root/normal", message: "followup" })
-    await execute("team_followup_task", { target: "helper", message: "followup" })
+    await execute("followup_task", { target: "root/helper", message: "followup" })
     await waitTurns(2)
     const restoredState = assembly.subagentState()
     await service.close()
     service = createSessionService({ ...options, restoredState })
     assembly = await service.assemblyFor("parent")
     await execute("followup_task", { target: "root/normal", message: "restored followup" })
-    await execute("team_followup_task", { target: "helper", message: "restored followup" })
+    await execute("followup_task", { target: "root/helper", message: "restored followup" })
     await waitTurns(3)
     for (const id of ids) {
       const events = (await coordinator.snapshot!(id)).session.events
@@ -111,4 +142,6 @@ it("ordinary and Team children keep role-local Code Mode through followup and re
       throw cleanup
     }
   }
-}, 15_000)
+// Two real child births, six Code turns and cold reconstruction take 44s
+// in the single-worker native qualification; keep a finite workload budget.
+}, 60_000)

@@ -119,8 +119,12 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
         const capture = resultStore ? captureChildResult(resultStore, entry, { resultText: result.finalText }, "completed") : undefined
         if (capture) execution?.retainResult(capture)
         const publish = (projection?: import("../task/result.ts").TaskResultProjection) => {
-          deps.table.update(entry.path, entry, { error: undefined, status: "waiting", finalText: projection ? projection.resultText : result.finalText, ...(projection ? { result: projection.result } : {}) })
-          if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "completed", output: projection ? projection.resultText ?? "" : result.finalText, ...(projection ? { result: projection.result } : {}) })
+          const ordinary = () => {
+            deps.table.update(entry.path, entry, { error: undefined, status: "waiting", finalText: projection ? projection.resultText : result.finalText, ...(projection ? { result: projection.result } : {}) })
+            if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "completed", output: projection ? projection.resultText ?? "" : result.finalText, ...(projection ? { result: projection.result } : {}) })
+          }
+          if (execution) execution.publishResult(projection ?? { resultText: result.finalText }, 'completed', ordinary)
+          else ordinary()
         }
         publish(capture?.projection())
         if (capture) publish(await (execution ? execution.settleResult() : capture.settle()))
@@ -134,8 +138,12 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
         const capture = resultStore ? captureChildResult(resultStore, entry, { error }, aborted ? "cancelled" : "error", dispatched ? "dispatched" : "not-dispatched") : undefined
         if (capture) execution?.retainResult(capture)
         const publish = (projection?: import("../task/result.ts").TaskResultProjection) => {
-          deps.table.update(entry.path, entry, { status: "waiting", error: projection ? projection.error : error, ...(projection ? { result: projection.result } : {}) })
-          if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: aborted ? "killed" : "error", output: projection ? projection.error ?? "" : error, ...(projection ? { result: projection.result } : {}) })
+          const ordinary = () => {
+            deps.table.update(entry.path, entry, { status: "waiting", error: projection ? projection.error : error, ...(projection ? { result: projection.result } : {}) })
+            if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: aborted ? "killed" : "error", output: projection ? projection.error ?? "" : error, ...(projection ? { result: projection.result } : {}) })
+          }
+          if (execution) execution.publishResult(projection ?? { error }, aborted ? 'cancelled' : 'error', ordinary)
+          else ordinary()
         }
         publish(capture?.projection())
         if (capture) publish(await (execution ? execution.settleResult() : capture.settle()))

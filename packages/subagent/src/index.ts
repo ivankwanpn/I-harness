@@ -1,4 +1,4 @@
-import {recoverCanonicalTaskPublications,closeTaskOwnerAfterAcceptedWork,canonicalTaskChildren,canonicalTaskChild} from './task/required-settlement.ts'
+import {recoverCanonicalTaskPublications,closeTaskOwnerAfterAcceptedWork,canonicalTaskChildren,canonicalTaskChild,captureOriginalTaskRuntimeData,captureOriginalTaskAuxiliaryData} from './task/required-settlement.ts'
 import {managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
 import {forwardTableProjection} from './runtime-projection.ts'
 import { bindPreparedTaskLaunchLeaf, type OriginalTaskCaller } from '@i-harness/core-tools/internal/task-caller'
@@ -47,7 +47,7 @@ export type { ParentInputAdmission, NotificationDrainOptions } from "./task-noti
 
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { ToolRegistry } from "@i-harness/core-tools"
-import { createSession, deliveryInputId, readDeliveries, type SessionView, type FactOwner } from "@i-harness/core-session"
+import { createSession, captureLegacyFact, canonicalJsonData, deliveryInputId, readDeliveries, type SessionView, type FactOwner } from "@i-harness/core-session"
 import { readOwnedDeliveryState } from '../../core-session/src/managed/view.ts'
 import { DeliverySourcesError } from './task-notification.ts'
 import type { ModelClient } from "@i-harness/llm-seam"
@@ -415,6 +415,55 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       ? { childSessions: { coordinator: opts.persist.coordinator, parentSessionId: opts.persist.parentSessionId } }
       : {}),
   }
+  if (ownedTask) residentOwnerFor(subagentDeps).bindResultPublication(entry => {
+    // Admission captures the actual persistent publishers, not the fresh-work
+    // facades. Their queued saves and receipts still belong to this runtime.
+    assertRuntimeWork()
+    const currentData = captureOriginalTaskRuntimeData(taskOwner), runtime = mountedRuntime
+    const path = entry.path, view = entry.session, owner = entry.factOwner, jobId = entry.jobId
+    const updateTable = runtime.table.update, updateJob = runtime.jobs.updateJob
+    const job = jobId ? runtime.jobs.read(jobId) : undefined
+    type Publication = { value: import('./task/result.ts').TaskResultProjection; encoded: string; tableAcknowledged: boolean; jobAcknowledged: boolean }
+    const publications = new Map<'pending' | 'final', Publication>()
+    const check = () => {
+      currentData()
+      const currentEntry = runtime.table.get(path)
+      if (mountedRuntime !== runtime || currentEntry !== undefined && currentEntry !== entry || entry.path !== path || entry.session !== view || entry.factOwner !== owner || entry.jobId !== jobId ||
+        runtime.table.update !== updateTable || runtime.jobs.updateJob !== updateJob) throw Error('Original followup runtime or entry replaced')
+      if (jobId) {
+        const now = runtime.jobs.read(jobId)
+        if (now.id !== job!.id || now.owner !== job!.owner || now.kind !== job!.kind || now.agentPath !== job!.agentPath || now.sessionId !== job!.sessionId) throw Error('Original followup job replaced')
+      }
+    }
+    check()
+    return (value, outcome) => {
+      check()
+      const captured = captureLegacyFact(value)
+      if (captured.kind !== 'captured') throw Error('Original followup projection cannot be captured')
+      const phase = value.result?.kind === 'pending' ? 'pending' : 'final'
+      const encoded = canonicalJsonData([captured.value, outcome])
+      let original = publications.get(phase)
+      if (original && original.encoded !== encoded) throw Error('Original followup projection changed')
+      if (!original) {
+        original = { value: captured.value, encoded, tableAcknowledged: false, jobAcknowledged: false }
+        publications.set(phase, original)
+      }
+      const fixed = original.value
+      if (!original.tableAcknowledged) {
+        // Removal retires this UI row, not the admitted original result. Its
+        // finalization must finish without resurrecting the removed entry.
+        if (runtime.table.get(path) === entry) updateTable.call(runtime.table, path, entry, { status: 'waiting', finalText: fixed.resultText, error: fixed.error, ...(fixed.result ? { result: fixed.result } : {}) })
+        original.tableAcknowledged = true
+      }
+      check()
+      if (jobId && !original.jobAcknowledged) {
+        updateJob.call(runtime.jobs, jobId, { status: outcome === 'completed' ? 'completed' : outcome === 'cancelled' ? 'killed' : 'error',
+          output: outcome === 'completed' ? fixed.resultText ?? '' : fixed.error ?? fixed.resultText ?? '', ...(fixed.result ? { result: fixed.result } : {}) })
+        original.jobAcknowledged = true
+      }
+      check()
+    }
+  })
   const tools = createSubagentTools(subagentDeps)
   // ToolRegistry.register throws on duplicate names, so skip tools the parent
   // already has — makes registerSubagent idempotent for repeat mounts.
@@ -473,7 +522,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       await taskOwner.qualifyRestoredResults()
       await classifyRestoredTasks(taskOwner, opts.persist!.coordinator)
       deriveCanonicalTaskMirrors()
-      const wired = wireSubagentPersistence(stagedRuntime, { ...opts.persist!, factOwner: opts.persist!.factOwner ?? opts.factOwner })
+      const wired = wireSubagentPersistence(stagedRuntime, { ...opts.persist!, factOwner: opts.persist!.factOwner ?? opts.factOwner }, captureOriginalTaskAuxiliaryData(taskOwner))
       factPersistence = wired
       mountedRuntime = wired
       if (opts.restoredState) emitRestoredJobTransitions(opts.persist!, opts.restoredState, jobs, wired.observe)
@@ -495,7 +544,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   }
   void ready.catch(() => {})
   let disposeFlight: Promise<void> | undefined
-  const entryPhases = new Map<ChildAgentEntry, { settled: boolean; disposed: boolean; dispose?: () => Promise<void>; unmount?: () => void; chain?: Promise<void>; sessionId?: string; agent?: ReturnType<AgentRegistry['get']> }>()
+  const entryPhases = new Map<ChildAgentEntry, { settled: boolean; disposed: boolean; chainJoined?: boolean; dispose?: () => Promise<void>; unmount?: () => void; chain?: Promise<void>; sessionId?: string; agent?: ReturnType<AgentRegistry['get']> }>()
   let factsFlushed = false, tasksFlushed = false, factsClosed = false, readyFailureReported = false
   function dispose(): Promise<void> {
     notificationsRetired = true
@@ -511,12 +560,28 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     owner.retire()
     // Release original consumer fences before any source/entry join can flush
     // a queued save behind them. The same flight retains read cleanup debt.
-    const acceptedNotifications=Promise.allSettled([...notificationDrains]).then(results=>{
-      const failures=results.flatMap(result=>result.status==='rejected'?[result.reason]:[])
-      if(failures.length)throw new AggregateError(failures,'Accepted Task notifications require recovery')
+    const acceptedNotifications = Promise.allSettled([...notificationDrains]).then(results => {
+      const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+      if (failures.length) throw new AggregateError(failures, 'Accepted Task notifications require recovery')
     })
-    void acceptedNotifications.catch(()=>{})
-    const taskClosing = closeTaskOwnerAfterAcceptedWork(taskOwner,acceptedNotifications)
+    void acceptedNotifications.catch(() => {})
+    // A turn/end may precede its result capture and terminal projection. Join
+    // the original finite drives before retiring the Task data they publish.
+    const acceptedDrives = Promise.allSettled([...new Set([
+      ...[...table.entries().values()].flatMap(entry => entry.followupChain ? [entry.followupChain] : []),
+      ...[...owner.records].flatMap(record => record.rawNext ? [record.rawNext] : []),
+    ])]).then(() => {})
+    // Raw drive failures describe the body, not an unresolved native ACK. The
+    // original result/publication owners below decide whether recovery remains.
+    const acceptedResults = Promise.allSettled([...owner.records].map(record => record.settleResults?.())).then(results => {
+      const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+      if (failures.length) throw new AggregateError(failures, 'Accepted result publication requires recovery')
+    })
+    void acceptedResults.catch(() => {})
+    const acceptedWork = Promise.all([acceptedNotifications, acceptedDrives, acceptedResults]).then(async () => {
+      await factPersistence?.flushFacts()
+    })
+    const taskClosing = closeTaskOwnerAfterAcceptedWork(taskOwner, acceptedWork)
     void taskClosing.catch(() => {})
     const fenceEntries = () => { for (const entry of table.entries().values()) {
       if (!entryPhases.has(entry)) entryPhases.set(entry, { settled: false, disposed: false,
@@ -537,10 +602,14 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       void ownedClosing.catch(() => {})
       const results = await Promise.allSettled([...entryPhases].map(async ([entry, phases]) => {
         const failures: unknown[] = []
+        if (!phases.chainJoined) {
+          try { await phases.chain } catch (error) { failures.push(error) }
+          finally { phases.chainJoined = true }
+        }
         if (!phases.settled) try { await owner.settleEntryResult(entry); phases.settled = true } catch (error) { failures.push(error) }
-        if (!phases.disposed) try {
+        if (phases.settled&&!phases.disposed) try {
           if (phases.dispose) await phases.dispose()
-          else { await phases.chain; await phases.unmount?.() }
+          else await phases.unmount?.()
           phases.disposed = true
         } catch (error) { failures.push(error) }
         if (!failures.length && phases.sessionId && agents.get(phases.sessionId) === phases.agent) agents.remove(phases.sessionId)
