@@ -1,6 +1,9 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 const faults = vi.hoisted(() => ({ paths: new Map<string, string>(), held: new Map<string, object>(), acquired: [] as string[], failKey: '', failOnce: false, releaseKey: '', consume: false }))
-vi.mock('@i-harness/fs-lock/internal/artifact-path', () => ({ createArtifactPathOwner: () => ({ capture: (path: string) => ({ kind: 'ready', key: path.toLowerCase(), assertCurrent() { if (faults.failOnce) { faults.failOnce = false; throw Error('namespace changed after acquisition') } } }), settleResources() {} }) }))
+vi.mock('@i-harness/fs-lock/internal/artifact-path', async load => ({
+  ...await load<typeof import('@i-harness/fs-lock/internal/artifact-path')>(),
+  createArtifactPathOwner: () => ({ capture: (path: string) => ({ kind: 'ready', key: path.toLowerCase(), assertCurrent() { if (faults.failOnce) { faults.failOnce = false; throw Error('namespace changed after acquisition') } } }), settleResources() {} }),
+}))
 vi.mock('@i-harness/fs-lock', async () => { const { createHash } = await import('node:crypto'), { join } = await import('node:path'); return {
   lockPathFor(root: string, id: string) { const path = join(root, '.i-harness-locks', createHash('sha256').update(id).digest('hex').slice(0, 24) + '.lock'); faults.paths.set(path, id); return path },
   async acquireSessionLock({ lockPath }: { lockPath: string }) {

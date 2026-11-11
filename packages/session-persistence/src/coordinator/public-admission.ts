@@ -22,12 +22,12 @@ export function createCoordinatorAdmission(accepted: Flights, related: readonly 
   }
 
   function retire(cleanup: () => Promise<void>, preflight?: () => void): Promise<void> {
+    if (phase === 'closed') return Promise.resolve()
+    try { preflight?.() } catch (error) { return Promise.reject(error) }
     const current = context.getStore()
     if (current && (current === closeFlight || sets.some(set => set.has(current)))) {
       return Promise.reject(new Error('Cannot close a coordinator from its own accepted operation'))
     }
-    if (phase === 'closed') return Promise.resolve()
-    try { preflight?.() } catch (error) { return Promise.reject(error) }
     if (closeFlight) return closeFlight
     phase = 'closing'
     const result = Promise.withResolvers<void>()

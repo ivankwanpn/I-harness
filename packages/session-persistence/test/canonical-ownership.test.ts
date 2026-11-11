@@ -1,4 +1,7 @@
-vi.mock('@i-harness/fs-lock/internal/artifact-path',()=>({createArtifactPathOwner:()=>({capture:(path:string)=>({kind:'ready',key:path,assertCurrent(){}}),settleResources(){}})}))
+vi.mock('@i-harness/fs-lock/internal/artifact-path', async load => ({
+  ...await load<typeof import('@i-harness/fs-lock/internal/artifact-path')>(),
+  createArtifactPathOwner: () => ({ capture: (path: string) => ({ kind: 'ready', key: path, assertCurrent() {} }), settleResources() {} }),
+}))
 import {beforeEach,expect,it,vi} from 'vitest'
 import {win32 as path} from 'node:path'
 const associations=vi.hoisted(()=>new WeakMap<object,any>())

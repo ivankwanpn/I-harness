@@ -177,7 +177,8 @@ it.each(['jsonl', 'commit-log'] as const)('locally refuses a %s callback joining
     const coordinator = store === 'jsonl' ? createSessionCoordinator(createJsonlBackend(root)) : createJsonlCommitCoordinator(root)
     await coordinator.create({ sessionId: 'source' })
     const result = await coordinator.withExistingSessionBindingObservation!({ sessionIds: ['source'] }, async () => {
-      await expect(coordinator.close()).rejects.toThrow('own accepted operation')
+      if (store === 'jsonl') await expect(coordinator.close()).rejects.toMatchObject({ name: 'SessionBindingObservationError', reason: 'conflict' })
+      else await expect(coordinator.close()).rejects.toThrow('own accepted operation')
       return 'original observation'
     })
     expect(result).toBe('original observation')
