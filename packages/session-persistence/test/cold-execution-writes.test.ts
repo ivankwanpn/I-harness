@@ -59,16 +59,22 @@ it('signals before original repair completes and only after original append succ
 });
 it('does not signal pre-issue backend method-integrity refusal', async () => {
     const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'cold-refusal-')), backend = createJsonlBackend(root), c = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract);
+    const append = backend.append;
+    let off: ReturnType<typeof observeColdExecutionWrites> | undefined;
     try {
         await c.create({ sessionId: 's' });
-        const seen: string[] = [], off = observeColdExecutionWrites(c, id => seen.push(id));
-        backend.append = async () => { throw Error('write failed'); };
-        await expect(c.append('s', [{ type: 'plan/mode', mode: 'on' }])).rejects.toThrow('TASK_TRANSITION_FAILED');
+        const path = join(root, 's.jsonl'), before = await readFile(path);
+        const seen: string[] = []; off = observeColdExecutionWrites(c, id => seen.push(id));
+        const foreign = vi.fn(async () => { throw Error('write failed'); });
+        backend.append = foreign;
+        await expect(c.append('s', [{ type: 'plan/mode', mode: 'on' }])).rejects.toThrow('PROCESS_READ_UNAVAILABLE');
+        expect(foreign).not.toHaveBeenCalled(); expect(await readFile(path)).toEqual(before);
         expect(seen).toEqual([]);
-        off();
     }
     finally {
+        off?.();
         await c.close();
+        backend.append = append;
         await rm(root, { recursive: true, force: true });
     }
 });

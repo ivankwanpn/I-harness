@@ -19,10 +19,12 @@ it.each(['sync-rollback', 'close-after-sync', 'close-recheck-denied'] as const)(
     // Capture the admission before the ORIGINAL repair read completes. Keep
     // the existing append-only failure/rollback oracles below unchanged.
     if (collecting && String(args[0]) === path && new Error().stack?.includes('Object.repair')) repairAdmissions.push(collecting.splice(0))
-    if (denyRead && String(args[0]) === path) { denyRead = false; counters.deniedRechecks++; throw Error('secondary recheck denied') }
     return (native.readFile as any)(...args)
   })
   vi.mocked(open).mockImplementation(async (...args) => {
+    // historyChanged uses the original streamed archive read, not fs.readFile.
+    // Deny that first real descriptor acquisition after the lost close ACK.
+    if (denyRead && String(args[0]) === path && args[1] === 'r') { denyRead = false; counters.deniedRechecks++; throw Error('secondary recheck denied') }
     const handle = await native.open(...args)
     if (String(args[0]) !== path || args[1] !== 'r+') return handle
     let wrote = false

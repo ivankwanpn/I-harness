@@ -235,15 +235,27 @@ it.each(['raw', 'capture', 'payload'] as const)('unproved %s cached authority re
     expect(await f.c.bootstrapSemanticTarget(payload,guards)).toMatchObject({kind:'refused',reason:'cached-unprepared'})
   }finally{await f.close()}
 })
-it('coordinator retirement joins the original cached adoption and invalidates it before disposal',async()=>{
+it('coordinator close joins admitted cached adoption before retiring its original ready witness',async()=>{
   const f=await fixture(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+  const witness=captureManagedReadyObservation(f.document,f.ownership)
+  let recovering:ReturnType<typeof resume>|undefined,closing:Promise<void>|undefined,primary:{error:unknown}|undefined
   try{
     readCuts.set(join(f.root, f.fork.sessionId + '.jsonl'), async () => { entered.resolve(); await release.promise })
-    const recovering=resume(f.c,f.fork.operation).catch(error=>error)
-    await entered.promise
-    let closed=false;const closing=f.c.close().then(()=>{closed=true})
+    recovering=resume(f.c,f.fork.operation)
+    await Promise.race([entered.promise,recovering.then(()=>{throw Error('Original cached adoption ended before its read gate')})])
+    let closed=false;closing=f.c.close().then(()=>{closed=true})
     await Promise.resolve();expect(closed).toBe(false);expect(f.c.ownerOf(f.fork.sessionId)).toBe(true)
-    release.resolve();expect(await recovering).toMatchObject({reason:'revoked'});await closing
+    witness.assertCurrent()
+    await expect(resume(f.c,f.fork.operation)).rejects.toMatchObject({code:'FACT_CLOSED'})
+    release.resolve();expect(await recovering).toMatchObject({kind:'already-ready',document:f.document});await closing
+    expect(()=>witness.assertCurrent()).toThrow()
     expect(f.c.ownerOf(f.fork.sessionId)).toBe(false)
-  }finally{release.resolve();await f.close()}
+  }catch(error){primary={error};throw error}
+  finally{
+    release.resolve()
+    readCuts.delete(join(f.root,f.fork.sessionId+'.jsonl'))
+    const results=await Promise.allSettled([recovering,closing,f.close()])
+    const failures=results.flatMap(result=>result.status==='rejected'?[result.reason]:[])
+    if(failures.length){const errors=[...new Set([...(primary?[primary.error]:[]),...failures])];if(errors.length===1)throw errors[0];throw new AggregateError(errors,'Original cached adoption and cleanup failed')}
+  }
 })
