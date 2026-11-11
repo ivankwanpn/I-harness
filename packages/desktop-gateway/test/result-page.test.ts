@@ -30,7 +30,7 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'gateway-result-')), workspace = join(root, 'workspace'), sessionDir = join(root, 'sessions'), settingsPath = join(root, 'settings.json')
   await mkdir(workspace); await mkdir(sessionDir); await writeFile(settingsPath, '{}')
   const coordinator = createSessionCoordinator(createJsonlBackend(sessionDir), { lock: { enabled: true } })
-  for (const sessionId of ['parent', 'foreign', 'archived', 'child']) await coordinator.create({ sessionId, ...(sessionId === 'child' ? { origin: 'subagent', parentSession: 'parent' } : {}), ...(sessionId === 'archived' ? { archived: true } : {}) })
+  for (const sessionId of ['parent', 'foreign', 'archived', 'child']) await coordinator.create({ sessionId, ...(sessionId === 'child' ? { origin: 'subagent', parentSession: 'parent', seedLength: 0 } : {}), ...(sessionId === 'archived' ? { archived: true } : {}) })
   const lease = await acquireAssemblyResultStore({ workspace, coordinator, sessionId: 'parent', contextOutputSettingsPath: settingsPath }), owner = lease.service!
   const scope = owner.registerResultScope({ operationId: 'gateway', sessionId: 'parent', callId: 'c', source: await lease.sourceFor!('parent') }, () => true)
   const sink = await owner.beginResult(scope, 'text-utf8-v1'); await sink.write(Buffer.from('cold gateway body 🙂'))
@@ -86,6 +86,25 @@ it.each(['before', 'during'] as const)('enforces the supplied native original ow
     await broker.configure({ id: 'p', name: 'Restored', roots: [f.workspace], primaryRoot: f.workspace })
     expect(await read('parent', { ref: saved.ref })).toMatchObject({ eof: true, data: { text: 'confirmed project bytes' } })
   } finally { resume.resolve(); io.enabled = false; await service.close(); await native.close(); await broker.close(); await f.close() }
+})
+
+it('publishes both ordinary parallel reads while one holds real body I/O', async () => {
+  const f = await fixture(), fence = createSessionManagementFence()
+  const entered = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>()
+  const read = readers.createConversationResultReader(f.coordinator, f.service, createConversationVisibility(f.coordinator), fence)!
+  const pending: Promise<unknown>[] = []
+  try {
+    io.enabled = true; io.entered = entered.resolve; io.resume = resume.promise
+    pending.push(read('parent', { ref: f.ref }))
+    await entered.promise
+    // Both requests are admitted while the first physical read is held. The
+    // original store may serialize its own initialization, so do not require
+    // the second I/O to finish before releasing the first.
+    pending.push(read('parent', { ref: f.ref }))
+    await new Promise(resolve => setImmediate(resolve))
+    resume.resolve()
+    for (const page of await Promise.all(pending)) expect(page).toMatchObject({ eof: true, data: { text: 'cold gateway body 🙂' } })
+  } finally { resume.resolve(); await Promise.allSettled(pending); await f.close() }
 })
 
 it.each(['archive', 'fence'] as const)('discards an admitted page when %s revokes visibility during real body I/O', async mode => {

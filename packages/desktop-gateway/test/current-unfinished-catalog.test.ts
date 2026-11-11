@@ -11,17 +11,17 @@ import { createDesktopSubagents } from '../src/session-subagents.ts'
 
 // Catches either provenance being dropped or no-result being mistaken for
 // legacy before loading a child's complete transcript just to infer status.
-it.each(['marker', 'task', 'state', 'pending', 'stale-followup', 'body-kind', 'legacy', 'migrated', 'future-state', 'future-task', 'corrupt-state', 'no-doc-legacy', 'marked-migrated', 'state-migrated', 'forged-migration'] as const)('public cold catalog qualifies %s provenance before transcript fallback', async kind => {
+it.each(['marker', 'task', 'state', 'pending', 'stale-followup', 'body-kind', 'legacy', 'migrated', 'future-state', 'future-task', 'valid-current-task', 'missing-notifications', 'invalid-notifications', 'invalid-task-row', 'corrupt-state', 'no-doc-legacy', 'marked-migrated', 'state-migrated', 'forged-migration'] as const)('public cold catalog qualifies %s provenance before transcript fallback', async kind => {
   const root = await mkdtemp(join(tmpdir(), 'current-catalog-'))
   let coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   let catalog: ReturnType<typeof createDesktopSubagents> | undefined
   let service: ReturnType<typeof createSessionService> | undefined
   try {
     await coordinator.create({ sessionId: 'parent' })
-    await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent', ...((kind === 'marker' || kind === 'marked-migrated') ? { subagentProtocolVersion: 1 as const } : {}) })
-    await coordinator.append('child', [{ type: 'turn/start' }, { type: 'assistant/message', text: 'child-only history' }, { type: 'turn/end' }, ...(kind === 'stale-followup' ? [{ type: 'turn/start' as const }] : [])])
+    await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent', seedLength: 0, ...((kind === 'marker' || kind === 'marked-migrated') ? { subagentProtocolVersion: 1 as const } : {}) })
+    await coordinator.append('child', [{ type: 'turn/start' }, { type: 'user/message', text: 'ordinary delegated task' }, { type: 'assistant/message', text: 'child-only history' }, { type: 'turn/end' }, ...(kind === 'stale-followup' ? [{ type: 'turn/start' as const }] : [])])
     const current = !['legacy', 'migrated', 'marker', 'state', 'marked-migrated', 'state-migrated'].includes(kind)
-    if (!['marker', 'future-state', 'future-task', 'corrupt-state', 'no-doc-legacy'].includes(kind)) {
+    if (!['marker', 'future-state', 'future-task', 'valid-current-task', 'missing-notifications', 'invalid-notifications', 'invalid-task-row', 'corrupt-state', 'no-doc-legacy'].includes(kind)) {
       const tasks = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ...(current ? { results: createTaskResultRetention(undefined, undefined, 'parent') } : {}) })
       const row = tasks.submit({ identity: { parentSessionId: 'parent', callEventSeq: 1 }, childSessionId: 'child', agentPath: 'root/a', description: 'a', prompt: 'go', agent: 'general', delivery: 'parent' })
       tasks.claim(row.id); await tasks.flushPersistence()
@@ -36,7 +36,11 @@ it.each(['marker', 'task', 'state', 'pending', 'stale-followup', 'body-kind', 'l
     }
     if (kind === 'state' || kind === 'state-migrated' || kind === 'stale-followup' || kind === 'pending') await coordinator.putDocumentStrict!('parent', { formatVersion: 2, jobs: [], roles: [], agentTable: [{ sessionId: 'child', path: 'root/a', status: kind === 'stale-followup' ? 'completed' : 'running', ...(kind === 'pending' ? { result: { version: 1, kind: 'pending', revision: 'original-pending' } } : {}) }] })
     if (kind === 'future-state' || kind === 'corrupt-state') await coordinator.putDocumentStrict!('parent', kind === 'future-state' ? { formatVersion: 3, agentTable: [] } : { formatVersion: 2, agentTable: 'invalid' })
-    if (kind === 'future-task') await coordinator.putDocumentStrict!(taskDocKey('parent'), { formatVersion: 3, tasks: [] })
+    if (kind === 'future-task') await coordinator.putDocumentStrict!(taskDocKey('parent'), { formatVersion: 4, tasks: [] })
+    if (kind === 'valid-current-task') await coordinator.putDocumentStrict!(taskDocKey('parent'), { formatVersion: 3, tasks: [], notifications: [] })
+    if (kind === 'missing-notifications') await coordinator.putDocumentStrict!(taskDocKey('parent'), { formatVersion: 3, tasks: [] })
+    if (kind === 'invalid-notifications') await coordinator.putDocumentStrict!(taskDocKey('parent'), { formatVersion: 3, tasks: [], notifications: 'invalid' })
+    if (kind === 'invalid-task-row') await coordinator.putDocumentStrict!(taskDocKey('parent'), { formatVersion: 3, tasks: [{ id: 'incomplete-row' }], notifications: [] })
     await coordinator.close()
     coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
     let sends = 0, assemblies = 0
@@ -44,8 +48,14 @@ it.each(['marker', 'task', 'state', 'pending', 'stale-followup', 'body-kind', 'l
     service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model: { async *stream() { sends++; throw Error('Read-created model work') } } })
     service.onAssembly(() => { assemblies++ })
     catalog = createDesktopSubagents(coordinator, service)
+    // Empty inherited history requires an initial legacy reviewer visibility
+    // check. Warm only that classification, then measure outcome fallback on
+    // a second cold query; no runtime or result authority is created.
+    await catalog.list('parent')
+    snapshots.mockClear()
     const row = (await catalog.list('parent')).agents[0]!
-    const legacy = kind === 'legacy' || kind === 'migrated' || kind === 'no-doc-legacy'
+    // A valid empty current document makes no claim about this legacy child.
+    const legacy = kind === 'legacy' || kind === 'migrated' || kind === 'no-doc-legacy' || kind === 'valid-current-task'
     expect(row.status).toBe(legacy ? 'completed' : 'unavailable')
     expect(row.finalText).toBe(legacy ? 'child-only history' : undefined)
     expect(snapshots.mock.calls.some(([id]) => id === 'child')).toBe(legacy)

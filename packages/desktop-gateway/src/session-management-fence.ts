@@ -14,6 +14,9 @@ export function createSessionManagementFence() {
   type Observer = { id: string; active: boolean; charged: boolean; preflight?(): void; prepare?(operation: RetainedCleanupOperation): void; retired(operation: RetainedCleanupOperation): void | Promise<void> }
   const observers = new Set<Observer>()
   let count = 0
+  function assertUnblocked(id: string) {
+    if (blocked.has(id) || retired.has(id)) throw new Error("Session management is in progress or session is deleted")
+  }
   function assertOpen(id: string) {
     // An operation already admitted for this session keeps its internal calls
     // open while it drains; a deleted session still refuses everything.
@@ -40,6 +43,7 @@ export function createSessionManagementFence() {
   return {
     associateRetainedDomain(owner: object) { if (associated && domain !== owner) throw new TypeError('Foreign fence lifecycle domain'); domain = owner; associated = true },
     assertOpen,
+    assertUnblocked,
     captureAdmission(id: string) {
       assertOpen(id); const revision = admissionRevisions.get(id)
       const captured = Object.freeze({ assertCurrent() { if (this !== captured) throw new TypeError('Original management admission receiver required'); assertOpen(id); if (admissionRevisions.get(id) !== revision) throw new Error('Session management admission changed') } })

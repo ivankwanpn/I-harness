@@ -23,10 +23,10 @@ export function createConversationResultReader(coordinator: SessionCoordinator, 
   if (!service.readResultPage) return undefined
   const read = service.readResultPage
   async function visible(id: string) {
-    fence.assertOpen(id)
+    fence.assertUnblocked(id)
     const { meta } = await coordinator.profile(id)
     if (meta.archived || !await isConversation(id, meta)) throw new Error('Conversation unavailable')
-    fence.assertOpen(id)
+    fence.assertUnblocked(id)
   }
   async function direct(id: string, query: ResultPageQuery): Promise<ResultPageResult> {
     try { return await read(id, query) } catch { return unavailable() }
@@ -44,14 +44,17 @@ export function createConversationResultReader(coordinator: SessionCoordinator, 
         const refId = (query as { ref?: { id?: string } }).ref?.id
         if (refId === undefined) return page
         if (!(await inheritedRefIds(coordinator, id)).has(refId)) return page
+        fence.assertUnblocked(id)
         let current = id
         for (let depth = 0; depth < 16; depth++) {
           const { meta } = await coordinator.profile(current)
           const parent = meta.parentSession
           if (parent === undefined || parent === current) return page
-          fence.assertOpen(parent)
+          fence.assertUnblocked(id)
+          fence.assertUnblocked(parent)
           const candidate = await direct(parent, query)
-          fence.assertOpen(id)
+          fence.assertUnblocked(parent)
+          fence.assertUnblocked(id)
           if (!isUnavailable(candidate)) return candidate
           current = parent
         }

@@ -4,7 +4,14 @@ import { currentTaskFormat } from "../src/subagents/catalog-provenance.ts"
 
 describe("task document formats", () => {
   it("accepts every persisted task document shape", () => {
-    for (const formatVersion of [1, 2, 3]) expect(supportedTaskDocument({ formatVersion, tasks: [] })).toBe(true)
+    for (const formatVersion of [1, 2]) expect(supportedTaskDocument({ formatVersion, tasks: [] })).toBe(true)
+    expect(supportedTaskDocument({ formatVersion: 3, tasks: [], notifications: [] })).toBe(true)
+  })
+
+  it('rejects malformed current documents through the canonical V3 codec', () => {
+    expect(supportedTaskDocument({ formatVersion: 3, tasks: [] })).toBe(false)
+    expect(supportedTaskDocument({ formatVersion: 3, tasks: [], notifications: 'invalid' })).toBe(false)
+    expect(supportedTaskDocument({ formatVersion: 3, tasks: [{ id: 'incomplete' }], notifications: [] })).toBe(false)
   })
 
   it("rejects unknown versions and a missing task array", () => {

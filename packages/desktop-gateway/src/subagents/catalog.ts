@@ -4,6 +4,7 @@ import type { SessionCoordinator, SessionMeta } from "@i-harness/session-persist
 import type { SessionService } from "@i-harness/session-executor"
 import { derivePlanMode, type SessionView as Session, type SessionEventView as SessionEvent } from "@i-harness/core-session"
 import { taskDocKey, childResultPreview } from "@i-harness/subagent"
+import { captureTaskV3Document } from '@i-harness/session-persistence/internal/task-state'
 import type { SubagentScope } from "./scope.ts"
 import { object, records, jobRecords, status, errorText, MAX_LINEAGE, CONTROL_REASON, PLAN_REASON, type AgentRecord, type DesktopSubagentCatalog, type DesktopSubagentRow } from "./types.ts"
 
@@ -12,7 +13,10 @@ import { object, records, jobRecords, status, errorText, MAX_LINEAGE, CONTROL_RE
  * showed "unavailable" and the panel banner read "metadata is invalid"). */
 export function supportedTaskDocument(document: Record<string, unknown>): boolean {
   const version = document.formatVersion
-  return (version === 1 || version === 2 || version === 3) && Array.isArray(document.tasks)
+  if (version === 3) {
+    try { captureTaskV3Document(document); return true } catch { return false }
+  }
+  return (version === 1 || version === 2) && Array.isArray(document.tasks)
 }
 
 export function createSubagentCatalog(coordinator: SessionCoordinator, service: SessionService, scope: SubagentScope) {
