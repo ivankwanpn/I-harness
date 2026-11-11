@@ -7,7 +7,7 @@ import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { acquireSessionLock, lockPathFor } from '@i-harness/fs-lock'
 import { legacyPrefixDigest } from '@i-harness/core-session'
 import { composeOriginalCurrentnessGuards, callOriginalCurrentnessMethod } from '../../core-session/src/managed/currentness-guards.ts'
-import { createSessionCoordinator as createBareSessionCoordinator, compileSemanticSeed, type SessionCoordinator, type SessionMeta, type ExistingSessionBindingObservation, type ExistingSessionBindingObservationRequest, type PersistenceBackend, type BootstrapRequest } from '../src/index.ts'
+import { createSessionCoordinator as createBareSessionCoordinator, createReadOnlySessionCoordinator, compileSemanticSeed, type SessionCoordinator, type SessionMeta, type ExistingSessionBindingObservation, type ExistingSessionBindingObservationRequest, type PersistenceBackend, type BootstrapRequest } from '../src/index.ts'
 
 import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
@@ -129,10 +129,16 @@ it('E00 exposes the real optional owner only under the original supported capabi
     expect(callOriginalCurrentnessMethod(guard!, read, 'binding', ['source'])).toEqual({ kind: 'absent' })
     return callOriginalCurrentnessMethod<SessionMeta>(guard!, read, 'metadata', ['source']).title
   })).toBe('original')
-  for (const candidate of [createBareSessionCoordinator(backend), createBareSessionCoordinator({ ...backend, readDocumentObserved: undefined } as PersistenceBackend, { lock: { enabled: true } })]) {
-    coordinators.push(candidate)
-    expect(candidate.withExistingSessionBindingObservation).toBeUndefined()
-    expect(candidate.withSessionBindingObservation).toBeUndefined()
+  expect(() => createBareSessionCoordinator(backend, { lock: { enabled: false } }))
+    .toThrow('Current-format writable coordination requires ownership')
+  const readOnly = createReadOnlySessionCoordinator(backend)
+  try {
+    expect(Reflect.get(readOnly, 'withExistingSessionBindingObservation')).toBeUndefined()
+    expect(Reflect.get(readOnly, 'withSessionBindingObservation')).toBeUndefined()
+  } finally { await readOnly.close() }
+  for (const copied of [{ ...backend }, { ...backend, readDocumentObserved: undefined }]) {
+    expect(() => createBareSessionCoordinator(copied as PersistenceBackend, { lock: { enabled: true } }))
+      .toThrow('Backend has no original writable coordinator factory')
   }
 })
 

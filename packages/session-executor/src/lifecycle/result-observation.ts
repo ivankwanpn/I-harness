@@ -1,4 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { types } from 'node:util'
+import { bindOriginalCurrentnessDescriptors, callOriginalCurrentnessMethod, runOriginalCurrentnessRead } from '@i-harness/core-session/internal/execution'
 import { canonicalJsonData, createLegacyReadVisibility, freezeJsonData, isStrictFactData, type SessionView } from '@i-harness/core-session'
 import { captureLegacyRefCommitment, type ContextCapture, type LegacyCommitment, type LegacyReadObservation, type LegacyReadObservationRunner } from '@i-harness/context-output'
 import {assertOriginalManagedTaskSourceRead, type ManagedTaskSourceRead} from '@i-harness/session-persistence/internal/selected-source-owner'
@@ -102,19 +104,38 @@ export async function discoverResultLineage(coordinator: Pick<SessionCoordinator
     cursor = meta.parentSession
   }
 }
-export function assertResultLineage(observation: ExistingSessionBindingObservation | SessionBindingObservation, ids: readonly string[], sessionId: string): void {
-  observation.assertCurrent()
-  let cursor = sessionId
-  for (const [index, id] of ids.entries()) {
-    if (cursor !== id) throw new Error('Result source lineage changed')
-    const meta = observation.metadata(id)
-    if (meta.sessionId !== id || meta.archived) throw new Error('Result source session unavailable')
-    const parent = meta.parentSession && ['subagent','team'].includes(meta.origin ?? '') ? meta.parentSession : undefined
-    if (index === ids.length - 1) { if (parent) throw new Error('Result source lineage expanded') }
-    else { if (!parent) throw new Error('Result source lineage changed'); cursor = parent }
-  }
-  observation.assertCurrent()
+/** Capture only an already-enrolled original guard. Accessors and foreign
+ * assertions retain their ordinary callback path without classification reads. */
+export function captureResultLineageGuard(observation: ExistingSessionBindingObservation | SessionBindingObservation): (() => void) | undefined {
+  if (types.isProxy(observation)) return
+  const current = Object.getOwnPropertyDescriptor(observation, 'assertCurrent')
+  const metadata = Object.getOwnPropertyDescriptor(observation, 'metadata')
+  if (!current || !('value' in current) || typeof current.value !== 'function'
+    || !metadata || !('value' in metadata) || typeof metadata.value !== 'function') return
+  const fields = [['assertCurrent', current.value], ['metadata', metadata.value]] as const
+  return bindOriginalCurrentnessDescriptors({ receiver: observation, method: current.value,
+    before: fields, after: fields, message: 'Original result observation methods changed' })
 }
+export function assertResultLineage(observation: ExistingSessionBindingObservation | SessionBindingObservation, ids: readonly string[], sessionId: string): void {
+  const guard = captureResultLineageGuard(observation)
+  const current = guard ?? (() => observation.assertCurrent())
+  const read = () => {
+    current()
+    let cursor = sessionId
+    for (const [index, id] of ids.entries()) {
+      if (cursor !== id) throw new Error('Result source lineage changed')
+      const meta = guard ? callOriginalCurrentnessMethod<Readonly<SessionMeta>>(guard, observation, 'metadata', [id]) : observation.metadata(id)
+      if (meta.sessionId !== id || meta.archived) throw new Error('Result source session unavailable')
+      const parent = meta.parentSession && ['subagent', 'team'].includes(meta.origin ?? '') ? meta.parentSession : undefined
+      if (index === ids.length - 1) { if (parent) throw new Error('Result source lineage expanded') }
+      else { if (!parent) throw new Error('Result source lineage changed'); cursor = parent }
+    }
+    current()
+  }
+  if (guard) runOriginalCurrentnessRead(guard, read)
+  else read()
+}
+
 const commitmentKey = (c: LegacyCommitment) => JSON.stringify([c.refId, c.revision, c.metadataDigest, c.metadataEncodedBytes, c.expiresAt])
 /** Predicates are synchronous inside L1; failures survive caught-denial paths. */
 export function legacyObservationFor(source: ResultSourceObservation): LegacyReadObservation {

@@ -1,10 +1,11 @@
+import { runOriginalCurrentnessRead, runOpaqueCurrentnessRead, wrapOriginalSourceCurrentness } from '@i-harness/core-session/internal/execution'
 import { canonicalJsonData, captureBootstrapPreparationFacts } from '@i-harness/core-session'
 import { contextSourceIdentity, contextWorkspaceIdentity, type LegacyForkTransferScope } from '@i-harness/context-output'
 import { ForkAdmissionError, ForkTargetPolicyDeniedError, type ForkHost, type ForkSourceWitness, type SessionCoordinator } from '@i-harness/session-persistence'
 import { createForkSourceWitness } from '../../session-persistence/src/fork-inline-host.ts'
 import { associateForkHostCleanupOwner } from '../../session-persistence/src/fork-controller.ts'
 import { observationCleanupFor, type ObservationCleanupHandle } from '../../session-persistence/src/coordinator/binding-observation.ts'
-import { assertResultLineage, discoverResultLineage, legacyObservationFor } from '../../session-executor/src/lifecycle/result-observation.ts'
+import { assertResultLineage, captureResultLineageGuard, discoverResultLineage, legacyObservationFor } from '../../session-executor/src/lifecycle/result-observation.ts'
 import type { createProjectScopeBroker } from './project-scope.ts'
 import type { createNativeContextRuntime } from './context-runtime.ts'
 
@@ -91,15 +92,32 @@ export function createGatewayForkHost(options: {
         let getter: Awaited<ReturnType<typeof projects.resultReadScopeFor>>
         let confirmed = false, manifestDigest: string | undefined
         const assertTargetCurrent = () => { admission(); if (!active) throw new Error('Gateway fork scope retired'); if (confirmed) transfer.targetPreparation.assertTargetCurrent() }
-        const assertSourceCurrent = () => {
-          admission()
+        const lineageGuard = observation && captureResultLineageGuard(observation)
+        const checkSource = () => {
+          // Host callbacks and unclassified source/project ports keep their
+          // original calls and split native accumulation at that boundary.
+          if (lineageGuard) runOpaqueCurrentnessRead(lineageGuard, admission)
+          else admission()
           if (passive || !source || !observation || !active) throw new ForkAdmissionError('cancelled')
-          observation.assertCurrent(); assertResultLineage(observation, ids, sourceId); source.assertUnchanged()
+          const checkLineage = () => {
+            if (lineageGuard) lineageGuard()
+            else observation.assertCurrent()
+            assertResultLineage(observation, ids, sourceId)
+          }
+          if (lineageGuard) runOriginalCurrentnessRead(lineageGuard, checkLineage)
+          else checkLineage()
+          if (lineageGuard) runOpaqueCurrentnessRead(lineageGuard, () => source!.assertUnchanged())
+          else source.assertUnchanged()
           if (getter) {
-            const selected = getter(), project = operation.prepared.requestIntent.project
-            if (project.kind === 'project' ? selected.projectId !== project.projectId : selected.projectId !== undefined) throw new ForkAdmissionError('policy')
+            const checkProject = () => {
+              const selected = getter!(), project = operation.prepared.requestIntent.project
+              if (project.kind === 'project' ? selected.projectId !== project.projectId : selected.projectId !== undefined) throw new ForkAdmissionError('policy')
+            }
+            if (lineageGuard) runOpaqueCurrentnessRead(lineageGuard, checkProject)
+            else checkProject()
           }
         }
+        const assertSourceCurrent = lineageGuard ? wrapOriginalSourceCurrentness(lineageGuard, checkSource) ?? checkSource : checkSource
         const transfer = nativeContext.prepareBootstrapTransfer({ invocation: operation.invocation, requestIntent: operation.prepared.requestIntent,
           ...(!passive ? { sourceSessionId: sourceId } : {}), sourceAvailable: () => !passive && active,
           assertNewWorkCurrent: assertSourceCurrent, targetAvailable: () => active }, passive ? undefined : { sessionId: sourceId, ...(control.signal ? { signal: control.signal } : {}) })
