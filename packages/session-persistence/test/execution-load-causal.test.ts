@@ -1,12 +1,14 @@
 import { expect, it, vi } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, appendFile, rename, open } from 'node:fs/promises';
 import { join } from 'node:path';
-const disposal = vi.hoisted(() => ({ armed: false, calls: 0, marker: Error('original release debt') }));
+const disposal = vi.hoisted(() => ({ armed: false, calls: 0, tracing: false, resources: [] as { path: string; attempts: number; held(): boolean }[], marker: Error('original release debt') }));
 vi.mock('@i-harness/fs-lock', async (original) => {
     const locks = await original<typeof import('@i-harness/fs-lock')>();
     return { ...locks, async acquireSessionLock(...args: Parameters<typeof locks.acquireSessionLock>) {
             const held = await locks.acquireSessionLock(...args);
-            return { get held() { return held.held; }, async release() { disposal.calls++; if (disposal.armed) {
+            const record = { path: args[0].lockPath, attempts: 0, held: () => held.held };
+            if (disposal.tracing) disposal.resources.push(record);
+            return { get held() { return held.held; }, async release() { disposal.calls++; record.attempts++; if (disposal.armed) {
                     disposal.armed = false;
                     throw disposal.marker;
                 } ; await held.release(); } };
@@ -21,6 +23,8 @@ import { createLoads } from '../src/coordinator/load.ts';
 import { createMutations } from '../src/coordinator/mutations.ts';
 import { createProcessReadLatches } from '../src/coordinator/process-read-latches.ts';
 import { createColdExecutionWrites, observeColdExecutionWrites } from '../src/coordinator/cold-execution-writes.ts';
+import { lockPathFor } from '@i-harness/fs-lock';
+import { artifactPathsFor } from '../src/coordinator/artifact-path-association.ts';
 it.each(['transition14', 'historical13', 'lower13', 'lower5'] as const)('qualifies original %s recovery bytes, physical effects, sequences and snapshot silence', async (lane) => {
     const native = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises'), root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'load-causal-')), backend = createJsonlBackend(root), path = join(root, 's.jsonl');
     const version = lane === 'transition14' ? 14 : lane === 'lower5' ? 5 : 13;
@@ -134,20 +138,43 @@ it('preserves lower owned replacement failure over original release debt, retain
     } });
     try {
         const before = await readFile(path);
-        disposal.calls = 0;
+        disposal.calls = 0; disposal.tracing = true; disposal.resources = [];
         await expect(loads.loadOwned('s')).rejects.toBe(fault);
         expect(await readFile(path)).not.toEqual(before);
         expect((await backend.read('s')).events.some(e => e.type === 'tool/result')).toBe(true);
         expect(seen).toEqual(['edge', 'edge', 'edge']);
-        expect(disposal.calls).toBe(1);
-        expect(ownership.ownerOf('s')).toBe(true);
+        const paths = artifactPathsFor(backend)!;
+        const expected = [paths.session('s'), paths.taskForParent('s')].map(capture => {
+            if (capture.kind !== 'ready') throw Error('Original fixture artifact unavailable');
+            return lockPathFor(root, 'artifact-ownership:' + capture.key);
+        });
+        expect(disposal.resources.map(resource => resource.path).toSorted()).toEqual(expected.toSorted());
+        const failed = disposal.resources.find(resource => resource.held())!;
+        const healthy = disposal.resources.find(resource => !resource.held())!;
+        expect(failed).toBeDefined(); expect(healthy).toBeDefined();
+        expect([failed.attempts, healthy.attempts, disposal.calls]).toEqual([1, 1, 2]);
+        // ownerOf reports the session-file lease, not a lone Task companion.
+        // Either remaining native resource is debt, never a healthy bundle.
+        expect(ownership.ownerOf('s')).toBe(failed.path === expected[0]);
+        expect(ownership.hasLiveOwnership('s')).toBe(false);
+        expect(() => ownership.assertHeld('s')).toThrow();
         await expect(ownership.borrowOwnership('s')).rejects.toBe(disposal.marker);
+        // Borrow may reacquire the already released healthy companion before
+        // encountering the original failed slot, then must roll it back.
+        expect(disposal.resources.filter(resource => resource.path === failed.path)).toEqual([failed]);
+        const rollback = disposal.resources.filter(resource => resource !== failed && resource !== healthy);
+        expect(rollback).toHaveLength(1);
+        expect(rollback[0]!.path).toBe(healthy.path);
+        expect([rollback[0]!.attempts, rollback[0]!.held()]).toEqual([1, false]);
+        expect([failed.attempts, healthy.attempts]).toEqual([1, 1]);
         await Promise.all(ownership.releaseHeldLocks());
-        expect(disposal.calls).toBe(2);
+        expect([failed.attempts, healthy.attempts, disposal.calls]).toEqual([2, 1, 4]);
+        expect(disposal.resources.every(resource => !resource.held())).toBe(true);
         expect(ownership.ownerOf('s')).toBe(false);
     }
     finally {
         disposal.armed = false;
+        disposal.tracing = false;
         off();
         vi.mocked(rename).mockImplementation(native.rename);
         await Promise.all(ownership.releaseHeldLocks());

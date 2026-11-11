@@ -1,8 +1,10 @@
 import { mkdtemp, rm, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { afterEach, expect, it, vi } from 'vitest'
-import { acquireSessionLock } from '@i-harness/fs-lock'
+import { acquireSessionLock, lockPathFor } from '@i-harness/fs-lock'
+import { artifactPathsFor } from '../src/coordinator/artifact-path-association.ts'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { forkSession, retryForkSession } from '../src/index.ts'
 import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/backend-factory.ts'
@@ -414,22 +416,43 @@ it('settles retained preparation cleanup before a new execute or explicit prepar
 })
 it('close attempts every independent original preparation cleanup and retains only unresolved handles', async () => {
   const f = await fixture()
-  const handles: { raw: Awaited<ReturnType<typeof nativeAcquire>>; fault: boolean; attempts: number }[] = []
+  const handles: { path: string; raw: Awaited<ReturnType<typeof nativeAcquire>>; fault: boolean; attempts: number }[] = []
   try {
     await f.c.create({ sessionId: 'other-source' })
+    expect(f.c.ownerOf('source')).toBe(true); expect(f.c.ownerOf('other-source')).toBe(true)
     const controller = controllerApi.createForkSessionController(f.c, createInlineForkHost(f.c))
     vi.mocked(acquireSessionLock).mockImplementation(async options => {
-      const raw = await nativeAcquire(options), record = { raw, fault: true, attempts: 0 }; handles.push(record)
+      const raw = await nativeAcquire(options), record = { path: options.lockPath, raw, fault: true, attempts: 0 }; handles.push(record)
       return { get held() { return raw.held }, async release() { record.attempts++; if (record.fault) throw new Error('independent original release'); await raw.release() } }
     })
     const results = await Promise.all(['source','other-source'].map(sourceSessionId => controller.prepare({ version: 1, sourceSessionId }).catch(error => error)))
     expect(results.every(error => error instanceof AggregateError)).toBe(true)
-    expect(handles.length).toBe(2)
-    handles[0]!.fault = false
+    const paths = artifactPathsFor(f.backend)!
+    // Both complete session/Task bundles are already owned. Preparation borrows
+    // them and acquires each original project binding's document pin + lease.
+    const resources = ['source', 'other-source'].flatMap(id => {
+      const key = 'desktop-session-project-' + createHash('sha256').update(id).digest('hex')
+      const capture = paths.document(key)
+      if (capture.kind !== 'ready') throw Error('Original preparation binding unavailable')
+      return [{ kind: 'pin', prefix: 'artifact-ownership:' }, { kind: 'lease', prefix: 'artifact-document-lease:' }].map(resource => ({ id, kind: resource.kind, path: lockPathFor(f.root, resource.prefix + capture.key) }))
+    })
+    const expected = resources.map(resource => resource.path).toSorted()
+    expect(handles.map(handle => handle.path).toSorted()).toEqual(expected)
+    const resourceFor = (handle: typeof handles[number]) => resources.find(resource => resource.path === handle.path)!
+    expect(handles.map(value => [value.raw.held, value.attempts])).toEqual(handles.map(value => [true, resourceFor(value).kind === 'lease' ? 1 : 0]))
+    for (const value of handles) if (resourceFor(value).id === 'source') value.fault = false
     await expect(controller.close()).rejects.toThrow('Fork cleanup unresolved')
-    expect(handles.map(value => [value.raw.held, value.attempts])).toEqual([[false, 2], [true, 2]])
-    handles[1]!.fault = false; await controller.close()
-    expect(handles.map(value => [value.raw.held, value.attempts])).toEqual([[false, 2], [false, 3]])
+    expect(handles.map(value => [value.raw.held, value.attempts])).toEqual(handles.map(value => {
+      const resource = resourceFor(value), healthy = resource.id === 'source'
+      return [!healthy, resource.kind === 'lease' ? 2 : healthy ? 1 : 0]
+    }))
+    for (const value of handles) value.fault = false
+    await controller.close()
+    expect(handles.map(value => [value.raw.held, value.attempts])).toEqual(handles.map(value => {
+      const resource = resourceFor(value)
+      return [false, resource.kind === 'lease' ? resource.id === 'source' ? 2 : 3 : 1]
+    }))
+    expect(handles.map(handle => handle.path).toSorted()).toEqual(expected)
   } finally { for (const value of handles) value.fault = false; await f.close() }
 })
 it('cold target conflict carries unknown capture evidence without source admission', async () => {

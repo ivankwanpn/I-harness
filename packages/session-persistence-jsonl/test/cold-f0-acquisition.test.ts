@@ -1,6 +1,9 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 const native = vi.hoisted(() => ({ paths: new Map<string, string>(), held: new Map<string, object>(), acquired: [] as string[], faultKey: '', failing: true, failOnce: false, consumed: false, releases: 0 }))
-vi.mock('../../fs-lock/src/artifact-path.ts', () => ({ createArtifactPathOwner: () => ({ capture: (path: string) => ({ kind: 'ready', key: path.toLowerCase(), assertCurrent() { if (native.failOnce) { native.failOnce = false; throw Error('canonical namespace changed after acquisition') } } }), settleResources() {} }) }))
+vi.mock('../../fs-lock/src/artifact-path.ts', async load => {
+  const actual = await load<typeof import('../../fs-lock/src/artifact-path.ts')>()
+  return { ...actual, createArtifactPathOwner: () => ({ capture: (path: string) => ({ kind: 'ready', key: path.toLowerCase(), assertCurrent() { if (native.failOnce) { native.failOnce = false; throw Error('canonical namespace changed after acquisition') } } }), settleResources() {} }) }
+})
 vi.mock('../../fs-lock/src/index.ts', async () => { const { createHash } = await import('node:crypto'), { join } = await import('node:path'); return {
   lockPathFor(root: string, id: string) { const path = join(root, '.i-harness-locks', createHash('sha256').update(id).digest('hex').slice(0, 24) + '.lock'); native.paths.set(path, id); return path },
   async acquireSessionLock({ lockPath }: { lockPath: string }) {
