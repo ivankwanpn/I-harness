@@ -1,4 +1,5 @@
 import { onExecutionEvent } from '@i-harness/core-plugin'
+import { assertManagedActionLifetimeCurrent } from '@i-harness/core-session/internal/execution'
 import { committedFactSeqs, type CapturedActionFact, type ProducerFactOutcome } from '@i-harness/core-session'
 import { PLAN_MODE_SYSTEM_PROMPT } from '../../plan-mode/src/index.ts'
 import type { ManagedRegistryConstruction } from '../../session-executor/src/managed-assembly.ts'
@@ -6,6 +7,8 @@ import type { ManagedRegistryConstruction } from '../../session-executor/src/man
 /** Plan state and mutation receipts belong to the original execution. */
 export async function mountOwnedPlan(original: ManagedRegistryConstruction, initiallyEnabled = false) {
  const pending = new Set<() => Promise<void>>()
+ const lifetime = Object.getOwnPropertyDescriptor(original,'assertLifetimeCurrent')?.value
+ if (typeof lifetime !== 'function') throw TypeError('Original construction lifetime required')
  let closing = false
  const capture = () => { original.assertCurrent(); const observation = original.execution.observe(); const plan = observation.plan(); observation.assertCurrent(); original.assertCurrent(); return {observation,plan} }
  const read = () => capture().plan
@@ -13,10 +16,21 @@ export async function mountOwnedPlan(original: ManagedRegistryConstruction, init
  original.retain(close)
  const change = async (selected: ReturnType<typeof capture>, mode:'on'|'off', signal?:AbortSignal) => {
   if (closing || pending.size) throw Error('Plan metadata recovery required')
+  original.assertCurrent()
+  selected.observation.assertCurrent()
   const action = original.execution.owner.beginAction(signal), guarded = action.captureMetadata
   if (!guarded) { action.finish(); throw TypeError('Guarded original metadata capture required') }
   let fact:CapturedActionFact<ProducerFactOutcome>
-  try { fact = guarded.call(action,{type:'plan/mode',mode},()=>{try { action.assertOpen(); original.assertCurrent(); selected.observation.assertCurrent(); return true } catch { return false }}) }
+  try { fact = guarded.call(action,{type:'plan/mode',mode},()=>{try {
+    if (closing) return false
+    const field=Object.getOwnPropertyDescriptor(original,'assertLifetimeCurrent')
+    if(!field||!('value' in field)||field.value!==lifetime)return false
+    Reflect.apply(lifetime,original,[])
+    assertManagedActionLifetimeCurrent(original.domain,action)
+    action.assertOpen()
+    selected.observation.assertCurrent()
+    return true
+  } catch { return false }}) }
   catch (error) { action.finish(); throw error }
   let invoked=false, terminal=false, source:ReturnType<typeof action.registerSettlementSource>
   const settle = async () => { let outcome=invoked?await fact.observe():await fact.admit(); invoked=true; if(outcome.kind==='unknown'||outcome.kind==='recovery-required'||outcome.kind==='not-issued'&&outcome.code==='FACT_RECOVERY_REQUIRED') outcome=await fact.reconcile(); if(outcome.kind==='committed'||outcome.kind==='memory-committed'||outcome.kind==='not-issued'&&outcome.code!=='FACT_RECOVERY_REQUIRED')terminal=true; return outcome }

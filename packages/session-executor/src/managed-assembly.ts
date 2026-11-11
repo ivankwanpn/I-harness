@@ -91,6 +91,8 @@ export interface ManagedRegistryConstruction {
  readonly execution:ManagedExecutionAttachment
  readonly instructions?:Readonly<{manager:ReturnType<typeof createMainInstructionManager>;runtime:ReturnType<typeof createExecutionRuntimeContext>;environment:OwnedInstructionBinding['environment'];cwd:string;authority:OwnedInstructionBinding['authority'];available:OwnedInstructionBinding['available']}>
  assertCurrent():void
+ /** Existing construction lifetime only; grants no fresh execution admission. */
+ assertLifetimeCurrent():void
  retain(cleanup:()=>void|Promise<void>):void
 }
 export interface OwnedDefaultSurface {
@@ -203,10 +205,11 @@ export async function createManagedExecutionRuntimeWithRegistry(options:Omit<Man
  let retired=false,retaining=true
  options.assertConstructionCurrent()
  const prepared=prepare(options,!!options.prepareFilesystem)
- const assertCurrent=()=>{if(retired)throw Error('Original construction retired');options.assertConstructionCurrent();prepared.origin.domain.assertCurrent()}
+ const assertLifetimeCurrent=()=>{if(retired)throw Error('Original construction retired');options.assertConstructionCurrent()}
+ const assertCurrent=()=>{assertLifetimeCurrent();prepared.origin.domain.assertCurrent()}
  options.retainConstructionCleanup(async()=>{retired=true})
  const original:ManagedRegistryConstruction={ctx:prepared.ctx,tools:prepared.pair.registry,domain:prepared.origin.domain,execution:prepared.execution,
-  ...(prepared.manager&&prepared.instructionRuntime&&prepared.instructionBinding?{instructions:{manager:prepared.manager,runtime:prepared.instructionRuntime,environment:prepared.instructionBinding.environment,cwd:prepared.instructionBinding.cwd,authority:prepared.instructionBinding.authority,available:prepared.instructionBinding.available}}:{}),assertCurrent,
+  ...(prepared.manager&&prepared.instructionRuntime&&prepared.instructionBinding?{instructions:{manager:prepared.manager,runtime:prepared.instructionRuntime,environment:prepared.instructionBinding.environment,cwd:prepared.instructionBinding.cwd,authority:prepared.instructionBinding.authority,available:prepared.instructionBinding.available}}:{}),assertCurrent,assertLifetimeCurrent,
   retain(cleanup){if(!retaining)throw Error('Original construction retention expired');assertCurrent();if(typeof cleanup!=='function')throw TypeError('Original mount cleanup required');options.retainConstructionCleanup(async()=>{await cleanup()})}}
  let defaultSurface:void|OwnedDefaultSurface
  try{assertCurrent();if(options.prepareFilesystem){if(!options.originalFilesystem)throw TypeError('Original filesystem required for rewind');const rewind=await options.prepareFilesystem(original);assertCurrent();prepared.mountFilesystem(rewind);assertCurrent()}defaultSurface=await options.configureRegistry(original)}finally{retaining=false}
