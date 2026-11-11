@@ -63,6 +63,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
           await entry.flight?.catch(()=>{})
           await bootstrap.settleCapture(entry)
           if(entry.headerUnknown)throw new FactRecoveryRequiredError()
+          await bootstrap.settlePendingFacts(entry)
           const cleanup=await Promise.allSettled([restoredEntries.get(entry)?.close(),(async()=>{await revokeTaskOperations(id);await close()})()]);const errors=cleanup.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(errors.length)throw aggregateErrors(errors,'Managed restored read/document cleanup unresolved');await bootstrap.releaseCapture(entry)
           if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)}
           outcome='settled';closeComplete=true
@@ -95,6 +96,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     await executions.get(entry)?.source.close()
     await bootstrap.settleCapture(entry)
     if(entry.headerUnknown)throw new FactRecoveryRequiredError()
+    await bootstrap.settlePendingFacts(entry)
     if(entry.selected)await bootstrap.releaseSelected(entry.selected.route,entry.selected.identity);else await bootstrap.releaseCapture(entry)
     if(documents.get(id)===entry)documents.delete(id)
     outcome='settled'

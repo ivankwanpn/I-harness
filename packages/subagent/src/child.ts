@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto"
 import type { ReasoningEffort } from "@i-harness/core-agent"
 import { forkTurns } from "./fork.ts"
 import { declaredRoleModel, modelLabelOf, subagentModelSelectionDisabled, subagentModelSelectionGated } from "./child/model-binding.ts"
@@ -10,6 +9,7 @@ import { openInitialChildGeneration, type InitialChildInput } from './child/gene
 import { captureChildInstructionContext } from './child/instruction-context.ts'
 import { invokeOriginal } from './followup/resident-lifetime.ts'
 import {claimTaskChildBirth,markTaskChildAdopted} from './child/task-birth.ts'
+import {captureHostChildInput,captureHostModelSelection,openHostChildBirth,type HostChildBirth} from './child/host-birth.ts'
 
 export { SUBAGENT_PROMPT_CONTRACT, composeSubagentPrompt, estimateChildOverhead } from "./child/prompt.ts"
 export { resolveRoleTools } from "./child/role-tools.ts"
@@ -35,28 +35,39 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   const retainInitial = dataMethod<NonNullable<SpawnOptions['retainInitialSetup']>>(opts, 'retainInitialSetup')?.bind(opts)
   // Pure role gates precede any child document or executable model resolution.
   const committed=opts.childStart?.kind==='committed-child-birth'?claimTaskChildBirth(opts.childStart.birth):undefined
-  const declared = committed?committed.declared:declaredRoleModel(opts.role, opts)
+  const captured = !committed && opts.childSessions ? captureHostChildInput(opts) : undefined
+  const role = captured ? captured.data.role : opts.role
+  const selected = committed ? committed.declared : declaredRoleModel(role, opts)
+  const declared = captured && selected !== undefined ? captureHostModelSelection(selected) : selected
   if (subagentModelSelectionGated(opts, declared)) throw subagentModelSelectionDisabled(opts.role.name)
   if (opts.childSessions && !opts.childSessions.coordinator.openManagedDocument) throw Object.assign(new Error('Durable child requires the owned fact capability'), { code: 'FACT_OWNER_UNSUPPORTED' })
 
-  const childPath = `${opts.parentPath}/${opts.taskName}`
-  const childCtx = opts.parentCtx.scope.mount()
-  const unmountContext = dataMethod<() => void>(childCtx.scope, 'unmount')?.bind(childCtx.scope)
-  if (!unmountContext) throw new TypeError('Original child context cleanup unavailable')
+  const childPath = captured
+    ? `${captured.data.parentPath}/${captured.data.taskName}`
+    : `${opts.parentPath}/${opts.taskName}`
+  const parentContext = opts.parentCtx
+  const signal = captured ? captured.signal : opts.signal
+  const resolveModel = opts.resolveModel
+  const inheritedBindingForStep = opts.inheritedBindingForStep
+  let childCtx!: ReturnType<typeof opts.parentCtx.scope.mount>
+  let unmountContext: (() => void) | undefined
+  let contextCreated = false
+  let contextFailure: { cause: unknown } | undefined
+  let hostBirth: HostChildBirth | undefined
 
-  // Allocate inherited seed and read depth before resolving the model.
+  // Only the nondurable branch uses raw seed records. Durable construction
+  // captures a semantic observation and commits it through atomic bootstrap.
   const turns = opts.forkTurns ?? "none"
   if (!committed && !opts.parentSession) throw new TypeError('Original parent session or committed child birth required')
-  const seedEvents = committed || turns === "none" ? [] : forkTurns(opts.parentSession!.events, turns === "all" ? Infinity : turns, opts.parentSession!.formatVersion, opts.parentSession!.header)
-
+  const seedEvents = committed || captured || turns === "none" ? [] : forkTurns(opts.parentSession!.events, turns === "all" ? Infinity : turns, opts.parentSession!.formatVersion, opts.parentSession!.header)
   let sessionId: string | undefined
-  const childDepth = committed ? committed.request.core.lineage.delegationDepth : (opts.parentSession!.header?.delegationDepth ?? 0) + 1
+  const childDepth = committed ? committed.request.core.lineage.delegationDepth
+    : captured ? captured.data.delegationDepth : (opts.parentSession!.header?.delegationDepth ?? 0) + 1
   const start = committed?.start??{ wall: Date.now(), monotonic: performance.now() }
   const controller = new AbortController()
-  const abort = () => controller.abort(opts.signal?.reason)
-  opts.signal?.addEventListener('abort', abort, { once: true })
-  if (opts.signal?.aborted) abort()
+  const abort = () => controller.abort(signal?.reason)
 
+  let results = opts.results
   let model = opts.parentModel
   let reasoningEffort: ReasoningEffort | undefined = opts.reasoningEffort
   let budgetBinding = opts.budgetBinding
@@ -99,7 +110,14 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
           await failedSettlement(failedInstructionInput); failedInstructionSettled = true
         }
         if (!documentClosed) { await closeDocument?.(); documentClosed = true }
-        if (!contextClosed) { await unmountContext(); contextClosed = true }
+        if (!contextClosed) {
+          if (contextCreated && !unmountContext) {
+            if (contextFailure) throw contextFailure.cause
+            throw new TypeError('Original child context cleanup unavailable')
+          }
+          await unmountContext?.()
+          contextClosed = true
+        }
         setupClosed = true; releaseSetup?.(); releaseSetup = undefined
       })()
       setupFlight = pending; void pending.catch(() => { if (setupFlight === pending) setupFlight = undefined }); return pending
@@ -107,27 +125,47 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   }
   return invokeOriginal(setup, async () => { try {
   if (retainInitial) releaseSetup = retainInitial(setup)
-  childCtx.services.register("hooks/agent-type", opts.role.name)
+  // Capture the original caller's result source while its admission is live.
+  // This read-only host capability does not require a child context or model.
+  if (results?.forSource) results = await results.forSource()
+  if (captured) {
+    hostBirth = await openHostChildBirth(captured, start, declared)
+    document = hostBirth.document
+    closeDocument = hostBirth.close
+    revokeDocument = hostBirth.revoke
+    sessionId = hostBirth.sessionId
+  }
   controller.signal.throwIfAborted()
-  if (opts.results?.forSource) opts = { ...opts, results: await opts.results.forSource() }
+  signal?.addEventListener('abort', abort, { once: true })
+  if (signal?.aborted) abort()
+  controller.signal.throwIfAborted()
+  childCtx = parentContext.scope.mount()
+  contextCreated = true
+  try {
+    unmountContext = dataMethod<() => void>(childCtx.scope, 'unmount')?.bind(childCtx.scope)
+    if (!unmountContext) throw new TypeError('Original child context cleanup unavailable')
+  } catch (cause) {
+    contextFailure = { cause }
+    throw cause
+  }
+  childCtx.services.register("hooks/agent-type", role.name)
+  controller.signal.throwIfAborted()
   controller.signal.throwIfAborted()
   const ordinary = (opts.childSessions?.origin ?? "subagent") === "subagent"
   const protocol = ordinary ? { subagentProtocolVersion: 1 as const } : {}
   const projection = ordinary ? { ...(opts.taskId ? { subagentTaskId: opts.taskId } : {}), ...(opts.agentPath ? { subagentAgentPath: opts.agentPath } : {}) } : {}
   if (committed) sessionId=committed.request.invocation.targetSessionId
-  else if (opts.childSessions) {
-    sessionId = `child-${randomUUID()}`
-    await opts.childSessions.coordinator.create({ sessionId,
-      parentSession: opts.childSessions.parentSessionId, seedLength: seedEvents.length,
-      origin: opts.childSessions.origin ?? "subagent", delegationDepth: childDepth, ...protocol, ...projection })
-  }
   controller.signal.throwIfAborted()
-  const opened = committed?{session:committed.document.view,factOwner:committed.document,document:committed.document}:await openChildDocument(seedEvents,
+  const opened = committed
+    ? { session: committed.document.view, factOwner: committed.document, document: committed.document }
+    : hostBirth
+      ? { session: hostBirth.document.view, factOwner: hostBirth.document, document: hostBirth.document }
+      : await openChildDocument(seedEvents,
     { ...(opts.childSessions ? { parentSession: opts.childSessions.parentSessionId } : {}), seedLength: seedEvents.length, origin: opts.childSessions?.origin ?? 'subagent', delegationDepth: childDepth, ...protocol, ...projection },
     opts.childSessions && sessionId ? { coordinator: opts.childSessions.coordinator, sessionId } : undefined)
   const { session: childSession, factOwner } = opened
   document = opened.document
-  if (document) { const close = dataMethod<() => Promise<void>>(document, 'close'), revoke = dataMethod<() => void>(document, 'revokeNewWork'); if (!close || !revoke) throw new TypeError('Original child document cleanup unavailable'); closeDocument = close.bind(document); revokeDocument = revoke.bind(document) }
+  if (document && !closeDocument) { const close = dataMethod<() => Promise<void>>(document, 'close'), revoke = dataMethod<() => void>(document, 'revokeNewWork'); if (!close || !revoke) throw new TypeError('Original child document cleanup unavailable'); closeDocument = close.bind(document); revokeDocument = revoke.bind(document) }
   if(committed&&opts.childStart?.kind==='committed-child-birth')markTaskChildAdopted(opts.childStart.birth)
   controller.signal.throwIfAborted()
   if (createInstruction) {
@@ -138,11 +176,11 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     instruction = captureChildInstructionContext(returned, () => { instructionAvailable = false }, cleanup => { instructionCleanup = cleanup })
   }
   if (!instructionAvailable) { instruction?.retire(); throw Object.assign(new Error('Child instruction setup retired'), { code: 'FACT_CLOSED' }) }
-  initial = await openInitialChildGeneration(opts, factOwner, sessionId, controller, start, () => model)
+  initial = await openInitialChildGeneration(opts, factOwner, sessionId, controller, start, () => model, hostBirth?.initial, captured)
   { const close = dataMethod<() => Promise<void>>(initial, 'close'); if (!close) throw new TypeError('Original child generation close unavailable'); closeInitial = close.bind(initial) }
   controller.signal.throwIfAborted()
   if (declared !== undefined) {
-    const state = await opts.resolveModel(declared)
+    const state = await resolveModel.call(opts, declared)
     if (state.status !== "ready") {
       throw new Error(`role '${opts.role.name}' cannot resolve its model: ${state.reason}`)
     }
@@ -156,30 +194,35 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   }
   controller.signal.throwIfAborted()
   if(sessionId && opts.childSessions) await childCtx.emit('session/inherited',{
-    sessionId,parentSessionId:opts.childSessions.parentSessionId,session:childSession,
+    sessionId,parentSessionId:captured ? captured.data.parentSessionId : opts.childSessions.parentSessionId,session:childSession,
   })
 
   warnInheritedSeed(childSession, contextWindow)
 
-  const { childReg, codeModeMount, agent } = await assembleChild(opts, childCtx, childSession, factOwner, sessionId, childPath, model, reasoningEffort, contextWindow, maxOutputTokens, contextMetadata, budgetBinding, declared === undefined ? opts.inheritedBindingForStep : undefined, controller, initial.sharedGeneration, instruction, mount => {
+  const { childReg, codeModeMount, agent } = await assembleChild(opts, childCtx, childSession, factOwner, sessionId, childPath, model, reasoningEffort, contextWindow, maxOutputTokens, contextMetadata, budgetBinding, declared === undefined ? inheritedBindingForStep : undefined, controller, initial.sharedGeneration, instruction, mount => {
     const failures: unknown[] = []
     try { const cancel = dataMethod<(reason?: string) => Promise<void>>(mount, 'cancel'); if (!cancel) throw new TypeError('Original child Code Mode cancel unavailable'); cancelRuntime = cancel.bind(mount) }
     catch (error) { failures.push(error); cancelRuntime = async () => { throw error } }
     try { const dispose = dataMethod<() => Promise<void>>(mount, 'dispose'); if (!dispose) throw new TypeError('Original child Code Mode dispose unavailable'); disposeRuntime = dispose.bind(mount) }
     catch (error) { failures.push(error); disposeRuntime = async () => { throw error } }
     if (failures.length) throw failures[0]
-  })
+  }, captured)
   controller.signal.throwIfAborted()
-  const published = await publishChild(opts, childCtx, childSession, factOwner, document, sessionId, childPath, childReg, codeModeMount, controller, agent, modelLabel, initial, () => model, instruction, () => { instructionAvailable = false }, entry => { publishedEntry = entry;transferred = true; releaseSetup?.(); releaseSetup = undefined; setupExit.resolve() }, () => { if (!instructionAvailable) throw Object.assign(new Error('Child setup retired'), { code: 'FACT_CLOSED' }) }, { unmount: unmountContext, revokeDocument, closeDocument, closeInitial, cancelMount: cancelRuntime, disposeMount: disposeRuntime })
+  const published = await publishChild(opts, childCtx, childSession, factOwner, document, sessionId, childPath, childReg, codeModeMount, controller, agent, modelLabel, initial, () => model, instruction, () => { instructionAvailable = false }, entry => { publishedEntry = entry;transferred = true; releaseSetup?.(); releaseSetup = undefined; setupExit.resolve() }, () => { if (!instructionAvailable) throw Object.assign(new Error('Child setup retired'), { code: 'FACT_CLOSED' }) }, { unmount: unmountContext!, revokeDocument, closeDocument, closeInitial, cancelMount: cancelRuntime, disposeMount: disposeRuntime }, captured?.data, { results })
   // Existing background-child lifetime begins at publication. The launching
   // turn's temporary cancellation fence applies to preparation only.
-  opts.signal?.removeEventListener('abort', abort)
+  signal?.removeEventListener('abort', abort)
   return published
   } catch (error) {
-    opts.signal?.removeEventListener('abort', abort)
-    setup.retire(); setupExit.resolve()
+    const cleanupFailures: unknown[] = []
+    try { signal?.removeEventListener('abort', abort) } catch (failure) { cleanupFailures.push(failure) }
+    try { setup.retire() } catch (failure) { cleanupFailures.push(failure) }
+    setupExit.resolve()
     try { if (publishedEntry) await publishedEntry.dispose?.(); else await setup.close() }
-    catch (saving) { throw Object.assign(new AggregateError([error, saving], 'Original child setup cleanup incomplete', { cause: error }), { code: 'FACT_RECOVERY_REQUIRED' }) }
+    catch (failure) { cleanupFailures.push(failure) }
+    if (cleanupFailures.length) {
+      throw Object.assign(new AggregateError([error, ...cleanupFailures], 'Original child setup cleanup incomplete', { cause: error }), { code: 'FACT_RECOVERY_REQUIRED' })
+    }
     throw error
   } })
 }

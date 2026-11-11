@@ -10,6 +10,12 @@ import { createSessionService } from '../src/index.ts'
 import { subscribe } from '@i-harness/core-session'
 
 afterEach(() => vi.unstubAllGlobals())
+async function closeOwned(service: ReturnType<typeof createSessionService>, coordinator: ReturnType<typeof createSessionCoordinator>, primary?: { error: unknown }) {
+  const errors: unknown[] = []
+  try { await service.close() } catch (error) { errors.push(error) }
+  try { await coordinator.close() } catch (error) { errors.push(error) }
+  if (errors.length) throw new AggregateError([...(primary ? [primary.error] : []), ...errors], 'Original reviewer owner cleanup failed', { cause: primary?.error })
+}
 it.each([['isolated', undefined, 'off'], ['isolated', 130_000, 'off'], ['subagent', undefined, 'off'], ['isolated', undefined, 'only'], ['subagent', undefined, 'only'], ['isolated', undefined, 'late'], ['subagent', undefined, 'late']] as const)('%s guardian owns its retry pool before held resolution and preserves timeout %s through %s', async (execution, timeoutMs, mode) => {
   const root = await mkdtemp(join(tmpdir(), 'ih-guardian-generation-'))
   const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
@@ -24,7 +30,7 @@ it.each([['isolated', undefined, 'off'], ['isolated', 130_000, 'off'], ['subagen
       main++
       const args = { path: join(root, '..', `${id}-outside.txt`), text: 'synthetic' }
       const code = (mode === 'late' ? 'const pending = tools.fixture_gate({}); await yield_control(); await pending; ' : '') + 'text(await tools.write(' + JSON.stringify(args) + '));'
-      delta = mode === 'late' && main > 1 ? { content: 'Parent turn finished.' } : { tool_calls: [{ index: 0, id: 'write-call', type: 'function', function: { name: mode === 'off' ? 'write' : 'code_exec', arguments: JSON.stringify(mode === 'off' ? args : { code }) } }] }
+      delta = mode === 'late' && main > 1 ? { content: 'Parent turn finished.' } : { tool_calls: [{ index: 0, id: 'write-call', type: 'function', function: { name: mode === 'off' ? 'write' : 'code_exec', arguments: JSON.stringify(mode === 'off' ? args : { code, ...(mode === 'only' ? { yield_time_ms: 10000 } : {}) }) } }] }
     } else throw new Error('Unexpected network destination')
     return new Response('data: ' + JSON.stringify({ choices: [{ delta, finish_reason: null }] }) + '\n\ndata: ' + JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] }) + '\n\ndata: [DONE]\n\n')
   })
@@ -42,6 +48,7 @@ it.each([['isolated', undefined, 'off'], ['isolated', 130_000, 'off'], ['subagen
   assembly.tools.register({ name: 'fixture_gate', description: 'Controlled test gate.', inputSchema: { type: 'object', properties: {} }, isReadOnly: true, isConcurrencySafe: true, execute: async () => { gateEntered.resolve(); await releaseGate.promise; return { released: true } } })
   const unsubscribe = subscribe(assembly.session, event => { if (event.type === 'code/cell' && ['completed', 'failed', 'terminated', 'interrupted'].includes(event.state)) cellClosed.resolve() })
   const run = service.submit(id, 'Consider the synthetic write.', new AbortController().signal); void run.catch(() => {})
+  let primary: { error: unknown } | undefined
   try {
     if (mode === 'late') {
       await gateEntered.promise; await run
@@ -72,7 +79,12 @@ it.each([['isolated', undefined, 'off'], ['isolated', 130_000, 'off'], ['subagen
       expect(audit.filter(event => event.type === 'model/exchange-accepted')).toHaveLength(1)
       expect(audit.filter(event => event.type === 'context/action' || event.type === 'context/attempt')).toHaveLength(0)
     }
-  } finally { releaseGate.resolve(); released.resolve(); await run.catch(() => {}); await service.close().catch(() => {}); unsubscribe(); await coordinator.close().catch(() => {}) }
+  } catch (error) { primary = { error }; throw error }
+  finally {
+    releaseGate.resolve(); released.resolve()
+    await run.catch(() => {})
+    try { await closeOwned(service, coordinator, primary) } finally { unsubscribe() }
+  }
 })
 
 it.each(['expires', 'revokes'] as const)('rechecks an actual already borrowed reviewer allowance when it %s across readiness', async mode => {
@@ -90,9 +102,11 @@ it.each(['expires', 'revokes'] as const)('rechecks an actual already borrowed re
   const service = createSessionService({ workspace: root, coordinator, model, modelPolicy: 'test-mock', approveAll: true, codeMode: { mode: 'off' } })
   const assembly = await service.assemblyFor(id)
   assembly.tools.register({ name: 'allowance_probe', description: '', inputSchema: {}, isReadOnly: true, execute: async (_args, exec) => {
-    const generation = await exec.modelGeneration!.approval({ timeoutMs: 150, selectedClient: () => model })
     const childId = (await coordinator.create({ parentSession: id, origin: 'approval-review', seedLength: 0 })).id
-    const child = await coordinator.openManagedDocument(childId), binding = generation.forChild(child.view)
+    const child = await coordinator.openManagedDocument(childId)
+    // Native child storage is not part of this already-borrowed expiry cut.
+    const generation = await exec.modelGeneration!.approval({ timeoutMs: 1000, selectedClient: () => model })
+    const binding = generation.forChild(child.view)
     expect(borrowApprovalGeneration(binding, child.view)).toBe(generation)
     const check = () => assertBorrowedApprovalGeneration(binding, child.view, generation)
     check()
@@ -115,6 +129,7 @@ it.each(['expires', 'revokes'] as const)('rechecks an actual already borrowed re
     await generation.close(mode === 'expires' ? 'failed' : 'stopped')
     return 'checked original allowance'
   } })
+  let primary: { error: unknown } | undefined
   try {
     const run = service.submit(id, 'check original allowance', controller.signal)
     if (mode === 'revokes') await expect(run).rejects.toBeInstanceOf(Error)
@@ -122,7 +137,8 @@ it.each(['expires', 'revokes'] as const)('rechecks an actual already borrowed re
     expect(checks).toBe(1); expect(requests).toBe(mode === 'expires' ? 2 : 1)
     expect(assembly.session.events.filter(event => event.type === 'context/action' && event.op === 'open' && event.purpose === 'approval')).toHaveLength(1)
     expect(assembly.session.events.filter(event => event.type === 'context/attempt' && event.op === 'reserve' && event.lane === 'auxiliary')).toHaveLength(0)
-  } finally { await service.close().catch(() => {}); await coordinator.close().catch(() => {}) }
+  } catch (error) { primary = { error }; throw error }
+  finally { await closeOwned(service, coordinator, primary) }
 })
 
 it('an actual approval grant binds once to its exact owned child; copied, foreign and reused bindings refuse before child execution', async () => {
@@ -161,11 +177,13 @@ it('an actual approval grant binds once to its exact owned child; copied, foreig
       return 'checked exact binding'
     } finally { await generation.close('completed') }
   } })
+  let primary: { error: unknown } | undefined
   try {
     await service.submit(id, 'Check the synthetic binding.', new AbortController().signal)
     expect([sends, checks]).toEqual([2, 1])
     const events = (await backend.read(id)).events
     expect(events.filter(event => event.type === 'context/action' && event.op === 'open' && event.purpose === 'approval')).toHaveLength(1)
     expect(events.filter(event => event.type === 'context/attempt' && event.op === 'reserve' && event.lane === 'auxiliary')).toHaveLength(0)
-  } finally { await service.close().catch(() => {}); await coordinator.close().catch(() => {}) }
+  } catch (error) { primary = { error }; throw error }
+  finally { await closeOwned(service, coordinator, primary) }
 })

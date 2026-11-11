@@ -1,3 +1,4 @@
+import type { CapturedHostChildData } from './host-birth.ts'
 import {bindOriginalSpawnRun,bindOriginalSpawnJob,hasRequiredOriginalSpawn} from '../tools/source-run.ts'
 import { retainChildResult } from "./result.ts"
 import type { PluginContext } from "@i-harness/core-plugin"
@@ -33,7 +34,15 @@ export async function publishChild(
   onEntryPublished?: (entry: ChildAgentEntry) => void,
   assertSetupLive?: () => void,
   original?: { unmount(): void; revokeDocument?(): void; closeDocument?(): Promise<void>; closeInitial?(): Promise<void>; cancelMount?(reason?: string): Promise<void>; disposeMount?(): Promise<void> },
+  captured?: CapturedHostChildData,
+  retention?: { readonly results?: SpawnOptions['results'] },
 ): Promise<{ path: string; jobId: string; sessionId?: string; modelLabel?: string }> {
+  const message = captured ? captured.message : opts.message
+  const role = captured ? captured.role : opts.role
+  const taskName = captured ? captured.taskName : opts.taskName
+  const parentSessionId = captured ? captured.parentSessionId : opts.childSessions?.parentSessionId
+  const results = retention ? retention.results : opts.results
+  const resultOwners = { table: opts.table, jobs: opts.jobs, results }
   const cancelMount = original?.cancelMount ?? originalMethod<(reason?: string) => Promise<void>>(codeModeMount, 'cancel')
   const disposeMount = original?.disposeMount ?? originalMethod<() => Promise<void>>(codeModeMount, 'dispose')
   const revokeDocument = original?.revokeDocument ?? originalMethod<() => void>(document, 'revokeNewWork')
@@ -42,13 +51,13 @@ export async function publishChild(
   const unmountContext = original?.unmount ?? originalMethod<() => void>(childCtx.scope, 'unmount')!
   const inputId = initial?.inputId ?? randomUUID(), admission = initial ? undefined : factOwner.beginAction(controller.signal)
   try {
-    const initialOutcome=initial?.outcome ?? await admission!.facts.inputs.admit({ type: 'agent/input/admitted', version: 1, inputId, text: opts.message, delivery: 'queue', intent: 'user', provenance: { kind: 'inherited', authority: 'observation', scope: 'turn', producer: 'subagent.initial', ...(opts.childSessions?.parentSessionId ? { originSessionId: opts.childSessions.parentSessionId } : {}) } })
+    const initialOutcome=initial?.outcome ?? await admission!.facts.inputs.admit({ type: 'agent/input/admitted', version: 1, inputId, text: message, delivery: 'queue', intent: 'user', provenance: { kind: 'inherited', authority: 'observation', scope: 'turn', producer: 'subagent.initial', ...(parentSessionId ? { originSessionId: parentSessionId } : {}) } })
     if (committedFactSeqs(initialOutcome).length !== 1) throw new TypeError('Initial input must name one admission')
   } finally { admission?.finish() }
   opts.validateBeforeLaunch?.()
   opts.retainPublication?.({kind:'agent',value:agent})
   if (sessionId !== undefined) opts.agents.register(sessionId, agent)
-  const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName, undefined, undefined, opts.childStart?.kind==='committed-child-birth'?()=>controller.abort():undefined,
+  const { id: jobId } = opts.jobs.registerJob("root", "subagent", taskName, undefined, undefined, opts.childStart?.kind==='committed-child-birth'?()=>controller.abort():undefined,
     { agentPath: childPath, ...(sessionId !== undefined ? { sessionId } : {}) },registration=>{bindOriginalSpawnJob(opts.onPublished,registration);opts.retainPublication?.({kind:'job',value:registration})})
   let resultLifetime = true
   let initialClosed = false, initialFlight: Promise<void> | undefined
@@ -74,7 +83,7 @@ export async function publishChild(
     mailbox: [],
     jobId,
     ...(sessionId !== undefined ? { sessionId } : {}),
-    roleName: opts.role.name,
+    roleName: role.name,
     toolRegistry: childReg,
     factoryTools: [...(codeModeMount ? ["code_exec", "code_wait"] : []), "get_context_remaining"].flatMap((name) => { const tool = childReg.get(name); return tool ? [tool] : [] }),
     ...(modelLabel !== undefined ? { modelLabel } : {}),
@@ -112,8 +121,8 @@ export async function publishChild(
   const publication=Object.freeze({path:childPath,jobId,sessionId,...(modelLabel!==undefined?{modelLabel}:{})})
   const runGate=Promise.withResolvers<void>()
   // Defer transport until the entry and its retained lifecycle are published.
-  const initialRun = runGate.promise.then(() => { controller.signal.throwIfAborted();assertSetupLive?.(); return agent.runAdmitted!(opts.message, controller.signal, undefined, inputId, initial?.generation && initial.delegatedOrigin
-    ? { provenance: { kind: 'inherited', authority: 'observation', scope: 'turn', producer: 'subagent.initial', ...(opts.childSessions?.parentSessionId ? { originSessionId: opts.childSessions.parentSessionId } : {}) }, generation: initial.generation, delegatedOrigin: initial.delegatedOrigin } : undefined) })
+  const initialRun = runGate.promise.then(() => { controller.signal.throwIfAborted();assertSetupLive?.(); return agent.runAdmitted!(message, controller.signal, undefined, inputId, initial?.generation && initial.delegatedOrigin
+    ? { provenance: { kind: 'inherited', authority: 'observation', scope: 'turn', producer: 'subagent.initial', ...(parentSessionId ? { originSessionId: parentSessionId } : {}) }, generation: initial.generation, delegatedOrigin: initial.delegatedOrigin } : undefined) })
 
   const completion = initialRun.then(
     async (result) => {
@@ -121,14 +130,14 @@ export async function publishChild(
       // followup can re-drive the same agent (M9 spec §2.2). A stale error
       // from an earlier interrupted attempt is cleared on success.
       const settled = await opts.onSettled?.({ finalText: result.finalText, aborted: false })
-      if(!hasRequiredOriginalSpawn(opts.onPublished))await retainChildResult(opts, entry, { resultText: result.finalText }, "completed", settled)
+      if(!hasRequiredOriginalSpawn(opts.onPublished))await retainChildResult(resultOwners, entry, { resultText: result.finalText }, "completed", settled)
     },
     async (err) => {
       const aborted = controller.signal.aborted
       // An interrupted turn leaves the child ALIVE (waiting) so followups still work.
       const settled = await opts.onSettled?.({ error: err instanceof Error ? err.message : String(err), aborted })
-      const error = opts.results ? (err instanceof Error ? err.message : String(err)) : aborted ? "aborted" : (err instanceof Error ? err.message : String(err))
-      if(!hasRequiredOriginalSpawn(opts.onPublished))await retainChildResult(opts, entry, { error }, aborted ? "cancelled" : "error", settled)
+      const error = results ? (err instanceof Error ? err.message : String(err)) : aborted ? "aborted" : (err instanceof Error ? err.message : String(err))
+      if(!hasRequiredOriginalSpawn(opts.onPublished))await retainChildResult(resultOwners, entry, { error }, aborted ? "cancelled" : "error", settled)
     },
   )
   entry.followupChain = completion.finally(settleInitial)

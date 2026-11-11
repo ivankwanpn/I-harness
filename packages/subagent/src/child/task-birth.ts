@@ -79,14 +79,87 @@ function verifyTaskChildBirth(birth:Birth){
  if(birth.request.core.caller.kind!=='task')throw Error('Original task child header unavailable')
  verifyOriginalChildBirth(birth,'subagent',birth.request.core.caller.parentSessionId)
 }
-export function verifyOriginalChildBirth(birth:OriginalChildBirthData,origin:'subagent'|'approval-review',parentSessionId:string){
- const {document,receipt,request,payload}=birth,{view}=document,header=view.header,initial=receipt.initial,frame=receipt.completion,key=frame.key
- if(!header)throw Error('Original child header unavailable')
- if(!isManagedFactOwner(view,document)||canonicalJsonData(receipt.invocation)!==canonicalJsonData(request.invocation)||!isManagedResultSource(view,document,request.invocation.targetSessionId)||header.origin!==origin||origin==='subagent'&&header.subagentProtocolVersion!==1||header.parentSession!==parentSessionId||header.seedLength!==payload.seed.records.length||receipt.seedLength!==payload.seed.records.length||header.semanticSeed?.seedDigest!==payload.seed.digest||header.semanticSeed?.manifestDigest!==receipt.manifestDigest||header.semanticSeed.requestDigest!==request.invocation.requestDigest||!initial||initial.inputId!==payload.initial!.inputId||initial.startedAt!==payload.initial!.startedAt||initial.expiresAt!==payload.initial!.expiresAt||frame.owner.sessionId!==request.invocation.targetSessionId||key.count<2||frame.lastSeq!==key.firstSeq+key.count-1||initial.seq<key.firstSeq||initial.seq>frame.lastSeq)throw new Error('Original B2 initial receipt mismatch',{cause:{header,receipt}})
- if(birth.assertDependencyReceipt)birth.assertDependencyReceipt(receipt,payload.seed);else if(receipt.dependencyClosureDigest!==payload.seed.dependencyDigest)throw Error('Original empty dependency receipt mismatch')
- const event=view.events[initial.seq],bootstrap=view.events[key.firstSeq]
- if(bootstrap?.type!=='session/bootstrap'||bootstrap.operationId!==request.invocation.operationId||bootstrap.manifestDigest!==receipt.manifestDigest||bootstrap.dependencyClosureDigest!==receipt.dependencyClosureDigest||event?.type!=='agent/input/admitted'||event.seq!==initial.seq||event.inputId!==payload.initial!.inputId||event.text!==payload.initial!.text||event.intent!=='user'||event.delivery!=='queue'||canonicalJsonData(event.provenance)!==canonicalJsonData({kind:'inherited',authority:'observation',scope:'turn',producer:'subagent.initial',originSessionId:payload.initial!.parentSessionId})||canonicalJsonData(childInitialCommitment(payload))!==canonicalJsonData(request.core.initial))throw Error('Original B2 initial event mismatch')
+/** Package-private common storage proof. This verifies the actual original
+ * document and committed facts; it does not issue Task or reviewer authority. */
+export function verifyStoredChildBirth(birth: {
+ document: ManagedDocument
+ receipt: BootstrapReceipt
+ payload: BootstrapRequest
+ assertDependencyReceipt?: (receipt: BootstrapReceipt, seed: ReturnType<typeof compileSemanticSeed>) => void
+}): void {
+ const { document, receipt, payload } = birth
+ const view = document.view
+ const header = view.header
+ const initial = receipt.initial
+ const expected = payload.initial
+ const frame = receipt.completion
+ const key = frame.key
+ if (!header || !isManagedFactOwner(view, document)
+   || !isManagedResultSource(view, document, payload.invocation.targetSessionId)
+   || canonicalJsonData(receipt.invocation) !== canonicalJsonData(payload.invocation)
+   || header.origin !== payload.lineage.origin
+   || header.subagentProtocolVersion !== payload.lineage.subagentProtocolVersion
+   || header.parentSession !== payload.lineage.parentSession
+   || header.seedLength !== payload.seed.records.length
+   || receipt.seedLength !== payload.seed.records.length
+   || header.semanticSeed?.seedDigest !== payload.seed.digest
+   || header.semanticSeed.manifestDigest !== receipt.manifestDigest
+   || header.semanticSeed.requestDigest !== payload.invocation.requestDigest
+   || frame.owner.sessionId !== payload.invocation.targetSessionId
+   || key.count < (expected ? 2 : 1)
+   || frame.lastSeq !== key.firstSeq + key.count - 1) {
+   throw new Error('Original B2 initial receipt mismatch', { cause: { header, receipt } })
+ }
+ const bootstrap = view.events[key.firstSeq]
+ if (bootstrap?.type !== 'session/bootstrap'
+   || bootstrap.operationId !== payload.invocation.operationId
+   || bootstrap.manifestDigest !== receipt.manifestDigest
+   || bootstrap.dependencyClosureDigest !== receipt.dependencyClosureDigest) {
+   throw new Error('Original B2 initial event mismatch')
+ }
+ if (expected) {
+   if (!initial || initial.inputId !== expected.inputId
+     || initial.startedAt !== expected.startedAt || initial.expiresAt !== expected.expiresAt
+     || initial.seq < key.firstSeq || initial.seq > frame.lastSeq) {
+     throw new Error('Original B2 initial receipt mismatch', { cause: { header, receipt } })
+   }
+   const event = view.events[initial.seq]
+   const provenance = { kind: 'inherited', authority: 'observation', scope: 'turn', producer: 'subagent.initial',
+     ...(expected.parentSessionId ? { originSessionId: expected.parentSessionId } : {}) }
+   if (event?.type !== 'agent/input/admitted' || event.seq !== initial.seq
+     || event.inputId !== expected.inputId || event.text !== expected.text
+     || event.intent !== 'user' || event.delivery !== 'queue'
+     || canonicalJsonData(event.provenance) !== canonicalJsonData(provenance)) {
+     throw new Error('Original B2 initial event mismatch')
+   }
+   if (header.semanticSeed.initialInputId !== initial.inputId
+     || header.semanticSeed.initialStartedAt !== initial.startedAt
+     || header.semanticSeed.initialExpiresAt !== initial.expiresAt
+     || header.semanticSeed.initialInputDigest !== bootstrapInitialInputDigest(event, initial.startedAt, initial.expiresAt)) {
+     throw new Error('Original child birth commitment mismatch')
+   }
+ } else if (initial !== undefined || header.semanticSeed.initialInputId !== undefined) {
+   throw new Error('Original child birth has an unexpected initial commitment')
+ }
+ if (birth.assertDependencyReceipt) birth.assertDependencyReceipt(receipt, payload.seed)
+ else if (receipt.dependencyClosureDigest !== payload.seed.dependencyDigest) throw new Error('Original empty dependency receipt mismatch')
  document.assertReady()
- if(view.formatVersion<14||header.delegationDepth!==payload.lineage.delegationDepth||header.semanticSeed?.dependencyDigest!==payload.seed.dependencyDigest||header.semanticSeed?.initialInputId!==initial.inputId||header.semanticSeed.initialStartedAt!==initial.startedAt||header.semanticSeed.initialExpiresAt!==initial.expiresAt||header.semanticSeed.initialInputDigest!==request.core.initial.digest||bootstrapInitialInputDigest(event,initial.startedAt,initial.expiresAt)!==request.core.initial.digest)throw Error('Original child birth commitment mismatch')
+ if (view.formatVersion < 14 || header.delegationDepth !== payload.lineage.delegationDepth
+   || header.semanticSeed.dependencyDigest !== payload.seed.dependencyDigest) {
+   throw new Error('Original child birth commitment mismatch')
+ }
+}
+
+export function verifyOriginalChildBirth(birth: OriginalChildBirthData, origin: 'subagent' | 'approval-review', parentSessionId: string): void {
+ const { request, payload } = birth
+ if (payload.lineage.origin !== origin || payload.lineage.parentSession !== parentSessionId
+   || canonicalJsonData(request.invocation) !== canonicalJsonData(payload.invocation)) {
+   throw new Error('Original B2 initial receipt mismatch')
+ }
+ verifyStoredChildBirth(birth)
+ if (!payload.initial || canonicalJsonData(childInitialCommitment(payload)) !== canonicalJsonData(request.core.initial)
+   || birth.document.view.header?.semanticSeed?.initialInputDigest !== request.core.initial.digest) {
+   throw new Error('Original B2 initial event mismatch')
+ }
 }
 export function committedTaskInitial(capability:CommittedTaskChildBirth):{inputId:string;outcome:ProducerFactOutcome;start:Birth['start']}{const birth=originalTaskChildBirth(capability);verifyTaskChildBirth(birth);return {inputId:birth.receipt.initial!.inputId,outcome:{kind:'committed',receipt:birth.receipt.completion,seqs:[birth.receipt.initial!.seq]},start:birth.start}}

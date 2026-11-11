@@ -169,6 +169,21 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     const io=entry.captureIO
     if(io&&!io.settled){await backend.settleBootstrapCaptureIO!((entry.bootstrap?.invocation??entry.selected!.route.request.invocation).targetSessionId,io.held);io.settled=true}
   }
+  /** Closing owns reconciliation of this already-issued bootstrap frame too.
+   * It must not capture another fact or require the retired source guard. */
+  async function settlePendingFacts(entry: ManagedEntry): Promise<void> {
+    const birth = entry.bootstrap
+    const pending = birth?.pending
+    if (!birth || !pending) return
+    const key = 'key' in pending ? pending.key : 'receipt' in pending ? pending.receipt.key : undefined
+    if (!key || !entry.document) throw new FactRecoveryRequiredError()
+    const outcome = await entry.document.reconcile(key)
+    if (outcome.kind !== 'committed' && outcome.kind !== 'absent') {
+      throw Object.assign(new FactRecoveryRequiredError(), { outcome })
+    }
+    if (entry.bootstrap !== birth || birth.pending !== pending) throw new FactRecoveryRequiredError()
+    birth.pending = undefined
+  }
   function reconcileHeader(entry: ManagedEntry, held: HeldFactOwner, operation: BootstrapHeaderOperation) {
     // Only an entered native callback can create capture IO. A barrier may
     // reject its precondition before this callback is reached.
@@ -954,7 +969,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
   return {
     originalColdBootstrap,
     assertColdInspectionAdmission,prepareSelectedCapture,captureSelected,inspectSelected,inspectColdSelected,coldSelectedRoute,useColdSelected,publishSelected,releaseSelected,reconcileSelected,
-    captureSupported, childSupported, assertOutsideCapture, captureSelfConflict, closeCaptureAdmission, settleCapture, releaseCapture, trackBootstrapInvocation: trackBootstrap,
+    captureSupported, childSupported, assertOutsideCapture, captureSelfConflict, closeCaptureAdmission, settleCapture, settlePendingFacts, releaseCapture, trackBootstrapInvocation: trackBootstrap,
     inspectBootstrapCapture:(input:BootstrapCaptureRequest)=>inspectCapture({protocol:'public',request:captureBootstrapCaptureRequest(input)}) as Promise<BootstrapCaptureInspection>,
     inspectChildBootstrapCapture:(input:ChildBootstrapCaptureRequest)=>inspectCapture({protocol:'child-v1',request:captureChildBootstrapCaptureRequest(input)}) as Promise<ChildBootstrapCaptureInspection>,
     bootstrapSemanticTargetWithCapture:(input:BootstrapCaptureRequest,guards:BootstrapGuards,capture:()=>Promise<BootstrapRequest>)=>captureTarget({protocol:'public',request:input},guards,capture),

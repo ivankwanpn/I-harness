@@ -1,3 +1,4 @@
+import type { CapturedHostChildInput } from './host-birth.ts'
 import { createToolRegistryWithModelOrigin } from '@i-harness/core-tools/model-origin'
 import { createAgentModelOriginOwner } from '@i-harness/core-agent/model-origin'
 import { isNondurableSession } from '@i-harness/core-session'
@@ -22,7 +23,13 @@ export async function assembleChild(
   sharedGeneration?: object,
   instruction?: import('./instruction-context.ts').ChildInstructionContext,
   retainRuntime?: (mount: import('@i-harness/code-mode').CodeModeMount) => void,
+  captured?: CapturedHostChildInput,
 ) {
+  const role = captured ? captured.data.role : opts.role
+  const timeoutMs = captured ? captured.data.modelActionTimeoutMs : opts.modelActionTimeoutMs
+  const maxAttempts = captured ? captured.data.modelActionMaxAttempts : opts.modelActionMaxAttempts
+  const factory = captured ? captured.generationFactory : opts.generationFactoryFor
+  const coordinator = captured ? captured.coordinator : opts.childSessions?.coordinator
   // child registry: register the role's allowed tools (resolved from the parent).
   // A declared tool the host does not mount is reported, never dropped silently.
   const modelOrigins = !sharedGeneration && !isNondurableSession(childSession) ? createAgentModelOriginOwner({view:childSession,factOwner}) : undefined
@@ -33,8 +40,8 @@ export async function assembleChild(
   // context). Without it, resolveRoleTools falls back to the legacy inherited
   // tools, whose parent-bound direct entry cannot run in a child context.
   if (opts.childShellFactory) await opts.childShellFactory({ ctx: childCtx, tools: childReg, session: childSession, factOwner, ...(sessionId !== undefined ? { sessionId } : {}) })
-  resolveRoleTools(opts.role.name, opts.role.tools, opts.parentRegistry, childReg)
-  const codeModeMount = opts.role.tools.length === 0 ? undefined : opts.codeModeFactory?.(childCtx, childReg, {
+  resolveRoleTools(role.name, role.tools, opts.parentRegistry, childReg)
+  const codeModeMount = role.tools.length === 0 ? undefined : opts.codeModeFactory?.(childCtx, childReg, {
     session: childSession, factOwner, sessionId, config: opts.codeMode,
   })
   // The initial setup owns original cleanup before ready can await or fail.
@@ -44,7 +51,7 @@ export async function assembleChild(
 
   // M73: the prompt is composed ONCE — the agent gets it, and the overhead
   // estimate below prices it.
-  const childPrompt = composeSubagentPrompt(opts.role.systemPrompt, { path: childPath, role: opts.role.name, tools: modelToolSchemas().map(tool => tool.name) })
+  const childPrompt = composeSubagentPrompt(role.systemPrompt, { path: childPath, role: role.name, tools: modelToolSchemas().map(tool => tool.name) })
   const systemPrompt = opts.inheritedSystemContext ? () => {
     const inherited = opts.inheritedSystemContext!(childSession)
     return inherited ? `${childPrompt}\n\n${inherited}` : childPrompt
@@ -62,12 +69,12 @@ export async function assembleChild(
   const controller = suppliedController ?? new AbortController()
   const agent = createAgent(childCtx, {
       modelCallOrigin,
-    ...(sharedGeneration ? { sharedGeneration } : sessionId && opts.generationFactoryFor ? { generationFactory: opts.generationFactoryFor(factOwner, sessionId, () => model) } : {}),
-    modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
+    ...(sharedGeneration ? { sharedGeneration } : sessionId && factory ? { generationFactory: factory.call(captured?.receiver ?? opts, factOwner, sessionId, () => model) } : {}),
+    modelActionTimeoutMs: timeoutMs, modelActionMaxAttempts: maxAttempts,
     summaryFactory: opts.summaryFactory,
     ...(inheritedBindingForStep ? { bindingForStep: inheritedBindingForStep } : {}),
     isSubagent: true,
-    ...(opts.childSessions && sessionId ? { ensureWritableContext: ownedContextReadiness(opts.childSessions.coordinator, sessionId, childSession) } : {}),
+    ...(coordinator && sessionId ? { ensureWritableContext: ownedContextReadiness(coordinator, sessionId, childSession) } : {}),
     ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
     session: childSession,
     factOwner,

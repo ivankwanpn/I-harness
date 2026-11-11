@@ -83,7 +83,7 @@ export function createLegacyReadVisibility(view: SessionView): LegacyReadVisibil
 }
 
 /** Shares B1's boundary, branch and closed-group selection without rendering. */
-export function createLegacyRetentionSelection(view: SessionView, selection: Extract<SeedSelection, { kind: 'completed' }>) {
+export function createLegacyRetentionSelection(view: SessionView, selection: Exclude<SeedSelection, { kind: 'none' }>) {
   const selected = selectSeedHistory(view, selection), boundary = resolveSeedBoundary(view, selection)
   if (selected.kind === 'refused') return selected
   if (boundary.kind === 'refused') return boundary
@@ -103,7 +103,16 @@ export function createLegacyRetentionSelection(view: SessionView, selection: Ext
       if (event.type === 'turn/start') priorTurn = turns.extents.get(index)!
       if (event.type !== 'context/result-ref' || !visibility.content(facts[index]!) || boundary.kind !== 'resolved' || boundary.boundary.localCutSeq !== undefined && event.seq! >= boundary.boundary.localCutSeq) continue
       const extent = priorTurn
-      if (extent.kind === 'framed' && extent.last > chosen.turns.total) continue
+      if (selection.kind === 'last-turns') {
+        // Reuse the semantic selector's original-to-child extent mapping. Refs
+        // outside the chosen suffix need no transfer and no guessed anchor.
+        const rebased = chosen.rebase(extent)
+        if (rebased.kind === 'unframed' && !chosen.turns.unframedPrefix) continue
+        if (rebased.kind === 'framed') {
+          if (rebased.last < 1 || rebased.first > chosen.turns.total) continue
+          if (rebased.first < 1 || rebased.last > chosen.turns.total) throw new TypeError('legacy-anchor-unsupported')
+        }
+      } else if (extent.kind === 'framed' && extent.last > chosen.turns.total) continue
       const anchor = anchorFor(extent, event.ref.callId)
       if (!anchor) throw new TypeError('legacy-anchor-unsupported')
       yield { ref: event.ref as Ref, original: { seq: event.seq!, part: 'context/result-ref.ref' }, extent: chosen.rebase(extent), anchor }
@@ -115,8 +124,20 @@ export function createLegacyRetentionSelection(view: SessionView, selection: Ext
   for (const chunk of streamJsonData(selected.turns, { lexical: true, dataOnly: true })) hash.update(chunk)
   return { kind: 'selected' as const, turnDomainDigest: hash.digest('hex'), totalTurns: selected.turns.total, unframedPrefix: selected.turns.unframedPrefix, local,
     inherited(extent: TurnExtent, anchor: Anchor) {
-      if (extent.kind === 'framed' && extent.first > selected.turns.total) return { kind: 'omitted' as const }
-      if (extent.kind === 'framed' && extent.last > selected.turns.total) return { kind: 'refused' as const, reason: 'legacy-anchor-unsupported' as const }
+      if (selection.kind === 'last-turns') {
+        if (extent.kind === 'framed' && (!Number.isSafeInteger(extent.first) || !Number.isSafeInteger(extent.last) || extent.first < 1 || extent.last < extent.first)) {
+          return { kind: 'refused' as const, reason: 'legacy-anchor-unsupported' as const }
+        }
+        const rebased = selected.rebase(extent)
+        if (rebased.kind === 'unframed' && !selected.turns.unframedPrefix) return { kind: 'omitted' as const }
+        if (rebased.kind === 'framed') {
+          if (rebased.last < 1 || rebased.first > selected.turns.total) return { kind: 'omitted' as const }
+          if (rebased.first < 1 || rebased.last > selected.turns.total) return { kind: 'refused' as const, reason: 'legacy-anchor-unsupported' as const }
+        }
+      } else {
+        if (extent.kind === 'framed' && extent.first > selected.turns.total) return { kind: 'omitted' as const }
+        if (extent.kind === 'framed' && extent.last > selected.turns.total) return { kind: 'refused' as const, reason: 'legacy-anchor-unsupported' as const }
+      }
       if (anchor.kind === 'seed-group') {
         const event = view.events.find(event => event.type === 'conversation/seed-group' && event.ordinal === anchor.ordinal)
         if (!event || !visibility.content(facts[view.events.indexOf(event)]!)) return { kind: 'omitted' as const }

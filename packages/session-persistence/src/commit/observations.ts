@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { CommitLogNotFoundError } from '@i-harness/session-commit-log'
-import { canonicalJsonData } from '@i-harness/core-session'
+import { canonicalJsonData, freezeJsonData } from '@i-harness/core-session'
 import {
   SessionBindingObservationError,
   type ExistingSessionBindingObservation,
@@ -26,8 +26,8 @@ const bindingKey = (id: string) => `desktop-session-project-${createHash('sha256
 const MAX_IDS = 64
 const ID = /^[^\\/\u0000-\u001f\u007f]{1,256}$/
 
-function captureIds(value: unknown): string[] {
-  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_IDS) throw new SessionBindingObservationError('invalid')
+function captureIds(value: unknown, allowEmpty = false): string[] {
+  if (!Array.isArray(value) || !allowEmpty && value.length < 1 || value.length > MAX_IDS) throw new SessionBindingObservationError('invalid')
   const ids = value.map(id => {
     if (typeof id !== 'string' || !ID.test(id)) throw new SessionBindingObservationError('invalid')
     return id
@@ -36,7 +36,13 @@ function captureIds(value: unknown): string[] {
   return [...ids].sort()
 }
 
-type Observed = { readonly meta: SessionMeta; readonly binding: ObservedDocument }
+type Observed = { readonly meta: SessionMeta; readonly binding: ObservedDocument; readonly fingerprint: string }
+
+function ownSnapshot<T>(value: T): T {
+  const captured = JSON.parse(canonicalJsonData(value)) as T
+  freezeJsonData(captured)
+  return captured
+}
 
 export type CommitObservations = {
   withExistingSessionBindingObservation<T>(request: ExistingSessionBindingObservationRequest, run: (observation: ExistingSessionBindingObservation) => Promise<T>): Promise<T>
@@ -46,22 +52,22 @@ export type CommitObservations = {
 export function createCommitObservations(ports: CommitObservationPorts): CommitObservations {
   const readBinding = async (id: string): Promise<ObservedDocument> => {
     const value = await ports.getDocument(bindingKey(id))
-    return value === undefined ? { kind: 'absent' } : { kind: 'present', value }
+    return value === undefined ? Object.freeze({ kind: 'absent' }) : Object.freeze({ kind: 'present', value: ownSnapshot(value) })
   }
   const readOne = async (id: string, signal?: AbortSignal): Promise<Observed> => {
     if (signal?.aborted) throw new SessionBindingObservationError('revoked')
     let meta: SessionMeta
     try { ({ meta } = await ports.profile(id)) } catch (error) { if (error instanceof CommitLogNotFoundError) throw new SessionBindingObservationError('unavailable'); throw error }
     if (meta.sessionId !== id || meta.archived === true) throw new SessionBindingObservationError('unavailable')
+    const capturedMeta = ownSnapshot(meta)
     const binding = await readBinding(id)
     if (signal?.aborted) throw new SessionBindingObservationError('revoked')
-    return { meta, binding }
+    return Object.freeze({ meta: capturedMeta, binding, fingerprint: canonicalJsonData({ meta: capturedMeta, binding }) })
   }
-  const fingerprint = (state: Observed) => canonicalJsonData({ meta: state.meta, binding: state.binding })
 
   const observe = <T>(
     states: Map<string, Observed>,
-    target: { id: string; binding: ObservedDocument } | undefined,
+    target: { id: string; binding: ObservedDocument; fingerprint: string } | undefined,
     signal: AbortSignal | undefined,
     run: (observation: { assertCurrent(): void; metadata(id: string): Readonly<SessionMeta>; binding(id: string): ObservedDocument }) => Promise<T>,
   ): Promise<T> => {
@@ -87,16 +93,17 @@ export function createCommitObservations(ports: CommitObservationPorts): CommitO
       },
     })
     return (async () => {
-      const result = await run(observation)
-      released = true
+      let result: T
+      try { result = await run(observation) }
+      finally { released = true }
       if (signal?.aborted) throw new SessionBindingObservationError('revoked')
       for (const [id, before] of states) {
         const after = await readOne(id, signal)
-        if (fingerprint(after) !== fingerprint(before)) throw new SessionBindingObservationError('conflict')
+        if (after.fingerprint !== before.fingerprint) throw new SessionBindingObservationError('conflict')
       }
       if (target) {
         const after = await readBinding(target.id)
-        if (canonicalJsonData(after) !== canonicalJsonData(target.binding)) throw new SessionBindingObservationError('conflict')
+        if (canonicalJsonData(after) !== target.fingerprint) throw new SessionBindingObservationError('conflict')
       }
       return result
     })()
@@ -110,13 +117,13 @@ export function createCommitObservations(ports: CommitObservationPorts): CommitO
       return observe(states, undefined, request.signal, run)
     },
     async withSessionBindingObservation(request, run) {
-      const existing = captureIds(request?.existingSessionIds)
+      const existing = captureIds(request?.existingSessionIds, true)
       const target = request?.target?.targetSessionId
       if (typeof target !== 'string' || !ID.test(target)) throw new SessionBindingObservationError('invalid')
       const states = new Map<string, Observed>()
       for (const id of existing) states.set(id, await readOne(id, request.signal))
       const binding = await readBinding(target)
-      return observe(states, { id: target, binding }, request.signal, run)
+      return observe(states, { id: target, binding, fingerprint: canonicalJsonData(binding) }, request.signal, run)
     },
   }
 }

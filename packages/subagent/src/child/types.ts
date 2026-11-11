@@ -50,8 +50,7 @@ export interface SpawnOptions extends RoleModelHost {
   agents: AgentRegistry
   forkTurns?: "none" | "all" | number
   // M8: when present, the child session is durable — minted as child-<uuid>,
-  // created through the coordinator with the lineage header, and mirrored to
-  // the parent's write-behind coordinator.
+  // atomically created with inherited observations and initial input.
   childSessions?: { coordinator: SessionCoordinator; parentSessionId: string; origin?: "approval-review" }
   // M26-D1: settle callback — fires once when the initial run settles (the
   // task protocol's spawn record transitions on it). Additive: absent = today.

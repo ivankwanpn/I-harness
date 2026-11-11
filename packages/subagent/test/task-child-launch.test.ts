@@ -8,7 +8,7 @@ const instructionCut=vi.hoisted(()=>({armed:false,created:0,closed:0}))
 vi.mock('../../runtime-context/src/index.ts',async original=>{const real=await original<typeof import('../../runtime-context/src/index.ts')>();return {...real,createRuntimeContext(...args:Parameters<typeof real.createRuntimeContext>){const runtime=real.createRuntimeContext(...args),counted=instructionCut.armed;if(counted)instructionCut.created++;return {...runtime,registerSection(...args:Parameters<typeof runtime.registerSection>){const result=runtime.registerSection(...args);if(instructionCut.armed){instructionCut.armed=false;throw undefined}return result},async close(){await runtime.close();if(counted)instructionCut.closed++}}}}})
 vi.mock('../../fs-lock/src/index.ts',async original=>{const real=await original<typeof import('../../fs-lock/src/index.ts')>();return {...real,async acquireSessionLock(options:import('../../fs-lock/src/index.ts').AcquireOptions){const lock=await real.acquireSessionLock(options);return {get held(){return lock.held},async release(){if(options.lockPath===scopeCut.path){scopeCut.entered?.();await scopeCut.gate;if(scopeCut.armed){scopeCut.attempts++;throw scopeCut.cause}}await lock.release()}}}}})
 import {mkdtemp,rm} from 'node:fs/promises'
-import {join} from 'node:path'
+import {join,relative,isAbsolute,sep} from 'node:path'
 import {createContext} from '@i-harness/core-plugin'
 import {createToolRegistry} from '@i-harness/core-tools'
 import {committedFactSeqs} from '@i-harness/core-session'
@@ -37,11 +37,21 @@ import {createProjectInstructionEnvironment} from '../../session-executor/src/co
 import {receivedInputsFor} from '../../session-executor/src/lifecycle/received-inputs.ts'
 import {inspectTaskChildHistory} from '../src/child/task-history.ts'
 import {recordFixture} from '../../session-executor/test/helpers.ts'
+// Real native Task birth took 23.5–26.9s in quiet completed runs. Keep the
+// operation bound local and reserve a separate finite window to join cleanup.
+const operationTimeoutMs=45_000
+const ownerCleanupTimeoutMs=15_000
 const diagnostic=(value:unknown):unknown=>value instanceof Error?{message:value.message,stack:value.stack,cause:diagnostic(value.cause),...(value instanceof AggregateError?{errors:value.errors.map(diagnostic)}:{})}:value
 it.each(['n2','n1','n1-string','n1-stale','n1-stop','n-zero','n-negative','n-overflow','all','all-stale','all-stop','all-commitment','declared','inherit','code','replay-cap','b2-lost-header','missing-host','managed-parent','foreign-host','stop-ack','expiry-ack','binding-unknown','stop-ready','stop-resolver','instruction-falsey','ready-held','publication-stop','scope-close','scope-parent-revoked'] as const)('original ordinary-none connected child: %s',async mode=>{
+ const fixtureController=new AbortController()
+ const deadline=Promise.withResolvers<never>()
+ void deadline.promise.catch(()=>{})
+ const providerFailure=Promise.withResolvers<never>()
+ void providerFailure.promise.catch(()=>{})
+
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'task-child-')),coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
  const wire=`data: ${JSON.stringify({choices:[{delta:{content:'child done'},finish_reason:'stop'}],usage:{prompt_tokens:5,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
- const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{expect(mounted!.tasks.get('task-1')!.status).toBe('running');response.end(wire)}]),parentModel=mode==='inherit'?createOpenAICompatibleClient({apiKey:'loopback',model:'parent-route',baseUrl:server.baseUrl}):createMockClient([]),parentStream=vi.spyOn(parentModel,'stream')
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{try{expect(mounted!.tasks.get('task-1')!.status).toBe('running');response.end(wire);}catch(error){providerFailure.reject(error);throw error}}]),parentModel=mode==='inherit'?createOpenAICompatibleClient({apiKey:'loopback',model:'parent-route',baseUrl:server.baseUrl}):createMockClient([]),parentStream=vi.spyOn(parentModel,'stream')
  const sourceSpy=vi.spyOn(spawnSources,'createSpawnSource'),readyGate=Promise.withResolvers<void>(),readyEntered=Promise.withResolvers<void>()
  const childStartSpy=vi.spyOn(childStarts,'spawnChild')
  let serializationSpy:{mockRestore():void}|undefined
@@ -57,9 +67,25 @@ it.each(['n2','n1','n1-string','n1-stale','n1-stop','n-zero','n-negative','n-ove
  const environment=createProjectInstructionEnvironment()
  let manager:ReturnType<typeof createMainInstructionManager>|undefined,instructions:ReturnType<typeof createChildInstructionHost>|undefined
  const foreign=mode==='foreign-host'?createJsonlTaskTransitionCoordinator(join(root,'foreign'),{lock:{enabled:true}},taskDocumentStorageContract):undefined
+ const flights:Promise<unknown>[]=[]
+ let closeSource:(()=>Promise<void>)|undefined
+ let parentContext:ReturnType<typeof createContext>|undefined
+ let primary:{cause:unknown}|undefined
+ let forcedDispose:Promise<void>|undefined
  let mounted:ReturnType<typeof registerSubagent>|undefined,action:ReturnType<Awaited<ReturnType<typeof coordinator.openManagedDocument>>['beginAction']>|undefined
+ const watchdog=setTimeout(()=>{
+  const error=new Error('Original Task fixture exceeded its owned operation budget')
+  fixtureController.abort(error)
+  action?.stop()
+  instructionCut.armed=false;scopeCut.armed=false;fileCut.headerCut=false;readyGate.resolve()
+  forcedDispose=mounted?.dispose()
+  void forcedDispose?.catch(()=>{})
+  deadline.reject(error)
+ },operationTimeoutMs)
  try{
-  await coordinator.create({sessionId:'parent'});const document=await coordinator.openManagedDocument('parent'),ctx=createContext(),registry=createToolRegistry(ctx,{executionOwner:{view:document.view,factOwner:document,context:ctx,sessionId:'parent'}})
+  fixtureController.signal.throwIfAborted()
+  await coordinator.create({sessionId:'parent'});const document=await coordinator.openManagedDocument('parent'),ctx=parentContext=createContext(),registry=createToolRegistry(ctx,{executionOwner:{view:document.view,factOwner:document,context:ctx,sessionId:'parent'}})
+
   if(mode==='n2'){
    await recordFixture(document,{type:'turn/start'});await recordFixture(document,{type:'user/message',text:'prior input'})
    await recordFixture(document,{type:'step/start'});await recordFixture(document,{type:'assistant/message',text:'prior answer',thinkingBlocks:[{type:'thinking',thinking:'prior reasoning',signature:'original-signature'}]})
@@ -78,23 +104,26 @@ it.each(['n2','n1','n1-string','n1-stale','n1-stop','n-zero','n-negative','n-ove
   mounted=registerSubagent(ctx,registry,{parentSession:document.view,factOwner:document,parentModel,exec:registerExec(ctx),resolveModel,allowSubagentModelSelection:true,reportPolicy:SHIPPING_REPORT_POLICY,results:createTaskResultRetention(undefined,undefined,'parent'),createInstructionContext:instruction,
    generationFactoryFor:(owner,id,selected)=>(owned,dependencies)=>createGenerationLifecycle(owner.view,id,owned,{enabled:false,selectedClient:selected},dependencies),
    ...(mode==='missing-host'?{}:{prepareTaskChild:async input=>{if(input.history){expect(()=>inspectTaskChildHistory({...input.history,kind:'original-task-child-history'},'parent')).toThrow();const captured=inspectTaskChildHistory(input.history,'parent');expect(captured.history.selection).toEqual(mode==='n2'?{kind:'last-turns',count:2}:mode.startsWith('n1')?{kind:'last-turns',count:1}:{kind:'all'});if(mode==='n2')inheritedSeed=captured.seed;expect(()=>{(captured.seed.records as unknown[]).push({})}).toThrow()}if(mode==='all'&&!serializationSpy){const stringify=coreSession.canonicalJsonData;serializationSpy=vi.spyOn(coreSession,'canonicalJsonData').mockImplementation(value=>{if(Array.isArray(value)&&value[0]===document.view.events[0])throw Error('Postcapture parent payload serialization');return stringify(value)})}if(['all-stale','all-stop','n1-stale','n1-stop'].includes(mode)){readyEntered.resolve();await readyGate.promise;input.assertCurrent()}return createUnmanagedTaskChildHost({coordinator:foreign??coordinator,policy:'unmanaged'})(input)}}),
-   persist:{coordinator,stateId:'parent',parentSessionId:'parent'}});await mounted.ready
+   persist:{coordinator,stateId:'parent',parentSessionId:'parent'}});await mounted.ready;
   mounted.roles.register({name:'small',description:'small',systemPrompt:'s',tools:[],...(mode==='inherit'?{}:{model:{provider:'fixture',model:'declared-child'}})})
   if(mode==='managed-parent')await coordinator.putDocument('desktop-session-project-'+createHash('sha256').update('parent').digest('hex'),{version:1,projectId:'foreign-project'})
   if(mode==='publication-stop'){const add=mounted.table.add.bind(mounted.table);vi.spyOn(mounted.table,'add').mockImplementation((...args)=>{add(...args);action!.stop()})}
   await receivedInputsFor(document,'parent').inbox.admit({inputId:'human',text:'parent work',intent:'user',delivery:'queue',provenance:{kind:'human',authority:'request',scope:'turn',producer:'session.prompt'}})
-  action=document.beginAction()
+  fixtureController.signal.throwIfAborted()
+  action=document.beginAction(fixtureController.signal)
   if(mode==='n2')committedFactSeqs(await action.facts.inputs.start({type:'agent/input/promoted',version:1,inputId:'human'},{type:'user/message',text:'parent work',input:{inputId:'human',intent:'user'},provenance:{kind:'human',authority:'request',scope:'turn',producer:'session.prompt'}}))
-  const source=action.registerSettlementSource(async()=>{}),args={message:'child work',task_name:'one',agent_type:'small',background:false,...(mode.startsWith('all')?{fork_turns:'all' as const}:mode==='n2'?{fork_turns:2}:mode==='n1-string'?{fork_turns:'1'}:mode.startsWith('n1')?{fork_turns:1}:mode==='n-zero'?{fork_turns:0}:mode==='n-negative'?{fork_turns:-1}:mode==='n-overflow'?{fork_turns:Number.MAX_SAFE_INTEGER+1}:{})},[seq]=committedFactSeqs(await action.facts.tools.call({type:'tool/call',callId:'call',name:'spawn_agent',args}));committedFactSeqs(await action.facts.tools.dispatch('call',{kind:'prior',seq:seq!,expectedType:'tool/call'}))
+  const source=action.registerSettlementSource(async()=>{});closeSource=source.close.bind(source);const args={message:'child work',task_name:'one',agent_type:'small',background:false,...(mode.startsWith('all')?{fork_turns:'all' as const}:mode==='n2'?{fork_turns:2}:mode==='n1-string'?{fork_turns:'1'}:mode.startsWith('n1')?{fork_turns:1}:mode==='n-zero'?{fork_turns:0}:mode==='n-negative'?{fork_turns:-1}:mode==='n-overflow'?{fork_turns:Number.MAX_SAFE_INTEGER+1}:{})},[seq]=committedFactSeqs(await action.facts.tools.call({type:'tool/call',callId:'call',name:'spawn_agent',args}));committedFactSeqs(await action.facts.tools.dispatch('call',{kind:'prior',seq:seq!,expectedType:'tool/call'}))
   const prepare=()=>registry.prepare({name:'spawn_agent',args},action!.signal,{session:document.view,sessionId:'parent',callId:'call',callEventSeq:seq!,settlementSource:source,...mode==='code'?{resultConsumer:'code' as const}:{}})
-  const first=registry.dispatch(await prepare()),duplicate=registry.dispatch(await prepare())
-  void first.catch(()=>{});void duplicate.catch(()=>{})
+
+  const first=registry.dispatch(await prepare());void first.catch(()=>{});flights.push(first)
+  const duplicate=registry.dispatch(await prepare());void duplicate.catch(()=>{});flights.push(duplicate)
+
   if(['n-zero','n-negative','n-overflow'].includes(mode)){
-   const results=await Promise.allSettled([first,duplicate]);expect(results.every(result=>result.status==='rejected')).toBe(true)
+   const results=await Promise.race([Promise.allSettled([first,duplicate]),deadline.promise]);expect(results.every(result=>result.status==='rejected')).toBe(true)
    expect(mounted.tasks.list()).toHaveLength(0);expect(sourceSpy).not.toHaveBeenCalled();expect(birthSpy).not.toHaveBeenCalled();expect(server.requests).toHaveLength(0);await source.close();return
   }
-  if(['all-stale','all-stop','n1-stale','n1-stop'].includes(mode)){await readyEntered.promise;if(mode.endsWith('stop'))action!.stop();else document.revokeNewWork();readyGate.resolve()}
-  if(mode==='ready-held'){await readyEntered.promise;expect(originalReady?.kind).toBe('ready');expect(server.requests).toHaveLength(0);expect(instruction).not.toHaveBeenCalled();expect(resolveModel).not.toHaveBeenCalled();expect(mounted.table.entries().size).toBe(0);readyGate.resolve()}
+  if(['all-stale','all-stop','n1-stale','n1-stop'].includes(mode)){await Promise.race([readyEntered.promise,providerFailure.promise,deadline.promise,Promise.all([first,duplicate]).then(()=>{throw Error('Original launch ended before its held readiness cut')})]);if(mode.endsWith('stop'))action!.stop();else document.revokeNewWork();readyGate.resolve()}
+  if(mode==='ready-held'){await Promise.race([readyEntered.promise,providerFailure.promise,Promise.all([first,duplicate]).then(()=>{throw Error('Original launch ended before held birth')})]);expect(originalReady?.kind).toBe('ready');expect(server.requests).toHaveLength(0);expect(instruction).not.toHaveBeenCalled();expect(resolveModel).not.toHaveBeenCalled();expect(mounted.table.entries().size).toBe(0);readyGate.resolve()}
   if(['n1-stale','n1-stop','all-stale','all-stop','all-commitment','missing-host','managed-parent','foreign-host','stop-ack','expiry-ack','binding-unknown','stop-ready','stop-resolver','instruction-falsey','publication-stop','scope-close','scope-parent-revoked'].includes(mode)){
    const results=await Promise.allSettled([first,duplicate]);expect(results.every(result=>result.status==='rejected')).toBe(true)
    expect(server.requests).toHaveLength(0);expect(parentStream).not.toHaveBeenCalled()
@@ -111,7 +140,7 @@ it.each(['n2','n1','n1-string','n1-stale','n1-stop','n-zero','n-negative','n-ove
    if(mode==='scope-parent-revoked'){expect(originalReady?.kind).toBe('ready');expect(terminalSaves).toHaveLength(1);const original=terminalSaves[0]!;expect(original.outcome()?.kind).not.toBe('committed');scopeCut.armed=false;document.revokeNewWork();await mounted.dispose();expect(terminalSaves).toEqual([original]);expect(original.outcome()?.kind).toBe('committed');await expect(mounted.tasks.save()).rejects.toThrow();expect(server.requests).toHaveLength(0);expect(birthSpy).toHaveBeenCalledTimes(1);await source.close();return}
    await source.close();return
   }
-  const results=await Promise.all([first,duplicate]);expect(results[0]).toEqual(results[1]);expect(results[0]).toMatchObject({task_id:'task-1',status:'completed'})
+  const results=await Promise.race([Promise.all([first,duplicate]),providerFailure.promise,deadline.promise]);expect(results[0]).toEqual(results[1]);expect(results[0]).toMatchObject({task_id:'task-1',status:'completed'})
   const task=mounted.tasks.get('task-1')!;expect(task.childBirth).toBeDefined();expect(task.childSessionId).toBe(task.childBirth!.request.invocation.targetSessionId)
   if(mode==='b2-lost-header'){expect(fileCut.headerFaults).toBe(1);expect(resumeSpy).toHaveBeenCalledTimes(1);expect(resumedReady?.kind).toMatch(/ready/);expect((resumeSpy as unknown as {mock:{calls:unknown[][]}}).mock.calls[0]![0]).toEqual(task.childBirth!.request)}else expect(resumeSpy).not.toHaveBeenCalled()
   const child=mounted.table.get('root/one')!;expect(child.session.events.filter(event=>event.type==='agent/input/admitted')).toHaveLength(1);expect(child.session.events.filter(event=>event.type==='session/bootstrap')).toHaveLength(1)
@@ -135,6 +164,39 @@ it.each(['n2','n1','n1-string','n1-stale','n1-stop','n-zero','n-negative','n-ove
   expect(server.requests).toHaveLength(1);expect(server.requests[0]!.body.model).toBe(mode==='inherit'?'parent-route':'declared-child');expect(resolveModel).toHaveBeenCalledTimes(mode==='inherit'?0:1);expect(parentStream).not.toHaveBeenCalled();expect(server.errors).toEqual([]);expect(instruction).toHaveBeenCalledTimes(1);expect(sourceSpy).toHaveBeenCalledTimes(1);expect(birthSpy).toHaveBeenCalledTimes(1)
   expect(mounted.agents.entries().size).toBe(1);expect(mounted.table.entries().size).toBe(1);expect(mounted.jobs.listAll()).toHaveLength(1)
   await source.close()
- }catch(cause){console.error('Original task launch diagnostic',JSON.stringify(diagnostic(cause)));throw cause}
- finally{serializationSpy?.mockRestore();clockSpy?.mockRestore();instructionCut.armed=false;scopeCut.armed=false;fileCut.headerCut=false;readyGate.resolve();saveSpy.mockRestore();captureSpy.mockRestore();birthSpy?.mockRestore();resumeSpy?.mockRestore();childStartSpy.mockRestore();sourceSpy.mockRestore();action?.finish();nativeTaskWrites.path='';try{await mounted?.dispose()}catch(cause){console.error('Original task cleanup diagnostic',JSON.stringify(diagnostic(cause)));throw cause}finally{await instructions?.close();await manager?.close();await environment.close();await coordinator.close();await foreign?.close();await server.close();await rm(root,{recursive:true,force:true})}}
-},20_000)
+ }catch(cause){primary={cause};console.error('Original task launch diagnostic',JSON.stringify(diagnostic(cause)));throw cause}
+ finally {
+  if(watchdog)clearTimeout(watchdog)
+  const errors:unknown[]=[]
+
+  if(primary)try{action?.stop()}catch(error){errors.push(error)}
+  instructionCut.armed=false;scopeCut.armed=false;fileCut.headerCut=false;readyGate.resolve()
+  try {
+   try{await (forcedDispose??mounted?.dispose())}catch(error){errors.push(error)}
+   await Promise.allSettled(flights)
+
+   try{await closeSource?.()}catch(error){errors.push(error)}
+   try{action?.finish()}catch(error){errors.push(error)}
+   try{await instructions?.close()}catch(error){errors.push(error)}
+   try{await manager?.close()}catch(error){errors.push(error)}
+   try{await environment.close()}catch(error){errors.push(error)}
+   try{await parentContext?.scope.unmount()}catch(error){errors.push(error)}
+   try{await coordinator.close()}catch(error){errors.push(error)}
+   try{await foreign?.close()}catch(error){errors.push(error)}
+   try{await server.close()}catch(error){errors.push(error)}
+   if(!primary&&!errors.length){
+    const suffix=relative(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,root)
+    if(!suffix||isAbsolute(suffix)||suffix==='..'||suffix.startsWith('..'+sep))throw Error('Unsafe Task fixture cleanup target')
+    await rm(root,{recursive:true,force:true})
+   }
+  } finally {
+   // Restore module/prototype observers only after their original operations
+   // and cleanup are joined; a failed case must not count another case's work.
+   serializationSpy?.mockRestore();clockSpy?.mockRestore();saveSpy.mockRestore();captureSpy.mockRestore()
+   birthSpy?.mockRestore();resumeSpy?.mockRestore();childStartSpy.mockRestore();sourceSpy.mockRestore()
+   nativeTaskWrites.path=''
+  }
+
+  if(errors.length)throw new AggregateError([...(primary?[primary.cause]:[]),...errors],'Original Task launch and cleanup failed',{cause:primary?.cause})
+ }
+},operationTimeoutMs+ownerCleanupTimeoutMs)
