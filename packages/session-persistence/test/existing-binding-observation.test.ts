@@ -108,6 +108,14 @@ function hold(c: SessionCoordinator, ids = ['source']) {
   const outcome = running.then(value => value, error => error)
   return { entered: entered.promise, leave: leave.resolve, outcome }
 }
+async function joinOriginalFixtureWork(primary: { error: unknown } | undefined, work: (Promise<unknown> | undefined)[]) {
+  const results = await Promise.allSettled(work)
+  const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+  if (!failures.length) return
+  const errors = [...new Set([...(primary ? [primary.error] : []), ...failures])]
+  if (errors.length === 1) throw errors[0]
+  throw new AggregateError(errors, 'Original observation assertion and cleanup failed')
+}
 
 it('E00 exposes the real optional owner only under the original supported capability gate', async () => {
   const { backend, c } = await fixture()
@@ -274,21 +282,35 @@ it.each(['releaseOwnership', 'closeManagedDocument'] as const)('E07 %s retires i
 it.each([['abort', 1], ['abort', 2], ['abort', 3], ['abort', 4], ['abort', 5], ['abort', 6], ['abort', 7], ['abort', 8], ['close', 1], ['close', 2], ['close', 3], ['close', 4], ['close', 5], ['close', 6], ['close', 7], ['close', 8]] as const)('E08 %s at cold native acquisition %s joins late handle and releases every obtained lease', async (mode, cut) => {
   const { root, c } = await fixture(); await c.create({ sessionId: 'ancestor', createdAt }); await c.releaseOwnership('ancestor')
   const entered = Promise.withResolvers<void>(), leave = Promise.withResolvers<void>(), controller = new AbortController()
+  const acquiredPaths: string[] = [], releasedPaths: string[] = []
   let acquired = 0, released = 0, live = 0, callbacks = 0
   vi.mocked(acquireSessionLock).mockImplementation(async options => {
-    const raw = await nativeAcquire(options); acquired++; live++
+    const raw = await nativeAcquire(options); acquired++; live++; acquiredPaths.push(options.lockPath)
     if (acquired === cut) { entered.resolve(); await leave.promise }
-    return { get held() { return raw.held }, async release() { await raw.release(); released++; live-- } }
+    return { get held() { return raw.held }, async release() { await raw.release(); released++; live--; releasedPaths.push(options.lockPath) } }
   })
-  const running = c.withExistingSessionBindingObservation!({ sessionIds: ['source', 'ancestor'], signal: controller.signal }, async () => { callbacks++ })
-  const rejected = expect(running).rejects.toMatchObject({ reason: 'revoked' })
-  await entered.promise
-  let closed = false; const closing = mode === 'close' ? c.close().then(() => { closed = true }) : undefined
-  if (mode === 'abort') controller.abort()
-  try { await Promise.resolve(); expect(closed).toBe(false); expect(live).toBe(cut) }
-  finally { leave.resolve(); await rejected; await closing }
-  expect([callbacks, acquired, released, live, c.ownerOf('source'), c.ownerOf('ancestor')]).toEqual([0, 2 * Math.ceil(cut / 2), 2 * Math.ceil(cut / 2), 0, false, false])
-  if (mode === 'close') await expect(c.withExistingSessionBindingObservation!(request, async () => 0)).rejects.toMatchObject({ reason: 'revoked' })
+  const running = c.withExistingSessionBindingObservation!({ sessionIds: ['source', 'ancestor'], signal: controller.signal }, async observed => { callbacks++; observed.assertCurrent(); return 'accepted observation' })
+  const outcome = running.then(value => ({ kind: 'value' as const, value }), error => ({ kind: 'error' as const, error }))
+  let closed = false, closing: Promise<void> | undefined, primary: { error: unknown } | undefined
+  try {
+    await Promise.race([entered.promise, outcome.then(result => { throw result.kind === 'error' ? result.error : Error('Observation ended before its acquisition gate') })])
+    if (mode === 'close') {
+      closing = c.close().then(() => { closed = true })
+      await expect(c.withExistingSessionBindingObservation!(request, async () => 0)).rejects.toMatchObject({ code: 'FACT_CLOSED' })
+    } else controller.abort()
+    await Promise.resolve(); expect(closed).toBe(false); expect(live).toBe(cut)
+  } catch (error) { primary = { error }; throw error }
+  finally { leave.resolve(); await joinOriginalFixtureWork(primary, [outcome, closing]) }
+  if (mode === 'close') {
+    expect(await outcome).toEqual({ kind: 'value', value: 'accepted observation' })
+    const expected = [...['source', 'ancestor'].flatMap(id => sessionPaths(root, id)), ...['source', 'ancestor'].map(key).flatMap(id => documentPaths(root, id))].sort()
+    expect(acquiredPaths.toSorted()).toEqual(expected); expect(releasedPaths.toSorted()).toEqual(expected)
+    expect([callbacks, acquired, released, live, c.ownerOf('source'), c.ownerOf('ancestor')]).toEqual([1, expected.length, expected.length, 0, false, false])
+    await expect(c.withExistingSessionBindingObservation!(request, async () => 0)).rejects.toMatchObject({ code: 'FACT_CLOSED' })
+  } else {
+    expect(await outcome).toMatchObject({ kind: 'error', error: { reason: 'revoked' } })
+    expect([callbacks, acquired, released, live, c.ownerOf('source'), c.ownerOf('ancestor')]).toEqual([0, 2 * Math.ceil(cut / 2), 2 * Math.ceil(cut / 2), 0, false, false])
+  }
   const probe = await nativeAcquire({ lockPath: sessionPaths(root, 'source')[0]!, deadlineMs: 20 }); await probe.release()
   console.info(JSON.stringify({ control: 'E08 real native acquisition cut', mode, cut, acquired, released, live, callbacks }))
 })
@@ -307,11 +329,17 @@ it('E08 close during original disposal is single flight and callback result wait
   expect(await running).toBe('original'); await closing; expect(acquiredPaths).toEqual([...sessionPaths(root, 'source'), ...documentPaths(root, key('source'))]); expect(releasedPaths).toEqual([...documentPaths(root, key('source')).reverse(), ...sessionPaths(root, 'source').reverse()]); expect(releases).toBe(acquiredPaths.length)
 })
 
-it('E08 active close revokes immediately and joins original callback', async () => {
+it('E08 active close fences fresh calls and joins the still-current original callback', async () => {
   const { c } = await fixture(), held = hold(c), old = await held.entered
   const closing = c.close()
-  try { expect(() => old.assertCurrent()).toThrow(); expect(c.ownerOf('source')).toBe(true) } finally { held.leave(); await held.outcome; await closing }
-  expect(await held.outcome).toMatchObject({ reason: 'revoked' }); expect(c.ownerOf('source')).toBe(false)
+  let primary: { error: unknown } | undefined
+  try {
+    old.assertCurrent(); expect(c.ownerOf('source')).toBe(true)
+    await expect(c.withExistingSessionBindingObservation!(request, async () => 0)).rejects.toMatchObject({ code: 'FACT_CLOSED' })
+  } catch (error) { primary = { error }; throw error }
+  finally { held.leave(); await joinOriginalFixtureWork(primary, [held.outcome, closing]) }
+  expect(await held.outcome).toBe('old-result'); await closing
+  expect(() => old.assertCurrent()).toThrow(); expect(c.ownerOf('source')).toBe(false)
 })
 
 it.each([['addEventListener', 'accessor'], ['addEventListener', 'method'], ['removeEventListener', 'accessor'], ['removeEventListener', 'method'], ['aborted', 'accessor']] as const)('E08 branded signal ignores shadowed %s %s', async (property, kind) => {

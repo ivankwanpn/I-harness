@@ -93,6 +93,14 @@ async function fixture() {
   await coordinator.create({ sessionId: 'source' })
   return { root, backend, coordinator }
 }
+async function joinOriginalFixtureWork(primary: { error: unknown } | undefined, work: (Promise<unknown> | undefined)[]) {
+  const results = await Promise.allSettled(work)
+  const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+  if (!failures.length) return
+  const errors = [...new Set([...(primary ? [primary.error] : []), ...failures])]
+  if (errors.length === 1) throw errors[0]
+  throw new AggregateError(errors, 'Original observation assertion and cleanup failed')
+}
 it('pin release cannot retire a concurrent persistent adopter of its original slot', async () => {
   const root = await mkdtemp(join(tmpdir(), 'binding-claims-')); roots.push(root)
   const owner = createOwnership({ lockRoot: root }, { ...fast, lock: { enabled: true } })
@@ -175,18 +183,25 @@ it('rejects callback self-waits without revoking the otherwise current scope', a
     }
   })
 })
-it('close revokes synchronously, joins callback and permanently fences observation admission', async () => {
+it('close fences fresh admission while joining the still-current accepted callback', async () => {
   const { coordinator: c } = await fixture()
   const entered = Promise.withResolvers<SessionBindingObservation>(), leave = Promise.withResolvers<void>()
-  const running = c.withSessionBindingObservation!(request, async observed => { entered.resolve(observed); await leave.promise })
-  const rejected = expect(running).rejects.toMatchObject({ reason: 'revoked' })
-  const observed = await entered.promise
-  const closing = c.close()
+  const running = c.withSessionBindingObservation!(request, async observed => { entered.resolve(observed); await leave.promise; observed.assertCurrent(); return 'original callback' })
+  let closing: Promise<void> | undefined, closed = false, primary: { error: unknown } | undefined
+  let observed!: SessionBindingObservation
+  try {
+    observed = await Promise.race([entered.promise, running.then(() => { throw Error('Observation ended before its gate') })])
+    closing = c.close().then(() => { closed = true })
+    observed.assertCurrent()
+    expect(c.ownerOf('source')).toBe(true)
+    await expect(c.withSessionBindingObservation!(request, async () => 0)).rejects.toMatchObject({ code: 'FACT_CLOSED' })
+    await Promise.resolve(); expect(closed).toBe(false)
+    leave.resolve(); expect(await running).toBe('original callback'); await closing
+  } catch (error) { primary = { error }; throw error }
+  finally { leave.resolve(); await joinOriginalFixtureWork(primary, [running, closing]) }
   expect(() => observed.assertCurrent()).toThrow()
-  expect(c.ownerOf('source')).toBe(true)
-  leave.resolve(); await rejected; await closing
   expect(c.ownerOf('source')).toBe(false)
-  await expect(c.withSessionBindingObservation!(request, async () => 0)).rejects.toMatchObject({ reason: 'revoked' })
+  await expect(c.withSessionBindingObservation!(request, async () => 0)).rejects.toMatchObject({ code: 'FACT_CLOSED' })
 })
 it('partial document acquire releases obtained target/session claims', async () => {
   const { root, coordinator: c } = await fixture()
@@ -292,24 +307,31 @@ it('bootstrap facade preserves original owner refusal without executing an acces
   expect(await c.bootstrapSemanticTarget(malformed as typeof original & { invocation: typeof invocation }, { assertCurrent() {}, dependencies: { confirm: never, reconcile: never } })).toEqual({ kind: 'refused', reason: 'manifest-invalid' })
   expect(reads).toBe(0)
 })
-it.each([1, 2, 3, 4, 5])('close joins pending acquisition %s, revokes callback authority and leaves zero temporary native leases', async cut => {
-  const { coordinator: c } = await fixture()
+it.each([1, 2, 3, 4, 5])('close joins accepted acquisition %s and its callback before retiring every native lease', async cut => {
+  const { root, coordinator: c } = await fixture()
   await c.create({ sessionId: 'ancestor', createdAt: invocation.createdAt }); await c.releaseOwnership('ancestor')
   const entered = Promise.withResolvers<void>(), leave = Promise.withResolvers<void>()
+  const ids = ['source', 'ancestor', 'target']
+  const expected = [...ids.filter(id => !c.ownerOf(id)).flatMap(id => [resourcePath(root, 'session', id), resourcePath(root, 'task', id)]), ...ids.flatMap(id => documentPaths(root, key(id)))].sort()
+  const acquiredPaths: string[] = [], releasedPaths: string[] = []
   let acquisitions = 0, releases = 0, live = 0, callbacks = 0
   vi.mocked(acquireSessionLock).mockImplementation(async options => {
     if (++acquisitions === cut) { entered.resolve(); await leave.promise }
-    const raw = await nativeAcquire(options); live++
-    return { get held() { return raw.held }, async release() { await raw.release(); live--; releases++ } }
+    const raw = await nativeAcquire(options); live++; acquiredPaths.push(options.lockPath)
+    return { get held() { return raw.held }, async release() { await raw.release(); live--; releases++; releasedPaths.push(options.lockPath) } }
   })
-  const running = c.withSessionBindingObservation!({ ...request, existingSessionIds: ['source', 'ancestor'] }, async () => { callbacks++ })
-  const rejected = expect(running).rejects.toMatchObject({ reason: 'revoked' })
-  await entered.promise
-  let closed = false
-  const closing = c.close().then(() => { closed = true })
-  await Promise.resolve(); expect(closed).toBe(false)
-  leave.resolve(); await rejected; await closing
-  expect([callbacks, live, releases]).toEqual([0, 0, 2 * Math.ceil(cut / 2)]) // the in-flight two-resource bundle finishes before revocation joins
+  const running = c.withSessionBindingObservation!({ ...request, existingSessionIds: ['source', 'ancestor'] }, async observed => { callbacks++; observed.assertCurrent(); return 'accepted observation' })
+  let closed = false, closing: Promise<void> | undefined, primary: { error: unknown } | undefined
+  try {
+    await Promise.race([entered.promise, running.then(() => { throw Error('Observation ended before its acquisition gate') })])
+    closing = c.close().then(() => { closed = true })
+    await expect(c.withSessionBindingObservation!(request, async () => 0)).rejects.toMatchObject({ code: 'FACT_CLOSED' })
+    await Promise.resolve(); expect(closed).toBe(false)
+    leave.resolve(); expect(await running).toBe('accepted observation'); await closing
+  } catch (error) { primary = { error }; throw error }
+  finally { leave.resolve(); await joinOriginalFixtureWork(primary, [running, closing]) }
+  expect([callbacks, live, releases, acquisitions]).toEqual([1, 0, expected.length, expected.length])
+  expect(acquiredPaths.toSorted()).toEqual(expected); expect(releasedPaths.toSorted()).toEqual(expected)
   expect(c.ownerOf('source')).toBe(false)
 })
 it('failed native disposal stays explicit debt after a later no-op, attempts all disposers and preserves dependent source owner', async () => {

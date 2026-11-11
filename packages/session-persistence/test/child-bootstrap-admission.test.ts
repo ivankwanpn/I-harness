@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { createSessionCoordinator, createControlledJsonlBackend as createJsonlBackend, backendControls, ownedControls } from './helpers/composed.ts'
 import * as p from '../src/index.ts'
 import { pair, guards } from './child-bootstrap-fixture.ts'
-import { acquireSessionLock } from '@i-harness/fs-lock'
+import { acquireSessionLock, lockPathFor } from '@i-harness/fs-lock'
+import { artifactPathsFor } from '../src/coordinator/artifact-path-association.ts'
 import { bootstrapPathsForRoute } from '../../session-persistence-jsonl/src/backend/bootstrap-stage.ts'
 vi.mock('node:fs/promises',async original=>{const fs=await original<typeof import('node:fs/promises')>();return{...fs,open:vi.fn(fs.open),readdir:vi.fn(fs.readdir)}})
 vi.mock('@i-harness/fs-lock',async original=>{const locks=await original<typeof import('@i-harness/fs-lock')>();return{...locks,acquireSessionLock:vi.fn(locks.acquireSessionLock)}})
@@ -13,6 +14,13 @@ const native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/p
 const roots:string[]=[],coordinators:p.SessionCoordinator[]=[]
 afterEach(async()=>{vi.restoreAllMocks();vi.mocked(open).mockImplementation(native.open);vi.mocked(readdir).mockImplementation(native.readdir);vi.mocked(acquireSessionLock).mockImplementation(nativeAcquire);for(const c of coordinators.splice(0))await c.close().catch(()=>{});for(const root of roots.splice(0))await rm(root,{recursive:true,force:true})})
 async function setup(){const root=await mkdtemp(join(tmpdir(),'ih-ca-'));roots.push(root);const backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true},acquireDeadlineMs:40,acquireRetryMs:5});coordinators.push(coordinator);return{root,backend,coordinator}}
+async function joinOriginalFixtureWork(primary: { error: unknown } | undefined, work: (Promise<unknown> | undefined)[]) {
+ const results=await Promise.allSettled(work),failures=results.flatMap(result=>result.status==='rejected'?[result.reason]:[])
+ if(!failures.length)return
+ const errors=[...new Set([...(primary?[primary.error]:[]),...failures])]
+ if(errors.length===1)throw errors[0]
+ throw new AggregateError(errors,'Original child assertion and cleanup failed')
+}
 it('keeps existing-read without a target mutation exemption and grants only the exact complete fork target',async()=>{
  const {root,coordinator}=await setup(),{request,payload}=pair();await coordinator.create({sessionId:'parent'})
  await coordinator.withExistingSessionBindingObservation!({sessionIds:['parent']},async()=>{
@@ -60,7 +68,7 @@ it('refuses direct callback self bootstrap/resume/open/close/retire/delete befor
   return payload
  });expect(outcome.kind).toBe('ready');expect(callbacks).toBe(1);await coordinator.withSessionBindingObservation!({existingSessionIds:[],target:{...request.invocation,targetSessionId:'unrelated'}},async observed=>observed.assertCurrent())
 })
-it.each(['root','namespace','reservation','callback','promotion','confirmation'] as const)('external close joins the original %s flight and revokes new child work',async cut=>{
+it.each(['root','namespace','reservation','callback','promotion','confirmation'] as const)('external close joins the accepted %s flight and fences fresh child work',async cut=>{
  const {root,backend,coordinator}=await setup(),{request,payload}=pair(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let paused=false,callbacks=0,closed=false,headerAcknowledged=false
  const pause=async()=>{if(!paused){paused=true;entered.resolve();await release.promise}}
  if(cut==='root'){const original=backendControls(backend).original.checkBootstrapCaptureRoot!;backendControls(backend).methods.checkBootstrapCaptureRoot =async()=>{await pause();return original()}}
@@ -68,10 +76,22 @@ it.each(['root','namespace','reservation','callback','promotion','confirmation']
  if(cut==='reservation'){const original=backend.bootstrapRoutes!.reserveCapture;backend.bootstrapRoutes!.reserveCapture=async(...args)=>{const result=await original(...args);await pause();return result}}
  if(cut==='promotion'){const original=backendControls(backend).original.prepareBootstrapHeader!;backendControls(backend).methods.prepareBootstrapHeader =async(...args)=>{const result=await original(...args);headerAcknowledged=result.kind==='committed';await pause();return result}}
  if(cut==='confirmation'){const original=backendControls(backend).original.confirmBootstrapFrames!;backendControls(backend).methods.confirmBootstrapFrames =async(...args)=>{const result=await original(...args);await pause();return result}}
- const capture=coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>{callbacks++;if(cut==='callback')await pause();return payload});await entered.promise
- const closing=coordinator.close().then(()=>{closed=true});expect(await coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>payload)).toMatchObject({kind:'not-issued',reason:'cancelled'});await Promise.resolve();expect(closed).toBe(false)
- release.resolve();const result=await capture;if(cut==='promotion')expect(headerAcknowledged).toBe(true);await closing;expect(result.kind).not.toBe('ready');expect(coordinator.ownerOf('target')).toBe(false);if(['root','namespace','reservation'].includes(cut))expect(callbacks).toBe(0)
- if(cut==='root')expect((await readdir(root)).some(n=>n.endsWith('.stage'))).toBe(false)
+ const capture=coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>{callbacks++;if(cut==='callback')await pause();return payload})
+ let closing:Promise<void>|undefined,primary:{error:unknown}|undefined
+ try {
+  await Promise.race([entered.promise,capture.then(()=>{throw Error('Original capture ended before its gate')})])
+  closing=coordinator.close().then(()=>{closed=true})
+  await expect(coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>payload)).rejects.toMatchObject({code:'FACT_CLOSED'})
+  await Promise.resolve();expect(closed).toBe(false)
+  release.resolve();const result=await capture
+  expect(result.kind).toBe('ready');expect(callbacks).toBe(1)
+  if(cut==='promotion')expect(headerAcknowledged).toBe(true)
+  await closing
+  expect(JSON.parse((await readFile(join(root,'target.jsonl'),'utf8')).split('\n')[0]!).sessionId).toBe('target')
+  expect(coordinator.ownerOf('target')).toBe(false)
+  await expect(coordinator.resumeChildTarget!(request,guards)).rejects.toMatchObject({code:'FACT_CLOSED'})
+ } catch(error){primary={error};throw error}
+ finally {release.resolve();await joinOriginalFixtureWork(primary,[capture,closing])}
 })
 it.each([undefined,null,false,0,''])('returns inspection facts after original cleanup and preserves callback %s beside independent cleanup failure',async fault=>{
  const {backend,coordinator}=await setup(),{request}=pair(),original=backendControls(backend).original.settleBootstrapCaptureIO!,failure=Error('same owner cleanup'),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let cleanupOwner:object|undefined,settles=0
@@ -82,16 +102,42 @@ it.each([undefined,null,false,0,''])('returns inspection facts after original cl
  const result=await coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>{fail=true;throw fault}).then(value=>({value}),error=>({error}));expect((result as any).error).toBeInstanceOf(AggregateError);expect((result as any).error.errors).toEqual([fault,failure])
 })
 it.each(['claim','retire-claim','namespace','reservation-open','inspection-open'] as const)('joins the actual late native %s acquisition and releases the original handles after external close',async cut=>{
- const {root,coordinator}=await setup(),{request,payload}=pair(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let paused=false,callbacks=0,closes=0,acquires=0,releases=0,rawHandle:Awaited<ReturnType<typeof open>>|undefined
+ const {root,backend,coordinator}=await setup(),{request,payload}=pair(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let paused=false,callbacks=0,closes=0,acquires=0,releases=0,rawHandle:Awaited<ReturnType<typeof open>>|undefined
  const nativeClaims: Awaited<ReturnType<typeof nativeAcquire>>[] = []
+ const acquiredPaths:string[]=[],releasedPaths:string[]=[]
  const pause=async()=>{if(!paused){paused=true;entered.resolve();await release.promise}}
- if(cut==='claim'||cut==='retire-claim')vi.mocked(acquireSessionLock).mockImplementation(async options=>{const lock=await nativeAcquire(options);nativeClaims.push(lock);acquires++;await pause();return{get held(){return lock.held},async release(){releases++;return lock.release()}}})
+ if(cut==='claim'||cut==='retire-claim')vi.mocked(acquireSessionLock).mockImplementation(async options=>{const lock=await nativeAcquire(options);nativeClaims.push(lock);acquiredPaths.push(options.lockPath);acquires++;await pause();return{get held(){return lock.held},async release(){await lock.release();releases++;releasedPaths.push(options.lockPath)}}})
  if(cut==='namespace')vi.mocked(readdir).mockImplementation((async(...args:any[])=>{const names=await Reflect.apply(native.readdir,undefined,args);await pause();return names}) as typeof readdir)
  if(cut==='inspection-open')await writeFile(bootstrapPathsForRoute(join(root,'target.jsonl'),{protocol:'child-v1',request}).stage,p.encodeChildBootstrapReservation({version:1,kind:'semantic-bootstrap-child-capture',request}))
  if(cut==='reservation-open'||cut==='inspection-open')vi.mocked(open).mockImplementation(async(...args)=>{const handle=await native.open(...args);if(!String(args[0]).endsWith('.stage')||args[1]!== (cut==='reservation-open'?'wx':'r'))return handle;rawHandle=handle;await pause();return new Proxy(handle,{get(target,key){if(key==='close')return async()=>{closes++;return target.close()};const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value}})})
- const operation=cut==='inspection-open'?coordinator.inspectChildBootstrapCapture!(request):coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>{callbacks++;return payload});await entered.promise
- let closed=false;const closing=(cut==='retire-claim'?coordinator.closeManagedDocument('target'):coordinator.close()).then(()=>{closed=true});if(cut==='retire-claim')await expect(coordinator.resumeChildTarget!(request,guards)).rejects.toMatchObject({reason:'conflict'});await Promise.resolve();expect(closed).toBe(false);release.resolve();const result=await operation;await closing;expect(result.kind).not.toBe('ready');expect(result.kind).not.toBe('absent');expect(callbacks).toBe(0);expect(coordinator.ownerOf('target')).toBe(false)
- if(cut==='claim'||cut==='retire-claim'){expect({acquires,releases}).toEqual({acquires:2,releases:2});expect(nativeClaims.every(claim=>claim.held===false)).toBe(true)};if(rawHandle){expect(rawHandle.fd).toBe(-1);expect(closes).toBe(1)}
+ const operation=cut==='inspection-open'?coordinator.inspectChildBootstrapCapture!(request):coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>{callbacks++;return payload})
+ let closed=false,closing:Promise<void>|undefined,primary:{error:unknown}|undefined
+ try {
+  await Promise.race([entered.promise,operation.then(()=>{throw Error('Original operation ended before its native gate')})])
+  closing=(cut==='retire-claim'?coordinator.closeManagedDocument('target'):coordinator.close()).then(()=>{closed=true})
+  if(cut==='retire-claim')await expect(coordinator.resumeChildTarget!(request,guards)).rejects.toMatchObject({reason:'conflict'})
+  else await expect(coordinator.resumeChildTarget!(request,guards)).rejects.toMatchObject({code:'FACT_CLOSED'})
+  await Promise.resolve();expect(closed).toBe(false)
+  release.resolve();const result=await operation;await closing
+  if(cut==='retire-claim'){expect(result.kind).not.toBe('ready');expect(result.kind).not.toBe('absent');expect(callbacks).toBe(0)}
+  else if(cut==='inspection-open'){expect(result).toMatchObject({kind:'reserved',reservation:{request}});expect(callbacks).toBe(0)}
+  else {expect(result.kind).toBe('ready');expect(callbacks).toBe(1)}
+  expect(coordinator.ownerOf('target')).toBe(false)
+ } catch(error){primary={error};throw error}
+ finally {release.resolve();await joinOriginalFixtureWork(primary,[operation,closing])}
+ if(cut==='claim'||cut==='retire-claim'){
+  const paths=artifactPathsFor(backend)!,target=request.invocation.targetSessionId
+  const ownership=[paths.session(target),paths.taskForParent(target)].map(capture=>{if(capture.kind!=='ready')throw Error('Original target artifact unavailable');return lockPathFor(root,'artifact-ownership:'+capture.key)})
+  const expected=[...ownership]
+  if(cut==='claim'){
+   // Full accepted completion initializes the child's canonical Task document.
+   // Target retirement stops before that third native lease is admitted.
+   const task=paths.document('task-'+target);if(task.kind!=='ready')throw Error('Original Task document unavailable')
+   expected.push(lockPathFor(root,'artifact-document-lease:'+task.key))
+  }
+  expect(acquiredPaths.toSorted()).toEqual(expected.toSorted());expect(releasedPaths.toSorted()).toEqual(expected.toSorted())
+  expect({acquires,releases}).toEqual({acquires:expected.length,releases:expected.length});expect(nativeClaims.every(claim=>claim.held===false)).toBe(true)
+ };if(rawHandle){expect(rawHandle.fd).toBe(-1);expect(closes).toBe(1)}
 })
 it('retains a real failed read-close handle and original held owner for inspection close retry',async()=>{
  const {root,backend,coordinator}=await setup(),{request}=pair(),stage=bootstrapPathsForRoute(join(root,'target.jsonl'),{protocol:'child-v1',request}).stage;await writeFile(stage,p.encodeChildBootstrapReservation({version:1,kind:'semantic-bootstrap-child-capture',request}))

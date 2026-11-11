@@ -222,15 +222,36 @@ it('new coordinator construction cannot reopen admission while original close st
     await release.promise;
 } return h; }); const reading = f.backend.read('a'); void reading.catch(() => { }); await entered.promise; const closing = first.close(); const second = createSessionCoordinator(f.backend); const secondRead = f.backend.read('a'); void secondRead.catch(() => { }); await new Promise<void>(resolve => setImmediate(resolve)); release.resolve(); const outcome = await secondRead.then(() => ({ ok: true, error: undefined }), error => ({ ok: false, error })); await Promise.allSettled([reading, closing]); expect(outcome.ok).toBe(false); vi.mocked(fs.open).mockImplementation(actualOpen); expect((await f.backend.read('a')).events).toHaveLength(1); await second.close(); });
 
-it('one settled coordinator cannot reopen reads while another original participant still drains',async()=>{
+it('a participant retains admitted document IO grace while every fresh public call is fenced',async()=>{
  const f=await fixture(),a=createSessionCoordinator(f.backend),b=createSessionCoordinator(f.backend),c=createSessionCoordinator(f.backend);
  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();
- vi.mocked(fs.writeFile).mockImplementation((async(...args:any[])=>{if(String(args[0]).includes('held.doc.jsonl.')){entered.resolve();await release.promise}return (actualWriteFile as any)(...args)}) as typeof fs.writeFile);
- const writing=b.putDocumentStrict!('held',{original:true});await entered.promise;
- const closingB=b.close(),closingA=a.close();void closingB.catch(()=>{});await closingA;
- const refused=await f.backend.read('a').then(()=>false,()=>true);
- release.resolve();await writing;await closingB;
- try{expect(refused).toBe(true);expect((await f.backend.read('a')).events).toHaveLength(1)}finally{await c.close()}
+ vi.mocked(fs.open).mockImplementation(async(...args)=>{
+  const handle=await actualOpen(...args);
+  if(String(args[0]).includes('held.doc.jsonl.')&&args[1]==='wx'){
+   const write=handle.writeFile.bind(handle);
+   handle.writeFile=async(...input:Parameters<typeof write>)=>{entered.resolve();await release.promise;return write(...input)};
+  }
+  return handle;
+ });
+ const writing=b.putDocumentStrict!('held',{original:true});
+ let closingA:Promise<void>|undefined,closingB:Promise<void>|undefined,primary:{error:unknown}|undefined,closedB=false;
+ try{
+  await Promise.race([entered.promise,writing.then(()=>{throw Error('Original document write ended before its gate')})]);
+  closingB=b.close().then(()=>{closedB=true});closingA=a.close();await closingA;
+  await expect(a.snapshot!('a')).rejects.toMatchObject({code:'FACT_CLOSED'});
+  await expect(b.snapshot!('a')).rejects.toMatchObject({code:'FACT_CLOSED'});
+  // B has not reached native archive retirement: its original document write
+  // still owns the accepted IO grace. Structural reads are a separate port.
+  expect((await f.backend.read('a')).events).toHaveLength(1);expect(closedB).toBe(false);
+  release.resolve();await writing;await closingB;
+  expect(closedB).toBe(true);expect((await f.backend.read('a')).events).toHaveLength(1);
+ }catch(error){primary={error}}
+ finally{
+  release.resolve();const joined=await Promise.allSettled([writing,closingA,closingB,a.close(),b.close(),c.close()]);
+  vi.mocked(fs.open).mockImplementation(actualOpen);
+  const failures=[...(primary?[primary.error]:[]),...joined.flatMap(result=>result.status==='rejected'?[result.reason]:[])];
+  if(failures.length===1)throw failures[0];if(failures.length)throw new AggregateError(failures,'Original archive fixture and cleanup failed');
+ }
 });
 async function semanticFixture(){const f=await fixture();const from=join(import.meta.dirname,'fixtures/bootstrap13-public');for(const name of await fs.readdir(from))await fs.copyFile(join(from,name),join(f.root,name));return {...f,path:join(f.root,'target.jsonl')}}
 it.each(['missing','torn','corrupt-first-missing-second'] as const)('preserves coded incomplete birth %s for actual read and subordinate prefix',async mode=>{
@@ -261,18 +282,38 @@ it('retained original mutation read scope is exact-session and expires without r
 it('raw structural backend observation survives settled close while that coordinator public reads stay retired',async()=>{
  const f=await fixture(),c=createSessionCoordinator(f.backend);await c.close();
  expect((await f.backend.read('a')).events).toHaveLength(1);
- await expect(c.snapshot!('a')).rejects.toThrow('ARCHIVE_READ_UNAVAILABLE');await expect(c.load('a')).rejects.toThrow('ARCHIVE_READ_UNAVAILABLE');
- const later=createSessionCoordinator(f.backend);try{expect((await later.snapshot!('a')).session.events).toHaveLength(1);await expect(c.snapshot!('a')).rejects.toThrow('ARCHIVE_READ_UNAVAILABLE')}finally{await later.close()}
+ await expect(c.snapshot!('a')).rejects.toMatchObject({code:'FACT_CLOSED'});await expect(c.load('a')).rejects.toMatchObject({code:'FACT_CLOSED'});
+ const later=createSessionCoordinator(f.backend);try{expect((await later.snapshot!('a')).session.events).toHaveLength(1);await expect(c.snapshot!('a')).rejects.toMatchObject({code:'FACT_CLOSED'})}finally{await later.close()}
 });
 
 import { composeJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
-it.each(['snapshot','load'] as const)('public %s cannot publish a candidate whose final migration crossed original coordinator close',async method=>{
+it.each(['snapshot','load'] as const)('close joins an accepted public %s through final migration before retiring its resource owner',async method=>{
  const f=await fixture(),c=composeJsonlTaskTransitionCoordinator(f.backend,undefined,taskDocumentStorageContract),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let calls=0;
  vi.mocked(formatValidation.migrate).mockImplementation(async(...args)=>{const result=await actualMigrate(...args);if(args[2]?.sessionId==='a'&&++calls===(method==='snapshot'?1:3)){entered.resolve();await release.promise}return result});
  const reading=method==='snapshot'?c.snapshot!('a'):c.load('a');void reading.catch(()=>{});
- await Promise.race([entered.promise,reading.then(()=>{throw Error('public read finished before migration hold')},error=>{throw error})]);
- const closing=c.close();void closing.catch(()=>{});release.resolve();const outcome=await reading.then(value=>({ok:true,value,error:undefined}),error=>({ok:false,value:undefined,error}));await closing;
- vi.mocked(formatValidation.migrate).mockImplementation(actualMigrate);
- const later=createSessionCoordinator(f.backend);try{expect(outcome.ok).toBe(false);expect(outcome.error).toMatchObject({message:'ARCHIVE_READ_UNAVAILABLE'});expect((await f.backend.read('a')).events.length).toBeGreaterThan(0);expect((await later.snapshot!('a')).session.events.length).toBeGreaterThan(0)}finally{await later.close()}
+ let closing:Promise<void>|undefined,closed=false,primary:{error:unknown}|undefined;
+ try{
+  await Promise.race([entered.promise,reading.then(()=>{throw Error('public read finished before migration hold')})]);
+  closing=c.close().then(()=>{closed=true});
+  await expect(c.snapshot!('a')).rejects.toMatchObject({code:'FACT_CLOSED'});
+  await Promise.resolve();expect(closed).toBe(false);
+  release.resolve();const outcome=await reading;await closing;
+  await expect(c.load('a')).rejects.toMatchObject({code:'FACT_CLOSED'});
+  const later=createSessionCoordinator(f.backend);
+  try{
+   // Legacy load normalizes sequence numbers; snapshot preserves raw legacy
+   // event syntax. Compare the same normal public API across owner lifetimes.
+   const reopened=method==='snapshot'?await later.snapshot!('a'):await later.load('a');
+   expect(outcome.session.events).toEqual(reopened.session.events);expect(outcome.session.events.length).toBeGreaterThan(0)
+  }finally{await later.close()}
+ }catch(error){primary={error};throw error}
+ finally{
+  release.resolve();
+  try{
+   const results=await Promise.allSettled([reading,closing,c.close()]);
+   const failures=results.flatMap(result=>result.status==='rejected'?[result.reason]:[]);
+   if(failures.length){const errors=[...new Set([...(primary?[primary.error]:[]),...failures])];if(errors.length===1)throw errors[0];throw new AggregateError(errors,'Original accepted read and cleanup failed')}
+  }finally{vi.mocked(formatValidation.migrate).mockImplementation(actualMigrate)}
+ }
 });
