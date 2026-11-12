@@ -5,15 +5,36 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { projectConversation } from '@i-harness/core-session'
 import { createJsonlBackend } from '../src/index.ts'
-import { literalReady } from '../../core-session/test/fixtures/format11-seed.ts'
+import { literalReady, literalSeed } from '../../core-session/test/fixtures/format11-seed.ts'
+import { createSessionCoordinator, compileSemanticSeed, type SessionCoordinator } from '@i-harness/session-persistence'
 
-const roots: string[] = []
-afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
-async function fixture(ready: boolean) {
+const roots: string[] = [], coordinators: SessionCoordinator[] = []
+
+afterEach(async () => {
+  for (const coordinator of coordinators.splice(0)) await coordinator.close()
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
+})
+async function fixture(ready: boolean, completeLineage = false) {
   const root = await mkdtemp(join(tmpdir(), 'semantic-publication-')); roots.push(root)
   const backend = createJsonlBackend(root), id = 'session', path = join(root, id + '.jsonl')
-  await backend.create(id, { formatVersion: CURRENT_FORMAT_VERSION, sessionId: id, createdAt: '2026-10-23T00:00:00.000Z', title: 'original', ...(ready ? structuredClone(literalReady.header) : {}) })
-  if (ready) await backend.replaceEvents!(id, structuredClone(literalReady.events))
+  if (ready) {
+    // Use complete native birth so publication checks retain the original
+    // stage, phase frames and completion manifest for this mutable target.
+    const origin = literalSeed.origins[0]
+    if (origin?.kind !== 'session') throw Error('Original literal source required')
+    const seed = compileSemanticSeed({ kind: 'seed', seed: structuredClone(literalSeed), digest: literalReady.header!.semanticSeed!.seedDigest, sourceObservationDigest: origin.revision })
+    expect(seed.records).toEqual(literalReady.events.slice(0, 2))
+    const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }); coordinators.push(coordinator)
+    const born = await coordinator.bootstrapSemanticTarget({
+      invocation: { version: 1, operationId: 'literal', targetSessionId: id, createdAt: '2026-10-23T00:00:00.000Z', requestDigest: 'a'.repeat(64) },
+      target: { kind: 'new' }, metadata: { title: 'original' },
+      lineage: completeLineage ? { origin: 'subagent', parentSession: 'parent', delegationDepth: 1, subagentProtocolVersion: 1 } : { origin: 'import' },
+      seed,
+    }, { assertCurrent() {}, dependencies: { async confirm() { throw Error('Literal has no external artifacts') }, async reconcile() { throw Error('Literal has no external artifacts') } } })
+    expect(born.kind).toBe('ready')
+  } else {
+    await backend.create(id, { formatVersion: CURRENT_FORMAT_VERSION, sessionId: id, createdAt: '2026-10-23T00:00:00.000Z', title: 'original' })
+  }
   const loaded = await backend.read(id)
   expect(projectConversation({ formatVersion: loaded.version, header: loaded.meta, events: loaded.events }).items).toHaveLength(ready ? 2 : 0)
   return { backend, id, path, loaded }
@@ -50,12 +71,10 @@ it('refuses reservation introduction on a plain target', async () => {
   expect(await readFile(path)).toEqual(before)
 })
 it.each(['parentSession','origin','delegationDepth','subagentProtocolVersion','createdAt'])('rejects removal of an existing reserved %s', async key => {
-  const {backend,id,path,loaded} = await fixture(true)
-  // Provision complete supported birth metadata before the public update;
-  // the target still has the same validated literal seed and body.
-  const beforeText = await readFile(path,'utf8'), end = beforeText.indexOf('\n')
-  const header = {...JSON.parse(beforeText.slice(0,end)),parentSession:'parent',origin:'subagent',delegationDepth:1,subagentProtocolVersion:1}
-  await writeFile(path,JSON.stringify(header)+beforeText.slice(end))
+  const {backend,id,path,loaded} = await fixture(true, true)
+  // These protected fields belong to the original stage from birth. Do not
+  // retrofit different reserved lineage into an already committed stage.
+  expect(loaded.meta).toMatchObject({parentSession:'parent',origin:'subagent',delegationDepth:1,subagentProtocolVersion:1})
   expect((await backend.read(id)).events).toEqual(loaded.events)
   const before = await readFile(path)
   await expect(backend.updateMeta(id,{[key]:undefined})).rejects.toThrow()

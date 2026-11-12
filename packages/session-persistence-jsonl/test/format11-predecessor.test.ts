@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, expect, it } from 'vitest'
 import { createManagedSessionState, legacyPrefixDigest, projectConversation, toJSONL } from '@i-harness/core-session'
 import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { buildSession } from '../../session-persistence/src/format/validation.ts'
@@ -68,7 +68,11 @@ it('preserves reservation through parse→buildSession→managed view and reads1
   const current = toJSONL(literalReady), lines = current.split('\n')
   lines[0] = JSON.stringify({...JSON.parse(lines[0]!),sessionId:'literal',createdAt:'2026-10-22T00:00:00.000Z'})
   await writeFile(join(store,'literal.jsonl'),lines.join('\n'))
-  const backend = createJsonlBackend(store), read = await backend.read('literal')
+  let auditRepair = false, repairs = 0
+  const backend = createJsonlBackend(store, { wrap(original) {
+    const repair = original.repair.bind(original)
+    original.repair = (...args) => { if (auditRepair) repairs++; return repair(...args) }
+  } }), read = await backend.read('literal')
   const parsed = parseHeader(lines[0]!), built = buildSession(parsed,read.events)
   expect(createManagedSessionState(built).view.header?.semanticSeed).toEqual(literalReady.header!.semanticSeed)
   expect(projectConversation(built).items[1]!.messages[1]!.content).toBe('seed exact')
@@ -84,12 +88,12 @@ it('preserves reservation through parse→buildSession→managed view and reads1
     expect((await coordinator.snapshot!('literal')).session.events).toEqual(literalReady.events)
     await expect(coordinator.openManagedDocument('literal')).rejects.toThrow()
     expect(await readFile(join(store,'literal.jsonl'))).toEqual(before)
-    const repair = vi.spyOn(backend,'repair')
+    auditRepair = true
     for(const [id,text] of Object.entries({headerOnly:lines[0]!+'\n',interrupted:lines[0]!+'\n'+lines[1]!.slice(0,20)})) {
       await writeFile(join(store,id+'.jsonl'),text)
-      await expect(coordinator.openManagedDocument(id)).rejects.toThrow(/bootstrap-incomplete/)
+      await expect(coordinator.openManagedDocument(id)).rejects.toMatchObject({message:'TASK_TRANSITION_FAILED',cause:{message:'bootstrap-incomplete'}})
       expect(await readFile(join(store,id+'.jsonl'),'utf8')).toBe(text)
     }
-    expect(repair).not.toHaveBeenCalled()
+    expect(repairs).toBe(0)
   } finally { await coordinator.close() }
 })

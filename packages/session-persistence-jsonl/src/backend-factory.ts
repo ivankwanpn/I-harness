@@ -194,9 +194,16 @@ export function createJsonlBackend(root: string, options?: {
   }
   function forgetJournal(id: string) { journalCache.delete(id) }
   const filePath = pathResolution.session
-  async function assertPublicBootstrap(sessionId: string, creating = false, observed?: {header:SessionMeta;birth:Buffer}, stageIO?:import('./backend/bootstrap-stage.ts').StageLookupIO) {
+  async function assertReadableBootstrapNamespace(sessionId: string, observed: {header:SessionMeta;birth:Buffer}) {
+    const namespace=await bootstrapNamespace(filePath(sessionId)).catch((error:NodeJS.ErrnoException)=>{if(error.code==='ENOENT')return [];throw error})
+    // Data without a native birth namespace can be inspected, but never gains
+    // an original stage, phase receipt or mutable activation from this read.
+    if (!namespace.length) return
+    await assertPublicBootstrap(sessionId,false,observed,undefined,namespace)
+  }
+  async function assertPublicBootstrap(sessionId: string, creating = false, observed?: {header:SessionMeta;birth:Buffer}, stageIO?:import('./backend/bootstrap-stage.ts').StageLookupIO, observedNamespace?:readonly string[]) {
     const path = filePath(sessionId)
-    const namespace=await bootstrapNamespace(path).catch((error:NodeJS.ErrnoException)=>{if(error.code==='ENOENT')return [];throw error})
+    const namespace=observedNamespace ?? await bootstrapNamespace(path).catch((error:NodeJS.ErrnoException)=>{if(error.code==='ENOENT')return [];throw error})
     if (!namespace.length) {
       if(creating)return
       // A retained semantic header does not become an ordinary replacement
@@ -398,7 +405,7 @@ export function createJsonlBackend(root: string, options?: {
     async read(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }> {
       await assertNotDeleted("session", sessionId)
       return archiveReads.run(filePath(sessionId),async(handle,extent)=>{
-        const candidate=await readSessionArchive(handle,extent,false,prefix => assertPublicBootstrap(sessionId,false,prefix))
+        const candidate=await readSessionArchive(handle,extent,false,prefix => assertReadableBootstrapNamespace(sessionId,prefix))
         await assertNotDeleted("session",sessionId)
         return {version:candidate.header.formatVersion,events:candidate.events,meta:candidate.header}
       },false,sessionId,true)

@@ -66,9 +66,21 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
     }
     if (partBytes) await line(take(), false);
     if (!header) throw Error('Empty archive');
-    if (needed) throw incompleteBirth();
+    if (needed) {
+        // A structural export may encode the complete logical birth in one
+        // frame. Only original physical-prefix/dependency reads require the
+        // native phase layout; ordinary history must validate decoded data.
+        if (prefixOnly || dependency) throw incompleteBirth();
+        await qualifyPrefix?.({ header, birth: Buffer.concat(birth) });
+        for (const frame of birth.slice(1)) consume(frame);
+    }
     if (!prefixOnly) {
         const decoded=decoder?.finish();
+        if (!dependency && header.semanticSeed) {
+            const reservation = header.semanticSeed;
+            const initial = 'initialInputId' in reservation && reservation.initialInputId !== undefined ? 1 : 0;
+            if (events.length < reservation.seedLength + 1 + initial) throw incompleteBirth();
+        }
         if(dependency){
             const expected=dependency.prefix,actual=decoded?.prefix;
             if(!actual||decoded?.torn||actual.eventCount!==expected.eventCount||actual.bodyBytes!==expected.bodyBytes||actual.prefixDigest!==expected.prefixDigest||events.length!==1)throw Error('Owned dependency prefix mismatch');
