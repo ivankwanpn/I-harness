@@ -291,8 +291,5 @@ describe("session coordinator lineage (M8)", () => {
 })
 
 it('raw public factory does not lend durable mutation authority to a structural fake backend', async () => {
-  const coordinator = createRawSessionCoordinator(fakeBackend())
-  await expect(coordinator.create()).rejects.toThrow('TASK_TRANSITION_UNSUPPORTED')
-  await expect(coordinator.append('s', [])).rejects.toThrow('TASK_TRANSITION_UNSUPPORTED')
-  await coordinator.close()
+  expect(() => createRawSessionCoordinator(fakeBackend())).toThrow('original writable coordinator factory')
 })

@@ -214,10 +214,12 @@ it('passive target-only observation never profiles any session and refuses unsup
   const { backend, coordinator: c } = await fixture()
   monitor('profile').mockImplementation(() => { throw new Error('source trap') })
   await c.withSessionBindingObservation!({ existingSessionIds: [], target: invocation }, async observed => { expect(observed.binding('target')).toEqual({ kind: 'absent' }) })
-  const unsupported = createBareSessionCoordinator({ ...backend, readDocumentObserved: undefined } as PersistenceBackend, { lock: { enabled: true } }); coordinators.push(unsupported)
-  expect(unsupported.withSessionBindingObservation).toBeUndefined()
-  const unlocked = createBareSessionCoordinator(backend); coordinators.push(unlocked)
-  expect(unlocked.withSessionBindingObservation).toBeUndefined()
+  const structural = { ...backend, readDocumentObserved: undefined }
+  expect(() => createBareSessionCoordinator(structural, { lock: { enabled: true } })).toThrow('original writable coordinator factory')
+  expect(() => createBareSessionCoordinator(backend, { lock: { enabled: false } })).toThrow('requires ownership')
+  const reader = createReadOnlySessionCoordinator(structural, { lock: { enabled: false } })
+  try { expect(Reflect.get(reader, 'withSessionBindingObservation')).toBeUndefined() }
+  finally { await reader.close() }
 })
 it('validates own fields, canonical invocation, bounded distinct IDs and genuine signal before acquiring', async () => {
   const { coordinator: c } = await fixture()
@@ -727,13 +729,16 @@ it.each([
   expect(await observing).toBe('completed')
   await c.updateMeta('ancestor', { title: 'mutation after terminal refusal' })
 })
-it.each(['bootstrap', 'resume'] as const)('fix R2 unsupported %s refuses before inspecting caller guards', async mode => {
+it.each(['bootstrap', 'resume'] as const)('fix R2 unsupported %s backend refuses at construction before inspecting caller guards', async mode => {
   const f = await fixture(), original = await existingAncestor(f)
-  const unsupported = createBareSessionCoordinator({ ...f.backend, prepareBootstrapHeader: undefined }, { lock: { enabled: true } }); coordinators.push(unsupported)
+  const structural = { ...f.backend, prepareBootstrapHeader: undefined }
   let inspections = 0
   const guards = new Proxy(originalGuards, { getOwnPropertyDescriptor(target, property) { if (property === 'targetPreparation') { inspections++; throw new Error('unsupported must not inspect') }; return Reflect.getOwnPropertyDescriptor(target, property) } })
-  const outcome = mode === 'bootstrap' ? await unsupported.bootstrapSemanticTarget(original, guards) : await unsupported.resumeSemanticTarget(original.invocation, guards, original)
-  expect(outcome).toEqual({ kind: 'not-issued', reason: 'unsupported' }); expect(inspections).toBe(0)
+  const attempt = () => {
+    const unsupported = createBareSessionCoordinator(structural, { lock: { enabled: true } })
+    return mode === 'bootstrap' ? unsupported.bootstrapSemanticTarget(original, guards) : unsupported.resumeSemanticTarget(original.invocation, guards, original)
+  }
+  expect(attempt).toThrow('original writable coordinator factory'); expect(inspections).toBe(0)
 })
 it('fix R2 malformed request invocation and resume payload retain closed refusal without accessors', async () => {
   const { coordinator: c } = await fixture()
@@ -745,15 +750,20 @@ it('fix R2 malformed request invocation and resume payload retain closed refusal
   expect(await c.resumeSemanticTarget(invocation, originalGuards, invalidRequest as BootstrapRequest)).toEqual({ kind: 'refused', reason: 'manifest-invalid' })
   expect(reads).toBe(0)
 })
-it('recovery close keeps reads retired while original ordinary writes and queued barriers remain supported',async()=>{
+it('recovery close fences later read and write admission while a fresh original coordinator can reopen',async()=>{
  const {coordinator:c,backend}=await fixture();let escaped:SessionBindingObservation|undefined
  await c.withSessionBindingObservation!(request,async observation=>{escaped=observation;observation.assertCurrent()})
  await c.close();expect(()=>escaped!.assertCurrent()).toThrow();let entered=false
  await expect(c.openManagedDocument('source')).rejects.toThrow();await expect(c.loadOwned!('source')).rejects.toThrow()
- await expect(c.withSessionBindingObservation!(request,async()=>{entered=true})).rejects.toMatchObject({reason:'revoked'});expect(entered).toBe(false)
+ await expect(c.withSessionBindingObservation!(request,async()=>{entered=true})).rejects.toMatchObject({code:'FACT_CLOSED'});expect(entered).toBe(false)
  await expect(c.withProcessReadObservation!('source',{documentKeys:[]},async()=>{entered=true},async value=>value)).rejects.toThrow();expect(entered).toBe(false)
- await c.updateMeta('source',{title:'supported ordinary metadata'});c.enqueue('source',[{type:'plan/mode',mode:'on',seq:0}]);await c.flush('source')
- expect((await backend.profile('source')).meta.title).toBe('supported ordinary metadata');expect((await backend.read('source')).events).toHaveLength(1);await c.close();expect(c.ownerOf('source')).toBe(false)
+ await expect(c.updateMeta('source',{title:'closed write'})).rejects.toMatchObject({code:'FACT_CLOSED'})
+ expect(()=>c.enqueue('source',[{type:'plan/mode',mode:'on',seq:0}])).toThrow('Coordinator is closed')
+ await c.flush('source');expect(c.ownerOf('source')).toBe(false)
+ const reopened=createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(reopened)
+ await reopened.updateMeta('source',{title:'supported ordinary metadata'});reopened.enqueue('source',[{type:'plan/mode',mode:'on',seq:0}]);await reopened.flush('source')
+ expect((await reopened.profile('source')).meta.title).toBe('supported ordinary metadata');expect((await reopened.snapshot!('source')).session.events).toHaveLength(1)
+ await reopened.close();expect(reopened.ownerOf('source')).toBe(false)
 })
 it('recovery unknown bootstrap observation is effect-free and original resume refences it before original recovery',async()=>{
  const f=await fixture(),c=f.coordinator,original=await existingAncestor(f);faults.headerUnknown=true

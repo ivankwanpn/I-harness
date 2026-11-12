@@ -23,9 +23,9 @@ vi.mock('@i-harness/fs-lock', async original => {
 const nativeAcquire = (await vi.importActual<typeof import('@i-harness/fs-lock')>('@i-harness/fs-lock')).acquireSessionLock
 afterEach(() => { vi.restoreAllMocks(); vi.mocked(acquireSessionLock).mockImplementation(nativeAcquire) })
 
-async function fixture() {
+async function fixture(wrap?: NonNullable<Parameters<typeof createJsonlBackend>[1]>['wrap']) {
   const root = await mkdtemp(join(tmpdir(), 'ih-fc-'))
-  const backend = createJsonlBackend(root), c = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const backend = createJsonlBackend(root, { wrap }), c = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   await c.create({ sessionId: 'source', title: 'original' })
   await c.append('source', [{ type: 'turn/start' }, { type: 'user/message', text: 'first' }, { type: 'turn/end' }])
   return { root, backend, c, async close() { await c.close(); await rm(root, { recursive: true, force: true }) } }
@@ -84,12 +84,18 @@ it('preserves falsy local causes and original operation on post-admission host f
   } finally { await f.close() }
 })
 it('keeps a spent native reservation passive across a cold controller and source changes', async () => {
-  const f = await fixture()
+  let reservations = 0
+  const f = await fixture(backend => {
+    const reserve = backend.prepareBootstrapCapture!.bind(backend)
+    backend.prepareBootstrapCapture = async (...args) => {
+      const result = await reserve(...args)
+      reservations++
+      if (result.kind === 'committed-new') throw undefined
+      return result
+    }
+  })
   try {
     const controller = controllerApi.createForkSessionController(f.c, createInlineForkHost(f.c)), op = await operation(controller)
-    const reserve = f.backend.prepareBootstrapCapture!.bind(f.backend)
-    let reservations = 0
-    f.backend.prepareBootstrapCapture = async (...args) => { const result = await reserve(...args); reservations++; if (result.kind === 'committed-new') throw undefined; return result }
     const error = await controller.execute({ operation: op, mode: 'begin' }).catch(error => error)
     expect(error).toBeInstanceOf(ForkOperationError); expect(error.cause).toBeUndefined()
     expect(reservations).toBe(1)
@@ -169,14 +175,29 @@ it('retires a valid operation before its first execute without issuing a reserva
   } finally { await f.close() }
 })
 it.each([false, true])('incomplete original payload requires fresh warm witness before issuance (source changed=%s)', async changed => {
-  const f = await fixture()
+  const rawHandles: Awaited<ReturnType<typeof nativeAcquire>>[] = []
+  if (changed) {
+    vi.mocked(acquireSessionLock).mockImplementation(async options => {
+      const raw = await nativeAcquire(options)
+      rawHandles.push(raw)
+      return raw
+    })
+  }
+  let headers = 0
+  const f = await fixture(backend => {
+    const prepare = backend.prepareBootstrapHeader!.bind(backend)
+    backend.prepareBootstrapHeader = async (...args) => {
+      if (++headers !== 1) return prepare(...args)
+      // Cross the original issue boundary; the reserved header remains unknown.
+      await args[1].beforeIssue()
+      return { kind: 'unknown' }
+    }
+  })
   try {
     const host = createInlineForkHost(f.c), handoffs: string[] = [], originalHandoff = host.withHandoff.bind(host)
     host.withHandoff = async (op, mode, control, use) => { handoffs.push(mode.kind); return originalHandoff(op, mode, control, use) }
     const controller = controllerApi.createForkSessionController(f.c, host), op = await operation(controller)
-    const prepare = f.backend.prepareBootstrapHeader!.bind(f.backend)
-    let headers = 0, callbacks = 0
-    f.backend.prepareBootstrapHeader = async (...args) => ++headers === 1 ? { kind: 'unknown' } : prepare(...args)
+    let callbacks = 0
     const capture = f.c.bootstrapSemanticTargetWithCapture!.bind(f.c)
     f.c.bootstrapSemanticTargetWithCapture = (request, guards, callback) => capture(request, guards, async () => { callbacks++; return callback() })
     expect(await controller.execute({ operation: op, mode: 'begin' })).toMatchObject({ kind: 'blocked', reason: 'unknown' })
@@ -197,7 +218,18 @@ it.each([false, true])('incomplete original payload requires fresh warm witness 
       expect(JSON.stringify((await f.backend.read('target')).events)).toContain('first')
     }
     expect(callbacks).toBe(1)
-  } finally { await f.close() }
+  } finally {
+    if (changed) {
+      // The original header reconciliation remains unknown after source
+      // retirement. No current source may authorize the missing header.
+      await expect(f.c.close()).rejects.toThrow('Coordinator cleanup is unresolved')
+      // Test-only OS teardown does not acknowledge the retained native debt.
+      for (const raw of rawHandles) await raw.release()
+      await rm(f.root, { recursive: true, force: true })
+    } else {
+      await f.close()
+    }
+  }
 })
 it('convenience reports preparation failure before mint and preserves its minted operation across retry', async () => {
   const f = await fixture()
@@ -265,6 +297,7 @@ it('retains the exact real final target release debt through controller close an
     vi.mocked(acquireSessionLock).mockImplementation(async options => {
       const raw = await nativeAcquire(options), held = finalBarrier
       if (held && !originalHandle) { originalHandle = raw; originalLockPath = options.lockPath }
+      if (raw !== originalHandle) return raw
       return { get held() { return raw.held }, async release() {
         if (raw === originalHandle) { attempts++; if (fault) throw new Error('real final observation release before action') }
         await raw.release()
@@ -303,6 +336,7 @@ it.each([undefined, null, false, 0])('nominal release failure preserves literal 
     const controller = controllerApi.createForkSessionController(f.c, host), op = await operation(controller)
     vi.mocked(acquireSessionLock).mockImplementation(async options => {
       const raw = await nativeAcquire(options), selected = finalBarrier
+      if (!selected) return raw
       return { get held() { return raw.held }, async release() { if (selected && fault) throw new Error('actual cleanup fault'); await raw.release() } }
     })
     const error = await controller.execute({ operation: op, mode: 'begin' }).catch(error => error)
@@ -318,6 +352,7 @@ it('never recognizes fabricated, wrapped or foreign-coordinator cleanup errors',
   try {
     vi.mocked(acquireSessionLock).mockImplementation(async options => {
       const raw = await nativeAcquire(options)
+      if (!fault) return raw
       return { get held() { return raw.held }, async release() { if (fault) throw new Error('foreign actual release'); await raw.release() } }
     })
     const original = await other.c.withExistingSessionBindingObservation!({ sessionIds: ['source'] }, async () => 'actual result').catch(error => error)
@@ -344,6 +379,7 @@ it('consumed native release failure stays unresolved without reacquisition or no
   vi.mocked(acquireSessionLock).mockImplementation(async options => {
     const raw = await nativeAcquire(options); raws.push(raw)
     if (finalBarrier) selected ??= raw
+    if (raw !== selected) return raw
     return { get held() { return raw.held }, async release() {
       if (raw === selected) { attempts++; await raw.release(); throw new Error('consumed native unknown') }
       await raw.release()
@@ -494,8 +530,16 @@ it('a previously observed real reservation never becomes first capture after lat
   try {
     const host = createInlineForkHost(f.c), handoff = host.withHandoff.bind(host), controller = controllerApi.createForkSessionController(f.c, host), op = await operation(controller)
     await f.c.releaseOwnership('source')
-    const backend = createJsonlBackend(f.root), reserve = backend.prepareBootstrapCapture!.bind(backend)
-    backend.prepareBootstrapCapture = async (...args) => { const result = await reserve(...args); if (result.kind === 'committed-new') throw undefined; return result }
+    const backend = createJsonlBackend(f.root, {
+      wrap(original) {
+        const reserve = original.prepareBootstrapCapture!.bind(original)
+        original.prepareBootstrapCapture = async (...args) => {
+          const result = await reserve(...args)
+          if (result.kind === 'committed-new') throw undefined
+          return result
+        }
+      },
+    })
     issuer = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
     const issued = controllerApi.createForkSessionController(issuer, createInlineForkHost(issuer))
     await issued.execute({ operation: op, mode: 'begin' }).catch(() => {})

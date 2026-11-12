@@ -4,13 +4,25 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { openCommitLog } from '@i-harness/session-commit-log'
 import { createCommitCoordinator } from '../src/commit/coordinator.ts'
+import type { LegacySession, LegacySessionStore } from '../src/commit/legacy.ts'
 
 it('checkpoints through normal document writes while preserving deletion and legacy fallback semantics', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-coordinator-checkpoint-'))
-  const legacy = {
+  const migrations: string[] = [], documentScopes: string[][] = []
+  // The original fixture source is a fixed projection with no mutation API.
+  // Its absence and document values stay constant through each publication.
+  const legacy: LegacySessionStore = {
     async list() { return [] },
     async read(): Promise<never> { throw Error('No legacy session') },
     async readDocument(key: string) { return ['legacy-cleared', 'legacy-kept'].includes(key) ? { legacy: key } : undefined },
+    async migrate<T>(id: string, publish: (source: LegacySession | undefined) => Promise<T>): Promise<T> {
+      migrations.push(id)
+      return publish(undefined)
+    },
+    async withDocuments<T>(keys: readonly string[], work: () => Promise<T>): Promise<T> {
+      documentScopes.push([...keys])
+      return work()
+    },
   }
   let coordinator = createCommitCoordinator({ root, legacy })
   try {
@@ -28,6 +40,8 @@ it('checkpoints through normal document writes while preserving deletion and leg
     const log = await openCommitLog({ root, sessionId: '__documents__' }, 'read')
     try { expect(log.records().length).toBeLessThan(64) } finally { await log.close() }
     expect((await readdir(join(root, '__documents__', 'side'))).length).toBeLessThan(64)
+    expect(migrations).toContain('gone')
+    expect(documentScopes.some(keys => keys.includes('legacy-cleared'))).toBe(true)
   } finally {
     await coordinator.close()
     if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ih-coordinator-checkpoint-')) throw Error('Unsafe cleanup')

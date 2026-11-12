@@ -1,10 +1,11 @@
 import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { describe, expect, it } from "vitest"
 import type { SessionEvent } from "@i-harness/core-session"
-import { createSessionCoordinator, registerEventType, registerUpgrade, type CoordinatorOptions, type PersistenceBackend } from "../src/index.ts"
+import { createReadOnlySessionCoordinator, registerEventType, registerUpgrade, type CoordinatorOptions, type PersistenceBackend } from "../src/index.ts"
 import { createOwnership } from "../src/coordinator/ownership.ts"
 import { createMutations } from "../src/coordinator/mutations.ts"
 import { createLoads } from "../src/coordinator/load.ts"
+import { createDocuments } from "../src/coordinator/documents.ts"
 
 function backend(): PersistenceBackend {
   return {
@@ -23,8 +24,8 @@ describe("coordinator callback and evaluation order", () => {
     const events = [{ type: "s9/custom", seq: 0 }] as unknown as SessionEvent[]
     store.read = async () => ({ version: 0, events })
     store.repair = async () => ({ version: 0, events })
-    const first = createSessionCoordinator(store)
-    const second = createSessionCoordinator(store)
+    const first = createReadOnlySessionCoordinator(store)
+    const second = createReadOnlySessionCoordinator(store)
     registerEventType("s9/custom")
     registerUpgrade(0, (events) => events.map(event => ({ ...event, upgraded: true })))
     expect((await first.snapshot!("s")).session.events).toEqual([{ type: "s9/custom", seq: 0, upgraded: true }])
@@ -47,9 +48,9 @@ describe("coordinator callback and evaluation order", () => {
       get acquireRetryMs(): number { throw new Error("retry must remain lazy") },
       get acquireDeadlineMs(): number { throw new Error("deadline must remain lazy") },
     }
-    const coordinator = createSessionCoordinator(store, options)
+    const coordinator = createReadOnlySessionCoordinator(store, options)
     expect(reads).toEqual(["report", "delay", "lock", "enabled", "lock", "root", "backend.lockRoot"])
-    await expect(coordinator.append("s", [])).rejects.toThrow("TASK_TRANSITION_UNSUPPORTED")
+    expect(Reflect.get(coordinator, "append")).toBeUndefined()
     await coordinator.close()
   })
 
@@ -65,7 +66,7 @@ describe("coordinator callback and evaluation order", () => {
     await Promise.all(ownership.releaseHeldLocks())
   })
 
-  it("lets a throwing document reporter reject while the next document and close still drain", async () => {
+  it("lets the original document queue reject a throwing reporter while the next document and cleanup still drain", async () => {
     const store = backend()
     const diskError = new Error("disk")
     const reportError = new Error("reporter")
@@ -75,15 +76,18 @@ describe("coordinator callback and evaluation order", () => {
       writes.push(key)
       if (key === "bad") throw diskError
     }
-    const coordinator = createSessionCoordinator(store, { reportBackgroundFailure(error) {
+    const ownership = createOwnership(store)
+    const documents = createDocuments(store, ownership, error => {
       expect(error).toBe(diskError)
       throw reportError
-    } })
-    const failed = coordinator.putDocument("bad", {})
-    const next = coordinator.putDocument("next", {})
+    })
+    const failed = documents.putDocument("bad", {})
+    const next = documents.putDocument("next", {})
     await expect(failed).rejects.toBe(reportError)
     await next
-    await coordinator.close()
+    await documents.pendingWrites()
+    await documents.retryDisposals()
+    await Promise.all(ownership.releaseHeldLocks())
     expect(writes).toEqual(["bad", "next"])
   })
 

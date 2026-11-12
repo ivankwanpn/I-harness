@@ -69,13 +69,17 @@ it('rereads accepted facts from each current durable prefix, after index creatio
   expect((await readFile(path, 'utf8')).split('\n').filter(Boolean)).toHaveLength(2)
   await coordinator.close()
 })
-it('refuses unsupported or interrupted readiness before any v2 append', async () => {
+it('uses original current readiness without the legacy upgrade method and refuses a missing managed owner before v2 append', async () => {
   const { coordinator, path } = await store(3, true), raw = await readFile(path, 'utf8')
-  await expect(coordinator.ensureWritableFormat!('s')).rejects.toThrow('TASK_TRANSITION_UNSUPPORTED')
-  expect(await readFile(path, 'utf8')).toBe(raw)
-  const s = createSession()
-  await expect(ownedContextReadiness({ ...coordinator, openManagedDocument: undefined } as unknown as typeof coordinator, 's', s)()).rejects.toMatchObject({code:'FACT_OWNER_UNSUPPORTED'})
-  await coordinator.close()
+  try {
+    expect(await coordinator.ensureWritableFormat!('s')).toEqual({ formatVersion: CURRENT_FORMAT_VERSION })
+    const ready = await readFile(path, 'utf8')
+    expect(ready).not.toBe(raw)
+    expect((await coordinator.snapshot!('s')).session.events).toEqual([])
+    const s = createSession()
+    await expect(ownedContextReadiness({ ...coordinator, openManagedDocument: undefined } as unknown as typeof coordinator, 's', s)()).rejects.toMatchObject({code:'FACT_OWNER_UNSUPPORTED'})
+    expect(await readFile(path, 'utf8')).toBe(ready)
+  } finally { await coordinator.close() }
 })
 it('central seed drops all operational facts and inherited accepted receipts even without rewind', () => {
   const { session, sample } = history(); append(session, sample)
