@@ -11,7 +11,19 @@ import * as bindings from '../../session-persistence/src/coordinator/binding-obs
 import { lockPathFor } from '../../fs-lock/src/index.ts'
 import { artifactPathsFor } from '../../session-persistence/src/coordinator/artifact-path-association.ts'
 const closeFault=vi.hoisted(()=>({path:'',fail:false,attempts:0,native:0,failure:undefined as unknown}))
-vi.mock('../../fs-lock/src/index.ts',async original=>{const real=await original<typeof import('../../fs-lock/src/index.ts')>();return {...real,async acquireSessionLock(...args:Parameters<typeof real.acquireSessionLock>){const lease=await real.acquireSessionLock(...args);return {get held(){return lease.held},async release(){if(args[0].lockPath===closeFault.path){closeFault.attempts++;if(closeFault.fail)throw closeFault.failure;closeFault.native++}await lease.release()}}}}})
+vi.mock('../../fs-lock/src/index.ts', async original => {
+  const real = await original<typeof import('../../fs-lock/src/index.ts')>()
+  return { ...real, async acquireSessionLock(...args: Parameters<typeof real.acquireSessionLock>) {
+    const lease = await real.acquireSessionLock(...args)
+    if (args[0].lockPath !== closeFault.path) return lease
+    return { get held() { return lease.held }, async release() {
+      closeFault.attempts++
+      if (closeFault.fail) throw closeFault.failure
+      await lease.release()
+      closeFault.native++
+    } }
+  } }
+})
 import { expect, it, vi } from 'vitest'
 import { copyFile, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -335,7 +347,7 @@ it('direct escaped document close fences and drains the exact held cold use',asy
  }finally{leave.resolve();await use;await closing?.catch(()=>{});await f.coordinator.close()}
 })
 it.each([undefined,0])('retains direct cold close ownership and retries original cleanup failure %s',async failure=>{
- const f=await fixture();try{const result=await selected.inspectColdSelectedTarget(f.coordinator,f.route);if(result.kind!=='qualification-required')throw Error('Missing target');let document!:import('../../session-persistence/src/coordinator/fact-types.ts').ManagedDocument;await selected.useColdSelectedTarget(f.coordinator,result.target,async observation=>{document=observation.document});closeFault.path=lockPathFor(f.root,'artifact-ownership:'+(artifactPathsFor(createJsonlBackend(f.root))!.session('target') as {key:string}).key);closeFault.failure=failure;closeFault.fail=true;closeFault.attempts=closeFault.native=0
+ const f=await fixture();closeFault.path=lockPathFor(f.root,'artifact-ownership:'+(artifactPathsFor(createJsonlBackend(f.root))!.session('target') as {key:string}).key);try{const result=await selected.inspectColdSelectedTarget(f.coordinator,f.route);if(result.kind!=='qualification-required')throw Error('Missing target');let document!:import('../../session-persistence/src/coordinator/fact-types.ts').ManagedDocument;await selected.useColdSelectedTarget(f.coordinator,result.target,async observation=>{document=observation.document});closeFault.failure=failure;closeFault.fail=true;closeFault.attempts=closeFault.native=0
  expect(await document.close().then(()=>({failed:false}),cause=>({failed:true,cause}))).toEqual({failed:true,cause:failure});expect(f.coordinator.ownerOf!('target')).toBe(true);expect((await selected.inspectColdSelectedTarget(f.coordinator,f.route)).kind).toBe('blocked');await expect(f.coordinator.openManagedDocument('target')).rejects.toThrow();await expect(f.coordinator.withProcessReadObservation!('target',{documentKeys:[]},async()=>true,async value=>value)).rejects.toThrow();closeFault.fail=false;await document.close();expect(closeFault.attempts).toBe(2);expect(closeFault.native).toBe(1);expect(f.coordinator.ownerOf!('target')).toBe(false);const reopened=await selected.inspectColdSelectedTarget(f.coordinator,f.route);if(reopened.kind!=='qualification-required')throw Error('Cold target not reusable');await document.close();await selected.useColdSelectedTarget(f.coordinator,reopened.target,async observation=>observation.assertCurrent())
  }finally{closeFault.fail=false;await f.coordinator.close();closeFault.path=''}
 })
@@ -356,10 +368,14 @@ it.each(['clean','cleanup-debt'] as const)('closes the exact document attached d
   await coordinator.create({sessionId:'ordinary'});opening=coordinator.openManagedDocument('ordinary');await entered.promise;expect(document).toBeUndefined();expect(JSON.parse((await readFile(join(root,'ordinary.jsonl'),'utf8')).split('\n')[0]!).formatVersion).toBe(14)
   closing=coordinator.closeManagedDocument!('ordinary').then(()=>({failed:false}),cause=>({failed:true,cause}));await closingEntered.promise;expect((await prompt(closing)).kind).toBe('pending');leave.resolve();const opened=await opening;expect(opened).toBe(document);expect(()=>opened.assertReady()).toThrow();const outcome=await closing
   expect(attempts).toBe(1);expect(resolved).toBeDefined()
-  if(mode==='cleanup-debt'){expect(outcome).toEqual({failed:true,cause:undefined});expect(registry!.has('ordinary')).toBe(true);expect(resolved!.get('ordinary')).toBe(opened);expect(()=>registry!.captureProcessReadById('ordinary',[])).toThrow();await coordinator.closeManagedDocument!('ordinary');expect(attempts).toBe(2)}else expect(outcome.failed).toBe(false)
+  if(mode==='cleanup-debt'){expect(outcome.failed).toBe(true);expect(outcome.cause).toBeInstanceOf(AggregateError);expect(outcome.cause).toMatchObject({errors:[undefined]});expect(registry!.has('ordinary')).toBe(true);expect(resolved!.get('ordinary')).toBe(opened);expect(()=>registry!.captureProcessReadById('ordinary',[])).toThrow();await coordinator.closeManagedDocument!('ordinary');expect(attempts).toBe(2)}else expect(outcome.failed).toBe(false)
   expect(registry!.has('ordinary')).toBe(false);expect(resolved!.has('ordinary')).toBe(false);await opened.close();expect(attempts).toBe(mode==='cleanup-debt'?2:1)
   if(mode==='clean'){read.mockRestore();const next=await coordinator.openManagedDocument('ordinary');expect(next).not.toBe(opened);next.assertReady();await opened.close();next.assertReady()}
- }finally{fail=false;leave.resolve();prefixGate.path='';prefixGate.armed=false;await opening?.catch(()=>{});await closing;await coordinator.close();map.mockRestore();read.mockRestore();leaf.mockRestore();factory.mockRestore()}
+ } finally {
+   fail=false;leave.resolve();prefixGate.path='';prefixGate.armed=false
+   try { await opening?.catch(()=>{});await closing;await coordinator.close() }
+   finally { map.mockRestore();read.mockRestore();leaf.mockRestore();factory.mockRestore() }
+ }
 })
 
 

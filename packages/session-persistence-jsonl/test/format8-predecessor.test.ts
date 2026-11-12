@@ -13,7 +13,7 @@ it.each([false,true])('upgrades literal8 header only, preserves its journal and 
  const coordinator=createSessionCoordinator(backend,{lock:{enabled:true}})
  try {
   expect(before.version).toBe(8);expect(before.events).toEqual(fixture.session.events)
-  if(explicit)expect((await backend.upgradeSessionFormat!('legacy',8,CURRENT_FORMAT_VERSION)).formatVersion).toBe(CURRENT_FORMAT_VERSION)
+  if(explicit)expect((await coordinator.ensureWritableFormat!('legacy')).formatVersion).toBe(CURRENT_FORMAT_VERSION)
   const document=await coordinator.openManagedDocument('legacy'),upgraded=await readFile(path,'utf8'),header=JSON.parse(upgraded.slice(0,upgraded.indexOf('\n')))
   expect(header).toEqual({...fixture.header,formatVersion:CURRENT_FORMAT_VERSION});expect(upgraded.slice(upgraded.indexOf('\n')+1)).toBe(fixture.body)
   expect(document.view.events).toEqual(before.events)
@@ -28,7 +28,7 @@ it.each([false,true])('upgrades literal8 header only, preserves its journal and 
   await expect(backend.upgradeSessionFormat!('legacy',CURRENT_FORMAT_VERSION+1,CURRENT_FORMAT_VERSION)).rejects.toThrow()
   const future=JSON.stringify({...fixture.header,formatVersion:CURRENT_FORMAT_VERSION+1,sessionId:'future'})+'\n'+fixture.body
   await writeFile(join(root,'future.jsonl'),future)
-  await expect(coordinator.openManagedDocument('future')).rejects.toThrow(/newer|Future|upgrade/i)
+  await expect(coordinator.openManagedDocument('future')).rejects.toMatchObject({code:'SESSION_FORMAT_UNSUPPORTED'})
   expect(await readFile(join(root,'future.jsonl'),'utf8')).toBe(future)
   await coordinator.close()
   const fresh=createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})

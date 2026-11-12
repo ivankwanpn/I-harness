@@ -1,5 +1,5 @@
 import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
-import { expect, it, vi } from 'vitest'
+import { expect, it } from 'vitest'
 import { mkdtemp, readFile, writeFile, copyFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -36,9 +36,14 @@ it('commits, structurally exports, cold-loads and forks replacement history unde
     expect(structural).not.toContain('incarnation')
     const child = await forkSession(coordinator, id), target = await coordinator.openManagedDocument(child.sessionId)
     expect(deriveMessages(target.view).map(message => message.content)).toEqual(['H', 'S', 'E2'])
-    expect(target.view.header).toMatchObject({ parentSession: id, seedLength: 10 })
+    expect(target.view.header).toMatchObject({ parentSession: id, seedLength: 4 })
+    expect(target.view.events.map(event => event.type)).toEqual([
+      'conversation/seed-manifest', 'conversation/seed-group',
+      'conversation/seed-group', 'conversation/seed-group', 'session/bootstrap',
+    ])
+    expect(target.view.events[4]).toMatchObject({ seq: 4, seedLength: 4 })
     const outcome = await target.metadata.admit({ type: 'plan/mode', mode: 'on' })
-    expect(outcome).toMatchObject({ kind: 'committed', receipt: { owner: { sessionId: child.sessionId } }, seqs: [10] })
+    expect(outcome).toMatchObject({ kind: 'committed', receipt: { owner: { sessionId: child.sessionId } }, seqs: [5] })
     if (outcome.kind === 'committed' && imported.kind === 'committed') expect(outcome.receipt.owner).not.toEqual(imported.receipt.owner)
     expect(await readFile(path)).toEqual(original)
     await parent.close(); await coordinator.releaseOwnership(id)
@@ -70,10 +75,16 @@ it('refuses wrong format before repair or mutation and hides every event of a to
   const path = join(root, 's.jsonl'), header = (formatVersion: number) => Buffer.from(JSON.stringify({ formatVersion, sessionId: 's', createdAt: 'literal', journal }) + '\n')
   const wrong = Buffer.concat([header(6), frame.bytes])
   await writeFile(path, wrong)
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), repair = vi.spyOn(backend, 'repair')
+  let repairs = 0
+  const backend = createJsonlBackend(root, { wrap(original) {
+    const repair = original.repair.bind(original)
+    original.repair = (...args) => { repairs++; return repair(...args) }
+  } }), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   try {
-    await expect(coordinator.loadOwned('s')).rejects.toBeInstanceOf(SessionFormatUnsupportedError)
-    expect(repair).not.toHaveBeenCalled(); expect(await readFile(path)).toEqual(wrong)
+    await expect(coordinator.loadOwned('s')).rejects.toMatchObject({
+      code: 'SESSION_FORMAT_UNSUPPORTED', cause: expect.any(SessionFormatUnsupportedError),
+    })
+    expect(repairs).toBe(0); expect(await readFile(path)).toEqual(wrong)
     const torn = Buffer.concat([header(7), frame.bytes.subarray(0, frame.bytes.length - 2)])
     await writeFile(path, torn)
     expect((await coordinator.snapshot!('s')).session.events).toEqual([])

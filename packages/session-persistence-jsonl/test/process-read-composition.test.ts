@@ -6,14 +6,18 @@ import { createSessionCoordinator, compileSemanticSeed } from '@i-harness/sessio
 import { createJsonlBackend } from '../src/backend-factory.ts';
 import { createSessionCoordinator as createComposedCoordinator } from './helpers/composed.ts';
 
-it('constructs the genuine composed coordinator while generic construction stays separate', async () => {
+it('constructs original process-read capabilities through public and composed factories', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ih-compose-'));
     const composed = createComposedCoordinator(createJsonlBackend(root), { lock: { enabled: true } });
     const generic = createSessionCoordinator(createJsonlBackend(root));
     try {
         await composed.create({ sessionId: 's' });
         expect((await composed.snapshot!('s')).session.events).toEqual([]);
-        expect('withProcessReadObservation' in generic).toBe(false);
+        expect(generic.withProcessReadObservation).toBeTypeOf('function');
+        await generic.create({ sessionId: 'public' });
+        expect(await generic.withProcessReadObservation!('public', { documentKeys: [] }, async observation => {
+            observation.assertCurrent(); return 'public candidate';
+        }, async value => value)).toBe('public candidate');
         expect(composed.withProcessReadObservation).toBeTypeOf('function');
         let escaped: { assertCurrent(): void } | undefined;
         const result = await composed.withProcessReadObservation!('s', { documentKeys: [] }, async observation => {

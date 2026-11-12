@@ -2,14 +2,13 @@ import { expect, it, vi } from 'vitest'
 const faults = vi.hoisted(() => ({ path: '', active: false, numericStats: 0, readFiles: 0, readBytes: 0, grow: false,
   failClose: false, closes: 0, closeGate: undefined as Promise<void> | undefined, closeEntered: undefined as (() => void) | undefined,
   failUnlink: false, unlinks: 0, unlinkGate: undefined as Promise<void> | undefined, unlinkEntered: undefined as (() => void) | undefined,
-  published: false, pathChecks: 0, revokeAtPathCheck: false, revoke: undefined as (() => void) | undefined, finalOpens: 0 }))
+  published: false, revokeAfterPublish: false, revoke: undefined as (() => void) | undefined, finalOpens: 0 }))
 vi.mock('node:fs/promises', async original => {
   const real = await original<typeof import('node:fs/promises')>()
   return { ...real,
     async lstat(...args: Parameters<typeof real.lstat>) {
       if (faults.active && !args[1]?.bigint) faults.numericStats++
       const stat = await real.lstat(...args)
-      if (faults.revokeAtPathCheck && faults.published && String(args[0]) === faults.path && ++faults.pathChecks === 2) faults.revoke?.()
       return stat
     },
     async open(...args: Parameters<typeof real.open>) {
@@ -30,7 +29,13 @@ vi.mock('node:fs/promises', async original => {
       }
       return handle
     },
-    async rename(...args: Parameters<typeof real.rename>) { await real.rename(...args); if (String(args[1]) === faults.path) faults.published = true },
+    async rename(...args: Parameters<typeof real.rename>) {
+      await real.rename(...args)
+      if (String(args[1]) === faults.path) {
+        faults.published = true
+        if (faults.revokeAfterPublish) faults.revoke?.()
+      }
+    },
     async unlink(...args: Parameters<typeof real.unlink>) {
       if (String(args[0]).startsWith(faults.path + '.') && String(args[0]).endsWith('.tmp')) {
         if (faults.failUnlink) throw false
@@ -56,7 +61,7 @@ async function fixture(run: (session: ReturnType<typeof createTaskDocumentObserv
   try { await run(session, faults.path) }
   finally {
     faults.active = false; faults.grow = false; faults.failClose = false; faults.failUnlink = false; faults.closeGate = undefined; faults.unlinkGate = undefined
-    faults.closeEntered = undefined; faults.unlinkEntered = undefined; faults.published = false; faults.pathChecks = 0; faults.revokeAtPathCheck = false; faults.revoke = undefined
+    faults.closeEntered = undefined; faults.unlinkEntered = undefined; faults.published = false; faults.revokeAfterPublish = false; faults.revoke = undefined
     await session.settleResources(); await lease.release(); await pin.release(); await rm(root, { recursive: true, force: true })
     faults.path = ''; faults.closes = 0; faults.unlinks = 0; faults.numericStats = 0; faults.readFiles = 0; faults.readBytes = 0; faults.finalOpens = 0
   }
@@ -87,9 +92,10 @@ it('bounds preimage reads when the original descriptor grows after metadata', as
   expect((await write.issue()).kind).toBe('conflict'); expect(faults.readFiles).toBe(0); expect(faults.readBytes).toBeLessThanOrEqual(8)
   faults.active = false; expect((await readFile(path)).length).toBe(1031)
 }))
-it('does not acquire a final writable descriptor after revocation at the last path check', async () => fixture(async (session, path) => {
-  const write = await replacement(session, path); faults.finalOpens = 0; faults.revokeAtPathCheck = true
-  expect((await write.issue()).kind).toBe('unknown'); expect(faults.finalOpens).toBe(0)
+it('does not acquire a final writable descriptor after revocation during original publication', async () => fixture(async (session, path) => {
+  const write = await replacement(session, path); faults.finalOpens = 0; faults.revokeAfterPublish = true
+  expect((await write.issue()).kind).toBe('unknown'); expect(faults.published).toBe(true); expect(faults.finalOpens).toBe(0)
+  expect(await readFile(path, 'utf8')).toBe('{"x":2}\n')
 }))
 it('uses exact native bigint identity throughout raw observation and retained publication', async () => fixture(async (session, path) => {
   faults.active = true; faults.revoke = undefined; faults.numericStats = 0
