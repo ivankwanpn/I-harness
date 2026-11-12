@@ -6,7 +6,7 @@ vi.mock('../../session-persistence-jsonl/src/backend/document-write.ts',async lo
 vi.mock('node:fs/promises',async original=>{const fs=await original<typeof import('node:fs/promises')>();return {...fs,async open(...args:Parameters<typeof fs.open>){const handle=await fs.open(...args);if(String(args[0])===fileCut.path)fileCut.opens++;const sync=handle.sync.bind(handle);handle.sync=async()=>{await sync();if(fileCut.headerCut&&String(args[0])===fileCut.headerPath){fileCut.headerCut=false;fileCut.headerFaults++;throw undefined}};return handle},async rename(...args:Parameters<typeof fs.rename>){await fs.rename(...args);if(String(args[1])===fileCut.path)fileCut.renames++;if(fileCut.rename&&String(args[1])===fileCut.path){fileCut.rename=false;throw undefined}}}})
 const instructionCut=vi.hoisted(()=>({armed:false,created:0,closed:0}))
 vi.mock('../../runtime-context/src/index.ts',async original=>{const real=await original<typeof import('../../runtime-context/src/index.ts')>();return {...real,createRuntimeContext(...args:Parameters<typeof real.createRuntimeContext>){const runtime=real.createRuntimeContext(...args),counted=instructionCut.armed;if(counted)instructionCut.created++;return {...runtime,registerSection(...args:Parameters<typeof runtime.registerSection>){const result=runtime.registerSection(...args);if(instructionCut.armed){instructionCut.armed=false;throw undefined}return result},async close(){await runtime.close();if(counted)instructionCut.closed++}}}}})
-vi.mock('../../fs-lock/src/index.ts',async original=>{const real=await original<typeof import('../../fs-lock/src/index.ts')>();return {...real,async acquireSessionLock(options:import('../../fs-lock/src/index.ts').AcquireOptions){const lock=await real.acquireSessionLock(options);return {get held(){return lock.held},async release(){if(options.lockPath===scopeCut.path){scopeCut.entered?.();await scopeCut.gate;if(scopeCut.armed){scopeCut.attempts++;throw scopeCut.cause}}await lock.release()}}}}})
+vi.mock('../../fs-lock/src/index.ts',async original=>{const real=await original<typeof import('../../fs-lock/src/index.ts')>();return {...real,async acquireSessionLock(options:import('../../fs-lock/src/index.ts').AcquireOptions){const lock=await real.acquireSessionLock(options);if(options.lockPath!==scopeCut.path)return lock;return {get held(){return lock.held},async release(){if(options.lockPath===scopeCut.path){scopeCut.entered?.();await scopeCut.gate;if(scopeCut.armed){scopeCut.attempts++;throw scopeCut.cause}}await lock.release()}}}}})
 import {mkdtemp,rm} from 'node:fs/promises'
 import {join,relative,isAbsolute,sep} from 'node:path'
 import {createContext} from '@i-harness/core-plugin'
@@ -37,12 +37,13 @@ import {createProjectInstructionEnvironment} from '../../session-executor/src/co
 import {receivedInputsFor} from '../../session-executor/src/lifecycle/received-inputs.ts'
 import {inspectTaskChildHistory} from '../src/child/task-history.ts'
 import {recordFixture} from '../../session-executor/test/helpers.ts'
-// Real native Task birth took 23.5–26.9s in quiet completed runs. Keep the
-// operation bound local and reserve a separate finite window to join cleanup.
-const operationTimeoutMs=45_000
+// Unarmed leases retain their original native identity. Bound the operation
+// separately from the finite window used to join original owner cleanup.
+const operationTimeoutMs=20_000
 const ownerCleanupTimeoutMs=15_000
 const diagnostic=(value:unknown):unknown=>value instanceof Error?{message:value.message,stack:value.stack,cause:diagnostic(value.cause),...(value instanceof AggregateError?{errors:value.errors.map(diagnostic)}:{})}:value
 it.each(['n2','n1','n1-string','n1-stale','n1-stop','n-zero','n-negative','n-overflow','all','all-stale','all-stop','all-commitment','declared','inherit','code','replay-cap','b2-lost-header','missing-host','managed-parent','foreign-host','stop-ack','expiry-ack','binding-unknown','stop-ready','stop-resolver','instruction-falsey','ready-held','publication-stop','scope-close','scope-parent-revoked'] as const)('original ordinary-none connected child: %s',async mode=>{
+ scopeCut.path='';scopeCut.armed=false;scopeCut.attempts=0;scopeCut.entered=undefined;scopeCut.gate=undefined
  const fixtureController=new AbortController()
  const deadline=Promise.withResolvers<never>()
  void deadline.promise.catch(()=>{})
@@ -195,6 +196,7 @@ it.each(['n2','n1','n1-string','n1-stale','n1-stop','n-zero','n-negative','n-ove
    serializationSpy?.mockRestore();clockSpy?.mockRestore();saveSpy.mockRestore();captureSpy.mockRestore()
    birthSpy?.mockRestore();resumeSpy?.mockRestore();childStartSpy.mockRestore();sourceSpy.mockRestore()
    nativeTaskWrites.path=''
+   scopeCut.path='';scopeCut.entered=undefined;scopeCut.gate=undefined
   }
 
   if(errors.length)throw new AggregateError([...(primary?[primary.cause]:[]),...errors],'Original Task launch and cleanup failed',{cause:primary?.cause})
