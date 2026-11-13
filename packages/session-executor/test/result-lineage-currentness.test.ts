@@ -1,3 +1,4 @@
+import { AsyncResource } from 'node:async_hooks'
 import { expect, it, vi } from 'vitest'
 const checked = vi.hoisted(() => ({ batches: 0, proofs: 0 }))
 vi.mock('../../fs-lock/src/win32-artifact-path.ts', async load => {
@@ -14,11 +15,11 @@ import { createArtifactPathOwner } from '../../fs-lock/src/artifact-path.ts'
 import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { assertArtifactCurrent, createArtifactCurrentGuard } from '../../session-persistence/src/coordinator/artifact-path-association.ts'
-import { assertResultLineage, captureResultLineageGuard } from '../src/lifecycle/result-observation.ts'
+import { createResultObservationScope, assertResultLineage, captureResultLineageGuard } from '../src/lifecycle/result-observation.ts'
 
-async function fixture() {
+async function fixture(options?: Parameters<typeof createJsonlBackend>[1]) {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'lineage-current-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } })
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, 'sessions'), options), { lock: { enabled: true } })
   await coordinator.create({ sessionId: 'source' })
   return { root, coordinator, async close() { await coordinator.close(); await rm(root, { recursive: true, force: true }) } }
 }
@@ -128,4 +129,52 @@ it('does not revive an original observation after its actual scope retires', asy
     const retired = await f.coordinator.withExistingSessionBindingObservation!({ sessionIds: ['source'] }, async read => read)
     expect(() => assertResultLineage(retired, ['source'], 'source')).toThrow()
   } finally { await f.close() }
+})
+
+it('preserves an original read while an independent known writer is held', async () => {
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const f = await fixture({ wrapOwnedBatch: original => async (...args) => {
+    entered.resolve()
+    await release.promise
+    return original(...args)
+  } })
+  const document = await f.coordinator.openManagedDocument('source')
+  const scopes = createResultObservationScope()
+  const background = new AsyncResource('original-independent-known-writer')
+  let writing: ReturnType<typeof document.metadata.admit> | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await f.coordinator.withExistingSessionBindingObservation!({ sessionIds: ['source'] }, async observation => {
+      writing = background.runInAsyncScope(() => document.metadata.admit({ type: 'plan/mode', mode: 'on' }))
+      void writing.catch(() => {})
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(Error('Original writer did not enter its native boundary while observation was held')), 3000)
+      })
+      await Promise.race([
+        entered.promise,
+        writing.then(value => { throw Error('Writer settled before its original boundary: ' + JSON.stringify(value)) }),
+        deadline,
+      ])
+      clearTimeout(timer)
+      document.assertReady()
+      await scopes.run({ sessionId: 'source', sessionIds: ['source'], observation, document,
+        currentSource() { return { sourceId: 'source', readonly: true } }, assertHostCurrent() {},
+      }, async () => {
+        const primary = scopes.current('source')!
+        primary.assertCurrent()
+        if (primary.kind !== 'public') throw Error('Original public observation required')
+        expect(primary.view.events).toHaveLength(0)
+      })
+    })
+  } finally {
+    clearTimeout(timer)
+    release.resolve()
+    try {
+      if (writing) expect((await writing).kind).toBe('committed')
+    } finally {
+      background.emitDestroy()
+      await f.close()
+    }
+  }
 })
