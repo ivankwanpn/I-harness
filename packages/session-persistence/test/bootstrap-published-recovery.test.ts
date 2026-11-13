@@ -8,7 +8,8 @@ import { tmpdir } from 'node:os'
 import { basename, join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
-import { decodeFactBatch, EMPTY_SEMANTIC_DEPENDENCY_DIGEST, encodeFactBatch, exportConversationSeed, legacyPrefixDigest } from '@i-harness/core-session'
+import { createContextOutputService } from '../../context-output/src/index.ts'
+import { createSession, append, decodeFactBatch, EMPTY_SEMANTIC_DEPENDENCY_DIGEST, encodeFactBatch, exportConversationSeed, legacyPrefixDigest } from '@i-harness/core-session'
 import { buildBootstrapHeader, captureBootstrapRequest } from '../src/coordinator/bootstrap-header.ts'
 import { bootstrapPaths } from '../../session-persistence-jsonl/src/backend/bootstrap-header.ts'
 import { readBootstrapFactJournal } from '@i-harness/core-session/internal/bootstrap'
@@ -269,4 +270,49 @@ it('rejects a changed observed Task witness without erasing the new durable noti
   confirmation.path = f.task; confirmation.before = () => writeFile(f.task, next)
   expect(['ready', 'already-ready']).not.toContain((await cold.coordinator.resumeChildTarget!(f.request, guards, f.payload)).kind)
   expect(appends).toBe(0); expect(await readFile(f.path)).toEqual(before); expect(await readFile(f.task)).toEqual(next)
+})
+
+it('retains a torn completion with a real artifact without consulting dependencies before target preparation', async () => {
+  const root = await mkdtemp(join(tmpdir(),'bootstrap-published-')); roots.push(root)
+  const results = createContextOutputService({root:join(root,'results'),workspaceId:'workspace',config:{enabled:true}})
+  try {
+  const scope = results.registerResultScope({operationId:'source-artifact',sessionId:'parent',callId:'read'},()=>true)
+  const sink = await results.beginResult(scope,'text-utf8-v1')
+  await sink.write(Buffer.from('original retained result'))
+  const saved = await sink.finish('complete')
+  if (saved.kind !== 'committed') throw Error('Actual source result unavailable')
+  const source = createSession()
+  append(source,{type:'step/start'});append(source,{type:'tool/call',callId:'read',name:'read',args:{}});append(source,{type:'assistant/message',text:''})
+  append(source,{type:'tool/result',callId:'read',name:'read',envelope:{version:1,execution:{outcome:'succeeded',dispatch:'dispatched'},preview:'original retained result',media:[],retention:{kind:'artifact',ref:saved.ref}}});append(source,{type:'step/end'})
+  const exported = exportConversationSeed(source,{kind:'session',sessionId:'parent'},{kind:'all'})
+  if (exported.kind !== 'seed') throw Error('Original artifact seed unavailable')
+  const base = pair().payload
+  const payload = {...base,lineage:{origin:'fork' as const,parentSession:'parent'},seed:compileSemanticSeed(exported)}
+  const closure = 'c'.repeat(64), order:string[]=[]
+  let prepared = false, retired = false
+  const transfer = {
+    assertCurrent(){if(retired)throw Error('source retired after original seed')},
+    targetPreparation:{async confirm(){prepared=true;order.push('target');return{kind:'confirmed' as const}},async reconcile(){prepared=true;order.push('target-reconcile');return{kind:'confirmed' as const}},assertTargetCurrent(){}},
+    dependencies:{async confirm(){expect(prepared).toBe(true);order.push('dependency');return{kind:'confirmed' as const,closureDigest:closure}},async reconcile(){expect(prepared).toBe(true);order.push('dependency-reconcile');return{kind:'confirmed' as const,closureDigest:closure}}},
+  }
+  const initial = actor(root), originalAppend=ownedControls(initial.backend).originalAppend
+  ownedControls(initial.backend).append=async(...args)=>{const outcome=await originalAppend(...args);if(args[3].key.batchId.endsWith(':seed'))retired=true;return outcome}
+  expect((await initial.coordinator.bootstrapSemanticTarget(payload,transfer)).kind).toBe('blocked')
+  await initial.coordinator.close()
+  const path=join(root,'target.jsonl'), stagePath=bootstrapPaths(path,payload.invocation).stage
+  const stage=parseBootstrapHeaderStage(await readFile(stagePath)), body=journal(await readFile(path)).decoded
+  const admission=buildBootstrapHeader(payload,stage).initial!
+  const complete={type:'session/bootstrap' as const,version:1 as const,seq:stage.seed.seedLength,operationId:stage.invocation.operationId,manifestDigest:JSON.parse(stage.headerBytes).semanticSeed.manifestDigest,dependencyClosureDigest:closure,seedLength:stage.seed.seedLength,initialInputId:stage.initial!.inputId,initialStartedAt:stage.initial!.startedAt,initialExpiresAt:stage.initial!.expiresAt}
+  const frame=encodeFactBatch('bootstrap:'+stage.invocation.operationId+':complete',body.prefix.prefixDigest,[complete,{...admission,seq:stage.seed.seedLength+1}])
+  await appendFile(path,Buffer.from(frame.bytes).subarray(0,Math.floor(frame.bytes.length/2)))
+  prepared=false;retired=false;order.length=0
+  const cold=actor(root)
+  const recovered=await cold.coordinator.resumeSemanticTarget(payload.invocation,transfer,payload)
+  expect(['ready','already-ready']).toContain(recovered.kind)
+  expect(order[0]).toBe('target');expect(order).toContain('dependency')
+  const restored=journal(await readFile(path)).decoded
+  expect(restored.torn).toBe(false);expect(restored.events.filter(e=>e.type==='agent/input/admitted')).toHaveLength(1)
+  expect(restored.frames.at(-1)!.batch.key).toEqual(frame.key)
+  await cold.coordinator.close()
+  } finally { await results.close() }
 })

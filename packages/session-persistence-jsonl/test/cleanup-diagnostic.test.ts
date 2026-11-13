@@ -1,9 +1,19 @@
 import { expect, it, vi } from 'vitest'
-import { mkdtemp, open } from 'node:fs/promises'
+import { mkdtemp, open, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createJsonlBackend } from '../src/index.ts'
 import { createSessionCoordinator } from './helpers/composed.ts'
+
+const originalLeases = vi.hoisted(() => ({ root: '', held: [] as import('../../fs-lock/src/index.ts').SessionLock[] }))
+vi.mock('../../fs-lock/src/index.ts', async load => {
+  const actual = await load<typeof import('../../fs-lock/src/index.ts')>()
+  return { ...actual, async acquireSessionLock(...args: Parameters<typeof actual.acquireSessionLock>) {
+    const lease = await actual.acquireSessionLock(...args)
+    if (originalLeases.root && args[0].lockPath.startsWith(originalLeases.root)) originalLeases.held.push(lease)
+    return lease
+  } }
+})
 
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
@@ -13,6 +23,7 @@ vi.mock('node:fs/promises', async importOriginal => {
 it.each(['append', 'reconcile'] as const)('reports one safe known-sync cleanup diagnostic through the original coordinator (%s)', async operation => {
   for (const reporter of ['normal', 'throw', 'reject'] as const) {
     const root = await mkdtemp(join(tmpdir(), 'ih-f1-cleanup-report-'))
+    originalLeases.root = root
     const report = vi.fn((_error: unknown) => { if (reporter === 'throw') throw new Error('reporter failed'); if (reporter === 'reject') return Promise.reject(new Error('reporter rejected')) })
     let writes = 0, truncates = 0, syncs = 0, closes = 0, key: import('@i-harness/core-session').BatchKey | undefined
     // The owned-batch writer is bound before the coordinator captures its
@@ -54,7 +65,23 @@ it.each(['append', 'reconcile'] as const)('reports one safe known-sync cleanup d
       await document.reconcile(outcome.receipt.key)
       expect(report).toHaveBeenCalledOnce()
       expect(writes).toBe(1)
-    } finally { vi.mocked(open).mockImplementation(native.open); await coordinator.close() }
+      const committedBytes = await readFile(join(root,id+'.jsonl'))
+      await expect(coordinator.close()).rejects.toBeInstanceOf(AggregateError)
+      await expect(coordinator.close()).rejects.toBeInstanceOf(AggregateError)
+      expect(closes).toBe(1)
+      expect([writes,syncs,truncates]).toEqual([1,1,0])
+      expect(report).toHaveBeenCalledOnce()
+      expect(originalLeases.held.some(lease=>lease.held)).toBe(true)
+      expect(await readFile(join(root,id+'.jsonl'))).toEqual(committedBytes)
+    } finally {
+      vi.mocked(open).mockImplementation(native.open)
+      await coordinator.close().catch(()=>{})
+      // Test-only native hygiene; consumed disposal remains logically unknown.
+      const releases=await Promise.allSettled(originalLeases.held.map(async lease=>{if(lease.held)await lease.release()}))
+      originalLeases.held=[];originalLeases.root=''
+      const errors=releases.flatMap(result=>result.status==='rejected'?[result.reason]:[])
+      if(errors.length)throw new AggregateError(errors,'Original fixture native lease cleanup failed')
+    }
   }
 })
 

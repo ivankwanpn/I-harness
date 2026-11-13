@@ -33,7 +33,7 @@ export type TaskTransitionConfiguration = {
   open(scope: HeldTaskDocumentScope): TaskTransitionBackendSession
   observeFresh(scope: HeldTaskDocumentScope): Promise<FreshProof>
   observeBootstrap(scope: HeldTaskDocumentScope, route: TransitionRoute, held: HeldFactOwner): Promise<FreshProof>
-  observePublishedBootstrap?(scope: HeldTaskDocumentScope, route: TransitionRoute, held: HeldFactOwner, operation: BootstrapHeaderOperation, seed?: Uint8Array): Promise<FreshProof>
+  observePublishedBootstrap?(scope: HeldTaskDocumentScope, route: TransitionRoute, held: HeldFactOwner, operation: BootstrapHeaderOperation, seed?: Uint8Array, completionLimit?: number): Promise<FreshProof>
   openHistory(scope: HeldTaskDocumentScope, held: HeldFactOwner): HistoryReader
   openBootstrapHistory(scope: HeldTaskDocumentScope, route: TransitionRoute, held: HeldFactOwner): HistoryReader
   openHistoryHeader(scope: HeldTaskDocumentScope, held: HeldFactOwner, proof: HistoryProof): HistoryHeader
@@ -275,7 +275,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
     let settleUpgrade: (() => Promise<void>) | undefined, issueUpgrade: TaskDocumentWrite['issue'] | undefined, retryUpgrade: TaskDocumentWrite['retry'] | undefined, outcomeUpgrade: TaskDocumentWrite['outcome'] | undefined
     let upgradeFields: PropertyDescriptorMap | undefined, upgradeWriteFields: PropertyDescriptorMap | undefined
     const captureUpgrade = (value: Header) => { upgrade = value; upgradeFields = Object.getOwnPropertyDescriptors(value); upgradeWriteFields = Object.getOwnPropertyDescriptors(value.handle); settleUpgrade = method(value,'settle'); issueUpgrade = method(value.handle,'issue'); retryUpgrade = method(value.handle,'retry'); outcomeUpgrade = method(value.handle,'outcome') }
-    let published: { operation: BootstrapHeaderOperation; seed?: Uint8Array } | undefined
+    let published: { operation: BootstrapHeaderOperation; seed?: Uint8Array; completionLimit?: number } | undefined
     let retainedHeaderOutcome: import('./bootstrap-types.ts').HeaderOutcome | undefined, upgrade: Header | undefined, upgradeResult: TaskWriteOutcome | undefined, task: TaskTransitionBackendSession | undefined, proof: FreshProof | HistoryProof | undefined, historyReader: HistoryReader | undefined, observation: Awaited<ReturnType<TaskTransitionBackendSession['observe']>> | undefined, write: TaskDocumentWrite | undefined, result: TaskWriteOutcome | undefined, held: HeldFactOwner | undefined = borrowed?.held
     let queue: ReturnType<Ownership['captureActiveSessionOperation']> | undefined, ownerFlight: Promise<void> | undefined, externalFlight: Promise<unknown> | undefined, flight: Promise<void> | undefined, cleanup: Promise<void> | undefined, cleanupPending = false
     let headerSettlement: Promise<void> | undefined, finishFlight: Promise<void> | undefined, headerSettlementFailure: { cause: unknown } | undefined
@@ -335,7 +335,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
           observation ??= await observeTask!(); guard()
           if (!proof) {
             try {
-              if (published && observation.kind === 'present') proof = await observePublishedBootstrap!(scope,route,held,published.operation,published.seed)
+              if (published && observation.kind === 'present') proof = await observePublishedBootstrap!(scope,route,held,published.operation,published.seed,published.completionLimit)
               else if (mode === 'new') proof = await observeBootstrap(scope,route,held)
               else {
                 historyReader = mode === 'completed' ? openBootstrapHistory(scope,route,held) : openHistory(scope,held)
@@ -398,11 +398,11 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
       setMode(value:'new'|'existing-empty'|'completed') { if (this !== barrier || mode && mode !== value) throw new Error('TASK_TRANSITION_CONFLICT'); mode = value },
       get mode() { if (this !== barrier) throw new TypeError('Invalid bootstrap barrier receiver'); return mode },
       async readState() { if (this !== barrier || !held || route.protocol === 'public-results-v1') throw new Error('TASK_TRANSITION_CONFLICT'); return runExternal(async () => { if (hasHeaderDebt(id,held!)) await settleHeader(id,held!); return readBootstrapState(route,held!) }) },
-      preparePublished(operation: BootstrapHeaderOperation, seed?: Uint8Array) {
+      preparePublished(operation: BootstrapHeaderOperation, seed?: Uint8Array, completionLimit?: number) {
         if (this !== barrier || mode || proof || published || flight || ownerFlight || externalFlight || done || !observePublishedBootstrap) return Promise.reject(new Error('TASK_TRANSITION_UNSUPPORTED'))
         const bytes = Buffer.from(operation.stageBytes), stage = parseBootstrapHeaderStage(bytes), headerBytes = Buffer.from(operation.headerBytes)
         if (!headerBytes.equals(Buffer.from(stage.headerBytes))) return Promise.reject(new Error('TASK_TRANSITION_CONFLICT'))
-        published = { operation: { invocation: stage.invocation, target: stage.originalTarget, stageBytes: bytes, headerBytes }, ...(seed ? { seed: Buffer.from(seed) } : {}) }
+        published = { operation: { invocation: stage.invocation, target: stage.originalTarget, stageBytes: bytes, headerBytes }, ...(seed ? { seed: Buffer.from(seed) } : {}), ...(completionLimit === undefined ? {} : {completionLimit}) }
         mode = stage.originalTarget.kind
         return prepare()
       },

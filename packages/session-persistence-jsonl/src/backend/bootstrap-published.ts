@@ -6,7 +6,7 @@ const conflict = (): never => { throw Object.assign(new Error('Published bootstr
 
 /** Validates copied bootstrap bytes. The constructor-owned reader binds them
  * to the actual held namespace. */
-export function capturePublishedBootstrap(route: BootstrapRoute, operation: BootstrapHeaderOperation, seedBytes?: Uint8Array) {
+export function capturePublishedBootstrap(route: BootstrapRoute, operation: BootstrapHeaderOperation, seedBytes?: Uint8Array, completionLimit?: number) {
   const stageBytes = Buffer.from(operation.stageBytes), headerBytes = Buffer.from(operation.headerBytes)
   const stage = parseBootstrapHeaderStage(stageBytes), invocation = routeInvocation(route)
   if (canonicalJsonData(stage.invocation) !== canonicalJsonData(invocation)
@@ -31,6 +31,7 @@ export function capturePublishedBootstrap(route: BootstrapRoute, operation: Boot
   const header = JSON.parse(stage.headerBytes)
   if (bootstrapManifest(stage, records) !== header.semanticSeed.manifestDigest) conflict()
   if (stage.captureReservation) validateOwnedCaptureStage(stage.captureReservation, stage, records)
+  if (completionLimit !== undefined && (!Number.isSafeInteger(completionLimit) || completionLimit <= 0)) conflict()
   return Object.freeze({
     check(state: BootstrapReadState, target: Uint8Array | undefined, actualStage: Uint8Array | undefined, publication: Uint8Array | undefined): string {
       if (state.foreign || state.promotionPresent) conflict()
@@ -45,7 +46,19 @@ export function capturePublishedBootstrap(route: BootstrapRoute, operation: Boot
       const bytes = target && Buffer.from(target)
       const expected = Buffer.concat([headerBytes, ...(seed ? [seed] : [])])
       const preimage = !!bytes && originalEmptyTarget(bytes,invocation.targetSessionId,operation)
-      if (bytes && !preimage && (bytes.length > expected.length || !bytes.equals(expected.subarray(0,bytes.length)))) conflict()
+      if (bytes && !preimage) {
+        if (bytes.length <= expected.length) {
+          if (!bytes.equals(expected.subarray(0,bytes.length))) conflict()
+        } else {
+          // This tail is an observation, never a receipt or history grant.
+          // Original journal reconciliation alone may validate and truncate it.
+          const tail = bytes.subarray(expected.length)
+          if (!completionLimit || !bytes.subarray(0,expected.length).equals(expected)
+            || tail.length >= completionLimit || tail.includes(10) || !state.torn
+            || state.events?.length !== stage.seed.seedLength
+            || state.frames?.length !== (seed ? 1 : 0)) conflict()
+        }
+      }
       if (publication) {
         if (stage.originalTarget.kind !== 'existing-empty') conflict()
         const published = Buffer.from(publication)

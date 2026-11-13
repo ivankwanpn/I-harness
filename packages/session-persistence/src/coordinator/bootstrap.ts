@@ -88,6 +88,21 @@ function publicationStatus(state:BootstrapReadState,stage?:BootstrapHeaderStage)
   if(bytes.length>expected.length||!Buffer.from(bytes).equals(expected.subarray(0,bytes.length)))return 'conflict'
   return readyState(state)&&bytes.length!==expected.length?'unknown':'valid'
 }
+function completionEvents(request: BootstrapRequest, stage: BootstrapHeaderStage, closure: string): SessionEvent[] {
+  const initial = buildBootstrapHeader(request, stage).initial
+  const complete: SessionEvent = {
+    type: 'session/bootstrap', version: 1, seq: stage.seed.seedLength,
+    operationId: stage.invocation.operationId,
+    manifestDigest: manifest(stage), dependencyClosureDigest: closure,
+    seedLength: stage.seed.seedLength,
+    ...(stage.initial ? {
+      initialInputId: stage.initial.inputId,
+      initialStartedAt: stage.initial.startedAt,
+      initialExpiresAt: stage.initial.expiresAt,
+    } : {}),
+  }
+  return [complete, ...(initial ? [{ ...initial, seq: stage.seed.seedLength + 1 }] : [])]
+}
 function framesFor(stage:BootstrapHeaderStage,events:readonly SessionEvent[]):BootstrapFrame[] {
   let prefix=emptyPrefix();const frames:BootstrapFrame[]=[]
   const add=(name:string,items:readonly SessionEvent[])=>{const batch=encodeFactBatch(`bootstrap:${stage.invocation.operationId}:${name}`,prefix.prefixDigest,items);frames.push({prefix,batch});const decoded=JSON.parse(Buffer.from(batch.bytes).toString('utf8'));prefix={eventCount:prefix.eventCount+batch.key.count,bodyBytes:prefix.bodyBytes+batch.bytes.length,prefixDigest:decoded.prefixDigest}}
@@ -488,7 +503,11 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         try {
           if (published) {
             const seed = b.stage.seed.seedLength ? encodeFactBatch('bootstrap:' + b.invocation.operationId + ':seed', emptyPrefix().prefixDigest, b.request.seed.records).bytes : undefined
-            await barrier.preparePublished(b.operation!, seed)
+            const previous = seed ? decodeFactBatch(seed).prefixDigest : emptyPrefix().prefixDigest
+            // The fixed-width placeholder measures only; no closure authority
+            // is inferred until the existing target/dependency sequence runs.
+            const completionLimit = encodeFactBatch('bootstrap:'+b.invocation.operationId+':complete',previous,completionEvents(b.request,b.stage,'0'.repeat(64))).bytes.byteLength
+            await barrier.preparePublished(b.operation!, seed, completionLimit)
           } else await barrier.prepare()
           held = barrier.held(); await barrier.settleHeader()
         }
@@ -539,10 +558,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       current(guards,entry)
       const phases:{phase:'seed'|'completion';events:SessionEvent[]}[]=[]
       if(b.stage.seed.seedLength)phases.push({phase:'seed',events:[...b.request.seed.records]})
-      const initial=buildBootstrapHeader(b.request,b.stage).initial
-      const complete:SessionEvent={type:'session/bootstrap',version:1,seq:b.stage.seed.seedLength,operationId:b.invocation.operationId,manifestDigest:manifest(b.stage),dependencyClosureDigest:closure,seedLength:b.stage.seed.seedLength,
-        ...(b.stage.initial?{initialInputId:b.stage.initial.inputId,initialStartedAt:b.stage.initial.startedAt,initialExpiresAt:b.stage.initial.expiresAt}:{})}
-      phases.push({phase:'completion',events:[complete,...(initial?[{...initial,seq:b.stage.seed.seedLength+1}]:[])]})
+      phases.push({phase:'completion',events:completionEvents(b.request,b.stage,closure)})
       for(const phase of phases) {
         b.phase=phase.phase
         if(doc.view.events.length>=phase.events[0]!.seq!+phase.events.length)continue

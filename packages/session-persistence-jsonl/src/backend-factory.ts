@@ -88,10 +88,10 @@ export function composeJsonlTaskTransitionCoordinator(backend: PersistenceBacken
           if (state.kind === 'unavailable' || state.foreign || state.meta || state.rawHeader || state.publicationPresent || state.promotionPresent || state.stagePresent && !state.stageBytes && !state.captureReservation) throw new Error('Bootstrap target unavailable')
           return canonicalJsonData({ kind: state.kind, stagePresent: !!state.stagePresent, stage: state.stageBytes ? Buffer.from(state.stageBytes).toString('base64') : null, reservation: state.captureReservation ?? null })
         })
-      }, observePublishedBootstrap(scope, route, held, operation, seed) {
+      }, observePublishedBootstrap(scope, route, held, operation, seed, completionLimit) {
         owner.assertOriginal()
         if (route.protocol === 'public-results-v1' || routeInvocation(route).targetSessionId !== scope.parentSessionId) throw new Error('Invalid published bootstrap route')
-        const expected = capturePublishedBootstrap(route, operation, seed)
+        const expected = capturePublishedBootstrap(route, operation, seed, completionLimit)
         return owner.capability.observePublishedTaskParent(scope, async () => {
           owner.assertOriginal(); scope.assertActive()
           const state = await owner.readTrackedState(route, held)
@@ -102,7 +102,7 @@ export function composeJsonlTaskTransitionCoordinator(backend: PersistenceBacken
           const namespace = await io.namespace()
           const allowed = [basename(paths.stage), basename(paths.publish)]
           if (namespace.some(name => !allowed.includes(name))) throw new Error('Retained bootstrap namespace conflict')
-          const limit = Math.max(HEADER_READ_MAX_BYTES, operation.headerBytes.byteLength + (seed?.byteLength ?? 0) + 1)
+          const limit = Math.max(HEADER_READ_MAX_BYTES, operation.headerBytes.byteLength + (seed?.byteLength ?? 0) + (completionLimit ?? 0) + 1)
           const target = await io.read(targetPath,limit)
           const actualStage = await io.read(paths.stage,262144)
           const publication = await io.read(paths.publish,65536)
