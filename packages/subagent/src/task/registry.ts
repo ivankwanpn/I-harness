@@ -192,8 +192,16 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     // failure changes delivery evidence only; it never reopens execution.
     if (!opts.coordinator || !opts.stateId) { task.retention = "memory"; return }
     const acknowledged=acknowledgedRetention.get(task)
+    if(acknowledged&&!sameRetention(acknowledged,task))throw Error('Original saved task result changed')
+    assertRestoredReader(task)
     if(acknowledged){
-      if(!sameRetention(acknowledged,task))throw Error('Original saved task result changed')
+      if (task.savedObservation && task.result?.kind === 'retained'
+        && task.result.envelope.retention.kind === 'artifact') {
+        const previous = task.retention
+        const previousError = task.retentionError
+        restoredRetention(task, true)
+        if (task.retention !== previous || task.retentionError !== previousError) publish(task)
+      }
       return
     }
     if (task.retention === "durable") return
@@ -205,6 +213,8 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       if (originalSave) { retentionSaves.set(task, originalSave);capturedRetention.set(task,captured); await completeOriginalRetention(task,originalSave,Boolean(previous));return }
       else await save()
       if(!sameRetention(captured,task))throw Error('Original saved task result changed')
+      acknowledgedRetention.set(task,captured)
+      assertRestoredReader(task)
       if (task.result?.kind === 'retained' && task.result.envelope.retention.kind === 'unavailable') {
         task.retention = 'failed'
         task.retentionError = task.result.envelope.retention.reason
@@ -212,14 +222,27 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         task.retention = "durable"
         delete task.retentionError
       }
-      acknowledgedRetention.set(task,captured)
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const changed = task.retention !== 'failed' || task.retentionError !== message
       task.retention = "failed"
-      task.retentionError = error instanceof Error ? error.message : String(error)
-      publish(task)
+      task.retentionError = message
+      if (changed) publish(task)
       throw error
     }
     publish(task)
+  }
+
+  function assertRestoredReader(task: TaskRecord): void {
+    if (task.savedObservation && task.result?.kind === 'retained'
+      && task.result.envelope.retention.kind === 'artifact'
+      && resultOwner?.available() !== true) {
+      const previous = task.retention
+      const previousError = task.retentionError
+      restoredRetention(task, false)
+      if (task.retention !== previous || task.retentionError !== previousError) publish(task)
+      throw new Error(task.retentionError)
+    }
   }
 
   async function completeOriginalRetention(task:TaskRecord,save:import('./persistence.ts').OwnedTaskSave,retry:boolean):Promise<void>{
@@ -229,6 +252,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     save.assertHandoff()
     save.release();acknowledgedRetention.set(task,captured);retentionSaves.delete(task);capturedRetention.delete(task)
     if(!sameRetention(captured,task))throw Error('Original saved task result changed')
+    assertRestoredReader(task)
     if(task.result?.kind==='retained'&&task.result.envelope.retention.kind==='unavailable'){task.retention='failed';task.retentionError=task.result.envelope.retention.reason}else task.retention='durable'
     publish(task)
   }
