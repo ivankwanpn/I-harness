@@ -8,6 +8,8 @@ vi.mock('../../fs-lock/src/index.ts', async original => {
   return { ...locks, async acquireSessionLock(options: import('../../fs-lock/src/index.ts').AcquireOptions) {
     if(options.lockPath===handoff.acquireFails)throw null
     const lock = await locks.acquireSessionLock(options)
+    const selected = [handoff.cleanupPath, handoff.heldFails, handoff.releaseFails].some(path => !!path && path === options.lockPath)
+    if (!selected) return lock
     return { get held() { if(options.lockPath===handoff.heldFails)throw 0; return lock.held }, async release() { if(options.lockPath===handoff.cleanupPath){handoff.releases++;if(options.lockPath===handoff.releaseFails)throw false}; if (options.lockPath === handoff.cleanupPath && handoff.cleanupGate) { handoff.cleanupEntered?.(); await handoff.cleanupGate }; await lock.release() } }
   } }
 })
@@ -39,69 +41,149 @@ function taskLeasePath(root: string): string {
   return lockPathFor(root, 'artifact-document-lease:' + capture.key)
 }
 
-it.each(['initial', 'retry'] as const)('rechecks the original %s save after awaiting finish', async mode => {
-  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-finish-continuation-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
-  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), probed = Promise.withResolvers<void>()
-  try {
-    await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
-    await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
-    const persistence = new TaskPersistence(coordinator, 'parent', true, () => ({ formatVersion: 2, tasks: [], notifications: [] }), captureOwnedTaskContext(coordinator, document, document.view, 'parent'))
-    fault.target = path; handoff.publications = handoff.temps = handoff.syncs = 0
-    if (mode === 'retry') fault.failFinalClose = true
-    else { handoff.cleanupPath = taskLeasePath(root); handoff.cleanupEntered = entered.resolve; handoff.cleanupGate = release.promise }
-    const original = persistence.captureSave()!
-    let completing = original.done; void completing.catch(() => {})
-    if (mode === 'retry') {
-      await expect(original.done).rejects.toBeNull(); fault.failFinalClose = false
-      handoff.cleanupPath = taskLeasePath(root); handoff.cleanupEntered = entered.resolve; handoff.cleanupGate = release.promise
-      completing = original.retry(); void completing.catch(() => {})
+it.each(['initial', 'retry'] as const)('rechecks the original %s save after awaiting finish', async (mode) => {
+    const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-finish-continuation-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract);
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), probed = Promise.withResolvers<void>();
+    try {
+        await coordinator.create({ sessionId: 'parent' });
+        const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl');
+        await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}');
+        const persistence = new TaskPersistence(coordinator, 'parent', true, () => ({ formatVersion: 2, tasks: [], notifications: [] }), captureOwnedTaskContext(coordinator, document, document.view, 'parent'));
+        fault.target = path;
+        handoff.publications = handoff.temps = handoff.syncs = 0;
+        handoff.cleanupPath = taskLeasePath(root);
+        if (mode === 'retry')
+            fault.failFinalClose = true;
+        else {
+            handoff.cleanupPath = taskLeasePath(root);
+            handoff.cleanupEntered = entered.resolve;
+            handoff.cleanupGate = release.promise;
+        }
+        const original = persistence.captureSave()!;
+        let completing = original.done;
+        void completing.catch(() => { });
+        if (mode === 'retry') {
+            await expect(original.done).rejects.toBeNull();
+            fault.failFinalClose = false;
+            handoff.cleanupPath = taskLeasePath(root);
+            handoff.cleanupEntered = entered.resolve;
+            handoff.cleanupGate = release.promise;
+            completing = original.retry();
+            void completing.catch(() => { });
+        }
+        await entered.promise;
+        const committed = original.outcome();
+        expect(committed?.kind).toBe('committed');
+        // All file IO is settled at this native release gate. Keep one bounded
+        // continuation queued ahead of the enclosing await's continuation; revoke
+        // as soon as the genuine handle proves finish has completed its check.
+        let turns = 0, revoked = false;
+        const probe = () => {
+            try {
+                original.assertHandoff();
+            }
+            catch {
+                if (++turns < 128) {
+                    queueMicrotask(probe);
+                    return;
+                }
+                ;
+                probed.resolve();
+                return;
+            }
+            document.revokeNewWork();
+            revoked = true;
+            probed.resolve();
+        };
+        queueMicrotask(probe);
+        release.resolve();
+        await probed.promise;
+        expect(revoked).toBe(true);
+        await expect(completing).rejects.toThrow();
+        await expect(persistence.flush()).rejects.toThrow();
+        const after = original.outcome();
+        expect(after).toMatchObject({ kind: 'committed', cleanupPending: false });
+        if (committed?.kind === 'committed' && after?.kind === 'committed')
+            expect(after.ack).toBe(committed.ack);
+        expect({ publications: handoff.publications, temps: handoff.temps, syncs: handoff.syncs }).toEqual({ publications: 1, temps: 1, syncs: 1 });
     }
-    await entered.promise; const committed = original.outcome(); expect(committed?.kind).toBe('committed')
-    // All file IO is settled at this native release gate. Keep one bounded
-    // continuation queued ahead of the enclosing await's continuation; revoke
-    // as soon as the genuine handle proves finish has completed its check.
-    let turns = 0, revoked = false
-    const probe = () => {
-      try { original.assertHandoff() } catch { if (++turns < 128) { queueMicrotask(probe); return }; probed.resolve(); return }
-      document.revokeNewWork(); revoked = true; probed.resolve()
+    finally {
+        release.resolve();
+        fault.failFinalClose = false;
+        fault.target = '';
+        handoff.cleanupPath = '';
+        handoff.cleanupGate = undefined;
+        handoff.cleanupEntered = undefined;
+        await coordinator.close();
+        await rm(root, { recursive: true, force: true });
     }
-    queueMicrotask(probe); release.resolve(); await probed.promise
-    expect(revoked).toBe(true); await expect(completing).rejects.toThrow(); await expect(persistence.flush()).rejects.toThrow()
-    const after = original.outcome(); expect(after).toMatchObject({ kind: 'committed', cleanupPending: false }); if (committed?.kind === 'committed' && after?.kind === 'committed') expect(after.ack).toBe(committed.ack)
-    expect({ publications: handoff.publications, temps: handoff.temps, syncs: handoff.syncs }).toEqual({ publications: 1, temps: 1, syncs: 1 })
-  } finally { release.resolve(); fault.failFinalClose = false; fault.target = ''; handoff.cleanupPath = ''; handoff.cleanupGate = undefined; handoff.cleanupEntered = undefined; await coordinator.close(); await rm(root, { recursive: true, force: true }) }
-})
+});
 
-it.each(['revoked', 'mutated', 'ready'] as const)('checks actual registry parent %s after committed save cleanup', async state => {
-  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-handoff-cleanup-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
-  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  try {
-    await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
-    await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
-    const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
-    await registry.ready
-    const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/child', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'tool' }); await registry.flushPersistence()
-    task.status = 'completed'; task.outcome = 'completed'; task.resultText = 'original result'
-    fault.target = path; handoff.cleanupPath = taskLeasePath(root); handoff.cleanupEntered = entered.resolve; handoff.cleanupGate = release.promise
-    handoff.publications = handoff.temps = handoff.syncs = 0
-    const retaining = registry.retainResult(task.id); void retaining.catch(() => {}); await entered.promise
-    const original = lastOriginalTaskSave(registry)!, committed = original.outcome(); expect(committed?.kind).toBe('committed')
-    if (state === 'revoked') document.revokeNewWork()
-    const mutation = state === 'mutated' ? coordinator.putDocumentStrict!('task-parent', { formatVersion: 1, tasks: [], notifications: [] }) : undefined
-    release.resolve()
-    if (state !== 'ready') {
-      await expect(retaining).rejects.toThrow(); expect(task.retention).toBe('failed')
-      await expect(original.retry()).rejects.toThrow(); expect(() => original.assertHandoff()).toThrow(); await expect(registry.flushPersistence()).rejects.toThrow()
-    } else {
-      await retaining; expect(task.retention).toBe('durable'); await original.retry(); original.assertHandoff(); await registry.flushPersistence()
+it.each(['revoked', 'mutated', 'ready'] as const)('checks actual registry parent %s after committed save cleanup', async (state) => {
+    const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-handoff-cleanup-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract);
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    try {
+        await coordinator.create({ sessionId: 'parent' });
+        const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl');
+        await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}');
+        const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') });
+        await registry.ready;
+        const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/child', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'tool' });
+        await registry.flushPersistence();
+        task.status = 'completed';
+        task.outcome = 'completed';
+        task.resultText = 'original result';
+        fault.target = path;
+        handoff.cleanupPath = taskLeasePath(root);
+        handoff.cleanupEntered = entered.resolve;
+        handoff.cleanupGate = release.promise;
+        handoff.publications = handoff.temps = handoff.syncs = 0;
+        const retaining = registry.retainResult(task.id);
+        void retaining.catch(() => { });
+        await entered.promise;
+        const original = lastOriginalTaskSave(registry)!, committed = original.outcome();
+        expect(committed?.kind).toBe('committed');
+        if (state === 'revoked')
+            document.revokeNewWork();
+        const mutation = state === 'mutated' ? coordinator.putDocumentStrict!('task-parent', { formatVersion: 1, tasks: [], notifications: [] }) : undefined;
+        release.resolve();
+        if (state !== 'ready') {
+            await expect(retaining).rejects.toThrow();
+            expect(task.retention).toBe('failed');
+            await expect(original.retry()).rejects.toThrow();
+            expect(() => original.assertHandoff()).toThrow();
+            await expect(registry.flushPersistence()).rejects.toThrow();
+        }
+        else {
+            await retaining;
+            expect(task.retention).toBe('durable');
+            await original.retry();
+            original.assertHandoff();
+            await registry.flushPersistence();
+        }
+        const after = original.outcome();
+        expect(after).toMatchObject({ kind: 'committed', cleanupPending: false });
+        if (committed?.kind === 'committed' && after?.kind === 'committed')
+            expect(after.ack).toBe(committed.ack);
+        await mutation;
+        if (state === 'mutated') {
+            document.assertReady();
+            expect(JSON.parse(await readFile(path, 'utf8')).tasks).toEqual([]);
+        }
+        else
+            expect(JSON.parse(await readFile(path, 'utf8')).tasks).toMatchObject([{ id: task.id, resultText: 'original result' }]);
+        expect({ publications: handoff.publications, temps: handoff.temps, syncs: handoff.syncs }).toEqual({ publications: state === 'mutated' ? 2 : 1, temps: state === 'mutated' ? 2 : 1, syncs: 1 });
     }
-    const after = original.outcome(); expect(after).toMatchObject({ kind: 'committed', cleanupPending: false }); if (committed?.kind === 'committed' && after?.kind === 'committed') expect(after.ack).toBe(committed.ack)
-    await mutation
-    if (state === 'mutated') { document.assertReady(); expect(JSON.parse(await readFile(path, 'utf8')).tasks).toEqual([]) }
-    else expect(JSON.parse(await readFile(path, 'utf8')).tasks).toMatchObject([{ id: task.id, resultText: 'original result' }])
-    expect({ publications: handoff.publications, temps: handoff.temps, syncs: handoff.syncs }).toEqual({ publications: state === 'mutated' ? 2 : 1, temps: 1, syncs: 1 })
-  } finally { release.resolve(); handoff.cleanupPath = ''; handoff.cleanupGate = undefined; handoff.cleanupEntered = undefined; fault.target = ''; await coordinator.close(); await rm(root, { recursive: true, force: true }) }
-})
+    finally {
+        release.resolve();
+        handoff.cleanupPath = '';
+        handoff.cleanupGate = undefined;
+        handoff.cleanupEntered = undefined;
+        fault.target = '';
+        await coordinator.close();
+        await rm(root, { recursive: true, force: true });
+    }
+});
 
 it('keeps a late committed save refused after external parent close and same-save retry', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-handoff-close-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
@@ -397,34 +479,66 @@ it('original spawn source retains its delivery guard until both handoff and term
 })
 
 it('joins original terminal retention while a later writer capture is queued', async () => {
-  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-terminal-consumer-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
-  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  try {
-    await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
-    await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
-    const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
-    await registry.ready
-    const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/a', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'parent' }); await registry.flushPersistence()
-    task.status = 'completed'; task.outcome = 'completed'; task.resultText = 'original terminal'
-    fault.target = path; handoff.cleanupPath = taskLeasePath(root); handoff.cleanupEntered = entered.resolve; handoff.cleanupGate = release.promise
-    handoff.publications = 0
-    const retaining = registry.retainResult(task.id); void retaining.catch(() => {}); await entered.promise
-    const original = lastOriginalTaskSave(registry)!
-    task.description = 'later captured mutation'
-    const later = registry.save(); void later.catch(() => {})
-    // The source and announcement both ask to retain the same result. They
-    // must join its consumer, not flush a subsequent snapshot over its ack.
-    const joining = registry.retainResult(task.id)
-    void joining.catch(() => {})
-    expect(task.retention).toBe('pending'); expect(handoff.publications).toBe(1)
-    handoff.cleanupGate = undefined; release.resolve()
-    await retaining; await joining; await later; await registry.flushPersistence()
-    expect(task.retention).toBe('durable')
-    expect(original.outcome()).toMatchObject({ kind: 'committed', cleanupPending: false })
-    expect(JSON.parse(await readFile(path, 'utf8')).tasks[0]).toMatchObject({ resultText: 'original terminal', description: 'later captured mutation' })
-    expect(handoff.publications).toBe(2)
-  } finally { release.resolve(); fault.target = ''; handoff.cleanupPath = ''; handoff.cleanupGate = undefined; handoff.cleanupEntered = undefined; await coordinator.close(); await rm(root, { recursive: true, force: true }) }
-})
+    const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-terminal-consumer-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract);
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    try {
+        await coordinator.create({ sessionId: 'parent' });
+        const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl');
+        await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}');
+        const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') });
+        await registry.ready;
+        const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/a', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'parent' });
+        await registry.flushPersistence();
+        const other = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/b', description: 'other work', prompt: 'other prompt', agent: 'general', delivery: 'tool' });
+        await registry.flushPersistence();
+        task.status = 'completed';
+        task.outcome = 'completed';
+        task.resultText = 'original terminal';
+        fault.target = path;
+        handoff.cleanupPath = taskLeasePath(root);
+        handoff.cleanupEntered = entered.resolve;
+        handoff.cleanupGate = release.promise;
+        handoff.publications = 0;
+        const retaining = registry.retainResult(task.id);
+        void retaining.catch(() => { });
+        await entered.promise;
+        const original = lastOriginalTaskSave(registry)!;
+        expect(registry.claim(other.id, 'other-child', undefined, 'job-b')).toBe(true);
+        const later = registry.save();
+        void later.catch(() => { });
+        // The source and announcement both ask to retain the same result. They
+        // must join its consumer, not flush a subsequent snapshot over its ack.
+        const joining = registry.retainResult(task.id);
+        void joining.catch(() => { });
+        expect(task.retention).toBe('pending');
+        expect(handoff.publications).toBe(1);
+        handoff.cleanupGate = undefined;
+        release.resolve();
+        await retaining;
+        await joining;
+        await later;
+        await registry.flushPersistence();
+        expect(task.retention).toBe('durable');
+        expect(original.outcome()).toMatchObject({ kind: 'committed', cleanupPending: false });
+        const saved = JSON.parse(await readFile(path, 'utf8')).tasks;
+        expect(saved.find((row: {
+            id: string;
+        }) => row.id === task.id)).toMatchObject({ resultText: 'original terminal', description: 'work' });
+        expect(saved.find((row: {
+            id: string;
+        }) => row.id === other.id)).toMatchObject({ childSessionId: 'other-child', status: 'running' });
+        expect(handoff.publications).toBe(2);
+    }
+    finally {
+        release.resolve();
+        fault.target = '';
+        handoff.cleanupPath = '';
+        handoff.cleanupGate = undefined;
+        handoff.cleanupEntered = undefined;
+        await coordinator.close();
+        await rm(root, { recursive: true, force: true });
+    }
+});
 import { createSpawnTool } from '../src/tools/spawn.ts'
 import { createRoleRegistry } from '../src/roles.ts'
 import { createAgentTable } from '../src/agent-table.ts'
@@ -504,6 +618,8 @@ it('actual spawn reconciliation resumes pre-terminal preparation after original 
     expect(f.tasks.notifications()).toHaveLength(1); expect(f.counts()).toMatchObject({ hints: 0, unregisters: 0, launches: 1 })
     fault.failFinalClose = false
     await f.source().reconcileTerminal()
+    expect(f.document.view.events.filter(event=>event.type==='subagent/end')).toHaveLength(0)
+    await f.document.drainOriginalSources()
     expect(f.document.view.events.filter(e => e.type === 'subagent/end')).toEqual([expect.objectContaining({ taskId: 'task-1', outcome: 'completed', resultText: 'actual original terminal' })])
     expect(f.tasks.get('task-1')!.retention).toBe('durable'); expect(f.tasks.notifications()).toHaveLength(1)
     expect(f.counts()).toMatchObject({ hints: 1, unregisters: 1, launches: 1 })
@@ -532,16 +648,30 @@ it('retirement releases a clean queue and checks receiver and repeated consumpti
     await expect(held.retireConsumer.call({})).rejects.toThrow('receiver'); expect(()=>held.release()).toThrow(); expect(()=>held.assertHandoff()).toThrow()
   } finally { await coordinator.close(); await rm(root,{recursive:true,force:true}) }
 })
-it('retirement retains unknown original write debt and releases the parked queue', async () => {
-  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(),'ih-binding-unknown-')), coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+it('retirement reconciles the exact original unknown write before releasing the parked queue', async () => {
+  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(),'ih-binding-unknown-'))
+  const coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
   try {
-    await coordinator.create({sessionId:'parent'}); const doc=await coordinator.openManagedDocument('parent'), path=join(root,'task-parent.doc.jsonl')
+    await coordinator.create({sessionId:'parent'})
+    const doc=await coordinator.openManagedDocument('parent'),path=join(root,'task-parent.doc.jsonl')
     const p=new TaskPersistence(coordinator,'parent',true,()=>({formatVersion:2,tasks:[],notifications:[]}),captureOwnedTaskContext(coordinator,doc,doc.view,'parent'))
-    fault.target=path; fault.afterRename=true; handoff.publications=0
-    const held=p.captureBindingSave(); await expect(held.done).rejects.toThrow(); const queued=p.save(); void queued.catch(()=>{})
-    await expect(held.retireConsumer()).rejects.toThrow(); await expect(queued).rejects.toThrow(); await expect(p.flush()).rejects.toThrow(); expect(handoff.publications).toBe(1); expect(p.lastOwnedSave()).toBe(held)
-  } finally { fault.afterRename=false; fault.target=''; await coordinator.close().catch(()=>{}); await rm(root,{recursive:true,force:true}) }
+    fault.target=path;fault.afterRename=true;handoff.publications=0
+    const held=p.captureBindingSave()
+    await expect(held.done).rejects.toThrow()
+    const queued=p.save();void queued.catch(()=>{})
+    await held.retireConsumer()
+    expect(held.outcome()).toMatchObject({kind:'committed',cleanupPending:false})
+    await expect(queued).rejects.toThrow('Earlier owned task save requires resolution')
+    expect(handoff.publications).toBe(1)
+    const queuedSave=p.lastOwnedSave()!
+    expect(queuedSave).not.toBe(held)
+    fault.afterRename=false
+    await queuedSave.retry();await p.flush()
+    expect(handoff.publications).toBe(2)
+    expect(()=>held.assertHandoff()).toThrow();expect(()=>held.release()).toThrow()
+  } finally { fault.afterRename=false;fault.target='';await coordinator.close().catch(()=>{});await rm(root,{recursive:true,force:true}) }
 })
+
 it('retirement retries only original close and retains its failure history', async () => {
   const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(),'ih-binding-close-')), coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
   try {
@@ -553,15 +683,36 @@ it('retirement retries only original close and retains its failure history', asy
   } finally { fault.failFinalClose=false; fault.target=''; await coordinator.close().catch(()=>{}); await rm(root,{recursive:true,force:true}) }
 })
 
-it.each(['before','after'] as const)('repair non-strict binding debt fences later save queued %s retirement',async timing=>{
- const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'binding-nonstrict-')),coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
- try{await coordinator.create({sessionId:'parent'});const doc=await coordinator.openManagedDocument('parent'),path=join(root,'task-parent.doc.jsonl');let version:1|2=2
- const p=new TaskPersistence(coordinator,'parent',false,()=>({formatVersion:version,tasks:[],notifications:[]}),captureOwnedTaskContext(coordinator,doc,doc.view,'parent'));fault.target=path;fault.afterRename=true;handoff.publications=handoff.temps=0
- const held=p.captureBindingSave();await expect(held.done).rejects.toThrow();version=1
- let later:Promise<void>|undefined;if(timing==='before'){later=p.save();void later.catch(()=>{})}await expect(held.retireConsumer()).rejects.toThrow();later??=p.save();void later.catch(()=>{});const flush=p.flush();void flush.catch(()=>{})
- await expect(later).rejects.toThrow();await expect(flush).rejects.toThrow();expect(handoff.publications).toBe(1);expect(handoff.temps).toBe(1);expect(JSON.parse(await readFile(path,'utf8')).formatVersion).toBe(2);expect(p.lastOwnedSave()).toBe(held);expect(()=>held.assertHandoff()).toThrow();expect(()=>held.release()).toThrow()
- }finally{fault.afterRename=false;fault.target='';await coordinator.close().catch(()=>{});await rm(root,{recursive:true,force:true})}
+it.each(['before','after'] as const)('repair non-strict binding retirement preserves each original acknowledgement: queued %s',async timing=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'binding-nonstrict-'))
+ const coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+ try {
+  await coordinator.create({sessionId:'parent'})
+  const doc=await coordinator.openManagedDocument('parent'),path=join(root,'task-parent.doc.jsonl')
+  let version:1|2=2
+  const p=new TaskPersistence(coordinator,'parent',false,()=>({formatVersion:version,tasks:[],notifications:[]}),captureOwnedTaskContext(coordinator,doc,doc.view,'parent'))
+  fault.target=path;fault.afterRename=true;handoff.publications=handoff.temps=0
+  const held=p.captureBindingSave();await expect(held.done).rejects.toThrow();version=1
+  let later:Promise<void>|undefined
+  if(timing==='before'){later=p.save();void later.catch(()=>{})}
+  await held.retireConsumer()
+  expect(held.outcome()).toMatchObject({kind:'committed',cleanupPending:false})
+  later??=p.save();void later.catch(()=>{})
+  await expect(later).rejects.toThrow()
+  await expect(p.flush()).rejects.toThrow()
+  const queued=p.lastOwnedSave()!
+  expect(queued).not.toBe(held)
+  expect(handoff.publications).toBe(timing==='before'?1:2)
+  expect(handoff.temps).toBe(timing==='before'?1:2)
+  expect(JSON.parse(await readFile(path,'utf8')).formatVersion).toBe(timing==='before'?2:1)
+  fault.afterRename=false
+  await queued.retry();await p.flush()
+  expect(handoff.publications).toBe(2);expect(handoff.temps).toBe(2)
+  expect(JSON.parse(await readFile(path,'utf8')).formatVersion).toBe(1)
+  expect(()=>held.assertHandoff()).toThrow();expect(()=>held.release()).toThrow()
+ } finally {fault.afterRename=false;fault.target='';await coordinator.close().catch(()=>{});await rm(root,{recursive:true,force:true})}
 })
+
 it.each(['retry-first','retire-first'] as const)('repair exact clean head retirement is single-owner for %s',async order=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'binding-concurrent-')),coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
  try{await coordinator.create({sessionId:'parent'});const doc=await coordinator.openManagedDocument('parent'),path=join(root,'task-parent.doc.jsonl');let version:1|2=2
@@ -593,29 +744,145 @@ it('repair failed cleanup after revoked parent recovers only original resources'
  try{fault.failFinalClose=true;const held=f.p.captureBindingSave();await expect(held.done).rejects.toBeNull();const original=held.outcome(),initialCloses=handoff.closeCalls;f.doc.revokeNewWork();await expect(held.retireConsumer()).rejects.toBeNull();await expect(f.p.flush()).rejects.toThrow();expect(f.p.lastOwnedSave()).toBe(held);fault.failFinalClose=false;await held.retry();await f.p.flush();expect(handoff.publications).toBe(1);expect(handoff.temps).toBe(1);expect(fault.finalOpens).toBe(1);expect(handoff.closeCalls).toBe(initialCloses+2);const after=held.outcome();if(original?.kind==='committed'&&after?.kind==='committed')expect(after.ack).toBe(original.ack);else throw Error('lost ack');expect(()=>held.release()).toThrow();expect(()=>held.assertHandoff()).toThrow()
  }finally{await f.close()}
 })
-it.each([null,undefined,0,false] as const)('repair failed snapshot retains original falsey cause %s and exact receivers',async cause=>{
- const f=await repairBinding(()=>{throw cause})
- try{const held=f.p.captureBindingSave();await expect(held.done).rejects.toBe(cause);expect(held.outcome()).toBeUndefined();await expect(held.retireConsumer()).rejects.toBe(cause);await expect(held.retry()).rejects.toBe(cause);expect(()=>held.release()).toThrow();expect(()=>held.assertHandoff()).toThrow();await expect(held.retireConsumer.call({})).rejects.toThrow('receiver');await expect(held.retry.call({})).rejects.toThrow('receiver');for(const method of [held.release,held.assertHandoff,held.outcome])expect(()=>method.call({})).toThrow('receiver');const later=f.p.save();await expect(later).rejects.toBe(cause);await expect(f.p.flush()).rejects.toMatchObject({cause});expect(handoff.publications).toBe(0);expect(handoff.temps).toBe(0);expect(f.p.lastOwnedSave()).toBe(held)
- }finally{await f.close()}
-})
-it.each(['validation','acquire','acquire-cleanup'] as const)('repair %s refusal retains original operation/cleanup without publication',async failure=>{
- const f=await repairBinding(failure==='validation'?()=>({formatVersion:3,tasks:[],notifications:[],extra:true}):undefined)
- try{if(failure==='acquire')handoff.acquireFails=handoff.cleanupPath;if(failure==='acquire-cleanup'){handoff.heldFails=handoff.cleanupPath;handoff.releaseFails=handoff.cleanupPath}
- const held=f.p.captureBindingSave();const error=await held.done.then(()=>{throw Error('unexpected success')},e=>e);expect(held.outcome()).toBeUndefined();if(failure==='acquire')expect(error.cause).toBeNull();if(failure==='acquire-cleanup'){expect(error.cause).toBe(0);expect(error.cleanupCause).toBe(false)}
- await expect(held.retireConsumer()).rejects.toBeDefined();f.doc.revokeNewWork();handoff.acquireFails=handoff.heldFails=handoff.releaseFails='';await expect(held.retry()).rejects.toBe(error);await expect(f.p.flush()).rejects.toThrow();expect(held.outcome()).toBeUndefined();expect(handoff.publications).toBe(0);expect(handoff.temps).toBe(0);expect(()=>held.assertHandoff()).toThrow();await expect(held.retry.call({})).rejects.toThrow('receiver')
- }finally{await f.close()}
-})
-it('repair queued non-strict save during original unknown publication retains exact candidate through explicit retry',async()=>{
+it.each([null, undefined, 0, false] as const)('repair failed snapshot retains original falsey cause %s and exact receivers', async (cause) => {
+    const f = await repairBinding(() => { throw cause; });
+    try {
+        const held = f.p.captureBindingSave();
+        await expect(held.done).rejects.toBe(cause);
+        expect(held.outcome()).toBeUndefined();
+        await held.retireConsumer();
+        await expect(held.retry()).rejects.toBe(cause);
+        expect(() => held.release()).toThrow();
+        expect(() => held.assertHandoff()).toThrow();
+        await expect(held.retireConsumer.call({})).rejects.toThrow('receiver');
+        await expect(held.retry.call({})).rejects.toThrow('receiver');
+        for (const method of [held.release, held.assertHandoff, held.outcome])
+            expect(() => method.call({})).toThrow('receiver');
+        const later = f.p.save();
+        await expect(later).rejects.toBe(cause);
+        await expect(f.p.flush()).rejects.toMatchObject({ cause });
+        expect(handoff.publications).toBe(0);
+        expect(handoff.temps).toBe(0);
+        expect(f.p.lastOwnedSave()).not.toBe(held);
+        expect(f.p.lastOwnedSave()!.outcome()).toBeUndefined();
+    }
+    finally {
+        await f.close();
+    }
+});
+it.each(['validation', 'acquire', 'acquire-cleanup'] as const)('repair %s refusal retains original operation/cleanup without publication', async (failure) => {
+    const f = await repairBinding(failure === 'validation' ? () => ({ formatVersion: 3, tasks: [], notifications: [], extra: true }) : undefined);
+    try {
+        if (failure === 'acquire')
+            handoff.acquireFails = handoff.cleanupPath;
+        if (failure === 'acquire-cleanup') {
+            handoff.heldFails = handoff.cleanupPath;
+            handoff.releaseFails = handoff.cleanupPath;
+        }
+        const held = f.p.captureBindingSave();
+        const error = await held.done.then(() => { throw Error('unexpected success'); }, e => e);
+        expect(held.outcome()).toBeUndefined();
+        if (failure === 'acquire')
+            expect(error.cause).toBeNull();
+        if (failure === 'acquire-cleanup') {
+            expect(error.cause).toBe(0);
+            expect(error.cleanupCause).toBe(false);
+        }
+        if (failure === 'acquire-cleanup')
+            await expect(held.retireConsumer()).rejects.toBeDefined();
+        else
+            await held.retireConsumer();
+        f.doc.revokeNewWork();
+        handoff.acquireFails = handoff.heldFails = handoff.releaseFails = '';
+        await expect(held.retry()).rejects.toBe(error);
+        if (failure === 'acquire-cleanup')
+            await expect(f.p.flush()).rejects.toThrow();
+        else
+            await f.p.flush();
+        expect(held.outcome()).toBeUndefined();
+        expect(handoff.publications).toBe(0);
+        expect(handoff.temps).toBe(0);
+        expect(() => held.assertHandoff()).toThrow();
+        await expect(held.retry.call({})).rejects.toThrow('receiver');
+    }
+    finally {
+        await f.close();
+    }
+});
+it('repair queued non-strict save advances only after original unknown publication is actually acknowledged',async()=>{
  const f=await repairBinding(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
- try{fault.afterRename=true;fault.entered=entered.resolve;fault.gate=release.promise;const held=f.p.captureBindingSave();void held.done.catch(()=>{});await entered.promise;f.version(1);const later=f.p.save();void later.catch(()=>{});const retiring=held.retireConsumer();void retiring.catch(()=>{});const flush=f.p.flush();void flush.catch(()=>{});release.resolve();await expect(held.done).rejects.toThrow();await expect(retiring).rejects.toThrow();await expect(later).rejects.toThrow();await expect(flush).rejects.toThrow();expect(f.p.lastOwnedSave()).toBe(held);expect(handoff.publications).toBe(1);expect(handoff.temps).toBe(1);fault.afterRename=false;await held.retry();expect(handoff.publications).toBe(1);expect(handoff.temps).toBe(1);const queued=f.p.lastOwnedSave()!;expect(queued).not.toBe(held);await queued.retry();await f.p.flush();expect(handoff.publications).toBe(2);expect(()=>held.release()).toThrow();expect(()=>held.assertHandoff()).toThrow()
+ try{
+  fault.afterRename=true;fault.entered=entered.resolve;fault.gate=release.promise
+  const held=f.p.captureBindingSave();void held.done.catch(()=>{});await entered.promise
+  f.version(1);const later=f.p.save();void later.catch(()=>{})
+  const retiring=held.retireConsumer();const flush=f.p.flush();void flush.catch(()=>{})
+  expect(handoff.publications).toBe(1)
+  release.resolve()
+  await expect(held.done).rejects.toThrow()
+  await retiring
+  const recovered=held.outcome()
+  expect(recovered).toMatchObject({kind:'committed',cleanupPending:false})
+  fault.afterRename=false
+  await expect(later).rejects.toThrow('Earlier owned task save requires resolution')
+  await expect(flush).rejects.toThrow()
+  expect(handoff.publications).toBe(1);expect(handoff.temps).toBe(1)
+  const queued=f.p.lastOwnedSave()!
+  expect(queued).not.toBe(held)
+  await queued.retry();await f.p.flush()
+  expect(f.p.lastOwnedSave()).not.toBe(held)
+  expect(f.p.lastOwnedSave()!.outcome()).toMatchObject({kind:'committed',cleanupPending:false})
+  expect(handoff.publications).toBe(2);expect(handoff.temps).toBe(2)
+  expect(JSON.parse(await readFile(f.path,'utf8')).formatVersion).toBe(1)
+  expect(()=>held.release()).toThrow();expect(()=>held.assertHandoff()).toThrow()
  }finally{release.resolve();await f.close()}
 })
-it.each(['unknown-revoked','conflict'] as const)('repair abandoned %s never grants handoff or a replacement snapshot',async kind=>{
- const f=await repairBinding()
- try{if(kind==='unknown-revoked')fault.afterRename=true;else fault.tempSynced=async()=>{fault.tempSynced=undefined;await writeFile(f.path,'{ "formatVersion":2,"tasks":[],"notifications":[] }')}
- const held=f.p.captureBindingSave();await expect(held.done).rejects.toThrow();const original=held.outcome();expect(original?.kind).toBe(kind==='conflict'?'conflict':'unknown');f.doc.revokeNewWork();await expect(held.retireConsumer()).rejects.toThrow();fault.afterRename=false;await expect(held.retry()).rejects.toBeDefined();const later=f.p.save();await expect(later).rejects.toBeDefined();await expect(f.p.flush()).rejects.toThrow();expect(held.outcome()).toEqual(original);expect(handoff.publications).toBe(kind==='conflict'?0:1);expect(handoff.temps).toBe(1);await expect(held.retry.call({})).rejects.toThrow('receiver');for(const method of [held.release,held.assertHandoff,held.outcome])expect(()=>method.call({})).toThrow('receiver');expect(()=>held.release()).toThrow();expect(()=>held.assertHandoff()).toThrow()
- }finally{fault.tempSynced=undefined;await f.close()}
-})
+
+it.each(['unknown-revoked', 'conflict'] as const)('repair abandoned %s never grants handoff or a replacement snapshot', async (kind) => {
+    const f = await repairBinding();
+    try {
+        if (kind === 'unknown-revoked')
+            fault.afterRename = true;
+        else
+            fault.tempSynced = async () => { fault.tempSynced = undefined; await writeFile(f.path, '{ "formatVersion":2,"tasks":[],"notifications":[] }'); };
+        const held = f.p.captureBindingSave();
+        await expect(held.done).rejects.toThrow();
+        const original = held.outcome();
+        expect(original?.kind).toBe(kind === 'conflict' ? 'conflict' : 'unknown');
+        f.doc.revokeNewWork();
+        await held.retireConsumer();
+        const retired = held.outcome();
+        if (kind === 'unknown-revoked')
+            expect(retired).toMatchObject({ kind: 'committed', cleanupPending: false });
+        else
+            expect(retired).toEqual(original);
+        fault.afterRename = false;
+        if (kind === 'unknown-revoked') {
+            await held.retry();
+            const retried = held.outcome();
+            if (retired?.kind !== 'committed' || retried?.kind !== 'committed')
+                throw Error('Original ack lost');
+            expect(retried.ack).toBe(retired.ack);
+        }
+        else
+            await expect(held.retry()).rejects.toBeDefined();
+        const later = f.p.save();
+        await expect(later).rejects.toBeDefined();
+        await expect(f.p.flush()).rejects.toThrow();
+        expect(f.p.lastOwnedSave()).not.toBe(held);
+        expect(held.outcome()).toEqual(retired);
+        expect(handoff.publications).toBe(kind === 'conflict' ? 0 : 1);
+        expect(handoff.temps).toBe(1);
+        await expect(held.retry.call({})).rejects.toThrow('receiver');
+        for (const method of [held.release, held.assertHandoff, held.outcome])
+            expect(() => method.call({})).toThrow('receiver');
+        expect(() => held.release()).toThrow();
+        expect(() => held.assertHandoff()).toThrow();
+    }
+    finally {
+        fault.tempSynced = undefined;
+        await f.close();
+    }
+});
 it('repair completed head retirement remains clean when a later capture records its own debt',async()=>{
  let invalid=false;const f=await repairBinding(()=>invalid?({formatVersion:3,tasks:[],notifications:[],extra:true}):({formatVersion:2,tasks:[],notifications:[]}))
  try{const held=f.p.captureBindingSave();await held.done;invalid=true;const later=f.p.save();void later.catch(()=>{});const retry=held.retry(),retirement=held.retireConsumer();await retry;await retirement;await expect(later).rejects.toThrow();await expect(f.p.flush()).rejects.toThrow();expect(f.p.lastOwnedSave()).not.toBe(held);expect(handoff.publications).toBe(1);expect(()=>held.assertHandoff()).toThrow()

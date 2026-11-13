@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile, unlink } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, unlink, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
@@ -9,11 +9,18 @@ import { createTaskStartupFacade } from '../src/task/startup-facade.ts'
 import { captureOwnedTaskContext } from '../src/task/owned-context.ts'
 const spawnProbe=vi.hoisted(()=>({armed:false,sources:0}))
 vi.mock('../src/tools/spawn-source.ts',async original=>{const real=await original<typeof import('../src/tools/spawn-source.ts')>();return {...real,createSpawnSource(...args:Parameters<typeof real.createSpawnSource>){if(spawnProbe.armed){spawnProbe.sources++;throw Error('Unexpected cold spawn source')}return real.createSpawnSource(...args)}}})
-const faults = vi.hoisted(() => ({ target: '', readFlag: '', failed: false, cause: undefined as unknown, closeFails: false, releaseFails: false, releasePath: '', entered: undefined as undefined | (() => void), gate: undefined as undefined | Promise<void>, renames: 0 }))
+const faults = vi.hoisted(() => ({ target: '', readFlag: '', failed: false, cause: undefined as unknown, closeFails: false, releaseFails: false, releasePath: '', entered: undefined as undefined | (() => void), gate: undefined as undefined | Promise<void>, renames: 0, mirrorTarget: '', mirrorOpens: 0, mirrorEntered: undefined as undefined | (() => void), mirrorGate: undefined as undefined | Promise<void> }))
 vi.mock('node:fs/promises', async original => {
  const fs = await original<typeof import('node:fs/promises')>()
  return { ...fs, async open(...args: Parameters<typeof fs.open>) {
   const handle = await fs.open(...args), read = handle.read.bind(handle), close = handle.close.bind(handle)
+  if (faults.mirrorTarget && String(args[0]) === faults.mirrorTarget && args[1] === 'r') {
+   faults.mirrorOpens++
+   const readFile = handle.readFile.bind(handle)
+   const pause = async () => { faults.mirrorEntered?.(); await faults.mirrorGate }
+   handle.read = (async (...input: Parameters<typeof handle.read>) => { await pause(); return Reflect.apply(read, handle, input) }) as typeof handle.read
+   handle.readFile = (async (...input: Parameters<typeof handle.readFile>) => { await pause(); return Reflect.apply(readFile, handle, input) }) as typeof handle.readFile
+  }
   if (String(args[0]) === faults.target) {
    handle.read = (async (...input: Parameters<typeof handle.read>) => { if (faults.failed && args[1] === faults.readFlag) throw faults.cause; return Reflect.apply(read, handle, input) }) as typeof handle.read
    handle.close = async () => { if (faults.closeFails && args[1] === 'r+') throw faults.cause; await close() }
@@ -25,6 +32,7 @@ vi.mock('../../fs-lock/src/index.ts', async original => {
  const locks=await original<typeof import('../../fs-lock/src/index.ts')>()
  return {...locks,async acquireSessionLock(options: import('../../fs-lock/src/index.ts').AcquireOptions){
   const lock=await locks.acquireSessionLock(options)
+  if (!faults.releasePath || options.lockPath !== faults.releasePath) return lock
   return {get held(){return lock.held},async release(){if(options.lockPath===faults.releasePath){faults.entered?.();await faults.gate;if(faults.releaseFails)throw faults.cause}await lock.release()}}
  }}
 })
@@ -44,7 +52,6 @@ import { registerExec } from '@i-harness/exec'
 import { lastOriginalTaskSave } from '../src/task/save-owner.ts'
 import { SHIPPING_REPORT_POLICY } from '../src/report-policy.ts'
 import { childInitialCommitment, compileSemanticSeed, createChildBootstrapRequestIntent, captureChildBootstrapCaptureRequest } from '@i-harness/session-persistence'
-import { appendStandalone } from './standalone-fixture.ts'
 import { isColdBoundChild } from '../src/task/cold-bindings.ts'
 const row = {id:'task-1',parentSessionId:'parent',toolCallId:'call',agentPath:'a',description:'d',prompt:'p',agent:'a',delivery:'tool' as const,status:'accepted' as const,timeCreated:1}
 async function fixture(value?: unknown, arm?: (root: string) => void, withResults = false) {
@@ -88,12 +95,20 @@ it.each(['claimed','target','contradictory'])('installs an actual owned bound3 r
   const alternatePayload={...payload,invocation:{...payload.invocation,targetSessionId:'other'}},alternateCore={...core,initial:childInitialCommitment(alternatePayload)},alternateIntent=createChildBootstrapRequestIntent(alternateCore,{kind:'unmanaged'}),alternateRequest=captureChildBootstrapCaptureRequest({version:1,kind:'child-bootstrap-capture-request',invocation:{...alternatePayload.invocation,requestDigest:alternateIntent.requestDigest},core:alternateCore,requestIntent:alternateIntent.intent}),alternateBirth={version:1 as const,kind:'task-child-birth' as const,request:alternateRequest}
   taskDocumentStorageContract.validate({formatVersion:3,tasks:[{...original,childSessionId:'other',childBirth:alternateBirth}],notifications:[]})
   expect(()=>{f.tasks.list()[0]!.childBirth=alternateBirth}).toThrow();expect(()=>{delete original.childBirth}).toThrow();expect(()=>{original.prompt='changed'}).toThrow();expect(()=>{original.childBirth!.request.core.execution.roleName='changed'}).toThrow();expect(f.tasks.get('task-1')?.childBirth).toBeDefined();expect(isColdBoundChild(f.tasks,'child')).toBe(true)
-  const open=vi.spyOn(f.coordinator,'openManagedDocument'),{mounted,resolveModel,stream,instruction,generation}=mount(f,true)
-  const entry=mounted.table.get('root/a')!;entry.taskId='task-1';if(link==='contradictory')entry.sessionId='contradictory';if(link==='target')entry.taskId='foreign';appendStandalone(entry.session,{type:'subagent/inbox',messageId:'consumed',message:'consumed'});appendStandalone(entry.session,{type:'subagent/inbox',messageId:'pending',message:'original pending'});const register=vi.spyOn(mounted.agents,'register')
+  await f.coordinator.create({sessionId:'child',origin:'subagent',parentSession:'parent',seedLength:0})
+  await f.coordinator.append('child',[
+   {type:'subagent/inbox',messageId:'consumed',message:'consumed'},
+   {type:'subagent/inbox',messageId:'pending',message:'original pending'},
+  ])
+  const originalChildBytes=await readFile(join(f.root,'child.jsonl'))
+  faults.mirrorTarget=join(f.root,'child.jsonl');faults.mirrorOpens=0
+  const {mounted,resolveModel,stream,instruction,generation}=mount(f,true)
+  const entry=mounted.table.get('root/a')!;entry.taskId='task-1';if(link==='contradictory')entry.sessionId='contradictory';if(link==='target')entry.taskId='foreign';const register=vi.spyOn(mounted.agents,'register')
   await mounted.ready
-  expect(open).not.toHaveBeenCalled();expect(resolveModel).not.toHaveBeenCalled();expect(stream).not.toHaveBeenCalled();expect(instruction).not.toHaveBeenCalled();expect(generation).not.toHaveBeenCalled();expect(register).not.toHaveBeenCalled();expect(mounted.agents.get('child')).toBeUndefined()
+  expect(faults.mirrorOpens).toBe(0);expect(resolveModel).not.toHaveBeenCalled();expect(stream).not.toHaveBeenCalled();expect(instruction).not.toHaveBeenCalled();expect(generation).not.toHaveBeenCalled();expect(register).not.toHaveBeenCalled();expect(mounted.agents.get('child')).toBeUndefined()
   await mounted.dispose()
- }finally{await f.close()}
+  expect(await readFile(join(f.root,'child.jsonl'))).toEqual(originalChildBytes)
+ }finally{try{await f.close()}finally{faults.mirrorTarget='';faults.mirrorOpens=0}}
 })
 it('bad second row and missing fresh task poison all registry operations permanently',async()=>{
  const notification={id:'notif-1',submissionId:'task-1',parentSessionId:'parent',messageId:'m',state:'completed',description:'',text:'',status:'pending',attempts:0,timeCreated:1}
@@ -192,24 +207,56 @@ it.each(['ready','false','undefined'] as const)('original facade cleanup joins p
 it('owned runtime mutation stays fenced while a restored mirror is still pending',async()=>{
  const f=await fixture({formatVersion:2,tasks:[],notifications:[]})
  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ let mounted:ReturnType<typeof mount>['mounted']|undefined
  try{
-  await f.tasks.ready;await f.coordinator.create({sessionId:'child',origin:'subagent',parentSession:'parent',seedLength:0})
-  const original=f.coordinator.openManagedDocument.bind(f.coordinator)
-  const spy=vi.spyOn(f.coordinator,'openManagedDocument').mockImplementation(async id=>{if(id==='child'){entered.resolve();await release.promise}return original(id)})
-  const {mounted}=mount(f,true);await entered.promise
-  expect(()=>mounted.jobs.registerJob('root','subagent','too early')).toThrow('pending')
-  expect(()=>mounted.roles.remove('general')).toThrow('pending')
+  await f.tasks.ready
+  await f.coordinator.create({sessionId:'child',origin:'subagent',parentSession:'parent',seedLength:0})
+  await f.coordinator.append('child',[{type:'plan/mode',mode:'on'},{type:'subagent/inbox',messageId:'durable-pending',message:'original pending'}])
+  const childBytes=await readFile(join(f.root,'child.jsonl'))
+  faults.mirrorTarget=join(f.root,'child.jsonl')
+  faults.mirrorEntered=entered.resolve
+  faults.mirrorGate=release.promise
+  mounted=mount(f,true).mounted
+  await Promise.race([entered.promise,mounted.ready.then(
+   ()=>{throw Error('Mirror completed before its original child read cut')},
+   cause=>{throw cause},
+  )])
+  expect(()=>mounted!.jobs.registerJob('root','subagent','too early')).toThrow('pending')
+  const originalEntry=mounted.table.get('root/a')!
+  const catalogRole={name:'catalog-only',description:'retained during mirror restore',systemPrompt:'fixture role',tools:[]}
+  mounted.roles.register(catalogRole)
+  expect(mounted.roles.get('catalog-only')).toEqual(catalogRole)
   await mounted.tasks.ready
-  expect(()=>mounted.tasks.submit({identity:{parentSessionId:'parent'},agentPath:'early',description:'',prompt:'',agent:'general',delivery:'tool'})).toThrow('pending')
-  expect(()=>mounted.tasks.claim('task-1')).toThrow('pending')
-  expect(()=>mounted.tasks.terminalize({taskId:'task-1',outcome:'completed'})).toThrow('pending')
-  expect(()=>mounted.tasks.bindForegroundHandoff('task-1')).toThrow('pending')
+  expect(()=>mounted!.tasks.submit({identity:{parentSessionId:'parent'},agentPath:'early',description:'',prompt:'',agent:'general',delivery:'tool'})).toThrow('pending')
+  expect(()=>mounted!.tasks.claim('task-1')).toThrow('pending')
+  expect(()=>mounted!.tasks.terminalize({taskId:'task-1',outcome:'completed'})).toThrow('pending')
+  expect(()=>mounted!.tasks.bindForegroundHandoff('task-1')).toThrow('pending')
   await expect(mounted.tasks.save()).rejects.toThrow('pending')
-  expect(mounted.tasks.list()).toHaveLength(0);expect(mounted.tasks.notifications()).toHaveLength(0);expect(lastOriginalTaskSave(mounted.tasks)).toBeUndefined()
-  release.resolve();await mounted.ready
+  expect(mounted.tasks.list()).toHaveLength(0)
+  expect(mounted.tasks.notifications()).toHaveLength(0)
+  expect(lastOriginalTaskSave(mounted.tasks)).toBeUndefined()
+  release.resolve()
+  await mounted.ready
+  expect(mounted.roles.get('catalog-only')).toEqual(catalogRole)
+  expect(mounted.table.get('root/a')).toBe(originalEntry)
+  expect(originalEntry.sessionId).toBe('child')
+  expect(originalEntry.mailbox).toEqual(['pending'])
+  expect(originalEntry.session.events.map(event=>event.type)).toEqual(['plan/mode','subagent/inbox'])
+  expect(await readFile(join(f.root,'child.jsonl'))).toEqual(childBytes)
+  expect(mounted.jobs.read('subagent-1')).toBeDefined()
   expect(mounted.jobs.registerJob('root','subagent','after restore').id).toBeTruthy()
-  await mounted.dispose();spy.mockRestore()
- }finally{release.resolve();await f.close()}
+ }finally{
+  release.resolve()
+  try{
+   await mounted?.ready.catch(()=>{})
+   const errors:unknown[]=[]
+   try{await mounted?.dispose()}catch(error){errors.push(error)}
+   try{await f.close()}catch(error){errors.push(error)}
+   if(errors.length)throw new AggregateError(errors,'Mirror fixture cleanup failed')
+  }finally{
+   faults.mirrorTarget='';faults.mirrorEntered=undefined;faults.mirrorGate=undefined
+  }
+ }
 })
 
 it.each([false,true])('genuine resident retirement with held save and parent revoked=%s drains original owners',async revoked=>{
