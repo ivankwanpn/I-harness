@@ -76,6 +76,7 @@ it('reads and searches real READY L1 bytes after manifest-only shadow, including
   const pending = new Set<Promise<unknown>>()
   let retired = false, complete = false
   let initializing: ReturnType<typeof legacyFixture> | undefined
+  let failedSetupCleanup: (() => Promise<void>) | undefined
   let closing: Promise<void> | undefined
   let primary: { cause: unknown } | undefined
   const runOwned = <T,>(run: () => Promise<T>): Promise<T> => {
@@ -92,12 +93,15 @@ it('reads and searches real READY L1 bytes after manifest-only shadow, including
     const attempt = Promise.resolve().then(async () => {
       const failures: unknown[] = []
       let original: Awaited<ReturnType<typeof legacyFixture>> | undefined
-      try { original = await initializing } catch (cause) { failures.push(cause) }
+      try { original = await initializing } catch (cause) { if (!primary || cause !== primary.cause) failures.push(cause) }
       const joined = await Promise.allSettled([...pending])
       for (const result of joined) {
         if (result.status === 'rejected' && (!primary || result.reason !== primary.cause)) failures.push(result.reason)
       }
-      try { await original?.close() } catch (cause) { failures.push(cause) }
+      try {
+        if (original) await original.close()
+        else await failedSetupCleanup?.()
+      } catch (cause) { failures.push(cause) }
       if (failures.length) throw new AggregateError([...(primary ? [primary.cause] : []), ...failures], 'Original READY fixture cleanup failed', { cause: primary?.cause })
       complete = true
     })
@@ -106,7 +110,8 @@ it('reads and searches real READY L1 bytes after manifest-only shadow, including
     return attempt
   }
   onTestFinished(close)
-  initializing = runOwned(() => legacyFixture())
+  initializing = runOwned(() => legacyFixture({ retainFailedSetupCleanup: cleanup => { failedSetupCleanup = cleanup } }))
+  void initializing.catch(cause => { primary ??= { cause } })
   const f = await initializing
   if (retired) throw Error('Original READY fixture retired during setup')
   const scopes = api.createResultObservationScope()
