@@ -89,29 +89,47 @@ it("subscribes without replay, copies claims and terminal CAS, and keeps legacy 
 describe("task protocol store", () => {
   it("drains queued task document saves before owner teardown without creating an empty document", async () => {
     const firstWrite = Promise.withResolvers<void>()
-    const release = Promise.withResolvers<void>()
+    const secondWrite = Promise.withResolvers<void>()
+    const releaseFirst = Promise.withResolvers<void>()
+    const releaseSecond = Promise.withResolvers<void>()
     const saved: unknown[] = []
     const putDocument = vi.fn(async (_key: string, value: unknown) => {
-      if (saved.length === 0) { firstWrite.resolve(); await release.promise }
-      saved.push(structuredClone(value))
+      const captured = structuredClone(value)
+      if (saved.length === 0) { firstWrite.resolve(); await releaseFirst.promise }
+      else if (saved.length === 1) { secondWrite.resolve(); await releaseSecond.promise }
+      saved.push(captured)
     })
     const tasks = createTaskRegistry({ coordinator: { putDocument } as never, stateId: "parent" })
     const row = tasks.submit({ identity: { parentSessionId: "parent" }, agentPath: "root/helper", description: "helper", prompt: "work", agent: "general", delivery: "tool" })
-    tasks.claim(row.id, "child")
-    tasks.terminalize({ taskId: row.id, outcome: "completed", resultText: "done" })
     let drained = false
+    let flush: Promise<void> | undefined
     try {
-      const flush = tasks.flushPersistence().then(() => { drained = true })
       await firstWrite.promise
+      tasks.claim(row.id, "child")
+      releaseFirst.resolve()
+      await secondWrite.promise
+      tasks.terminalize({ taskId: row.id, outcome: "completed", resultText: "done" })
+      flush = tasks.flushPersistence().then(() => { drained = true })
+      await new Promise<void>(resolve => setImmediate(resolve))
       expect(drained).toBe(false)
-      release.resolve()
+      releaseSecond.resolve()
       await flush
       expect(putDocument).toHaveBeenCalledTimes(3)
+      expect(saved).toEqual([
+        expect.objectContaining({ tasks: [expect.objectContaining({ status: 'accepted' })] }),
+        expect.objectContaining({ tasks: [expect.objectContaining({ status: 'running', childSessionId: 'child' })] }),
+        expect.objectContaining({ tasks: [expect.objectContaining({ outcome: 'completed', childSessionId: 'child' })] }),
+      ])
       expect(saved.at(-1)).toMatchObject({ tasks: [expect.objectContaining({ outcome: "completed", childSessionId: "child" })] })
       const empty = createTaskRegistry({ coordinator: { putDocument } as never, stateId: "empty" })
       await empty.flushPersistence()
       expect(putDocument).toHaveBeenCalledTimes(3)
-    } finally { release.resolve() }
+    } finally {
+      releaseFirst.resolve()
+      releaseSecond.resolve()
+      await flush
+      await tasks.flushPersistence()
+    }
   })
 
   it("taskDocKey namespaces by stateId", () => {

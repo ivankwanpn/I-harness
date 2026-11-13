@@ -230,13 +230,15 @@ describe("subagent tools", () => {
   })
   it("close publishes admission barrier and preserves an entry replaced during drain", async () => {
     const { tools, table } = setup(), release = Promise.withResolvers<void>()
-    const original = { path: "root/c", status: "running" as const, session: createSession(), controller: new AbortController(), mailbox: [], dispose: () => release.promise }
+    const entered = Promise.withResolvers<void>()
+    const original = { path: "root/c", status: "running" as const, session: createSession(), controller: new AbortController(), mailbox: [], dispose: () => { entered.resolve(); return release.promise } }
     table.add(original.path, original)
     const seen: unknown[] = []
     table.subscribe(change => seen.push({ kind: change.kind, closing: change.entry.closing }))
-    const closing = tools.find(t => t.name === "close_agent")!.execute({ target: original.path }, {})
     const replacement = { ...original, controller: new AbortController() }
+    const closing = tools.find(t => t.name === "close_agent")!.execute({ target: original.path }, {})
     try {
+      await Promise.race([entered.promise, Promise.resolve(closing).then(() => { throw Error('Close completed before original disposal') })])
       expect(seen).toEqual([{ kind: "update", closing: true }])
       table.add(original.path, replacement)
       release.resolve(); await closing
@@ -641,10 +643,12 @@ describe("subagent control tools", () => {
     const { ctx, table, jobs, roles, parentReg, session, resolveModel, model, exec } = setup()
     const agents = createAgentRegistry()
     const calls: string[] = []
+    const firstEntered = Promise.withResolvers<void>()
     let resolveFirst: ((v: { finalText: string; turns: number; reasoning: string[] }) => void) | undefined
     const firstTurn = new Promise<{ finalText: string; turns: number; reasoning: string[] }>((r) => { resolveFirst = r })
     const followup = vi.fn().mockImplementation((msg: string) => {
       calls.push(msg)
+      if (calls.length === 1) firstEntered.resolve()
       return calls.length === 1 ? firstTurn : Promise.resolve({ finalText: `ok:${msg}`, turns: 2, reasoning: [] })
     })
     const fakeAgent: Agent = { run: vi.fn(), followup }
@@ -664,32 +668,40 @@ describe("subagent control tools", () => {
     const follow = all.find((t) => t.name === "followup_task")!
     const entry = table.get("root/helper")!
 
-    // Two followup_tasks back to back: both queue durably, both wake the driver.
-    await follow.execute({ target: "root/helper", message: "one" }, {})
-    await follow.execute({ target: "root/helper", message: "two" }, {})
-    // Turn 1 is in flight; turn 2 must NOT have started yet (serialized chain).
-    expect(calls).toEqual(["one"])
-    expect(entry.status).toBe("running")
-    expect(jobs.read(jobId).status).toBe("running")
+    try {
+      // Two followup_tasks back to back: both queue durably, both wake the driver.
+      await follow.execute({ target: "root/helper", message: "one" }, {})
+      await follow.execute({ target: "root/helper", message: "two" }, {})
+      await Promise.race([firstEntered.promise, entry.followupChain!.then(() => { throw Error('Original followup ended before its first body: ' + entry.error) })])
+      // Turn 1 is in flight; turn 2 must NOT have started yet (serialized chain).
+      expect(calls).toEqual(["one"])
+      expect(entry.status).toBe("running")
+      expect(jobs.read(jobId).status).toBe("running")
 
-    // Release turn 1 → turn 2 runs to completion, then the chain settles.
-    resolveFirst!({ finalText: "ok:one", turns: 1, reasoning: [] })
-    await entry.followupChain
-    expect(calls).toEqual(["one", "two"])
-    expect(entry.status).toBe("waiting")
-    expect(entry.finalText).toBe("ok:two")
-    expect(jobs.read(jobId).status).toBe("completed")
-    expect(jobs.read(jobId).output).toBe("ok:two")
+      // Release turn 1 → turn 2 runs to completion, then the chain settles.
+      resolveFirst!({ finalText: "ok:one", turns: 1, reasoning: [] })
+      await entry.followupChain
+      expect(calls).toEqual(["one", "two"])
+      expect(entry.status).toBe("waiting")
+      expect(entry.finalText).toBe("ok:two")
+      expect(jobs.read(jobId).status).toBe("completed")
+      expect(jobs.read(jobId).output).toBe("ok:two")
+    } finally {
+      resolveFirst!({ finalText: 'cleanup', turns: 1, reasoning: [] })
+      await entry.followupChain
+    }
   })
 
   it("close_agent mid-drain stops the driver (no further followup calls)", async () => {
     const { ctx, table, jobs, roles, parentReg, session, resolveModel, model, exec } = setup()
     const agents = createAgentRegistry()
     const calls: string[] = []
+    const firstEntered = Promise.withResolvers<void>()
     let resolveFirst: ((v: { finalText: string; turns: number; reasoning: string[] }) => void) | undefined
     const firstTurn = new Promise<{ finalText: string; turns: number; reasoning: string[] }>((r) => { resolveFirst = r })
     const followup = vi.fn().mockImplementation((msg: string) => {
       calls.push(msg)
+      if (calls.length === 1) firstEntered.resolve()
       return calls.length === 1 ? firstTurn : Promise.resolve({ finalText: `ok:${msg}`, turns: 2, reasoning: [] })
     })
     const fakeAgent: Agent = { run: vi.fn(), followup }
@@ -710,19 +722,25 @@ describe("subagent control tools", () => {
     const close = all.find((t) => t.name === "close_agent")!
     const entry = table.get("root/helper")!
 
-    // Queue TWO pending inbox messages; turn 1 hangs on the deferred promise.
-    await follow.execute({ target: "root/helper", message: "one" }, {})
-    await follow.execute({ target: "root/helper", message: "two" }, {})
-    expect(calls).toEqual(["one"])
+    try {
+      // Queue TWO pending inbox messages; turn 1 hangs on the deferred promise.
+      await follow.execute({ target: "root/helper", message: "one" }, {})
+      await follow.execute({ target: "root/helper", message: "two" }, {})
+      await Promise.race([firstEntered.promise, entry.followupChain!.then(() => { throw Error('Original followup ended before its first body: ' + entry.error) })])
+      expect(calls).toEqual(["one"])
 
-    // Close the agent mid-drain (entry removed) while turn 1 is still in flight.
-    await close.execute({ target: "root/helper" }, {})
-    expect(table.get("root/helper")).toBeUndefined()
-    // Release turn 1; the driver must observe the removed entry and stop
-    // without ever starting a turn for the second pending message.
-    resolveFirst!({ finalText: "ok:one", turns: 1, reasoning: [] })
-    await entry.followupChain
-    expect(calls).toEqual(["one"])
+      // Close the agent mid-drain (entry removed) while turn 1 is still in flight.
+      await close.execute({ target: "root/helper" }, {})
+      expect(table.get("root/helper")).toBeUndefined()
+      // Release turn 1; the driver must observe the removed entry and stop
+      // without ever starting a turn for the second pending message.
+      resolveFirst!({ finalText: "ok:one", turns: 1, reasoning: [] })
+      await entry.followupChain
+      expect(calls).toEqual(["one"])
+    } finally {
+      resolveFirst!({ finalText: 'cleanup', turns: 1, reasoning: [] })
+      await entry.followupChain
+    }
   })
 
   it("close_agent unregisters the child agent from the registry", async () => {
@@ -1121,29 +1139,38 @@ describe("M26-D2 background delivery", () => {
   // (Without the seam the bound is 300_000, which no test can afford to reach.)
   it("background:false that times out says so — the task is still running, not 'settled'", async () => {
     const { ctx, table, jobs, roles, parentReg, session, resolveModel, exec } = setup()
-    // The child must outlive the 50ms wait: its initial turn streams a chunk and
-    // then sleeps well past it, so at the deadline the task is still non-terminal.
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    // The real provider remains active through the foreground wait deadline.
     const slowModel: ModelClient = {
       async *stream() {
+        entered.resolve()
         yield { type: "text/chunk", text: "working" }
-        await new Promise((r) => setTimeout(r, 2_000))
+        await release.promise
         yield { type: "end" }
       },
     }
     const tasks = createTaskRegistry()
     const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: slowModel, resolveModel, exec, agents: createAgentRegistry(), tasks, foregroundWaitMs: 50 })
     const spawn = all.find((t) => t.name === "spawn_agent")!
-    const out = await spawn.execute({ message: "do it", task_name: "helper", background: false }, { sessionId: "s-main", callEventSeq: 5 }) as { task_id: string; status?: string; outcome?: string; resultText?: string; timed_out?: boolean; message?: string }
-    expect(out.timed_out).toBe(true)
-    expect(out.message).toBe("wait timed out for root/helper (still running)")
-    expect(out.status).toBe("running")
-    // …and it really is still running: no outcome on the durable record, a live
-    // table entry, and no summary fields invented for a settlement that has not
-    // happened.
-    expect(tasks.get(out.task_id)!.outcome).toBeUndefined()
-    expect(table.get("root/helper")?.status).toBe("running")
-    expect(out.outcome).toBeUndefined()
-    expect(out.resultText).toBeUndefined()
+    try {
+      const out = await spawn.execute({ message: "do it", task_name: "helper", background: false }, { sessionId: "s-main", callEventSeq: 5 }) as { task_id: string; status?: string; outcome?: string; resultText?: string; timed_out?: boolean; message?: string }
+      await entered.promise
+      expect(out.timed_out).toBe(true)
+      expect(out.message).toBe("wait timed out for root/helper")
+      expect(out.status).toBe("running")
+      // …and it really is still running: no outcome on the durable record, a live
+      // table entry, and no summary fields invented for a settlement that has not
+      // happened.
+      expect(tasks.get(out.task_id)!.outcome).toBeUndefined()
+      expect(table.get("root/helper")?.status).toBe("running")
+      expect(out.outcome).toBeUndefined()
+      expect(out.resultText).toBeUndefined()
+    } finally {
+      release.resolve()
+      const entry = table.get('root/helper')
+      await entry?.followupChain
+      await entry?.dispose?.()
+    }
   }, 15_000)
 
   it("an unbound terminalized source stays pending without generic parent admission", async () => {

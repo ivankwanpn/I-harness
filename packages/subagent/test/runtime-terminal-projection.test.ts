@@ -96,18 +96,34 @@ it.each(['before-io','unknown-after-io'])('isolates canonical required Task proj
  expect(writes).toBe(before+1)
 })
 
-it('retains auxiliary save failures in their own mount flush and cleanup without repeating the save',async()=>{
- let writes=0
- const cause=Error('Original auxiliary projection unavailable')
- const wired=wireSubagentPersistence({jobs:createJobRegistry(),table:createAgentTable(),roles:createRoleRegistry()},{
-  coordinator:{async putDocument(){writes++;throw cause}} as unknown as Parameters<typeof wireSubagentPersistence>[1]['coordinator'],
-  stateId:'auxiliary',parentSessionId:'parent',
- })
- wired.jobs.registerJob('root','code','ordinary')
- await expect(wired.flushFacts()).rejects.toThrow('Auxiliary subagent projections require recovery')
- await expect(wired.flushFacts()).rejects.toThrow('Auxiliary subagent projections require recovery')
- await expect(wired.closeFacts()).rejects.toThrow('Subagent projection cleanup unresolved')
- expect(writes).toBe(1)
+it('retains the original auxiliary snapshot and error across explicit flush and cleanup retries', async () => {
+  let writes = 0, failing = true
+  const snapshots: unknown[] = []
+  const cause = Error('Original auxiliary projection unavailable')
+  const originalJobs = createJobRegistry()
+  const wired = wireSubagentPersistence({ jobs: originalJobs, table: createAgentTable(), roles: createRoleRegistry() }, {
+    coordinator: { async putDocument(_key: string, value: unknown) {
+      writes++
+      snapshots.push(structuredClone(value))
+      if (failing) throw cause
+    } } as unknown as Parameters<typeof wireSubagentPersistence>[1]['coordinator'],
+    stateId: 'auxiliary', parentSessionId: 'parent',
+  })
+  const job = wired.jobs.registerJob('root', 'code', 'ordinary')
+  await expect(wired.flushFacts()).rejects.toBe(cause)
+  const afterFailure = writes
+  originalJobs.updateJob(job.id, { output: 'a later live change' })
+  await expect(wired.flushFacts()).rejects.toBe(cause)
+  expect(writes).toBe(afterFailure + 1)
+  await expect(wired.closeFacts()).rejects.toMatchObject({ message: 'Subagent projection cleanup unresolved', errors: [cause] })
+  expect(writes).toBe(afterFailure + 2)
+  failing = false
+  await wired.closeFacts()
+  expect(writes).toBe(afterFailure + 3)
+  expect(snapshots).toEqual(Array.from({ length: writes }, () => snapshots[0]))
+  expect(snapshots[0]).toMatchObject({ jobs: [expect.objectContaining({ id: job.id, output: '' })] })
+  await wired.closeFacts()
+  expect(writes).toBe(afterFailure + 3)
 })
 
 it('never selects Task cache omission from an ordinary receipt, copied identity or projection shape',async()=>{
@@ -129,18 +145,36 @@ it('never selects Task cache omission from an ordinary receipt, copied identity 
  expect(writes).toBe(2)
 })
 
-it.each(['mailbox','followup','custom-role'])('preserves required %s persistence and its original failure',async mode=>{
- let armed=false,writes=0
- const wired=wireSubagentPersistence({jobs:createJobRegistry(),table:createAgentTable(),roles:createRoleRegistry()},{
-  coordinator:{async putDocument(){writes++;if(armed)throw Error('required '+mode)}} as unknown as Parameters<typeof wireSubagentPersistence>[1]['coordinator'],stateId:'required',parentSessionId:'parent',
- })
- const actual={...entry(),taskId:'copied-task-id'}
- if(mode==='followup'){wired.table.add(actual.path,actual);await wired.flushFacts()}
- armed=true
- if(mode==='mailbox'){actual.mailbox.push('unconsumed');wired.table.add(actual.path,actual)}
- else if(mode==='followup')wired.table.update(actual.path,actual,{lastInboxSeq:7,finalText:'new followup result',status:'waiting'})
- else wired.roles.register({name:'custom',description:'durable configuration',systemPrompt:'custom instructions',tools:[]})
- await expect(wired.flushFacts()).rejects.toThrow('Auxiliary subagent projections require recovery')
- await expect(wired.closeFacts()).rejects.toThrow('Subagent projection cleanup unresolved')
- expect(writes).toBe(mode==='followup'?2:1)
+it.each(['mailbox', 'followup', 'custom-role'])('preserves required %s persistence and its original failure', async mode => {
+  let armed = false, writes = 0
+  const cause = Error('required ' + mode)
+  const snapshots: unknown[] = []
+  const wired = wireSubagentPersistence({ jobs: createJobRegistry(), table: createAgentTable(), roles: createRoleRegistry() }, {
+    coordinator: { async putDocument(_key: string, value: unknown) {
+      writes++
+      snapshots.push(structuredClone(value))
+      if (armed) throw cause
+    } } as unknown as Parameters<typeof wireSubagentPersistence>[1]['coordinator'],
+    stateId: 'required', parentSessionId: 'parent',
+  })
+  const actual = { ...entry(), taskId: 'copied-task-id' }
+  if (mode === 'followup') { wired.table.add(actual.path, actual); await wired.flushFacts() }
+  armed = true
+  if (mode === 'mailbox') { actual.mailbox.push('unconsumed'); wired.table.add(actual.path, actual) }
+  else if (mode === 'followup') wired.table.update(actual.path, actual, { lastInboxSeq: 7, finalText: 'new followup result', status: 'waiting' })
+  else wired.roles.register({ name: 'custom', description: 'durable configuration', systemPrompt: 'custom instructions', tools: [] })
+  await expect(wired.flushFacts()).rejects.toBe(cause)
+  const afterFailure = writes, failedSnapshot = snapshots.at(-1)
+  if (mode === 'mailbox') expect(failedSnapshot).toMatchObject({ agentTable: [expect.objectContaining({ mailbox: ['unconsumed'] })] })
+  else if (mode === 'followup') expect(failedSnapshot).toMatchObject({ agentTable: [expect.objectContaining({ lastInboxSeq: 7, finalText: 'new followup result', status: 'waiting' })] })
+  else expect(failedSnapshot).toMatchObject({ roles: [expect.objectContaining({ name: 'custom', systemPrompt: 'custom instructions' })] })
+  await expect(wired.closeFacts()).rejects.toMatchObject({ message: 'Subagent projection cleanup unresolved', errors: [cause] })
+  expect(writes).toBe(afterFailure + 1)
+  expect(snapshots.at(-1)).toEqual(failedSnapshot)
+  armed = false
+  await wired.closeFacts()
+  expect(writes).toBe(afterFailure + 2)
+  expect(snapshots.at(-1)).toEqual(failedSnapshot)
+  await wired.closeFacts()
+  expect(writes).toBe(afterFailure + 2)
 })

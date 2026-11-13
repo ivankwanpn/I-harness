@@ -2,7 +2,7 @@ import { expect, it } from 'vitest'
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { committedFactSeqs } from '@i-harness/core-session'
+import { committedFactSeqs, CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createContextOutputService } from '../../context-output/src/index.ts'
@@ -49,7 +49,7 @@ it.each([
     await source.close(); action.finish()
     await coordinator.close()
     const file = join(root, 'parent.jsonl'), bytes = await readFile(file), before = await stat(file)
-    expect(JSON.parse(bytes.toString().split('\n')[0]!).formatVersion).toBe(10)
+    expect(JSON.parse(bytes.toString().split('\n')[0]!).formatVersion).toBe(CURRENT_FORMAT_VERSION)
     const query = createFileBackedSessionQuery({ storeRoot: root, dbPath: join(root, 'query.db') })
     const hits = await Promise.all(['CHILD_RESULT_MARKER', 'CHILD_ERROR_MARKER'].map(marker => query.search(marker)))
     for (const [index, marker] of ['CHILD_RESULT_MARKER', 'CHILD_ERROR_MARKER'].entries()) {

@@ -1,9 +1,9 @@
-const publicationFault=vi.hoisted(()=>({target:'',armed:false}))
-vi.mock('node:fs/promises',async original=>{const fs=await original<typeof import('node:fs/promises')>();return {...fs,async rename(...args:Parameters<typeof fs.rename>){await fs.rename(...args);if(publicationFault.armed&&String(args[1])===publicationFault.target){publicationFault.armed=false;throw undefined}}}})
+const publicationFault=vi.hoisted(()=>({target:'',armed:false,renames:0}))
+vi.mock('node:fs/promises',async original=>{const fs=await original<typeof import('node:fs/promises')>();return {...fs,async rename(...args:Parameters<typeof fs.rename>){await fs.rename(...args);if(String(args[1])===publicationFault.target)publicationFault.renames++;if(publicationFault.armed&&String(args[1])===publicationFault.target){publicationFault.armed=false;throw undefined}}}})
 import * as spawnSources from '../src/tools/spawn-source.ts'
 const originalSpawnSource=spawnSources.createSpawnSource
 import { expect,it,vi } from 'vitest'
-import {mkdtemp,rm} from 'node:fs/promises'
+import {mkdtemp,rm,readFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {createContext} from '@i-harness/core-plugin'
 import {createToolRegistry} from '@i-harness/core-tools'
@@ -15,6 +15,7 @@ import {registerSubagent} from '../src/index.ts'
 import {registerExec} from '@i-harness/exec'
 import {receivedInputsFor} from '../../session-executor/src/lifecycle/received-inputs.ts'
 import * as slots from '../src/task/launch-slots.ts'
+import {lastOriginalTaskSave} from '../src/task/save-owner.ts'
 import {TaskPersistence} from '../src/task/persistence.ts'
 import {createUnmanagedTaskChildHost} from '../../session-executor/src/lifecycle/task-child-host.ts'
 it.each([false,undefined])('mounted Boolean-disabled declared model refuses before task effects (%s)',async policy=>{
@@ -98,23 +99,74 @@ import {captureOwnedTaskContext} from '../src/task/owned-context.ts'
 import {childInitialCommitment,compileSemanticSeed,createChildBootstrapRequestIntent,captureChildBootstrapCaptureRequest} from '@i-harness/session-persistence'
 it.each(['stop','parent','dispose','unknown'] as const)('original slot binding retires its held consumer on %s without launch revival',async cut=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'slot-binding-')),coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract),release=Promise.withResolvers<void>(),bound=Promise.withResolvers<void>()
+ let dispatch:Promise<unknown>|undefined
+ let source:ReturnType<NonNullable<typeof action>['registerSettlementSource']>|undefined
  let taskOwner:ReturnType<typeof createTaskRegistry>|undefined,action:ReturnType<Awaited<ReturnType<typeof coordinator.openManagedDocument>>['beginAction']>|undefined
  try{
   await coordinator.create({sessionId:'parent'});const document=await coordinator.openManagedDocument('parent'),ctx=createContext(),registry=createToolRegistry(ctx,{executionOwner:{view:document.view,factOwner:document,context:ctx,sessionId:'parent'}}),owned=captureOwnedTaskContext(coordinator,document,document.view,'parent')!
   taskOwner=createTaskRegistry({coordinator,stateId:'parent',ownedTask:owned,launchContext:{view:document.view,factOwner:document,context:ctx,sessionId:'parent'}});await taskOwner.ready
-  action=document.beginAction();const source=action.registerSettlementSource(async()=>{}),args={message:'work',task_name:'one',agent_type:'a',background:false},[seq]=committedFactSeqs(await action.facts.tools.call({type:'tool/call',callId:'call',name:'spawn_agent',args}));committedFactSeqs(await action.facts.tools.dispatch('call',{kind:'prior',seq:seq!,expectedType:'tool/call'}))
+  action=document.beginAction();source=action.registerSettlementSource(async()=>{});const args={message:'work',task_name:'one',agent_type:'a',background:false},[seq]=committedFactSeqs(await action.facts.tools.call({type:'tool/call',callId:'call',name:'spawn_agent',args}));committedFactSeqs(await action.facts.tools.dispatch('call',{kind:'prior',seq:seq!,expectedType:'tool/call'}))
+  let unknownAtRejection:string|undefined, originalFailure:unknown
+  let rejectedSave:ReturnType<typeof lastOriginalTaskSave>
+  let executeCalls=0
   let slot:slots.TaskLaunchSlot|undefined,entry:ReturnType<typeof bindPreparedTaskLaunchLeaf>
-  const tool={name:'spawn_agent',description:'',inputSchema:{},async execute(_args:unknown,exec:import('@i-harness/core-tools').ToolExec){const caller=entry.enter(exec)!;slot=slots.taskLaunchPortFor(taskOwner!).admit(caller,{name:'a',description:'',systemPrompt:'a',tools:[]}).slot;await slot.accepted
+  const tool={name:'spawn_agent',description:'',inputSchema:{},async execute(_args:unknown,exec:import('@i-harness/core-tools').ToolExec){executeCalls++;const caller=entry.enter(exec)!;slot=slots.taskLaunchPortFor(taskOwner!).admit(caller,{name:'a',description:'',systemPrompt:'a',tools:[]}).slot;await slot.accepted
    const initial={inputId:'initial',text:'work',startedAt:1,expiresAt:11,parentSessionId:'parent'},lineage={origin:'subagent' as const,subagentProtocolVersion:1 as const,parentSession:'parent'},payload={invocation:{version:1 as const,operationId:'op',targetSessionId:'child',createdAt:'2026-11-01T00:00:00.000Z',requestDigest:'a'.repeat(64)},target:{kind:'new' as const},metadata:{},lineage,seed:compileSemanticSeed({kind:'none'}),initial},core={version:1 as const,kind:'child-bootstrap-core' as const,caller:{kind:'task' as const,taskId:slot.task.id,parentSessionId:'parent',callEventSeq:seq!,toolCallId:'call'},history:{selection:{kind:'none' as const}},metadata:{},lineage,initial:childInitialCommitment(payload),execution:{roleName:'a',roleDigest:'b'.repeat(64),toolNames:[],model:{kind:'inherit-parent' as const},approval:'ordinary' as const}},intent=createChildBootstrapRequestIntent(core,{kind:'unmanaged'}),request=captureChildBootstrapCaptureRequest({version:1,kind:'child-bootstrap-capture-request',invocation:{...payload.invocation,requestDigest:intent.requestDigest},core,requestIntent:intent.intent})
-   if(cut==='unknown'){publicationFault.target=join(root,'task-parent.doc.jsonl');publicationFault.armed=true;await expect(slot.bind({version:1,kind:'task-child-birth',request})).rejects.toThrow()}else{await slot.bind({version:1,kind:'task-child-birth',request});slot.assertBinding()}bound.resolve();await release.promise;return 'done'}}
+   if(cut==='unknown') {
+    publicationFault.target=join(root,'task-parent.doc.jsonl');publicationFault.renames=0;publicationFault.armed=true
+    const binding=slot.bind({version:1,kind:'task-child-birth',request})
+    rejectedSave=lastOriginalTaskSave(taskOwner!)
+    expect(rejectedSave).toBeDefined()
+    const observed=rejectedSave!.done.then(
+     ()=>{throw Error('Original unknown save unexpectedly acknowledged')},
+     cause=>{originalFailure=cause;unknownAtRejection=rejectedSave!.outcome()?.kind},
+    )
+    await expect(binding).rejects.toThrow()
+    await observed
+   }else{await slot.bind({version:1,kind:'task-child-birth',request});slot.assertBinding()}bound.resolve();await release.promise;return 'done'}}
   entry=bindPreparedTaskLaunchLeaf(tool,tool.execute);registry.register(tool)
-  const dispatch=registry.dispatch(await registry.prepare({name:'spawn_agent',args},action.signal,{session:document.view,sessionId:'parent',callId:'call',callEventSeq:seq!,settlementSource:source}));void dispatch.catch(()=>{});await bound.promise
+  dispatch=registry.dispatch(await registry.prepare({name:'spawn_agent',args},action.signal,{session:document.view,sessionId:'parent',callId:'call',callEventSeq:seq!,settlementSource:source}));void dispatch.catch(()=>{});await bound.promise
   expect((await coordinator.getDocument('task-parent') as {formatVersion:number}).formatVersion).toBe(3)
   if(cut==='stop')action.stop();else if(cut==='parent')document.revokeNewWork();else if(cut==='dispose')taskOwner.retireOwnedLoad()
-  if(cut==='unknown'){await expect(taskOwner.closeOwnedLoad()).rejects.toThrow();await slot!.retryBinding()}
+  if(cut==='unknown') {
+   const original=lastOriginalTaskSave(taskOwner)!
+   expect(original).toBeDefined()
+   expect(original).toBe(rejectedSave)
+   expect(unknownAtRejection).toBe('unknown')
+   await expect(original.done).rejects.toBe(originalFailure)
+   const bytes=await readFile(publicationFault.target)
+   expect(publicationFault.renames).toBe(1)
+   await taskOwner.closeOwnedLoad()
+   const committed=original.outcome()
+   expect(committed).toMatchObject({kind:'committed',cleanupPending:false})
+   if(committed?.kind!=='committed')throw Error('Original acknowledgement unavailable')
+   await expect(original.done).rejects.toBe(originalFailure)
+   expect(()=>original.assertHandoff()).toThrow()
+   expect(()=>original.release()).toThrow()
+   await slot!.retryBinding()
+   const retried=original.outcome()
+   if(retried?.kind!=='committed')throw Error('Original acknowledgement lost')
+   expect(retried.ack).toBe(committed.ack)
+   expect(lastOriginalTaskSave(taskOwner)).toBe(original)
+   expect(await readFile(publicationFault.target)).toEqual(bytes)
+   expect(publicationFault.renames).toBe(1)
+   expect(executeCalls).toBe(1)
+   await expect(readFile(join(root,'child.jsonl'))).rejects.toMatchObject({code:'ENOENT'})
+  }
   await taskOwner.closeOwnedLoad();expect(()=>slot!.assertBinding()).toThrow();await slot!.retryBinding();expect(()=>slot!.consumeBinding()).toThrow()
   release.resolve();await dispatch.catch(()=>{});await source.close()
- }finally{release.resolve();action?.finish();await taskOwner?.closeOwnedLoad().catch(()=>{});await coordinator.close();await rm(root,{recursive:true,force:true})}
+ }finally{
+  release.resolve()
+  await dispatch?.catch(()=>{})
+  const errors:unknown[]=[]
+  try{await source?.close()}catch(error){errors.push(error)}
+  try{action?.finish()}catch(error){errors.push(error)}
+  try{await taskOwner?.closeOwnedLoad()}catch(error){errors.push(error)}
+  try{await coordinator.close()}catch(error){errors.push(error)}
+  publicationFault.armed=false;publicationFault.target=''
+  if(errors.length)throw new AggregateError(errors,'Original slot fixture cleanup failed')
+  await rm(root,{recursive:true,force:true})
+ }
 })
 import {createCodeModeBroker} from '../../code-mode/src/broker.ts'
 it.each([false,true])('real Code Mode broker task caller with foreign view=%s',async foreign=>{
