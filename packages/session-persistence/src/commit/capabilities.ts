@@ -7,6 +7,7 @@ import { associateArtifactPaths } from '../coordinator/artifact-path-association
 import { createTaskDocumentOperations, type TaskDocumentConfiguration } from '../coordinator/task-document-operation.ts'
 import { createProcessReadLatches } from '../coordinator/process-read-latches.ts'
 import { openCommitTaskDocumentSession } from './task-document.ts'
+import { captureManagedTaskParentReadiness } from '../coordinator/managed-document.ts'
 import type { ObservedDocument, SessionMeta } from '../coordinator/types.ts'
 
 export type CapabilityDocuments = {
@@ -61,12 +62,21 @@ export function createCommitTaskOperations(ports: Pick<CommitOwnershipPorts, 'ow
   return createTaskDocumentOperations(ownership, ports.observations, {
     validator: options.validator,
     captureParent(document) {
-      const id = sessionOf(document as object)
+      const id = sessionOf(document)
       if (!id) throw new TypeError('Original task parent session unavailable')
-      return {
+      const readiness = captureManagedTaskParentReadiness(document, ownership)
+      const parent = Object.freeze({
         id,
-        assertCurrent() { (document as { assertReady?(): void }).assertReady?.() },
-      }
+        assertOriginal() {
+          if (this !== parent) throw new TypeError('Original task parent receiver required')
+          readiness.assertOriginal()
+        },
+        assertCurrent() {
+          if (this !== parent) throw new TypeError('Original task parent receiver required')
+          readiness.assertCurrent()
+        },
+      })
+      return parent
     },
     open: scope => openCommitTaskDocumentSession(scope, { getDocument: documents.getDocument, putDocument: documents.putDocument }),
   }, run => run(), taskLatches)
