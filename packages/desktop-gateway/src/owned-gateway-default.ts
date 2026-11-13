@@ -17,7 +17,7 @@ import type {createOwnedIndexJobBindings} from './owned-index-jobs.ts'
 /** Called only by the future configured private-host selector after its native,
  * child and Code owners are attached to this same original registry. */
 export async function composeOwnedGatewayDefault(original:ManagedRegistryConstruction, options:{
- extensions: Omit<Parameters<typeof mountOwnedHostExtensions>[1],'bindIdentity'|'modelTools'|'inputs'|'directMcp'>
+ extensions: Omit<Parameters<typeof mountOwnedHostExtensions>[1],'bindIdentity'|'inputs'|'directMcp'>
  surface: Omit<Parameters<typeof createOwnedDefaultSurface>[1],'prepareInput'|'hookPrompt'|'recoveryPrompt'|'prepareModelSurface'>
  leaves: Parameters<typeof mountOwnedGatewayLeaves>[1]
  task:RegisterSubagentResult
@@ -36,7 +36,6 @@ export async function composeOwnedGatewayDefault(original:ManagedRegistryConstru
  let surface:OwnedDefaultSurface|undefined
  const extensions=await mountOwnedHostExtensions(original,{...options.extensions,inputs:selected.inputs,directMcp:selected.directMcp,
   policy:()=>{const current=options.selection.current(original.domain.sessionId);return {...options.extensions.policy(),hookConfigs:current.inputs.hookConfigs,pluginAuthority:current.inputs}},
-  modelTools:()=>{if(!surface)throw Error('Owned model surface unavailable');return surface.modelToolSchemas()},
   bindIdentity(owner,identity){const unbind=options.bindings.bind(owner,identity);try{original.retain(unbind)}catch(error){unbind();throw error}},
  })
  selected.assertCurrent();original.assertCurrent();options.selection.bind(original,extensions.mount)

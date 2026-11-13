@@ -320,6 +320,13 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
                         if (record.call && step!.batch.includes(record.call))
                             record.handled = true;
                     lifecycle.deferredFailure = error => acceptance.fail(async (complete) => { lifecycle.providerCompleted = complete; await closeGeneration(generation, signal.aborted ? 'stopped' : 'failed'); await settleFailedTurn(owned, lifecycle, error); });
+                    // Background delivery may still own a finite read when the
+                    // response ends. Join it before accepting this same response.
+                    for (;;) {
+                        const wait = getManagedExecutionAdmissionWait(host.domain, action, signal);
+                        if (!wait) break;
+                        await wait;
+                    }
                     const result = await acceptModelExchange({ facts: action.facts, flush: host.flush, generationAction: generation, captureModelExchange(...args) { assertManagedActionCurrent(host.domain, action); const capture = action.captureModelExchange(...args); acceptedCapture = capture; return capture; }, readAccepted(capture, outcome) {
                             if (outcome.kind !== 'committed')
                                 throw TypeError('Original durable acceptance required');

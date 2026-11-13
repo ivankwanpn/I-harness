@@ -5,8 +5,7 @@ import type { SessionAssembly, SessionProjectContext } from "@i-harness/session-
 import type { AuthorityState } from "@i-harness/sandbox"
 
 export interface ApprovalIdentitySources {
-  plan: unknown; roles: unknown; catalog: unknown; deferred: unknown; modelTools: unknown
-  mcp: unknown; agents: unknown
+  plan: unknown; roles: unknown
 }
 export interface ApprovalIdentityOptions {
   workspace: string; sandbox: string; approval: string
@@ -18,9 +17,7 @@ export interface ApprovalIdentityOptions {
 }
 /** Current host authority, synchronously reassessed both at prepare and dispatch. */
 export function approvalPolicyIdentity(assembly: SessionAssembly, options: ApprovalIdentityOptions): { workspaceId: string; revision: string } | undefined {
-  return approvalPolicyIdentityFromSources(() => ({ plan: derivePlanMode(assembly.session), roles: assembly.subagentState().roles,
-    catalog: assembly.tools.genToolCatalog(), deferred: assembly.tools.deferredSearchIndex(), modelTools: assembly.executionState?.(),
-    mcp: [...assembly.pluginMcpResults], agents: [...assembly.pluginAgentResults] }), options)
+  return approvalPolicyIdentityFromSources(() => ({ plan: derivePlanMode(assembly.session), roles: assembly.subagentState().roles }), options)
 }
 
 /** Values must come from the live original registry and metadata owners. */
@@ -35,8 +32,8 @@ export function approvalPolicyIdentityFromSources(sources: () => ApprovalIdentit
     const project = options.project()
     const executionAuthority = options.executionAuthority?.()
     if (executionAuthority?.kind === "revoked" || executionAuthority?.kind === "unavailable") return undefined
-    // Model-facing schema projection is a read; its live presentation metadata
-    // is separate from the owned registry catalog fingerprinted below.
+    // Tool registration is validated by the prepared call's original binding.
+    // Policy identity reads only the independent authority inputs below.
     const source = sources()
     const authority = {
       sandbox: options.sandbox, approval: options.approval, plan: source.plan,

@@ -12,7 +12,7 @@ import type { InteractionBridge } from './interaction.ts'
 export async function mountOwnedHostExtensions(original: ManagedRegistryConstruction, options: {
   roles: RoleRegistry; workspace: string; configDir: string; startSource: 'startup' | 'resume'
   inputs: RuntimeInputs; directMcp?: OwnedPluginMountOptions['directMcp']; report(messages: string[]): void
-  interaction: InteractionBridge; modelTools(): unknown
+  interaction: InteractionBridge
   policy(): Omit<ApprovalIdentityOptions, 'hookAuthority'>
   bindIdentity(owner: { ctx: ManagedRegistryConstruction['ctx']; sessionId: string; tools: ManagedRegistryConstruction['tools'] }, identity: () => { workspaceId: string; revision: string } | undefined): void
 }) {
@@ -26,12 +26,11 @@ export async function mountOwnedHostExtensions(original: ManagedRegistryConstruc
   const owner = { ctx: original.ctx, sessionId: original.domain.sessionId, tools: original.tools }
   const identity = () => approvalPolicyIdentityFromSources(() => {
     if (closed) throw Error('Owned host retired')
-    original.assertCurrent()
+    original.assertLifetimeCurrent()
     const observation = original.execution.observe()
     const plan = observation.plan()
-    const result = { plan, roles: options.roles.list(), catalog: original.tools.genToolCatalog(), deferred: original.tools.deferredSearchIndex(),
-      modelTools: options.modelTools(), mcp: [...catalog.mcpResults], agents: [...catalog.roleResults] }
-    observation.assertCurrent(); original.assertCurrent()
+    const result = { plan, roles: options.roles.list() }
+    observation.assertCurrent(); original.assertLifetimeCurrent()
     return result
   }, { ...options.policy(), hookAuthority: () => mount!.hookAuthority(options.policy().hookConfigs) })
   options.bindIdentity(owner, identity)
