@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
 import { createContext } from "@i-harness/core-plugin"
@@ -11,6 +11,29 @@ import { createMockClient } from "@i-harness/llm-mock"
 import { registerExec } from "@i-harness/exec"
 import { registerSubagent, SHIPPING_REPORT_POLICY, createTaskRegistry, createNotificationDrain, isSessionCancelledChain } from "../src/index.ts"
 import { fixtureGenerationFor, controlledModel } from './generation-fixture.ts'
+
+async function finishReportFixture(
+  sub: ReturnType<typeof registerSubagent>,
+  coordinator: ReturnType<typeof createSessionCoordinator>,
+  root: string,
+  primary: { cause: unknown } | undefined,
+) {
+  const errors: unknown[] = []
+  try { await sub.dispose() } catch (error) { errors.push(error) }
+  try { await coordinator.close() } catch (error) { errors.push(error) }
+  if (!primary && !errors.length) {
+    const target = resolve(root)
+    const owned = ['owned-result-pages-', 'child-retention-failure-', 'child-retention-cancellation-']
+    if (dirname(target) !== resolve(tmpdir()) || !owned.some(prefix => basename(target).startsWith(prefix))) throw Error('Unsafe report fixture cleanup')
+    await rm(target, { recursive: true, force: true })
+  }
+  if (primary && !errors.length) throw primary.cause
+  if (primary || errors.length) throw new AggregateError(
+    [...(primary ? [primary.cause] : []), ...errors],
+    'Bounded report fixture failed at '+root+'; original body cause retained before cleanup',
+    { cause: primary ? primary.cause : errors[0] },
+  )
+}
 
 it("bounds aggregate reports and reconstructs owned multilingual results with digest cursors", async () => {
   const ctx = createContext(), tools = createToolRegistry(ctx), session = createSession()
@@ -76,6 +99,7 @@ it("actual followup changes a job digest and stale result/list pages refuse mixe
   const ctx = createContext(), tools = createToolRegistry(ctx), session = createSession()
   const first = "FIRST 中文🙂".repeat(4000), second = "SECOND 中文🙂".repeat(5000)
   const sub = registerSubagent(ctx, tools, { generationFactoryFor: fixtureGenerationFor, parentSession: session, parentModel: createMockClient([{ role: "assistant", text: first }, { role: "assistant", text: second }]), exec: registerExec(ctx), resolveModel: async () => ({ status: "unconfigured", reason: "unused" }), reportPolicy: SHIPPING_REPORT_POLICY, persist: { coordinator, stateId: "parent", parentSessionId: "parent" } })
+  let primary: { cause: unknown } | undefined
   try {
     await sub.ready
     sub.roles.register({ name: "bare", description: "controlled no-tool fixture", systemPrompt: "Answer", tools: [] })
@@ -94,7 +118,8 @@ it("actual followup changes a job digest and stale result/list pages refuse mixe
     legacy.jobs.updateJob(job.id, { status: "completed", output: first })
     expect((await legacyTools.execute({ name: "job_output", args: { job_id: job.id } })).output).toEqual({ text: `${first}\n[status: completed]`, status: "completed" })
     await legacy.dispose()
-  } finally { await sub.dispose(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+  } catch (cause) { primary = { cause } }
+  await finishReportFixture(sub, coordinator, root, primary)
 })
 
 it("strict owned task documents retain full presentation while an unbound generic notice stays pending", async () => {
@@ -170,9 +195,11 @@ it("a real completed child tool is never replayed when its full task document re
   const root = await mkdtemp(join(tmpdir(), "child-retention-failure-"))
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
+  let failRetention = true
+  const retentionFailure = new Error("owned result disk full")
   const strict = coordinator.putDocumentStrict!.bind(coordinator)
   coordinator.putDocumentStrict = async (key, data) => {
-    if (key === "task-parent" && (data as any).tasks.some((task: any) => task.outcome === "completed")) throw new Error("owned result disk full")
+    if (failRetention && key === "task-parent" && (data as any).tasks.some((task: any) => task.outcome === "completed")) throw retentionFailure
     return strict(key, data)
   }
   const ctx = createContext(), tools = createToolRegistry(ctx), admissions: string[] = []
@@ -185,6 +212,7 @@ it("a real completed child tool is never replayed when its full task document re
     yield { type: "end" as const }
   })
   const sub = registerSubagent(ctx, tools, { generationFactoryFor: fixtureGenerationFor, parentSession: createSession(), parentModel: model, exec: registerExec(ctx), resolveModel: async () => ({ status: "unconfigured", reason: "unused" }), reportPolicy: SHIPPING_REPORT_POLICY, persist: { coordinator, stateId: "parent", parentSessionId: "parent" }, parentNotify: { admit: async input => { admissions.push(input.text) }, wake: () => {} } })
+  let primary: { cause: unknown } | undefined
   try {
     await sub.ready
     sub.roles.register({ name: "effect-worker", description: "controlled worker", systemPrompt: "Use effect then report", tools: ["effect"] })
@@ -199,7 +227,26 @@ it("a real completed child tool is never replayed when its full task document re
     await coordinator.flush(task.childSessionId!)
     expect((await coordinator.load(task.childSessionId!)).session.events.some(event => event.type === "tool/result" && (event.output as any).committed === true)).toBe(true)
     expect(sideeffects).toBe(1)
-  } finally { await sub.dispose(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+    failRetention = false
+    await sub.tasks.retainResult(task.id)
+    expect(sub.tasks.get(task.id)).toMatchObject({ outcome: 'completed', resultText: 'effect actually completed', retention: 'durable' })
+    const saved = await coordinator.getDocument('task-parent') as { formatVersion: number; tasks: typeof task[] }
+    expect(saved.formatVersion).toBe(2)
+    expect(saved.tasks.find(row => row.id === task.id)).toMatchObject({ outcome: 'completed', resultText: 'effect actually completed' })
+    expect(saved.tasks.find(row => row.id === task.id)?.result).toBeUndefined()
+    expect(saved.tasks.find(row => row.id === task.id)?.legacyFormatVersion).toBeUndefined()
+    await sub.drainParentNotifications()
+    const closeFailure = await sub.dispose().then(() => undefined, error => error)
+    const leaves = (error: unknown): unknown[] => error instanceof AggregateError
+      ? error.errors.flatMap(leaves) : error instanceof Error && error.cause !== undefined ? leaves(error.cause) : [error]
+    expect(closeFailure).toBeInstanceOf(AggregateError)
+    expect(leaves(closeFailure).length).toBeGreaterThan(0)
+    expect(leaves(closeFailure).every(error => error === retentionFailure)).toBe(true)
+    await sub.dispose()
+    expect(sideeffects).toBe(1)
+    expect(modelCalls).toBe(2)
+  } catch (cause) { primary = { cause } }
+  await finishReportFixture(sub, coordinator, root, primary)
 })
 
 it("cancellation during strict result retention suppresses admission without replaying the completed child effect", async () => {
@@ -227,13 +274,22 @@ it("cancellation during strict result retention suppresses admission without rep
     yield { type: "end" as const }
   })
   const sub = registerSubagent(ctx, tools, { generationFactoryFor: fixtureGenerationFor, parentSession: createSession(), parentModel: model, exec: registerExec(ctx), resolveModel: async () => ({ status: "unconfigured", reason: "unused" }), reportPolicy: SHIPPING_REPORT_POLICY, persist: { coordinator, stateId: "parent", parentSessionId: "parent" } })
+  let primary: { cause: unknown } | undefined
   try {
     await sub.ready
     const parent = sub.tasks.submit({ identity: { parentSessionId: "root", callEventSeq: 1 }, agentPath: "root", description: "parent", prompt: "p", agent: "general", delivery: "tool" })
     sub.tasks.claim(parent.id, "parent")
     sub.roles.register({ name: "effect-worker", description: "controlled worker", systemPrompt: "Use effect then report", tools: ["effect"] })
     const spawned = (await tools.execute({ name: "spawn_agent", args: { message: "go", task_name: "effect", agent_type: "effect-worker" } })).output as any
-    await retaining
+    const child = sub.table.get(spawned.agent_path ?? 'root/effect')
+    if (!child) throw Error('Original spawned entry unavailable')
+    const originalFlight = child.followupChain
+    if (!originalFlight) throw Error('Original child continuation unavailable')
+    void originalFlight.catch(() => {})
+    await Promise.race([
+      retaining,
+      originalFlight.then(() => { throw new Error('Original child settled before strict retention boundary', { cause: child.error }) }),
+    ])
     const admit = vi.fn(async () => {}), wake = vi.fn()
     const drain = createNotificationDrain({ tasks: sub.tasks, reportPolicy: SHIPPING_REPORT_POLICY,
       isSessionCancelled: sessionId => {
@@ -260,5 +316,7 @@ it("cancellation during strict result retention suppresses admission without rep
     expect(sideeffects).toBe(1)
     expect(modelCalls).toBe(2)
     expect(await drain.drain()).toBe(0)
-  } finally { release(); await sub.dispose(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+  } catch (cause) { primary = { cause } }
+  release()
+  await finishReportFixture(sub, coordinator, root, primary)
 })

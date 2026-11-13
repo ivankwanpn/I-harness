@@ -177,8 +177,16 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   async function retainResultOnce(taskId: string): Promise<void> {
     const task = currentState.records.get(taskId)
     if (!task) throw new Error(`unknown task: ${taskId}`)
-    if (!task.result && (task.publication === 'unqualified' || currentState.version >= 2 && task.legacyFormatVersion !== 1)) throw new Error('Retained task body incomplete')
+    // Require captured bodies from compositions that own a body producer.
+    // Legacy memory parents persist full presentation in the strict document.
+    const capturesBody = ownedTask !== undefined || resultOwner !== undefined
+    if (!task.result && (task.publication === 'unqualified' || capturesBody && task.legacyFormatVersion !== 1)) {
+      throw new Error('Retained task body incomplete')
+    }
     if (resultOwner) await resultOwner.settle(task)
+    if (!resultOwner && task.result?.kind === 'pending') {
+      throw Object.assign(new Error('Original task body capture unavailable after restart'), { code: 'FACT_RECOVERY_REQUIRED' })
+    }
     if (!opts.reportPolicy) return
     // The in-memory authoritative outcome is already complete. Persistence
     // failure changes delivery evidence only; it never reopens execution.
