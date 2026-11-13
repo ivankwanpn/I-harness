@@ -1,4 +1,5 @@
-import { open, readFile, type FileHandle } from 'node:fs/promises'
+import { createBootstrapCaptureIO, type CaptureResource } from './bootstrap-capture-io.ts'
+import { readFile, type FileHandle } from 'node:fs/promises'
 import { CURRENT_FORMAT_VERSION, canonicalJsonData, decodeFactBatch, readFactJournal, validJournalMetadata, validJournalPrefix, type EncodedFactBatch, type FactReceipt, type JournalPrefix, type SessionEvent } from '@i-harness/core-session'
 import type { BackendFactOutcome, HeldFactOwner, OwnedFactBackend, SessionMeta } from '@i-harness/session-persistence'
 import { isHeldFactOwner, bootstrapManifest, validateOwnedCaptureStage } from '@i-harness/session-persistence'
@@ -105,135 +106,147 @@ async function checkPrefix(handle: FileHandle, h: { meta: SessionMeta; bytes: nu
 
 /** Only the coordinator creates owner contexts. This leaf owns complete writes,
  * fsync evidence and same-issued-batch reconciliation; no write-behind retry. */
-export function createFactJournalBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>, nativePrewrite?: Readonly<{ filePath: typeof filePath; assertNotDeleted: typeof assertNotDeleted; enter(id: string, owner: import('@i-harness/session-persistence').IssuingFactOwner, batch: EncodedFactBatch): () => void }>, publication?: PublicationOwner): OwnedFactBackend & Pick<BootstrapBackend,'confirmBootstrapFrames'> {
+export function createFactJournalBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>, nativePrewrite?: Readonly<{ filePath: typeof filePath; assertNotDeleted: typeof assertNotDeleted; enter(id: string, owner: import('@i-harness/session-persistence').IssuingFactOwner, batch: EncodedFactBatch): () => void }>, publication?: PublicationOwner, captureIO = createBootstrapCaptureIO()): OwnedFactBackend & Pick<BootstrapBackend,'confirmBootstrapFrames'> {
   if (nativePrewrite && (nativePrewrite.filePath !== filePath || nativePrewrite.assertNotDeleted !== assertNotDeleted)) throw new TypeError('Changed original native writer prerequisites')
   const receipt = (owner: HeldFactOwner, batch: EncodedFactBatch, prefixDigest: string): FactReceipt => ({
     owner: { ...owner.owner }, key: { ...batch.key }, lastSeq: batch.key.firstSeq + batch.key.count - 1, prefixDigest,
   })
   return {
     async confirmBootstrapFrames(id,owner,expected) {
-      scope(id,owner);await assertNotDeleted('session',id)
-      let handle:FileHandle|undefined
-      try {
-        const bytes=await readFile(filePath(id)),end=bytes.indexOf(10),meta=parseHeader(bytes.subarray(0,end).toString('utf8'))
-        if(meta.semanticSeed?.version===3)throw new TypeError('Legacy acknowledgment cannot confirm selected results')
-        const decoded=readBootstrapFactJournal(bytes.subarray(end+1),meta.journal!,meta.formatVersion,meta)
-        if(decoded.torn)return {kind:'unknown'}
-        readFactJournal(bytes.subarray(end+1),meta.journal!,meta.formatVersion,meta)
-        for(const wanted of expected){checkBatch(wanted.prefix,wanted.batch);const frame=decoded.frames.find(frame=>frame.prefix.bodyBytes===wanted.prefix.bodyBytes)
-          if(!frame||JSON.stringify(frame.prefix)!==JSON.stringify(wanted.prefix)||!Buffer.from(frame.batch.bytes).equals(Buffer.from(wanted.batch.bytes)))return {kind:'conflict'}}
-        handle=await open(filePath(id),'r+');scope(id,owner);await handle.sync();scope(id,owner)
-        return {kind:'committed',receipts:expected.map(frame=>receipt(owner,frame.batch,decodeFactBatch(frame.batch.bytes).prefixDigest))}
-      }catch{return {kind:'unknown'}}finally{await handle?.close().catch(()=>{})}
+      scope(id, owner)
+      return captureIO.tracked<Awaited<ReturnType<BootstrapBackend['confirmBootstrapFrames']>>>(id, owner, async ledger => {
+        scope(id,owner);await assertNotDeleted('session',id)
+        let handle:FileHandle|undefined, resource:CaptureResource|undefined
+        try {
+          const bytes=await readFile(filePath(id)),end=bytes.indexOf(10),meta=parseHeader(bytes.subarray(0,end).toString('utf8'))
+          if(meta.semanticSeed?.version===3)throw new TypeError('Legacy acknowledgment cannot confirm selected results')
+          const decoded=readBootstrapFactJournal(bytes.subarray(end+1),meta.journal!,meta.formatVersion,meta)
+          if(decoded.torn)return {kind:'unknown'}
+          readFactJournal(bytes.subarray(end+1),meta.journal!,meta.formatVersion,meta)
+          for(const wanted of expected){checkBatch(wanted.prefix,wanted.batch);const frame=decoded.frames.find(frame=>frame.prefix.bodyBytes===wanted.prefix.bodyBytes)
+            if(!frame||JSON.stringify(frame.prefix)!==JSON.stringify(wanted.prefix)||!Buffer.from(frame.batch.bytes).equals(Buffer.from(wanted.batch.bytes)))return {kind:'conflict'}}
+          resource=await captureIO.acquire(ledger,filePath(id),'r+');handle=resource.handle;scope(id,owner);await handle.sync();scope(id,owner)
+          return {kind:'committed',receipts:expected.map(frame=>receipt(owner,frame.batch,decodeFactBatch(frame.batch.bytes).prefixDigest))}
+        }catch{return {kind:'unknown'}}finally{if(resource)await captureIO.close(ledger,resource).catch(()=>{})}
+      })
     },
     async readJournalPrefix(id, owner) {
       scope(id, owner)
-      await assertNotDeleted('session', id)
-      const path = filePath(id), bytes = await readFile(path)
-      const end = bytes.indexOf(0x0a)
-      const meta = parseHeader(bytes.subarray(0, end).toString('utf8'))
-      if (meta.semanticSeed?.version === 3) throw new TypeError('Legacy owned prefix cannot repair selected results')
-      if (![6, 7, 8, 9, 10, 11, 12, 13, 14].includes(meta.formatVersion) || !validJournalMetadata(meta.journal)) throw new TypeError('Managed journal format required')
-      const decoded = readFactJournal(bytes.subarray(end + 1), meta.journal, meta.formatVersion, meta)
-      const handle = await open(path, 'r+')
-      try {
+      return captureIO.tracked<Awaited<ReturnType<OwnedFactBackend['readJournalPrefix']>>>(id, owner, async ledger => {
         scope(id, owner)
-        if (decoded.torn) await handle.truncate(end + 1 + decoded.prefix.bodyBytes)
-        await handle.sync()
-        scope(id, owner)
-      } finally { await handle.close() }
-      return decoded.prefix
+        await assertNotDeleted('session', id)
+        const path = filePath(id), bytes = await readFile(path)
+        const end = bytes.indexOf(0x0a)
+        const meta = parseHeader(bytes.subarray(0, end).toString('utf8'))
+        if (meta.semanticSeed?.version === 3) throw new TypeError('Legacy owned prefix cannot repair selected results')
+        if (![6, 7, 8, 9, 10, 11, 12, 13, 14].includes(meta.formatVersion) || !validJournalMetadata(meta.journal)) throw new TypeError('Managed journal format required')
+        const decoded = readFactJournal(bytes.subarray(end + 1), meta.journal, meta.formatVersion, meta)
+        const resource = await captureIO.acquire(ledger, path, 'r+'), handle = resource.handle
+        try {
+          scope(id, owner)
+          if (decoded.torn) await handle.truncate(end + 1 + decoded.prefix.bodyBytes)
+          await handle.sync()
+          scope(id, owner)
+        } finally { await captureIO.close(ledger, resource!) }
+        return decoded.prefix
+      })
     },
     async appendOwnedBatch(id, owner, prefix, batch) {
       scope(id, owner)
-      const decoded = checkBatch(prefix, batch)
-      // Only the original JSONL constructor pairs these exact native-only closures.
-      // Custom callback-bearing factories never receive this observation.
-      let leavePrewrite = nativePrewrite?.enter(id, owner, batch)
-      try { await assertNotDeleted('session', id) } catch (error) { leavePrewrite?.(); throw error }
-      let handle: FileHandle | undefined, issued = false, synced = false, position = 0
-      let outcome: BackendFactOutcome
-      try {
-        handle = await open(filePath(id), 'r+')
-        const h = await header(handle, filePath(id), batch)
-        position = h.bytes + prefix.bodyBytes
-        if ((await handle.stat()).size !== position) return { kind: 'conflict', key: batch.key }
-        await checkPrefix(handle, h, prefix)
-        // No await is permitted between the final fence and the first write.
+      return captureIO.tracked<Awaited<ReturnType<OwnedFactBackend['appendOwnedBatch']>>>(id, owner, async ledger => {
         scope(id, owner)
-        leavePrewrite?.(); leavePrewrite = undefined
-        owner.beforeIssue()
-        issued = true
-        let written = 0
-        while (written < batch.bytes.length) {
-          const result = await handle.write(batch.bytes, written, batch.bytes.length - written, position + written)
-          if (!Number.isSafeInteger(result.bytesWritten) || result.bytesWritten <= 0) throw new Error('Fact write made no progress')
-          written += result.bytesWritten
+        const decoded = checkBatch(prefix, batch)
+        // Only the original JSONL constructor pairs these exact native-only closures.
+        // Custom callback-bearing factories never receive this observation.
+        let leavePrewrite = nativePrewrite?.enter(id, owner, batch)
+        try { await assertNotDeleted('session', id) } catch (error) { leavePrewrite?.(); throw error }
+        let handle: FileHandle | undefined, resource: CaptureResource | undefined, issued = false, synced = false, position = 0
+        let outcome: BackendFactOutcome
+        try {
+          resource = await captureIO.acquire(ledger, filePath(id), 'r+'); handle = resource.handle
+          const h = await header(handle, filePath(id), batch)
+          position = h.bytes + prefix.bodyBytes
+          if ((await handle.stat()).size !== position) return { kind: 'conflict', key: batch.key }
+          await checkPrefix(handle, h, prefix)
+          // No await is permitted between the final fence and the first write.
+          scope(id, owner)
+          leavePrewrite?.(); leavePrewrite = undefined
+          owner.beforeIssue()
+          issued = true
+          let written = 0
+          while (written < batch.bytes.length) {
+            const result = await handle.write(batch.bytes, written, batch.bytes.length - written, position + written)
+            if (!Number.isSafeInteger(result.bytesWritten) || result.bytesWritten <= 0) throw new Error('Fact write made no progress')
+            written += result.bytesWritten
+          }
+          await handle.sync()
+          synced = true
+          outcome = { kind: 'committed', receipt: receipt(owner, batch, decoded.prefixDigest) }
+        } catch (error) {
+          const code = (error as { code?: string } | null | undefined)?.code
+          if (!issued) outcome = error instanceof JournalPrefixConflict ? { kind: 'conflict', key: batch.key } : code === 'FACT_CANCELLED' || code === 'FACT_CLOSED' || code === 'FACT_OWNER_UNSUPPORTED' || code === 'FACT_RECOVERY_REQUIRED' || code === 'FACT_PRECONDITION_STALE'
+            ? { kind: 'not-issued', code } : { kind: 'absent', key: batch.key }
+          else {
+            outcome = { kind: 'unknown', key: batch.key }
+            try {
+              scope(id, owner)
+              await handle!.truncate(position)
+              await handle!.sync()
+              outcome = { kind: 'absent', key: batch.key }
+            } catch { /* absence needs both truncate and sync under the same lease */ }
+          }
+        } finally {
+          leavePrewrite?.(); leavePrewrite = undefined
+          if (handle) try { await captureIO.close(ledger, resource!) } catch {
+            // A successful fsync is already a durable commit. Cleanup cannot
+            // erase that receipt or authorize rewriting the committed batch.
+            if (synced && outcome!.kind === 'committed') outcome = { ...outcome!, cleanupDiagnostic: 'file-close-failed' }
+            else if (!synced && issued) outcome = { kind: 'unknown', key: batch.key }
+          }
         }
-        await handle.sync()
-        synced = true
-        outcome = { kind: 'committed', receipt: receipt(owner, batch, decoded.prefixDigest) }
-      } catch (error) {
-        const code = (error as { code?: string }).code
-        if (!issued) outcome = error instanceof JournalPrefixConflict ? { kind: 'conflict', key: batch.key } : code === 'FACT_CANCELLED' || code === 'FACT_CLOSED' || code === 'FACT_OWNER_UNSUPPORTED' || code === 'FACT_RECOVERY_REQUIRED' || code === 'FACT_PRECONDITION_STALE'
-          ? { kind: 'not-issued', code } : { kind: 'absent', key: batch.key }
-        else {
-          outcome = { kind: 'unknown', key: batch.key }
-          try {
-            scope(id, owner)
-            await handle!.truncate(position)
-            await handle!.sync()
-            outcome = { kind: 'absent', key: batch.key }
-          } catch { /* absence needs both truncate and sync under the same lease */ }
-        }
-      } finally {
-        leavePrewrite?.(); leavePrewrite = undefined
-        if (handle) try { await handle.close() } catch {
-          // A successful fsync is already a durable commit. Cleanup cannot
-          // erase that receipt or authorize rewriting the committed batch.
-          if (synced && outcome!.kind === 'committed') outcome = { ...outcome!, cleanupDiagnostic: 'file-close-failed' }
-          else if (!synced && issued) outcome = { kind: 'unknown', key: batch.key }
-        }
-      }
-      if (outcome!.kind === 'committed' && decoded.events.some(event => event.type === 'session/bootstrap')) await publication?.end(id, filePath(id))
-      return outcome!
+        if (outcome!.kind === 'committed' && decoded.events.some(event => event.type === 'session/bootstrap')) await publication?.end(id, filePath(id))
+        return outcome!
+      })
     },
     async reconcileOwnedBatch(id, owner, prefix, batch) {
       scope(id, owner)
-      const decoded = checkBatch(prefix, batch)
-      await assertNotDeleted('session', id)
-      let handle: FileHandle | undefined, outcome: BackendFactOutcome = { kind: 'unknown', key: batch.key }
-      try {
-        handle = await open(filePath(id), 'r+')
-        const h = await header(handle, filePath(id), batch), position = h.bytes + prefix.bodyBytes
-        await checkPrefix(handle, h, prefix)
-        const size = (await handle.stat()).size
-        if (size < position || size > position + batch.bytes.length) return { kind: 'conflict', key: batch.key }
-        const actual = Buffer.alloc(size - position)
-        let offset = 0
-        while (offset < actual.length) {
-          const { bytesRead } = await handle.read(actual, offset, actual.length - offset, position + offset)
-          if (!bytesRead) throw new Error('Fact reconciliation read made no progress')
-          offset += bytesRead
-        }
-        if (!actual.equals(Buffer.from(batch.bytes.subarray(0, actual.length)))) return { kind: 'conflict', key: batch.key }
+      return captureIO.tracked<Awaited<ReturnType<OwnedFactBackend['reconcileOwnedBatch']>>>(id, owner, async ledger => {
         scope(id, owner)
-        if (actual.length === batch.bytes.length) {
-          await handle.sync()
-          outcome = { kind: 'committed', receipt: receipt(owner, batch, decoded.prefixDigest) }
-        } else {
-          await handle.truncate(position)
-          await handle.sync()
-          outcome = { kind: 'absent', key: batch.key }
-        }
-      } catch (error) { if (error instanceof JournalPrefixConflict) outcome = { kind: 'conflict', key: batch.key } }
-      finally {
-        if (handle) await handle.close().catch(() => {
-          if (outcome.kind === 'committed') outcome = { ...outcome, cleanupDiagnostic: 'file-close-failed' }
+        const decoded = checkBatch(prefix, batch)
+        await assertNotDeleted('session', id)
+        let handle: FileHandle | undefined, resource: CaptureResource | undefined, outcome: BackendFactOutcome = { kind: 'unknown', key: batch.key }
+        try {
+          resource = await captureIO.acquire(ledger, filePath(id), 'r+'); handle = resource.handle
+          const h = await header(handle, filePath(id), batch), position = h.bytes + prefix.bodyBytes
+          await checkPrefix(handle, h, prefix)
+          const size = (await handle.stat()).size
+          if (size < position || size > position + batch.bytes.length) return { kind: 'conflict', key: batch.key }
+          const actual = Buffer.alloc(size - position)
+          let offset = 0
+          while (offset < actual.length) {
+            const { bytesRead } = await handle.read(actual, offset, actual.length - offset, position + offset)
+            if (!bytesRead) throw new Error('Fact reconciliation read made no progress')
+            offset += bytesRead
+          }
+          if (!actual.equals(Buffer.from(batch.bytes.subarray(0, actual.length)))) return { kind: 'conflict', key: batch.key }
+          scope(id, owner)
+          if (actual.length === batch.bytes.length) {
+            await handle.sync()
+            outcome = { kind: 'committed', receipt: receipt(owner, batch, decoded.prefixDigest) }
+          } else {
+            await handle.truncate(position)
+            await handle.sync()
+            outcome = { kind: 'absent', key: batch.key }
+          }
+        } catch (error) { if (error instanceof JournalPrefixConflict) outcome = { kind: 'conflict', key: batch.key } }
+        finally {
+          if (handle) await captureIO.close(ledger, resource!).catch(() => {
+            if (outcome.kind === 'committed') outcome = { ...outcome, cleanupDiagnostic: 'file-close-failed' }
         })
-      }
-      if (outcome.kind === 'committed' && decoded.events.some(event => event.type === 'session/bootstrap')) await publication?.end(id, filePath(id))
-      return outcome
+        }
+        if (outcome.kind === 'committed' && decoded.events.some(event => event.type === 'session/bootstrap')) await publication?.end(id, filePath(id))
+        return outcome
+      })
     },
   }
 }

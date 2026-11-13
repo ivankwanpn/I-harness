@@ -5,8 +5,8 @@ import { mkdtemp, mkdir, readFile, writeFile, readdir, rm } from 'node:fs/promis
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
-import { createSession, append, toJSONL, readDeliveries, encodeFactBatch, legacyPrefixDigest } from '@i-harness/core-session';
-import { createSessionCoordinator } from '@i-harness/session-persistence';
+import { CURRENT_FORMAT_VERSION, createSession, append, toJSONL, readDeliveries, encodeFactBatch, legacyPrefixDigest } from '@i-harness/core-session';
+import { createReadOnlySessionCoordinator, createSessionCoordinator } from '@i-harness/session-persistence';
 import { createJsonlBackend } from '../src/index.ts';
 import { extractFormat12Predecessor, pinnedSource } from './helpers/format12-predecessor.ts';
 import { extractCurrentPredecessor, provisionPredecessorLock } from './helpers/current-context-predecessors.ts';
@@ -53,15 +53,16 @@ it('predecessor12 refuses header-downgraded required facts via its unknown requi
   expect(result.error).toMatch(/unknown event type.*agent\/delivery-generation/);
   expect(result.counts).toEqual({ fetch: 0, repair: 0, upgrade: 0, provider: 0 });
   expect(await readFile(join(store, 'parent.jsonl'))).toEqual(bytes);
-  const current = createSessionCoordinator(createJsonlBackend(store), { lock: { enabled: false } });
+  const current = createReadOnlySessionCoordinator(createJsonlBackend(store), { lock: { enabled: false } });
   try {
-    await expect(current.load('parent')).rejects.toThrow();
+    await expect(current.snapshot('parent')).rejects.toThrow();
+    expect(await readFile(join(store, 'parent.jsonl'))).toEqual(bytes);
   }
   finally {
     await current.close();
   }
 }, 30000);
-it.each([11, 12] as const)('preserves genuine original%s ready/header-only/interrupted bootstrap birth and initial work through13', async (format) => {
+it.each([11, 12] as const)('preserves genuine original%s ready/header-only/interrupted bootstrap birth and initial work through current storage', async (format) => {
   for (const cut of ['ready', 'header-only', 'interrupted'] as const) {
     const root = await fresh(), old = join(root, 'old'), receipt = format === 12 ? await extractFormat12Predecessor(old) : await extractCurrentPredecessor(old, 11), store = join(root, 'store');
     await mkdir(store);
@@ -85,7 +86,7 @@ const backend=jsonl.createJsonlBackend(process.argv[2]),c=persistence.createSess
       expect(resumed.receipt.initial).toEqual(original.receipt.initial);
       expect(await readFile(join(store, stageName))).toEqual(stage);
       const after = await readFile(path);
-      expect(JSON.parse(after.subarray(0, after.indexOf(10)).toString()).formatVersion).toBe(13);
+      expect(JSON.parse(after.subarray(0, after.indexOf(10)).toString()).formatVersion).toBe(CURRENT_FORMAT_VERSION);
       expect(after.subarray(after.indexOf(10) + 1)).toEqual(before.subarray(end + 1));
       expect(readDeliveries(resumed.document.view).activeGeneration()).toBeUndefined();
     }
@@ -98,12 +99,22 @@ it('upgrades genuine ordinary12 header with byte-identical original journal and 
   const root = await fresh(), old = join(root, 'old'), receipt = await extractFormat12Predecessor(old), store = join(root, 'store');
   await mkdir(store);
   await provisionPredecessorLock(old);
-  await run(old, `const c=persistence.createSessionCoordinator(jsonl.createJsonlBackend(process.argv[2]),{lock:{enabled:true}});await c.create({sessionId:'parent'});const d=await c.openManagedDocument('parent'),a=d.beginAction();core.committedFactSeqs(await a.facts.delivery.record({type:'subagent/start',version:1,taskId:'original',role:'r',agentPath:'a',description:'original',parentSessionId:'parent'}));const s=a.registerSettlementSource(async()=>{});core.committedFactSeqs(await s.delivery.capture({type:'subagent/end',version:1,taskId:'original',outcome:'completed',resultRevision:'old-revision',envelope:{version:1,execution:{outcome:'succeeded',dispatch:'dispatched'},preview:'',media:[],retention:{kind:'inline',value:'old result',encodedBytes:12}}}).admit());await s.close();a.finish();await c.close();console.log(JSON.stringify({format:core.CURRENT_FORMAT_VERSION}));`, store, receipt.packages);
-  const path = join(store, 'parent.jsonl'), before = await readFile(path), c = createSessionCoordinator(createJsonlBackend(store), { lock: { enabled: true } });
+  await run(old, `
+const c=persistence.createSessionCoordinator(jsonl.createJsonlBackend(process.argv[2]),{lock:{enabled:true}});
+await c.create({sessionId:'parent'});
+const d=await c.openManagedDocument('parent'),a=d.beginAction();
+core.committedFactSeqs(await a.facts.delivery.record({type:'subagent/start',version:1,taskId:'original',role:'r',agentPath:'a',description:'original',parentSessionId:'parent'}));
+const s=a.registerSettlementSource(async()=>{});
+core.committedFactSeqs(await s.delivery.capture({type:'subagent/end',version:1,taskId:'original',outcome:'completed',resultRevision:'old-revision',envelope:{version:1,execution:{outcome:'succeeded',dispatch:'dispatched'},preview:'',media:[],retention:{kind:'inline',value:'old result',encodedBytes:12}}}).admit());
+await s.close();a.finish();
+await c.putDocument('task-parent',{formatVersion:2,tasks:[{id:'original',parentSessionId:'parent',agentPath:'a',description:'original',prompt:'original work',agent:'r',delivery:'tool',status:'completed',outcome:'completed',resultText:'old result',timeCreated:1,timeCompleted:2}],notifications:[]});
+await c.close();console.log(JSON.stringify({format:core.CURRENT_FORMAT_VERSION}));`, store, receipt.packages);
+  const path = join(store, 'parent.jsonl'), before = await readFile(path), taskPath = join(store, 'task-parent.doc.jsonl'), taskBefore = await readFile(taskPath), c = createSessionCoordinator(createJsonlBackend(store), { lock: { enabled: true } });
   try {
     const d = await c.openManagedDocument('parent'), after = await readFile(path);
-    expect(d.view.formatVersion).toBe(13);
+    expect(d.view.formatVersion).toBe(CURRENT_FORMAT_VERSION);
     expect(after.subarray(after.indexOf(10) + 1)).toEqual(before.subarray(before.indexOf(10) + 1));
+    expect(await readFile(taskPath)).toEqual(taskBefore);
     expect(d.view.events.at(-1)).toMatchObject({ type: 'subagent/end', resultRevision: 'old-revision', envelope: { retention: { value: 'old result' } } });
     expect(readDeliveries(d.view).activeGeneration()).toBeUndefined();
     expect(readDeliveries(d.view).pending()).toEqual([]);

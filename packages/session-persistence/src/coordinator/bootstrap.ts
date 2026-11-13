@@ -1,3 +1,4 @@
+import { retainManagedJournalCleanup, type NativeJournalCleanup } from '../native-fact-writer-internal.ts'
 import { createArtifactCurrentGuard } from './artifact-path-association.ts'
 import { captureChildBootstrapCaptureRequest, type ChildBootstrapCaptureRequest, type ChildBootstrapCaptureInspection, type OwnedCaptureReservation, type OwnedCaptureInspection } from './child-bootstrap-intent.ts'
 import { captureBootstrapRoute, captureBootstrapCaptureRoute, encodeOwnedCaptureReservation, routeForReservation, routeInvocation, validateOwnedCaptureStage, type BootstrapRoute, type BootstrapCaptureRoute } from './bootstrap-route.ts'
@@ -34,6 +35,8 @@ import { createSelectedCaptureAttempt } from './selected-capture-attempt.ts'
 import { createColdSelectedInspection, type ColdSelectedTarget, type ColdSelectedObservation } from './cold-selected-target.ts'
 
 export interface ManagedEntry {
+  journalCleanup?: Map<object, NativeJournalCleanup>;
+  journalMutation?: { token: ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>; users: number; unknown: boolean; finished: boolean };
   coldFinalization?:import('./cold-finalization-types.ts').ColdFinalization;
   revokeColdFinalization?:()=>void;
   metadataRevision?: object;
@@ -293,6 +296,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     const doc=entry.document??attach(b.invocation.targetSessionId,entry,buildSession(state.meta,state.events!),state.prefix!)
     const frames=framesFor(stage,state.events!)
     const held=cached?.held??entry.control!.held
+    retainManagedJournalCleanup(entry.journalCleanup ??= new Map(), backend, b.invocation.targetSessionId, held)
     const confirmed=await ownership.withSessionOperation(b.invocation.targetSessionId,()=>backend.confirmBootstrapFrames!(b.invocation.targetSessionId,held,frames))
     cached?.assertCurrent()
     if(!isStrictFactData(confirmed)||confirmed.kind!=='committed'||!Array.isArray(confirmed.receipts)||confirmed.receipts.length!==frames.length)return blocked(entry)
@@ -342,7 +346,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     let cached:ManagedReadyObservation
     try{cached=captureManagedReadyObservation(entry.document,ownership)}catch{return Promise.resolve({kind:'refused',reason:'cached-unprepared'})}
     const previous=entry.flight
-    const candidate:ManagedEntry={route,document:entry.document,ready:true,bootstrap:{invocation,phase:'completion',issued:true}}
+    const candidate:ManagedEntry={journalCleanup:entry.journalCleanup ??= new Map(),route,document:entry.document,ready:true,bootstrap:{invocation,phase:'completion',issued:true}}
     const assertCurrent=()=>{if(documents.get(invocation.targetSessionId)!==entry||entry.revoked)throw new FactRecoveryRequiredError();cached.assertCurrent()}
     const flight=Promise.resolve().then(async():Promise<BootstrapOutcome>=>{
       try{
@@ -396,7 +400,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     if(entry.captureIO)entry.captureIO.activeIssue=()=>{if (b.taskBarrier?.mode) b.taskBarrier.markHeaderIssued();current(guards,entry);b.issued=true;entry.headerUnknown=true;entry.captureIO!.settled=false}
     try {
       // Reconcile only the original completed Task14 birth; this path cannot issue work.
-      if (entry.document && b.stage && b.taskBarrier?.completed) {
+      if (entry.ready && entry.document && b.stage && b.taskBarrier?.completed) {
         if (b.pending) {
           const pending = b.pending, key = 'key' in pending ? pending.key : 'receipt' in pending ? pending.receipt.key : undefined
           if (!key) return blocked(entry)
@@ -467,10 +471,17 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         b.stage=built.stage;b.operation=built.operation
       }
       if(publicationStatus(state,b.stage)!=='valid')return blocked(entry)
-      const predecessorBirth = !!state.meta?.semanticSeed && state.meta.formatVersion === 13 && !b.taskBarrier?.mode
+      // A retained original predecessor stage can own birth before its header
+      // is complete. Current-format births still require the native Task lane.
+      const predecessorVersion = state.meta?.semanticSeed
+        ? state.meta.formatVersion
+        : !state.meta ? b.stage?.headerBase.formatVersion : undefined
+      const predecessorBirth = predecessorVersion !== undefined
+        && [11, 12, 13].includes(predecessorVersion)
+        && !b.taskBarrier?.mode
       if (transitions && !predecessorBirth) {
         const barrier = b.taskBarrier; if (!barrier) return blocked(entry)
-        const published = !barrier.mode && !!state.meta?.semanticSeed && !!state.stageBytes && state.meta.formatVersion === 14
+        const published = !barrier.mode && b.stage!.headerBase.formatVersion === 14 && !!state.stagePresent
         if (!barrier.mode && (b.request.target.kind === 'resume' || b.request.target.kind === 'new' && !!state.meta) && !published) return {kind:'not-issued',reason:'unsupported'}
         if (!published) barrier.setMode(b.request.target.kind === 'existing-empty' ? 'existing-empty' : 'new')
         barrier.setGuard(() => { if (barrier.headerWasIssued) { if (guards.signal?.aborted || entry.revoked) throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'}) } else current(guards,entry); if (targetPrepared) targetCurrent(guards) })
@@ -481,7 +492,16 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
           } else await barrier.prepare()
           held = barrier.held(); await barrier.settleHeader()
         }
-        catch (error) { const conflict = barrier.taskConflict; if (!barrier.taskIssued || conflict) { await barrier.close(); b.taskBarrier = undefined }; return conflict ? {kind:'refused',reason:'conflict'} : blocked(entry) }
+        catch (error) {
+          const conflict = barrier.taskConflict
+          if (!barrier.taskIssued || conflict) {
+            await barrier.close()
+            b.taskBarrier = undefined
+          }
+          const code = (error as {code?:string}|null|undefined)?.code
+          if (!b.taskBarrier && !b.issued && (code === 'FACT_CANCELLED' || code === 'FACT_PRECONDITION_STALE')) throw error
+          return conflict ? {kind:'refused',reason:'conflict'} : blocked(entry)
+        }
       }
       b.phase='header'
       let outcome = !predecessorBirth && b.taskBarrier?.headerCommitted && b.taskBarrier.headerOutcome?.kind === 'committed' ? b.taskBarrier.headerOutcome : !predecessorBirth && b.taskBarrier ? await b.taskBarrier.runHeader(h => reconcileHeader(entry,h,b.operation!)) : await ownership.withSessionOperation(id,()=>reconcileHeader(entry,held,b.operation!))
@@ -528,6 +548,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         if(doc.view.events.length>=phase.events[0]!.seq!+phase.events.length)continue
         const prefix:JournalPrefix=phase.phase==='seed'?emptyPrefix():state.prefix!
         const batch=encodeFactBatch(`bootstrap:${b.invocation.operationId}:${phase.phase==='seed'?'seed':'complete'}`,prefix.prefixDigest,phase.events)
+        retainManagedJournalCleanup(entry.journalCleanup ??= new Map(), backend, id, entry.control!.held)
         const reconciled=await ownership.withSessionOperation(id,()=>backend.reconcileOwnedBatch!(id,entry.control!.held,prefix,batch))
         if(reconciled.kind==='unknown'||reconciled.kind==='conflict')return blocked(entry)
         if(reconciled.kind==='committed') {
@@ -597,6 +618,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       guards={get signal(){return originalGuards.signal},assertCurrent(){originalGuards.assertCurrent()},get dependencies(){return originalGuards.dependencies},targetPreparation}
     }catch{return Promise.resolve({kind:'refused',reason:'manifest-invalid'})}
     const first=r?.seed.records[0]
+    if(first?.type==='conversation/seed-manifest'&&(first as { readonly version: number }).version===3)return Promise.resolve({kind:'refused',reason:'manifest-invalid'})
     if(first?.type==='conversation/seed-manifest'&&first.artifacts.length&&first.origins[0]?.kind!=='session')return Promise.resolve({kind:'refused',reason:'target-policy'})
     const id=captured.targetSessionId
     if(callbackScope.getStore()?.active&&callbackScope.getStore()?.id===id)return Promise.resolve({kind:'refused',reason:'conflict'})

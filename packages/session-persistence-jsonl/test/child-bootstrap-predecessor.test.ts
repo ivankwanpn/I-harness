@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
 import { mkdir, readFile, readdir, writeFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { canonicalJsonData } from '@i-harness/core-session'
+import { canonicalJsonData, CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { encodeChildBootstrapReservation } from '@i-harness/session-persistence'
 import { buildBootstrapHeader } from '../../session-persistence/src/coordinator/bootstrap-header.ts'
 import { pair } from '../../session-persistence/test/child-bootstrap-fixture.ts'
@@ -18,7 +18,7 @@ const methods=['inspect','capture-inspect','capture-inspect-valid','read','snaps
 const oldRequest=`const request={...input.payload,seed:persistence.compileSemanticSeed({kind:'none'})};`
 const getInput=`const input=JSON.parse(await fs.readFile(resolve(store,'input.json'),'utf8'));`
 const writer=`${getInput}${oldRequest}
-const backend=backendFor(store),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}});let outcome,operationError;
+const backend=backendFor(store),coordinator=persistence.createSessionCoordinator(backend,{lock:{enabled:true}});let outcome,operationError;
 try{outcome=await coordinator.bootstrapSemanticTarget(request,guards)}catch(error){operationError=errorRecord(error)}
 const result={kind:outcome?.kind,reason:outcome?.reason,token:outcome?.token,request,receipt:outcome?.receipt,operationError};
 process.stdout.write(JSON.stringify({event:'operation-before-cleanup',...result})+'\\n');
@@ -107,7 +107,7 @@ if(protectedWrites.length||['ready','already-ready'].includes(outcome?.kind))thr
    const store=join(root,graph.label+'-cold-'+shape);await mkdir(store);await writeFile(join(store,graph.stageName),graph.stage)
    const end=originalTarget.indexOf(10),cut=shape==='ready'?originalTarget.length:shape==='header-only'?end+1:end+24;await writeFile(join(store,'target.jsonl'),originalTarget.subarray(0,cut))
    const coordinator=createSessionCoordinator(createJsonlBackend(store),{lock:{enabled:true}})
-   try{const resumed=await coordinator.resumeSemanticTarget(graph.positive.request.invocation,guards,graph.positive.request);expect(resumed.kind).toBe(shape==='ready'?'already-ready':'ready');const after=await readFile(join(store,'target.jsonl'));expect(JSON.parse(after.subarray(0,after.indexOf(10)).toString())).toEqual({...JSON.parse(originalTarget.subarray(0,end).toString()),formatVersion:13});expect(after.subarray(after.indexOf(10)+1)).toEqual(originalTarget.subarray(end+1));expect(await readFile(join(store,graph.stageName))).toEqual(graph.stage);if(resumed.kind==='ready'||resumed.kind==='already-ready'){expect(resumed.receipt.initial).toMatchObject({inputId:'input',startedAt:1,expiresAt:11});await writeFile(join(store,'recovery.json'),JSON.stringify({shape,receipt:resumed.receipt,original:originalTarget.toString('base64'),after:after.toString('base64')},null,2))}}finally{await coordinator.close()}
+   try{const resumed=await coordinator.resumeSemanticTarget(graph.positive.request.invocation,guards,graph.positive.request);expect(resumed.kind).toBe(shape==='ready'?'already-ready':'ready');const after=await readFile(join(store,'target.jsonl'));expect(JSON.parse(after.subarray(0,after.indexOf(10)).toString())).toEqual({...JSON.parse(originalTarget.subarray(0,end).toString()),formatVersion:CURRENT_FORMAT_VERSION});expect(after.subarray(after.indexOf(10)+1)).toEqual(originalTarget.subarray(end+1));expect(await readFile(join(store,graph.stageName))).toEqual(graph.stage);if(resumed.kind==='ready'||resumed.kind==='already-ready'){expect(resumed.receipt.initial).toMatchObject({inputId:'input',startedAt:1,expiresAt:11});await writeFile(join(store,'recovery.json'),JSON.stringify({shape,receipt:resumed.receipt,original:originalTarget.toString('base64'),after:after.toString('base64')},null,2))}}finally{await coordinator.close()}
   }
  }
 },600000)

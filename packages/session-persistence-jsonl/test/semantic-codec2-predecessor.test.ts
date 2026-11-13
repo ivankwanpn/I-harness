@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { exportConversationSeed } from '@i-harness/core-session'
+import { CURRENT_FORMAT_VERSION, exportConversationSeed } from '@i-harness/core-session'
 import { createSessionCoordinator, compileSemanticSeed } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '../src/index.ts'
 import { extractSemanticCodec1Predecessor13, pinnedSource } from './helpers/semantic-codec1-predecessor13.ts'
@@ -90,9 +90,8 @@ const coordinator=persistence.createSessionCoordinator(jsonl.createJsonlBackend(
     const resumed = await coordinator.resumeSemanticTarget(original.request.invocation, { assertCurrent() {}, dependencies: { async confirm() { throw Error('empty') }, async reconcile() { throw Error('empty') } } }, original.request)
     expect(resumed.kind).toBe(shape === 'ready' ? 'already-ready' : 'ready')
     const after = await readFile(path), afterHeader = JSON.parse(after.subarray(0, after.indexOf(10)).toString()), beforeHeader = JSON.parse(before.subarray(0, headerEnd).toString())
-    expect(afterHeader).toEqual({ ...beforeHeader, formatVersion: 13 })
+    expect(afterHeader).toEqual({ ...beforeHeader, formatVersion: CURRENT_FORMAT_VERSION })
     expect(after.subarray(after.indexOf(10) + 1)).toEqual(before.subarray(headerEnd + 1))
-    if (format === 13) expect(after).toEqual(before)
     expect(await readFile(join(store, stageName))).toEqual(stage)
   } finally { await coordinator.close() }
 }, 60000)

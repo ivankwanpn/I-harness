@@ -102,8 +102,11 @@ it('refuses supplied V3 through actual generic bootstrap/resume and private chil
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'v3-wrapper-denial-')), backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   try {
     const payload: any = { invocation, target: { kind: 'new' }, metadata: {}, lineage: { origin: 'fork', parentSession: 'source' }, seed: compileSelectedResultsSemanticSeed(codecSeed('public-completed')) }
-    expect(await coordinator.bootstrapSemanticTarget(payload, guards)).toMatchObject({ kind: 'refused' })
-    expect(await coordinator.resumeSemanticTarget(invocation, guards, payload)).toMatchObject({ kind: 'refused' })
+    const before = (await readdir(root)).toSorted()
+    expect(await coordinator.bootstrapSemanticTarget(payload, guards)).toEqual({ kind: 'refused', reason: 'manifest-invalid' })
+    expect((await readdir(root)).toSorted()).toEqual(before)
+    expect(await coordinator.resumeSemanticTarget(invocation, guards, payload)).toEqual({ kind: 'refused', reason: 'manifest-invalid' })
+    expect((await readdir(root)).toSorted()).toEqual(before)
     expect((await readdir(root)).filter(name => name.startsWith('target.jsonl'))).toEqual([])
     const child = pair(), childPayload: any = { ...child.payload, seed: compileSelectedResultsSemanticSeed(codecSeed()) }
     let callbacks = 0

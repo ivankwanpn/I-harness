@@ -6,7 +6,7 @@ import { basename, dirname } from 'node:path'
 import { types } from 'node:util'
 import { canonicalJsonData } from '@i-harness/core-session'
 import { parseBootstrapCaptureReservation, parseBootstrapHeaderStage, rawHeaderDigest, type HeldFactOwner, type IssuingFactOwner, type BootstrapCaptureInspection, type BootstrapCaptureRequest, type BootstrapCaptureReserveOutcome, type BootstrapHeaderOperation, type HeaderOutcome } from '@i-harness/session-persistence'
-import { bootstrapPathsForRoute, bootstrapNamespace, lookupBootstrapStage } from './bootstrap-stage.ts'
+import { sameImmutableBootstrapHeader, bootstrapPathsForRoute, bootstrapNamespace, lookupBootstrapStage } from './bootstrap-stage.ts'
 export { bootstrapNamespace } from './bootstrap-stage.ts'
 import { captureBootstrapCaptureRoute, parseOwnedCaptureReservation, encodeOwnedCaptureReservation, routeForReservation, type BootstrapCaptureRoute, type OwnedCaptureInspection } from '@i-harness/session-persistence'
 import { captureSelectedResultsRoute, parseSelectedResultsReservation, parseSelectedResultsHeaderStage, type SelectedResultsRoute, type SelectedResultsReservationV1, type SelectedResultsHeaderStageV2 } from '@i-harness/session-persistence'
@@ -223,14 +223,27 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
         let resource:Resource
         try{resource=await acquire(ledger,path,'r+')}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return {kind:'unknown'};throw error}
         try {
-          guard();const actual=Buffer.alloc(operation.headerBytes.length);let offset=0
-          while(offset<actual.length){const read=await resource.handle.read(actual,offset,actual.length-offset,offset);guard();if(!read.bytesRead)break;offset+=read.bytesRead}
-          let expected=Buffer.from(operation.headerBytes)
-          if(offset===actual.length&&!actual.equals(expected)) {
-            const original=JSON.parse(expected.toString('utf8'))
-            if(original.formatVersion===13) {const upgraded=Buffer.from(canonicalJsonData({...original,formatVersion:14})+'\n');if(actual.equals(upgraded))expected=upgraded}
+          guard()
+          const buffer = Buffer.alloc(65536)
+          let offset = 0, end = -1
+          while (offset < buffer.length && end < 0) {
+            const read = await resource.handle.read(buffer, offset, buffer.length-offset, offset)
+            guard()
+            if (!read.bytesRead) break
+            end = buffer.indexOf(10, offset)
+            offset += read.bytesRead
+            if (end >= offset) end = -1
           }
-          if(offset!==actual.length||!actual.equals(expected))return {kind:expected.subarray(0,offset).equals(actual.subarray(0,offset))?'unknown':'conflict'}
+          if (end < 0) {
+            const partial = buffer.subarray(0,offset)
+            const originalBytes = Buffer.from(operation.headerBytes)
+            return {kind:offset < buffer.length && partial.length < originalBytes.length && partial.equals(originalBytes.subarray(0,partial.length)) ? 'unknown' : 'conflict'}
+          }
+          const expected = buffer.subarray(0,end+1)
+          let live: Record<string, unknown>, original: Record<string, unknown>
+          try { live = JSON.parse(expected.toString('utf8')); original = JSON.parse(Buffer.from(operation.headerBytes).toString('utf8')) }
+          catch { return {kind:'conflict'} }
+          if (!live || typeof live !== 'object' || !sameImmutableBootstrapHeader(live,original)) return {kind:'conflict'}
           await resource.handle.sync();guard();await assertNotDeleted('session',id)
           return {kind:'committed',headerDigest:rawHeaderDigest(expected)}
         }finally{await close(ledger,resource)}

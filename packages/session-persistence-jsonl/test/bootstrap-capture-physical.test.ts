@@ -15,7 +15,8 @@ import { createOwnership } from '../../session-persistence/src/coordinator/owner
 import { buildBootstrapHeader } from '../../session-persistence/src/coordinator/bootstrap-header.ts'
 import { createBootstrapOwner, type ManagedEntry } from '../../session-persistence/src/coordinator/bootstrap.ts'
 import { createMutations } from '../../session-persistence/src/coordinator/mutations.ts'
-import { acquireSessionLock } from '../../fs-lock/src/index.ts'
+import { acquireSessionLock, lockPathFor } from '../../fs-lock/src/index.ts'
+import { artifactPathsFor } from '../../session-persistence/src/coordinator/artifact-path-association.ts'
 const roots: string[] = [], coordinators: p.SessionCoordinator[] = []
 vi.mock('node:fs/promises', async original => { const fs = await original<typeof import('node:fs/promises')>(); return { ...fs, open: vi.fn(fs.open), rename: vi.fn(fs.rename) } })
 vi.mock('../../fs-lock/src/index.ts',async original=>{const locks=await original<typeof import('../../fs-lock/src/index.ts')>();return {...locks,acquireSessionLock:vi.fn(locks.acquireSessionLock)}})
@@ -181,7 +182,7 @@ it.each(['partial','rename-before','rename-after'] as const)('P09/P10 %s promoti
     expect(()=>buildBootstrapHeader(original,{...stage,captureReservation:undefined} as any)).toThrow()
     expect(()=>buildBootstrapHeader(original,stage,undefined,undefined)).toThrow()
     for(const captureReservation of [null,false,0])expect(()=>p.parseBootstrapHeaderStage(Buffer.from(canonicalJsonData({...stage,captureReservation})+'\n'))).toThrow()
-    expect((await cold.coordinator.resumeSemanticTarget(r.invocation,guards,original)).kind).toBe('ready')
+    const resumed = await cold.coordinator.resumeSemanticTarget(r.invocation,guards,original); expect(resumed.kind, JSON.stringify(resumed)).toBe('ready')
   }else{
     expect(JSON.parse(before.toString()).kind).toBe('semantic-bootstrap-capture')
     expect(await cold.coordinator.resumeSemanticTarget(r.invocation,guards,original)).toMatchObject({kind:'blocked',reason:'payload-required'})
@@ -273,8 +274,9 @@ it('P14 original held.owner identity persists through promotion, settlement and 
 it('P14/P15 external close joins late original open and never authorizes capture after revoke',async()=>{
   const {root,coordinator}=await setup(),r=request(),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises'),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let captures=0,closed=false,handles=0
   vi.mocked(open).mockImplementation(async(...args)=>{const h=await native.open(...args);if(!String(args[0]).endsWith('.stage')||args[1]!=='wx')return h;handles++;entered.resolve();await release.promise;return new Proxy(h,{get(target,name){if(name==='close')return async()=>{await target.close();handles--};const value=Reflect.get(target,name);return typeof value==='function'?value.bind(target):value}})})
-  const running=coordinator.bootstrapSemanticTargetWithCapture!(r,guards,async()=>{captures++;return payload(r)})
-  try{await entered.promise;const closing=coordinator.close().then(()=>{closed=true});await Promise.resolve();expect(closed).toBe(false);release.resolve();expect(await running).toMatchObject({kind:'blocked'});await closing;expect(handles).toBe(0);expect(captures).toBe(0);expect(await readFile(stagePath(root,r))).toBeDefined()}finally{release.resolve();vi.mocked(open).mockImplementation(native.open)}
+  const stop = new AbortController()
+  const running=coordinator.bootstrapSemanticTargetWithCapture!(r,{...guards,signal:stop.signal},async()=>{captures++;return payload(r)})
+  try{await entered.promise;stop.abort(new Error('original capture stopped before callback'));const closing=coordinator.close().then(()=>{closed=true});await Promise.resolve();expect(closed).toBe(false);release.resolve();expect(await running).toMatchObject({kind:'blocked'});await closing;expect(handles).toBe(0);expect(captures).toBe(0);expect(await readFile(stagePath(root,r))).toBeDefined()}finally{release.resolve();vi.mocked(open).mockImplementation(native.open)}
 })
 it('P16 ready captured deletion inventories promote and leaves a tombstone that prevents replay',async()=>{
   const {root,backend,coordinator}=await setup(),r=request()
@@ -293,14 +295,14 @@ it('P13 external delete joins the whole original capture before backend deletion
   try{await Promise.resolve();await Promise.resolve();expect(deleted).toBe(false);expect(backendDeletes).toBe(0)}finally{release.resolve()}
   expect(await running).toMatchObject({kind:'blocked'});await refused;expect(await readFile(stagePath(root,r))).toBeDefined()
 })
-it.each(['root','claim','read','settle'] as const)('P14 strict inspection close joins the original %s whole lifetime without target cache',async cut=>{
+it.each(['root','claim','read','settle'] as const)('P14 close joins accepted strict inspection through the original %s whole lifetime without target cache',async cut=>{
   const {root,coordinator,hooks}=await setup(),r=request(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>(),native=await vi.importActual<typeof import('../../fs-lock/src/index.ts')>('../../fs-lock/src/index.ts');let closed=false,reads=0,acquires=0,releases=0,held:p.HeldFactOwner|undefined
   hooks.checkBootstrapCaptureRoot=async(rootCheck)=>{await rootCheck();if(cut==='root'){entered.resolve();await release.promise}}
   vi.mocked(acquireSessionLock).mockImplementation(async options=>{const raw=await native.acquireSessionLock(options);acquires++;if(cut==='claim'){entered.resolve();await release.promise}return {get held(){return raw.held},async release(){await raw.release();releases++}}})
   hooks.readBootstrapCapture=async(read,id,owner,request)=>{reads++;held=owner;if(cut==='read'){entered.resolve();await release.promise}return read(id,owner,request)}
   hooks.settleBootstrapCaptureIO=async(settle,id,owner)=>{expect(owner).toBe(held);owner.assertHeld();if(cut==='settle'){entered.resolve();await release.promise}return settle(id,owner)}
   const running=coordinator.inspectBootstrapCapture!(r)
-  try{await entered.promise;const closing=coordinator.close().then(()=>{closed=true});await Promise.resolve();expect(closed).toBe(false);release.resolve();expect(await running).toEqual({kind:'unavailable'});await closing;expect(releases).toBe(acquires);expect(coordinator.ownerOf('target')).toBe(false);expect(await readdir(root)).not.toContain('target.jsonl');if(cut==='root')expect(reads).toBe(0)}finally{release.resolve();vi.mocked(acquireSessionLock).mockImplementation(native.acquireSessionLock)}
+  try{await entered.promise;const closing=coordinator.close().then(()=>{closed=true});await Promise.resolve();expect(closed).toBe(false);release.resolve();expect(await running).toEqual({kind:'absent'});await closing;expect(releases).toBe(acquires);expect(coordinator.ownerOf('target')).toBe(false);expect(await readdir(root)).not.toContain('target.jsonl');expect(reads).toBe(1)}finally{release.resolve();vi.mocked(acquireSessionLock).mockImplementation(native.acquireSessionLock)}
 })
 it('P14 close joins pending inspection even when independent original observation cleanup fails',async()=>{
   const {coordinator,hooks}=await setup(),r=request(),native=await vi.importActual<typeof import('../../fs-lock/src/index.ts')>('../../fs-lock/src/index.ts')
@@ -312,7 +314,7 @@ it('P14 close joins pending inspection even when independent original observatio
   hooks.checkBootstrapCaptureRoot=async(actual)=>{await actual();rootEntered.resolve();await leaveRoot.promise}
   const inspecting=coordinator.inspectBootstrapCapture!(r);await rootEntered.promise
   const closing=coordinator.close().finally(()=>{closed=true}),closeFailure=expect(closing).rejects.toThrow()
-  try{leaveObservation.resolve();await observationFailure;expect(closed).toBe(false);leaveRoot.resolve();expect(await inspecting).toEqual({kind:'unavailable'});await closeFailure;expect(coordinator.ownerOf('target')).toBe(false);expect(coordinator.ownerOf('source')).toBe(true);allowRelease=true;await coordinator.close();expect(coordinator.ownerOf('source')).toBe(false)}finally{allowRelease=true;leaveRoot.resolve();leaveObservation.resolve();vi.mocked(acquireSessionLock).mockImplementation(native.acquireSessionLock)}
+  try{leaveObservation.resolve();await observationFailure;expect(closed).toBe(false);leaveRoot.resolve();expect(await inspecting).toEqual({kind:'absent'});await closeFailure;expect(coordinator.ownerOf('target')).toBe(false);expect(coordinator.ownerOf('source')).toBe(true);allowRelease=true;await coordinator.close();expect(coordinator.ownerOf('source')).toBe(false)}finally{allowRelease=true;leaveRoot.resolve();leaveObservation.resolve();vi.mocked(acquireSessionLock).mockImplementation(native.acquireSessionLock)}
 })
 it('P14 inspection cleanup retries its exact original handle/held and does not release a live adopter',async()=>{
   const {root,coordinator,hooks}=await setup(),r=request(),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');await coordinator.create({sessionId:'target'});await writeFile(stagePath(root,r),p.encodeBootstrapCaptureReservation({version:1,kind:'semantic-bootstrap-capture',request:r}))
@@ -365,23 +367,73 @@ it('P07 generic payload cannot complete an uncertain zero-byte stage or future p
   await other.coordinator.close();await writeFile(stagePath(other.root,r).replace(/\.stage$/,'.promote'),'{"version":2,"kind":"future"}\n')
   const cold=await setup(other.root);expect(await cold.coordinator.inspectBootstrapCapture!(r)).toEqual({kind:'unavailable'});expect((await cold.coordinator.resumeSemanticTarget(r.invocation,guards,payload(r))).kind).not.toBe('already-ready')
 })
-it('P14 capture claim release failure retains the exact entry release capability for explicit close retry',async()=>{
-  const {coordinator}=await setup(),r=request(),native=await vi.importActual<typeof import('../../fs-lock/src/index.ts')>('../../fs-lock/src/index.ts');let releases=0
-  vi.mocked(acquireSessionLock).mockImplementation(async options=>{const raw=await native.acquireSessionLock(options);return {get held(){return raw.held},async release(){if(++releases===1)throw new Error('original release before native');await raw.release()}}})
-  try{
-    await expect(coordinator.bootstrapSemanticTargetWithCapture!(r,guards,async()=>{throw new Error('spent')})).rejects.toThrow('spent')
-    await expect(coordinator.close()).rejects.toThrow();expect(releases).toBe(1);await coordinator.close();expect(releases).toBe(2);expect(coordinator.ownerOf('target')).toBe(false)
-  }finally{vi.mocked(acquireSessionLock).mockImplementation(native.acquireSessionLock)}
+it('P14 capture claim release failure retains the exact entry release capability for explicit close retry', async () => {
+  const { root, backend, coordinator } = await setup()
+  const r = request()
+  const native = await vi.importActual<typeof import('../../fs-lock/src/index.ts')>('../../fs-lock/src/index.ts')
+  const capture = artifactPathsFor(backend)!.session('target')
+  if (capture.kind !== 'ready') throw new Error('Original target claim unavailable')
+  const selectedPath = lockPathFor(root, 'artifact-ownership:' + capture.key)
+  const others: Awaited<ReturnType<typeof native.acquireSessionLock>>[] = []
+  let selected: Awaited<ReturnType<typeof native.acquireSessionLock>> | undefined
+  let releases = 0
+  vi.mocked(acquireSessionLock).mockImplementation(async options => {
+    const raw = await native.acquireSessionLock(options)
+    if (options.lockPath !== selectedPath) { others.push(raw); return raw }
+    expect(selected).toBeUndefined()
+    selected = raw
+    return { get held() { return raw.held }, async release() {
+      releases++
+      if (releases === 1) throw new Error('original release before native')
+      await raw.release()
+    } }
+  })
+  try {
+    await expect(coordinator.bootstrapSemanticTargetWithCapture!(r, guards, async () => { throw new Error('spent') })).rejects.toThrow('spent')
+    await expect(coordinator.close()).rejects.toThrow()
+    expect(releases).toBe(1)
+    expect(selected?.held).toBe(true)
+    await coordinator.close()
+    expect(releases).toBe(2)
+    expect(selected?.held).toBe(false)
+    expect(others.every(raw => !raw.held)).toBe(true)
+    expect(coordinator.ownerOf('target')).toBe(false)
+  } finally { vi.mocked(acquireSessionLock).mockImplementation(native.acquireSessionLock) }
 })
-it('P14 consumed native capture claim release remains original debt across close retries without replacement',async()=>{
-  const {coordinator}=await setup(),r=request(),native=await vi.importActual<typeof import('../../fs-lock/src/index.ts')>('../../fs-lock/src/index.ts');let releases=0,acquisitions=0
-  vi.mocked(acquireSessionLock).mockImplementation(async options=>{acquisitions++;const raw=await native.acquireSessionLock(options);return {get held(){return raw.held},async release(){releases++;await raw.release();throw new Error('consumed original capture claim')}}})
-  try{
-    await expect(coordinator.bootstrapSemanticTargetWithCapture!(r,guards,async()=>{throw new Error('spent callback')})).rejects.toThrow('spent callback')
-    await expect(coordinator.close()).rejects.toThrow();await expect(coordinator.close()).rejects.toThrow()
-    expect(releases).toBe(1);expect(acquisitions).toBe(1);expect(coordinator.ownerOf('target')).toBe(false)
-  }finally{vi.mocked(acquireSessionLock).mockImplementation(native.acquireSessionLock)}
+it('P14 consumed native capture claim release remains original debt across close retries without replacement', async () => {
+  const { root, backend, coordinator } = await setup()
+  const r = request()
+  const native = await vi.importActual<typeof import('../../fs-lock/src/index.ts')>('../../fs-lock/src/index.ts')
+  const capture = artifactPathsFor(backend)!.session('target')
+  if (capture.kind !== 'ready') throw new Error('Original target claim unavailable')
+  const selectedPath = lockPathFor(root, 'artifact-ownership:' + capture.key)
+  const others: Awaited<ReturnType<typeof native.acquireSessionLock>>[] = []
+  let selected: Awaited<ReturnType<typeof native.acquireSessionLock>> | undefined
+  let releases = 0, acquisitions = 0
+  vi.mocked(acquireSessionLock).mockImplementation(async options => {
+    const raw = await native.acquireSessionLock(options)
+    if (options.lockPath !== selectedPath) { others.push(raw); return raw }
+    acquisitions++
+    expect(selected).toBeUndefined()
+    selected = raw
+    return { get held() { return raw.held }, async release() {
+      releases++
+      await raw.release()
+      throw new Error('consumed original capture claim')
+    } }
+  })
+  try {
+    await expect(coordinator.bootstrapSemanticTargetWithCapture!(r, guards, async () => { throw new Error('spent callback') })).rejects.toThrow('spent callback')
+    await expect(coordinator.close()).rejects.toThrow()
+    await expect(coordinator.close()).rejects.toThrow()
+    expect(releases).toBe(1)
+    expect(acquisitions).toBe(1)
+    expect(selected?.held).toBe(false)
+    expect(others.every(raw => !raw.held)).toBe(true)
+    expect(coordinator.ownerOf('target')).toBe(false)
+  } finally { vi.mocked(acquireSessionLock).mockImplementation(native.acquireSessionLock) }
 })
+
 const predecessorLiteral = {"stage":"{\"headerBase\":{\"createdAt\":\"2026-10-23T00:00:00.000Z\",\"formatVersion\":11,\"journal\":{\"legacyBodyBytes\":0,\"legacyEventCount\":0,\"legacyPrefixDigest\":\"1e9f8adb040e92789e005f089d72c73c7cc54d3f73fda753a381447798fd5868\",\"separatorBytes\":0,\"version\":1},\"origin\":\"fork\",\"parentSession\":\"source\",\"seedLength\":0,\"sessionId\":\"target\",\"title\":\"literal original\"},\"headerBytes\":\"{\\\"createdAt\\\":\\\"2026-10-23T00:00:00.000Z\\\",\\\"formatVersion\\\":11,\\\"journal\\\":{\\\"legacyBodyBytes\\\":0,\\\"legacyEventCount\\\":0,\\\"legacyPrefixDigest\\\":\\\"1e9f8adb040e92789e005f089d72c73c7cc54d3f73fda753a381447798fd5868\\\",\\\"separatorBytes\\\":0,\\\"version\\\":1},\\\"origin\\\":\\\"fork\\\",\\\"parentSession\\\":\\\"source\\\",\\\"seedLength\\\":0,\\\"semanticSeed\\\":{\\\"codec\\\":\\\"semantic-seed-v1\\\",\\\"dependencyDigest\\\":\\\"7fd4c9f0169abf80e5e11e8cab2e06d9e8bf8bf2cd3d9ee63e17ea0345c6a29c\\\",\\\"groupCount\\\":0,\\\"manifestDigest\\\":\\\"5a255899e40ddb1db47d6621805827e244998da2f1b73eb0944d7ce1e8a90b6b\\\",\\\"operationId\\\":\\\"literal-old\\\",\\\"requestDigest\\\":\\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\\",\\\"seedDigest\\\":\\\"f682547f170c025d0519512768a13bd41a570527aa5aee1c3f69be82424f2498\\\",\\\"seedLength\\\":0,\\\"version\\\":1},\\\"sessionId\\\":\\\"target\\\",\\\"title\\\":\\\"literal original\\\"}\\n\",\"invocation\":{\"createdAt\":\"2026-10-23T00:00:00.000Z\",\"operationId\":\"literal-old\",\"requestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"targetSessionId\":\"target\",\"version\":1},\"kind\":\"semantic-bootstrap-header\",\"lineage\":{\"origin\":\"fork\",\"parentSession\":\"source\"},\"metadata\":{\"title\":\"literal original\"},\"originalTarget\":{\"kind\":\"new\"},\"seed\":{\"dependencyDigest\":\"7fd4c9f0169abf80e5e11e8cab2e06d9e8bf8bf2cd3d9ee63e17ea0345c6a29c\",\"digest\":\"f682547f170c025d0519512768a13bd41a570527aa5aee1c3f69be82424f2498\",\"groupCount\":0,\"seedLength\":0,\"sourceObservation\":{\"kind\":\"none\"}},\"version\":1}\n","header":"{\"createdAt\":\"2026-10-23T00:00:00.000Z\",\"formatVersion\":11,\"journal\":{\"legacyBodyBytes\":0,\"legacyEventCount\":0,\"legacyPrefixDigest\":\"1e9f8adb040e92789e005f089d72c73c7cc54d3f73fda753a381447798fd5868\",\"separatorBytes\":0,\"version\":1},\"origin\":\"fork\",\"parentSession\":\"source\",\"seedLength\":0,\"semanticSeed\":{\"codec\":\"semantic-seed-v1\",\"dependencyDigest\":\"7fd4c9f0169abf80e5e11e8cab2e06d9e8bf8bf2cd3d9ee63e17ea0345c6a29c\",\"groupCount\":0,\"manifestDigest\":\"5a255899e40ddb1db47d6621805827e244998da2f1b73eb0944d7ce1e8a90b6b\",\"operationId\":\"literal-old\",\"requestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"seedDigest\":\"f682547f170c025d0519512768a13bd41a570527aa5aee1c3f69be82424f2498\",\"seedLength\":0,\"version\":1},\"sessionId\":\"target\",\"title\":\"literal original\"}\n","frame":"{\"recordKind\":\"session/fact-batch\",\"version\":1,\"batchId\":\"bootstrap:literal-old:complete\",\"firstSeq\":0,\"count\":1,\"previousPrefixDigest\":\"1e9f8adb040e92789e005f089d72c73c7cc54d3f73fda753a381447798fd5868\",\"events\":[{\"type\":\"session/bootstrap\",\"version\":1,\"seq\":0,\"operationId\":\"literal-old\",\"manifestDigest\":\"5a255899e40ddb1db47d6621805827e244998da2f1b73eb0944d7ce1e8a90b6b\",\"dependencyClosureDigest\":\"7fd4c9f0169abf80e5e11e8cab2e06d9e8bf8bf2cd3d9ee63e17ea0345c6a29c\",\"seedLength\":0}],\"batchDigest\":\"1fa2421c19ed3bc9fd11ee6ad89c4a6b42a67e304b020d9159b155d0a24559e2\",\"prefixDigest\":\"ec7b724cce6bdee32b4572070a5edc0608da534058e747a4652b9d8806112725\"}\n"}
 it('P11 literal old format11 stage/header/completion preserve birth and upgrade only writable storage',async()=>{
   const {root,backend,coordinator}=await setup(),stage=p.parseBootstrapHeaderStage(Buffer.from(predecessorLiteral.stage))
@@ -463,3 +515,17 @@ function parseBootstrapHeaderStage(bytes: Uint8Array): BootstrapHeaderStage {
 
 return parseBootstrapHeaderStage
 })()
+
+it.each(['zero', 'common-prefix'] as const)('P90 cannot reinterpret an uncertain %s capture with present empty Task storage as generic birth', async shape => {
+  const { root, coordinator } = await setup()
+  const r = request(), original = payload(r)
+  const uncertain = shape === 'zero' ? Buffer.alloc(0) : Buffer.from('{"')
+  const taskBytes = Buffer.from(JSON.stringify({ formatVersion: 2, tasks: [], notifications: [] })+'\n')
+  await writeFile(join(root,'task-target.doc.jsonl'),taskBytes)
+  await writeFile(stagePath(root,r),uncertain)
+  const result = await coordinator.resumeSemanticTarget(r.invocation,guards,original)
+  expect(['ready','already-ready']).not.toContain(result.kind)
+  await expect(readFile(join(root,'target.jsonl'))).rejects.toMatchObject({code:'ENOENT'})
+  expect(await readFile(stagePath(root,r))).toEqual(uncertain)
+  expect(await readFile(join(root,'task-target.doc.jsonl'))).toEqual(taskBytes)
+})

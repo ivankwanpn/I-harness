@@ -1,3 +1,4 @@
+import { retainManagedJournalCleanup, settleManagedJournalCleanup, type NativeJournalCleanup } from '../native-fact-writer-internal.ts'
 import {taskParentMetadataProjection} from './task-parent-metadata.ts'
 import { notIssuedFailure } from './not-issued.ts'
 import { resolveUnissuedConflict } from './unissued-conflict.ts'
@@ -164,7 +165,7 @@ export function captureManagedTaskParentReadiness(document:ManagedDocument,owner
 export function beginManagedTaskMetadataUpdate(document:ManagedDocument,ownership:Ownership){const execution=privateExecutionOwners.get(document);if(execution){if(execution.ownership!==ownership)throw new FactRecoveryRequiredError();return execution.beginTaskMetadata()}const original=readyOwners.get(document);if(!original||original.ownership!==ownership)throw new FactRecoveryRequiredError();return original.beginTaskMetadata()}
 /** One owned document, one staged suffix, one private Session/index. All disk
  * mutations join the coordinator's existing session operation lane. */
-export function createManagedDocument(id: string, source: Session|undefined, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void, bootstrap?: { operationId: string; selected?:boolean; bind(control: BootstrapDocumentControl): void }, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: () => void = () => {}, executionChanges?: ReturnType<typeof createColdExecutionWrites>, execution?:{state:Awaited<ReturnType<typeof restoreManagedExecutionState>>;held:HeldFactOwner;assertCurrent():void}): ManagedDocument & {
+export function createManagedDocument(id: string, source: Session|undefined, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void, bootstrap?: { operationId: string; selected?:boolean; bind(control: BootstrapDocumentControl): void }, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: () => void = () => {}, executionChanges?: ReturnType<typeof createColdExecutionWrites>, execution?:{state:Awaited<ReturnType<typeof restoreManagedExecutionState>>;held:HeldFactOwner;assertCurrent():void}, journalScopes: Map<object, NativeJournalCleanup> = new Map()): ManagedDocument & {
     assertObservable(): void;
 } {
     const core=execution?.state;
@@ -203,6 +204,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
         if (closed)
             throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' });
     }));
+    if (!bootstrap?.selected) retainManagedJournalCleanup(journalScopes, backend, id, held);
     const actionMembers=new Set<{source:object;finished():boolean}>();
     const releaseFinishedMembers=()=>{if(pending||queue.length)return;for(const record of actionMembers)if(record.finished()){core?.releaseSource(record.source);actionMembers.delete(record)}};
     const executionStatus = (): 'available' | 'unavailable' | 'retired' => {
@@ -386,6 +388,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                     if (bootstrap?.selected && selectedIOStarted) await settleSelected();
                     if (requiredWriter) throw new FactRecoveryRequiredError();
                     if(bootstrap?.selected)selectedIOStarted=true;
+                    await settleManagedJournalCleanup(journalScopes);
                     const outcome = bootstrap?.selected ? await selectedJournal!.appendOwnedBatch(id,issuer,selectedLane!,prefix,batch) : await backend.appendOwnedBatch!(id,issuer,prefix,batch);
                     completed = finish(current, outcome);
                 }
@@ -511,8 +514,10 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
         assertTaskOutside();
         if(closed)return;
         held.assertHeld();
+        await settleManagedJournalCleanup(journalScopes);
         const drains = await Promise.allSettled([...sourceDrains.values()].map(entry => entry.closeOriginal()));
         await pump;
+        await settleManagedJournalCleanup(journalScopes);
         held.assertHeld();
         if (pending || quarantined || sourceFault || recoveryHolds.size || drains.some(result => result.status === 'rejected'))
             throw Object.assign(new FactRecoveryRequiredError(),{cause:new AggregateError(drains.flatMap(result=>result.status==='rejected'?[result.reason]:[]),'Original document sources require cleanup')});
@@ -711,6 +716,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
         },
         async drain() {
             await pump;
+            await settleManagedJournalCleanup(journalScopes);
             await core?.settleDependencies();
             if (pending || quarantined || sourceFault)
                 throw new FactRecoveryRequiredError();
@@ -756,10 +762,13 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
             if (closed)
                 return;
             revokeOriginalWork();
-            if(core){await pump;await core.settleDependencies()}
+            await pump;
+            await settleManagedJournalCleanup(journalScopes);
+            if(core)await core.settleDependencies();
             await drainOriginalSourceOwners();
             if(selectedBindFlight)await selectedBindFlight.catch(()=>{});
             await settleSelected();
+            await settleManagedJournalCleanup(journalScopes);
             if(core){for(const member of actionMembers)core.releaseSource(member.source);actionMembers.clear();await core.close()}
             closed = true;
         },

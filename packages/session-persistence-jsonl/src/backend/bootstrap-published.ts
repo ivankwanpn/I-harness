@@ -1,3 +1,4 @@
+import { originalEmptyTarget } from './bootstrap-stage.ts'
 import { canonicalJsonData, decodeFactBatch, legacyPrefixDigest } from '@i-harness/core-session'
 import { bootstrapManifest, parseBootstrapHeaderStage, routeInvocation, routeForReservation, validateOwnedCaptureStage, type BootstrapRoute, type BootstrapHeaderOperation, type BootstrapReadState } from '@i-harness/session-persistence'
 
@@ -30,24 +31,28 @@ export function capturePublishedBootstrap(route: BootstrapRoute, operation: Boot
   const header = JSON.parse(stage.headerBytes)
   if (bootstrapManifest(stage, records) !== header.semanticSeed.manifestDigest) conflict()
   if (stage.captureReservation) validateOwnedCaptureStage(stage.captureReservation, stage, records)
-  const seeded = decoded && seed ? { eventCount: decoded.key.count, bodyBytes: seed.length, prefixDigest: decoded.prefixDigest } : undefined
   return Object.freeze({
-    check(state: BootstrapReadState): string {
-      if (state.kind !== 'present') { if (state.foreign) conflict(); throw new Error('Published bootstrap read unavailable') }
-      if (state.foreign || state.captureReservation || !state.stagePresent || !state.stageBytes
-        || !Buffer.from(state.stageBytes).equals(stageBytes) || state.promotionPresent
-        || state.rawHeader !== stage.headerBytes || state.meta?.formatVersion !== 14
-        || !state.events || !state.prefix || !state.frames) return conflict()
-      if (state.publicationPresent && (stage.originalTarget.kind === 'new' || !state.publicationBytes || !Buffer.from(state.publicationBytes).equals(headerBytes))) conflict()
-      if (state.events.length === 0) {
-        if (state.frames.length || canonicalJsonData(state.prefix) !== canonicalJsonData(empty)) conflict()
-      } else {
-        if (!seed || !seeded || state.events.length !== stage.seed.seedLength || state.frames.length !== 1
-          || !Buffer.from(state.frames[0]!.batch.bytes).equals(seed)
-          || canonicalJsonData(state.frames[0]!.prefix) !== canonicalJsonData(empty)
-          || canonicalJsonData(state.prefix) !== canonicalJsonData(seeded)) conflict()
+    check(state: BootstrapReadState, target: Uint8Array | undefined, actualStage: Uint8Array | undefined, publication: Uint8Array | undefined): string {
+      if (state.foreign || state.promotionPresent) conflict()
+      if (actualStage === undefined) return conflict()
+      const actual = Buffer.from(actualStage)
+      const captured = !!stage.captureReservation
+      // Generic recovery needs a discriminating original header-stage prefix.
+      // Empty/common prefixes cannot prove this was not a spent capture.
+      const genericPrefix = Buffer.from('{"headerBase":')
+      if (!captured && (actual.length < genericPrefix.length || !actual.subarray(0,genericPrefix.length).equals(genericPrefix))) conflict()
+      if (captured ? !actual.equals(stageBytes) : actual.length > stageBytes.length || !actual.equals(stageBytes.subarray(0,actual.length))) conflict()
+      const bytes = target && Buffer.from(target)
+      const expected = Buffer.concat([headerBytes, ...(seed ? [seed] : [])])
+      const preimage = !!bytes && originalEmptyTarget(bytes,invocation.targetSessionId,operation)
+      if (bytes && !preimage && (bytes.length > expected.length || !bytes.equals(expected.subarray(0,bytes.length)))) conflict()
+      if (publication) {
+        if (stage.originalTarget.kind !== 'existing-empty') conflict()
+        const published = Buffer.from(publication)
+        if (published.length > headerBytes.length || !published.equals(headerBytes.subarray(0,published.length))) conflict()
+        if (!preimage && (!bytes || !bytes.equals(headerBytes))) conflict()
       }
-      return canonicalJsonData({ header: state.rawHeader, stage: stageBytes.toString('base64'), prefix: state.prefix, torn: !!state.torn, publication: state.publicationBytes ? Buffer.from(state.publicationBytes).toString('base64') : null })
+      return canonicalJsonData({ stage:actual.toString('base64'),target:bytes?.toString('base64') ?? null,publication:publication ? Buffer.from(publication).toString('base64') : null })
     },
   })
 }

@@ -20,7 +20,7 @@ vi.mock('@i-harness/core-session/internal/bootstrap',async original=>{
   }}
 })
 afterEach(async () => { for (const c of coordinators.splice(0)) await c.close().catch(() => {}); for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true }) })
-type BootstrapHooks = { append?: (actual: any, ...args: any[]) => any; confirm?: (actual: any, ...args: any[]) => any; prepareBootstrapHeader?: (actual: any, ...args: any[]) => any }
+type BootstrapHooks = { append?: (actual: any, ...args: any[]) => any; confirm?: (actual: any, ...args: any[]) => any; reconcile?: (actual: any, ...args: any[]) => any; prepareBootstrapHeader?: (actual: any, ...args: any[]) => any }
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), 'ih-bootstrap-')); roots.push(root)
   const hooks: BootstrapHooks = {}
@@ -28,6 +28,8 @@ async function setup() {
   // snapshots the backend descriptors; patching them afterwards is
   // PROCESS_READ_UNAVAILABLE by design.
   const backend = createJsonlBackend(root, { wrap: b => {
+    const reconcile = b.reconcileOwnedBatch!.bind(b)
+    b.reconcileOwnedBatch = ((...args: any[]) => hooks.reconcile ? hooks.reconcile(reconcile, ...args) : (reconcile as any)(...args)) as typeof b.reconcileOwnedBatch
     const append = b.appendOwnedBatch!.bind(b), confirm = b.confirmBootstrapFrames!.bind(b), prepare = b.prepareBootstrapHeader!.bind(b)
     b.appendOwnedBatch = ((...args: any[]) => hooks.append ? hooks.append(append, ...args) : (append as any)(...args)) as typeof b.appendOwnedBatch
     b.confirmBootstrapFrames = ((...args: any[]) => hooks.confirm ? hooks.confirm(confirm, ...args) : (confirm as any)(...args)) as typeof b.confirmBootstrapFrames
@@ -253,16 +255,18 @@ it('keeps the original manifest ready after mutable metadata edits and a later c
 })
 it.each(['seed','complete'])('reconciles a real synced %s frame after response loss without duplicate inputs or a second view',async phase=>{
   const {root,coordinator,hooks}=await setup(),r=seeded(true)
-  hooks.append=async(actual,...args)=>{const result=await actual(...args);return args[3].key.batchId.endsWith(':'+phase)?{kind:'unknown',key:args[3].key}:result}
+  let lostBatchId: string | undefined
+  hooks.reconcile=async(actual,...args)=>args[3].key.batchId===lostBatchId?{kind:'unknown',key:args[3].key}:actual(...args)
+  hooks.append=async(actual,...args)=>{const result=await actual(...args);if(args[3].key.batchId.endsWith(':'+phase)){lostBatchId=args[3].key.batchId;return{kind:'unknown',key:args[3].key}}return result}
   const lost=await coordinator.bootstrapSemanticTarget(r,guards);expect(lost).toMatchObject({kind:'blocked'})
   await expect(coordinator.openManagedDocument('target')).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
   await expect(coordinator.snapshot('target')).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
   await expect(coordinator.close()).rejects.toThrow()
   hooks.append=undefined
-  // Closing revoked optional new work; original passive reconciliation is still permitted.
-  const adopted=await coordinator.resumeSemanticTarget(r.invocation,guards)
-  if(phase==='complete')expect(adopted.kind).toBe('already-ready')
-  else expect(adopted).toMatchObject({kind:'blocked'})
+  hooks.reconcile=undefined
+  // Public admission remains retired; only original close may settle its debt.
+  await expect(coordinator.resumeSemanticTarget(r.invocation,guards)).rejects.toMatchObject({code:'FACT_CLOSED'})
+  await coordinator.close()
   const raw=await readFile(join(root,'target.jsonl'),'utf8')
   expect(raw.match(/"batchId":"bootstrap:operation:seed"/g)).toHaveLength(1)
   const cold=await copyStore(root)
@@ -297,7 +301,8 @@ it('retains a partial stage under failed close and honestly resumes cold with or
     const resumed=await cold.coordinator.resumeSemanticTarget(r.invocation,guards,r)
     expect(resumed.kind).toBe('ready')
     expect((await readFile(join(cold.root,stage))).subarray(0,17)).toEqual(before)
-    await coordinator.resumeSemanticTarget(r.invocation,guards,r)
+    await expect(coordinator.resumeSemanticTarget(r.invocation,guards,r)).rejects.toMatchObject({code:'FACT_CLOSED'})
+    await expect(coordinator.close()).rejects.toThrow()
   }finally{vi.mocked(open).mockImplementation(native.open)}
 })
 it('blocks cold public open and metadata mutations when existing-empty publication has not occurred',async()=>{
@@ -504,14 +509,20 @@ it('passively confirms complete header bytes after sync failure while Stop preve
   expect((await readFile(join(root,'target.jsonl'),'utf8')).trimEnd().split('\n')).toHaveLength(1)
   expect((await coordinator.resumeSemanticTarget(r.invocation,guards)).kind).toBe('ready')
 })
-it('keeps header fsync commitment when file close cleanup fails',async()=>{
+it('retains synced original header bytes while consumed native close remains unresolved',async()=>{
   const {root,coordinator}=await setup(),r=request(),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  let closes = 0
   vi.mocked(open).mockImplementation(async(...args)=>{const h=await native.open(...args)
-    if(args[1]!=='wx')return h
-    return new Proxy(h,{get(target,name){if(name==='close')return async()=>{await target.close();throw new Error('close after sync')};const value=Reflect.get(target,name);return typeof value==='function'?value.bind(target):value}})
+    if(String(args[0])!==join(root,'target.jsonl')||args[1]!=='wx')return h
+    return new Proxy(h,{get(target,name){if(name==='close')return async()=>{closes++;await target.close();throw new Error('close after sync')};const value=Reflect.get(target,name);return typeof value==='function'?value.bind(target):value}})
   })
-  try{expect((await coordinator.bootstrapSemanticTarget(r,guards)).kind).toBe('ready')}finally{vi.mocked(open).mockImplementation(native.open)}
-  expect((await readFile(join(root,'target.jsonl'),'utf8')).match(/"batchId":"bootstrap:operation:complete"/g)).toHaveLength(1)
+  try{expect((await coordinator.bootstrapSemanticTarget(r,guards)).kind).toBe('blocked')}finally{vi.mocked(open).mockImplementation(native.open)}
+  const stageName = (await readdir(root)).find(name => name.endsWith('.stage'))!
+  const stage = persistence.parseBootstrapHeaderStage(await readFile(join(root,stageName)))
+  expect(await readFile(join(root,'target.jsonl'))).toEqual(Buffer.from(stage.headerBytes))
+  await expect(coordinator.close()).rejects.toThrow()
+  await expect(coordinator.close()).rejects.toThrow()
+  expect(closes).toBe(1)
 })
 it('rejects a foreign historical receipt after real sync and adopts only the current owner evidence',async()=>{
   const {root,coordinator,hooks}=await setup(),r=request()

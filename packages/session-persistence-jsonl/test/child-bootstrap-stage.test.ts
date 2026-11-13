@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promi
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
-import { canonicalJsonData } from '@i-harness/core-session'
+import { canonicalJsonData, CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import * as p from '@i-harness/session-persistence'
 import { createJsonlBackend } from '../src/index.ts'
 import { createSessionCoordinator } from './helpers/composed.ts'
@@ -58,10 +58,10 @@ it('a missing sole child stage cannot turn ordinary reads or suffix mutation int
  const {root,backend,coordinator}=await setup(),{request,payload}=pair(),ready=await coordinator.bootstrapChildTargetWithCapture!(request,guards,async()=>payload);expect(ready.kind).toBe('ready');if(ready.kind!=='ready')throw Error('ready required')
  const loaded=await backend.read('target'),path=join(root,'target.jsonl'),before=await readFile(path),stage=bootstrapPathsForRoute(path,{protocol:'child-v1',request}).stage,original=await readFile(stage)
  await unlink(stage)
- try{await expect(backend.read('target')).rejects.toThrow();await expect(backend.replaceEvents!('target',loaded.events)).rejects.toThrow();await expect(backend.repair('target')).rejects.toThrow();await expect(backend.updateMeta('target',{title:'forbidden'})).rejects.toThrow();expect((await ready.document.metadata.admit({type:'plan/mode',mode:'on'})).kind).not.toBe('committed');expect(await readFile(path)).toEqual(before)}finally{await writeFile(stage,original)}
+ try{expect((await backend.read('target')).events).toEqual(loaded.events);expect(await readFile(path)).toEqual(before);await expect(backend.bootstrapRoutes!.resolveBirth('target')).rejects.toThrow();await expect(backend.replaceEvents!('target',loaded.events)).rejects.toThrow();await expect(backend.repair('target')).rejects.toThrow();await expect(backend.updateMeta('target',{title:'forbidden'})).rejects.toThrow();expect((await ready.document.metadata.admit({type:'plan/mode',mode:'on'})).kind).not.toBe('committed');expect(await readFile(path)).toEqual(before)}finally{await writeFile(stage,original)}
 })
 it('preserves a constructed reservation-free format12 storage fixture through its actual historical initial birth lane and upgrade',async()=>{
  const {root,backend,coordinator}=await setup(),{payload}=pair(),current=buildBootstrapHeader(payload).stage,headerBase={...current.headerBase,formatVersion:12},core={...current,headerBase},header=JSON.parse(current.headerBytes);header.formatVersion=12;header.semanticSeed.manifestDigest=bootstrapManifest(core,payload.seed.records);const stage={...core,headerBytes:canonicalJsonData(header)+'\n'},built=buildBootstrapHeader(payload,stage),path=join(root,'target.jsonl'),paths=bootstrapPaths(path,payload.invocation)
  await writeFile(paths.stage,built.operation.stageBytes);await writeFile(path,built.operation.headerBytes)
- const ready=await coordinator.resumeSemanticTarget(payload.invocation,guards,payload);expect(ready.kind).toBe('ready');await coordinator.close();const raw=await readFile(path),body=raw.subarray(raw.indexOf(10)+1),loaded=await backend.read('target');expect(loaded.version).toBe(13);await backend.replaceEvents!('target',loaded.events);await backend.updateMeta('target',{title:'after storage upgrade'});const after=await readFile(path);expect(after.subarray(after.indexOf(10)+1)).toEqual(body);expect(await readFile(paths.stage)).toEqual(Buffer.from(built.operation.stageBytes));expect((await backend.bootstrapRoutes!.resolveBirth('target'))?.route.protocol).toBe('public')
+ const ready=await coordinator.resumeSemanticTarget(payload.invocation,guards,payload);expect(ready.kind).toBe('ready');await coordinator.close();const raw=await readFile(path),body=raw.subarray(raw.indexOf(10)+1),loaded=await backend.read('target');expect(loaded.version).toBe(CURRENT_FORMAT_VERSION);await backend.replaceEvents!('target',loaded.events);await backend.updateMeta('target',{title:'after storage upgrade'});const after=await readFile(path);expect(after.subarray(after.indexOf(10)+1)).toEqual(body);expect(await readFile(paths.stage)).toEqual(Buffer.from(built.operation.stageBytes));expect((await backend.bootstrapRoutes!.resolveBirth('target'))?.route.protocol).toBe('public')
 })

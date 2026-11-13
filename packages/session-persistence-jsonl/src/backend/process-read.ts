@@ -202,24 +202,28 @@ export function createJsonlProcessReadCapability(ports: Ports) {
         if (!isHeldTaskDocumentScope(scope)) bad()
         scope.assertActive(); ports.assertOriginal()
         const id = scope.parentSessionId, path = ports.file(id), parents = await ancestors(path)
-        const before = await lstat(path, { bigint: true })
-        if (!before.isFile() || before.isSymbolicLink()) bad()
-        const original = identity(before), baseline = await readNamespace()
+        const before = await lstat(path, { bigint: true }).catch(error => { if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return undefined; throw error })
+        if (before && (!before.isFile() || before.isSymbolicLink())) bad()
+        const original = before && identity(before), baseline = await readNamespace()
         async function rootCurrent() {
             scope.assertActive(); ports.assertOriginal()
             await ports.checkDeleted('session', id); await ports.checkDeleted('document', scope.key)
-            const current = await ancestors(path), file = await lstat(path, { bigint: true })
+            const current = await ancestors(path)
             if (parents.root.dev !== current.root.dev || parents.root.ino !== current.root.ino
-                || parents.rootAncestry !== current.rootAncestry || parents.pathAncestry !== current.pathAncestry
-                || !file.isFile() || file.isSymbolicLink() || !same(original, identity(file))) bad()
+                || parents.rootAncestry !== current.rootAncestry || parents.pathAncestry !== current.pathAncestry) bad()
             scope.assertActive(); ports.assertOriginal()
         }
         const proof = Object.freeze({
             async assertCurrent() {
                 if (this !== proof) bad()
                 await rootCurrent()
+                const file = await lstat(path, { bigint: true }).catch(error => { if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return undefined; throw error })
+                if (original ? !file || !file.isFile() || file.isSymbolicLink() || !same(original,identity(file)) : !!file) bad()
                 if (await readNamespace() !== baseline) bad()
                 await rootCurrent()
+                const finalFile = await lstat(path, { bigint: true }).catch(error => { if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return undefined; throw error })
+                scope.assertActive(); ports.assertOriginal()
+                if (original ? !finalFile || !finalFile.isFile() || finalFile.isSymbolicLink() || !same(original,identity(finalFile)) : !!finalFile) bad()
             },
             async assertRoot() { if (this !== proof) bad(); await rootCurrent() },
         })

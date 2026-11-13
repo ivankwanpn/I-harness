@@ -89,8 +89,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     managed.assertOutsideCapture(id)
     observations.assertOutsideObservedSession(id)
     observations.assertOutsideOwnedOperations([id])
-    observations.assertOutsideOwnedOperations([id])
-    const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' })
+    const token = managed.borrowJournalRetirement(id) ?? processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' })
     let outcome: 'settled' | 'unknown' = 'unknown'
     try {
       const admission = observations.beginRetirement(id)

@@ -68,12 +68,18 @@ function productionAppends(): Map<string, string[]> {
     if (!existsSync(src) || !statSync(src).isDirectory()) continue
     for (const file of sourceFiles(src)) {
       const text = readFileSync(file, "utf8")
-      let m: RegExpExecArray | null
-      for(const re of expressions)while ((m = re.exec(text)) !== null) {
-        const where = `${relative(ROOT, file).split(sep).join("/")}:${text.slice(0, m.index).split("\n").length}`
-        const list = found.get(m[1]) ?? []
-        list.push(where)
-        found.set(m[1], list)
+      const location = relative(ROOT, file).split(sep).join('/')
+      for (const expression of expressions) {
+        let match: RegExpExecArray | null, line = 1, offset = 0
+        while ((match = expression.exec(text)) !== null) {
+          // Regex matches advance monotonically. Count each newline once per
+          // expression instead of copying/splitting every preceding prefix.
+          while (offset < match.index) { if (text.charCodeAt(offset) === 10) line++; offset++ }
+          const where = location + ':' + line
+          const list = found.get(match[1]) ?? []
+          list.push(where)
+          found.set(match[1], list)
+        }
       }
     }
   }

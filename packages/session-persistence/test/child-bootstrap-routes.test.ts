@@ -1,3 +1,4 @@
+import { validateTaskDocument } from '../src/task-state-internal.ts'
 import { afterEach, expect, it, vi } from 'vitest'
 import { appendFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -113,8 +114,23 @@ it('preserves child birth bytes through raw suffix replacement and refuses stale
  expect((await readFile(path)).subarray(end+1,end+1+birth.length)).toEqual(birth)
  const before=await readFile(path);const changed=structuredClone(suffix);(changed[1] as any).text='changed';await expect(backend.replaceEvents!('target',changed)).rejects.toThrow();expect(await readFile(path)).toEqual(before)
  await appendFile(path,'{"torn":');await backend.repair('target');await backend.updateMeta('target',{title:'new title'})
- const cold=await setup(root);await expect(cold.coordinator.openManagedDocument('target')).rejects.toThrow('TASK_TRANSITION_FAILED')
+ const cold=await setup(root),document=await cold.coordinator.openManagedDocument('target')
+ expect(document.view.events.findLast(event=>event.type==='plan/mode')).toMatchObject({mode:'off'})
+ expect(document.view.events.filter(event=>event.type==='agent/input/admitted')).toEqual([expect.objectContaining({text:payload.initial!.text})])
+ expect((await cold.coordinator.profile('target')).meta.title).toBe('new title')
  const after=await readFile(path);expect(after.subarray(after.indexOf(10)+1,after.indexOf(10)+1+birth.length)).toEqual(birth)
+ await cold.coordinator.close()
+ // Metadata changes preserve a valid birth; a valid Task2 row for a FOREIGN
+ // parent in this child's sidecar is the actual inconsistent ownership input.
+ const taskPath=join(root,'task-target.doc.jsonl')
+ const foreignTask={formatVersion:2 as const,tasks:[{id:'task-1',parentSessionId:'foreign',agentPath:'root/foreign',description:'foreign',prompt:'foreign work',agent:'general',delivery:'tool' as const,status:'accepted' as const,timeCreated:1}],notifications:[]}
+ validateTaskDocument(foreignTask)
+ await writeFile(taskPath,JSON.stringify(foreignTask)+'\n')
+ const taskBefore=await readFile(taskPath),sourceBefore=await readFile(path)
+ const invalid=await setup(root)
+ await expect(invalid.coordinator.openManagedDocument('target')).rejects.toThrow('TASK_TRANSITION_FAILED')
+ expect(await readFile(taskPath)).toEqual(taskBefore)
+ expect(await readFile(path)).toEqual(sourceBefore)
 
 })
 it('resumes the original child receipt after native suffix facts and a user title update',async()=>{

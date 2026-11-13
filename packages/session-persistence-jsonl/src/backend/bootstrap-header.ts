@@ -1,17 +1,3 @@
-/** Mutable header fields a completed target may legitimately change after its
- * bootstrap: a rewrite of any other field is a real conflict. */
-const MUTABLE_HEADER_FIELDS = new Set(['title', 'workspaceId', 'archived', 'modelSelection', 'subagentProtocolVersion'])
-function sameImmutableHeader(live: Record<string, unknown>, staged: Record<string, unknown>): boolean {
-  const keys = new Set([...Object.keys(live), ...Object.keys(staged)])
-  for (const key of keys) {
-    if (MUTABLE_HEADER_FIELDS.has(key)) continue
-    const a = live[key], b = staged[key]
-    if (a === b) continue
-    try { if (canonicalJsonData(a) === canonicalJsonData(b)) continue } catch { return false }
-    return false
-  }
-  return true
-}
 import { lstat, open, readFile, readdir, rename, mkdir, type FileHandle } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -24,7 +10,7 @@ import { parseHeader } from '../format.ts'
 import { createBootstrapCaptureBackend } from './bootstrap-capture.ts'
 import { createBootstrapCaptureIO, type BootstrapCaptureIO } from './bootstrap-capture-io.ts'
 import { createPublicationOwner, type PublicationOwner } from './publication.ts'
-import { bootstrapPaths, bootstrapNamespace, bootstrapPathsForRoute, lookupBootstrapStage, ordinaryStageIO } from './bootstrap-stage.ts'
+import { originalEmptyTarget, sameImmutableBootstrapHeader, bootstrapPaths, bootstrapNamespace, bootstrapPathsForRoute, lookupBootstrapStage, ordinaryStageIO } from './bootstrap-stage.ts'
 export { bootstrapPaths } from './bootstrap-stage.ts'
 import { captureBootstrapRoute, routeInvocation, type BootstrapRoute, type BootstrapRouteBackend, type BootstrapReadState } from '@i-harness/session-persistence'
 import { preserveBootstrapBirth } from './fact-journal.ts'
@@ -58,15 +44,7 @@ function scope(id:string,owner:HeldFactOwner) {
 function matchingPrefix(actual:Uint8Array,expected:Uint8Array):boolean {
   return actual.length<=expected.length&&Buffer.from(actual).equals(Buffer.from(expected.subarray(0,actual.length)))
 }
-function originalEmptyTarget(actual:Buffer,id:string,operation:BootstrapHeaderOperation):boolean {
-  if(operation.target.kind!=='existing-empty')return false
-  try {
-    const end=actual.indexOf(10),meta=end>=0?parseHeader(actual.subarray(0,end).toString('utf8')):undefined
-    return end===actual.length-1&&!!meta&&!meta.semanticSeed&&[11,12,13,14].includes(meta.formatVersion)&&meta.sessionId===id&&meta.createdAt===operation.invocation.createdAt
-      &&rawHeaderDigest(actual)===operation.target.expectedHeaderDigest&&meta.journal?.legacyEventCount===0&&meta.journal?.legacyBodyBytes===0
-      &&meta.journal?.separatorBytes===0&&meta.journal?.legacyPrefixDigest===operation.target.expectedPrefix.prefixDigest
-  }catch{return false}
-}
+
 export function createBootstrapHeaderBackend(filePath:(id:string)=>string, assertNotDeleted:(kind:string,id:string)=>Promise<void>, rootPath:string,captureIO:BootstrapCaptureIO=createBootstrapCaptureIO(),publisher:PublicationOwner=createPublicationOwner(rootPath)):Pick<BootstrapBackend,'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'|'checkBootstrapCaptureRoot'|'readBootstrapCapture'|'prepareBootstrapCapture'|'settleBootstrapCaptureIO'> & {selectedCapture:Pick<ReturnType<typeof createBootstrapCaptureBackend>,'readSelectedCapture'|'reserveSelectedCapture'|'prepareSelectedHeader'|'reconcileSelectedHeader'|'confirmSelectedBirthHeader'>; bootstrapRoutes:BootstrapRouteBackend; trackHeaderOwner(id:string, owner:HeldFactOwner):void; settleTrackedHeaderIO(id:string, owner:HeldFactOwner):Promise<void>; readTrackedState(route:BootstrapRoute,owner:HeldFactOwner):Promise<BootstrapReadState>; hasTrackedHeaderDebt(id:string,owner:HeldFactOwner):boolean; trackedStageIO(id:string,owner:HeldFactOwner):import('./bootstrap-stage.ts').StageLookupIO; resolveTrackedBirth(id:string,owner:HeldFactOwner):Promise<{route:BootstrapRoute; stage:import('@i-harness/session-persistence').BootstrapHeaderStage; stageBytes:Uint8Array; digest:string} | {route:import('@i-harness/session-persistence').SelectedResultsRoute; stage:import('@i-harness/session-persistence').SelectedResultsHeaderStageV2; stageBytes:Uint8Array; digest:string} | undefined>} {
   const capture = createBootstrapCaptureBackend(filePath, assertNotDeleted, rootPath, captureIO, publisher)
   type HeaderResource = { handle: FileHandle; close: FileHandle['close']; failed: boolean; cause?: unknown }
@@ -306,27 +284,17 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
         const target=await optional(path)
         if(!target)return {kind:'unknown'}
         if(originalEmptyTarget(target,id,operation))return {kind:'unknown'}
-        if(target.length<operation.headerBytes.length)return {kind:target.equals(Buffer.from(operation.headerBytes.subarray(0,target.length)))?'unknown':'conflict'}
+        if(target.indexOf(10)<0)return {kind:target.equals(Buffer.from(operation.headerBytes.subarray(0,target.length)))?'unknown':'conflict'}
         let liveBytes=Buffer.from(operation.headerBytes)
         if(!target.subarray(0,liveBytes.length).equals(liveBytes)) {
           const original=JSON.parse(liveBytes.toString('utf8'))
-          if(original.formatVersion===13){
-            const upgraded=Buffer.from(canonicalJsonData({...original,formatVersion:14})+'\n')
-            if(!target.subarray(0,upgraded.length).equals(upgraded))return {kind:'conflict'}
-            liveBytes=upgraded
-          } else {
-            // A completed target keeps its immutable bootstrap header but may carry
-            // later title/workspace/archive/model edits. Reconcile adopts the live
-            // header when only those mutable fields differ; anything else is a
-            // genuine conflict.
-            const end=target.indexOf(10)
-            const liveLine=end<0?undefined:target.subarray(0,end).toString('utf8')
-            if(liveLine===undefined)return {kind:'conflict'}
-            let liveMeta:unknown
-            try{liveMeta=JSON.parse(liveLine)}catch{return {kind:'conflict'}}
-            if(typeof liveMeta!=='object'||liveMeta===null||!sameImmutableHeader(liveMeta as Record<string,unknown>,original))return {kind:'conflict'}
-            liveBytes=Buffer.from(liveLine+'\n')
-          }
+          const end = target.indexOf(10)
+          if (end < 0 || end + 1 > 65536) return {kind:'conflict'}
+          const liveLine = target.subarray(0,end).toString('utf8')
+          let liveMeta: Record<string, unknown>
+          try { liveMeta = JSON.parse(liveLine) } catch { return {kind:'conflict'} }
+          if (!liveMeta || typeof liveMeta !== 'object' || !sameImmutableBootstrapHeader(liveMeta, original)) return {kind:'conflict'}
+          liveBytes = Buffer.from(liveLine+'\n')
         }
         if(!await syncExact(path,liveBytes,id,owner))return {kind:'unknown'}
         return {kind:'committed',headerDigest:rawHeaderDigest(liveBytes)}

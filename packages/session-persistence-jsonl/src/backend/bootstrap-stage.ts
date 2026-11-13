@@ -1,3 +1,5 @@
+import { parseHeader } from '../format.ts'
+import { rawHeaderDigest, type BootstrapHeaderOperation } from '@i-harness/session-persistence'
 import { createHash } from 'node:crypto'
 import { basename, dirname } from 'node:path'
 import { open, readdir } from 'node:fs/promises'
@@ -62,4 +64,30 @@ export async function lookupBootstrapStage(path:string,expectation:StageExpectat
   io.assertCurrent()
   return stage?{kind:'full',route,stage,exactBytes:bytes}:{kind:'reserved',route,reservation:reservation!,exactBytes:bytes}
  }catch{return{kind:'unavailable',present}}
+}
+
+const MUTABLE_BOOTSTRAP_HEADER_FIELDS = new Set(['title', 'workspaceId', 'archived', 'modelSelection'])
+/** Compare a live storage header with its immutable original birth. */
+export function sameImmutableBootstrapHeader(live: Record<string, unknown>, staged: Record<string, unknown>): boolean {
+  const oldVersion = staged.formatVersion, liveVersion = live.formatVersion
+  const supportedUpgrade = typeof oldVersion === 'number' && typeof liveVersion === 'number'
+    && Number.isSafeInteger(oldVersion) && Number.isSafeInteger(liveVersion)
+    && [11, 12, 13].includes(oldVersion) && liveVersion > oldVersion && liveVersion <= CURRENT_FORMAT_VERSION
+  for (const key of new Set([...Object.keys(live), ...Object.keys(staged)])) {
+    if (MUTABLE_BOOTSTRAP_HEADER_FIELDS.has(key) || key === 'formatVersion' && supportedUpgrade) continue
+    if (live[key] === staged[key]) continue
+    try { if (canonicalJsonData(live[key]) === canonicalJsonData(staged[key])) continue } catch { return false }
+    return false
+  }
+  return true
+}
+
+export function originalEmptyTarget(actual:Buffer,id:string,operation:BootstrapHeaderOperation):boolean {
+  if(operation.target.kind!=='existing-empty')return false
+  try {
+    const end=actual.indexOf(10),meta=end>=0?parseHeader(actual.subarray(0,end).toString('utf8')):undefined
+    return end===actual.length-1&&!!meta&&!meta.semanticSeed&&[11,12,13,14].includes(meta.formatVersion)&&meta.sessionId===id&&meta.createdAt===operation.invocation.createdAt
+      &&rawHeaderDigest(actual)===operation.target.expectedHeaderDigest&&meta.journal?.legacyEventCount===0&&meta.journal?.legacyBodyBytes===0
+      &&meta.journal?.separatorBytes===0&&meta.journal?.legacyPrefixDigest===operation.target.expectedPrefix.prefixDigest
+  }catch{return false}
 }

@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
-import { mkdtemp, mkdir, readFile, writeFile, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, readdir, rm, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { append, createSession, toJSONL, projectConversation } from '@i-harness/core-session'
 import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { createJsonlBackend } from '../src/index.ts'
@@ -12,8 +12,12 @@ import { createSessionCoordinator } from './helpers/composed.ts'
 import { extractFormat10Predecessor } from './helpers/format10-predecessor.ts'
 import { extractCurrentPredecessor, provisionPredecessorLock } from './helpers/current-context-predecessors.ts'
 
+vi.mock('node:fs/promises', async original => {
+  const actual = await original<typeof import('node:fs/promises')>()
+  return { ...actual, rename: vi.fn(actual.rename) }
+})
 const roots: string[] = []
-afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
+afterEach(async () => { vi.restoreAllMocks(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
 const loader = pathToFileURL(createRequire(import.meta.url).resolve('tsx/esm')).href
 async function fresh() { const root = await mkdtemp(join(tmpdir(), 'ih-c12-')); roots.push(root); return root }
 function runnerPrefix(packages: string[]) { return `
@@ -47,7 +51,7 @@ console.log(JSON.stringify({format:core.CURRENT_FORMAT_VERSION,refused,counts,im
   for (const [id, data] of Object.entries(cases)) expect(await readFile(join(store, id + '.jsonl'), 'utf8')).toBe(data)
 }, 30000)
 
-it.each(['ready', 'header-only', 'stage-only', 'partial-header', 'upgrade-response-lost', 'upgrade-target-revoked', 'direct-upgrade', 'birth-conflict', 'unsupported-upgrade'] as const)('adopts genuine old11 %s with original initial work, immutable birth and current12 storage', async mode => {
+it.each(['ready', 'header-only', 'stage-only', 'partial-header', 'upgrade-response-lost', 'upgrade-target-revoked', 'direct-upgrade', 'birth-conflict', 'unsupported-upgrade'] as const)('adopts genuine old11 %s with original initial work, immutable birth and current storage', async mode => {
   const root = await fresh(), old = join(root, 'old'), receipt = await extractCurrentPredecessor(old, 11), store = join(root, 'store'); await mkdir(store)
   const lock = await provisionPredecessorLock(old)
   const wasReady = !['header-only', 'stage-only', 'partial-header'].includes(mode)
@@ -68,17 +72,28 @@ await c.close();console.log(JSON.stringify({request,kind:outcome.kind,reason:out
   expect(JSON.parse(before.subarray(0, before.indexOf(10)).toString()).formatVersion).toBe(11)
   let targetAvailable = true
   let cutUpgrade = mode === 'upgrade-response-lost'
-  let missingUpgrade = false
-  // The upgrade policy is bound before the canonical-path guard snapshots the
-  // backend descriptors; patching upgradeSessionFormat afterwards is refused.
+  let legacyUpgradeCalls = 0
+  let nativeUpgradePublications = 0
+  const native = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  if (mode === 'upgrade-response-lost' || mode === 'upgrade-target-revoked') {
+    vi.mocked(rename).mockImplementation(async (...args) => {
+      const result = await native.rename(...args)
+      if (String(args[1]) === path && String(args[0]).endsWith('.tmp')) {
+        nativeUpgradePublications++
+        if (mode === 'upgrade-target-revoked') targetAvailable = false
+        if (cutUpgrade) { cutUpgrade = false; throw new Error('lost original native upgrade publication acknowledgment') }
+      }
+      return result
+    })
+  }
+  // The native transition owns its retained stageOwnedUpgrade. The optional
+  // legacy header helper is not its publication or receipt boundary.
   const backend = createJsonlBackend(store, { wrap: b => {
     const actualUpgrade = b.upgradeSessionFormat!.bind(b)
     b.upgradeSessionFormat = async (...args) => {
-      if (missingUpgrade) throw new Error('upgrade capability unavailable')
-      const result = await actualUpgrade(...args)
-      if (mode === 'upgrade-target-revoked') targetAvailable = false
-      if (cutUpgrade) { cutUpgrade = false; throw Error('lost upgrade response') }
-      return result
+      legacyUpgradeCalls++
+      if (mode === 'unsupported-upgrade') throw new Error('legacy upgrade capability unavailable')
+      return actualUpgrade(...args)
     }
   } })
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
@@ -104,20 +119,17 @@ await c.close();console.log(JSON.stringify({request,kind:outcome.kind,reason:out
       expect(await readFile(path)).toEqual(before)
       await writeFile(join(store, stageName), stage)
     }
-    if (mode === 'unsupported-upgrade') {
-      missingUpgrade = true
-      expect((await coordinator.resumeSemanticTarget(original.request.invocation, guards, original.request)).kind).toBe('blocked')
-      expect(await readFile(path)).toEqual(before)
-      missingUpgrade = false
-    }
-    if (mode === 'direct-upgrade') await backend.upgradeSessionFormat!('target', 11, CURRENT_FORMAT_VERSION)
+    if (mode === 'direct-upgrade') expect(await coordinator.ensureWritableFormat!('target')).toEqual({ formatVersion: CURRENT_FORMAT_VERSION })
     if (mode === 'upgrade-response-lost' || mode === 'upgrade-target-revoked') {
       expect((await coordinator.resumeSemanticTarget(original.request.invocation, guards, original.request)).kind).toBe('blocked')
       expect(await readFile(join(store, stageName))).toEqual(stage)
+      expect(nativeUpgradePublications).toBe(1)
       targetAvailable = true
     }
     const resumed = await coordinator.resumeSemanticTarget(original.request.invocation, guards, original.request)
     expect(resumed.kind).toBe(wasReady ? 'already-ready' : 'ready')
+    if (mode === 'unsupported-upgrade') expect(legacyUpgradeCalls).toBe(0)
+    if (mode === 'upgrade-response-lost' || mode === 'upgrade-target-revoked') expect(nativeUpgradePublications).toBe(1)
     if (resumed.kind !== 'ready' && resumed.kind !== 'already-ready') throw Error(JSON.stringify(resumed))
     expect(resumed.document.view.events.filter(event => event.type === 'agent/input/admitted')).toHaveLength(1)
     expect(resumed.receipt.initial).toEqual({ inputId: 'original-input', seq: original.request.seed.records.length + 1, startedAt: 100, expiresAt: 100000 })

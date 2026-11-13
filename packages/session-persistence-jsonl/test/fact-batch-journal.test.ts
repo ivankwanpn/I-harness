@@ -618,14 +618,16 @@ it('keeps a successful fsync committed when file close cleanup fails, with no ro
   const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const native = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
-  let syncs = 0, truncates = 0, closes = 0
+  let syncs = 0, truncates = 0, closes = 0, failClose = true
+  const handles: Awaited<ReturnType<typeof native.open>>[] = []
   vi.mocked(open).mockImplementation(async (...args) => {
     const handle = await native.open(...args)
     if (String(args[0]) !== join(root, `${id}.jsonl`) || args[1] !== 'r+') return handle
+    handles.push(handle)
     return new Proxy(handle, { get(target, name) {
       if (name === 'sync') return async () => { syncs++; await target.sync() }
       if (name === 'truncate') return async (length: number) => { truncates++; await target.truncate(length) }
-      if (name === 'close') return async () => { closes++; await target.close(); throw new Error('controlled cleanup failure after known sync') }
+      if (name === 'close') return async () => { closes++; if(failClose)throw new Error('controlled cleanup failure before native close'); await target.close() }
       const value = Reflect.get(target, name)
       return typeof value === 'function' ? value.bind(target) : value
     } })
@@ -635,9 +637,16 @@ it('keeps a successful fsync committed when file close cleanup fails, with no ro
     expect([syncs, truncates, closes]).toEqual([1, 0, 1])
     expect(document.view.events).toEqual([{ type: 'plan/mode', mode: 'on', seq: 0 }])
     vi.mocked(open).mockImplementation(native.open)
+    await expect(document.close()).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+    expect(closes).toBe(2)
+    failClose = false
     await document.close(); await coordinator.releaseOwnership(id)
-    expect((await coordinator.openManagedDocument(id)).view.events).toEqual([{ type: 'plan/mode', mode: 'on', seq: 0 }])
-  } finally { vi.mocked(open).mockImplementation(native.open); await coordinator.close().catch(() => {}) }
+    expect([syncs, truncates, closes]).toEqual([1, 0, 3])
+    const reopened = await coordinator.openManagedDocument(id)
+    reopened.assertReady()
+    expect(reopened.view.events).toEqual([{ type: 'plan/mode', mode: 'on', seq: 0 }])
+    expect(() => document.assertReady()).toThrow('FACT_CLOSED')
+  } finally { failClose = false; vi.mocked(open).mockImplementation(native.open); await coordinator.close().catch(() => {}); await Promise.all(handles.map(async handle=>{if(handle.fd>=0)await handle.close()})) }
 })
 
 it('rejects cross-document and old-incarnation actual owner contexts despite identical empty prefixes', async () => {

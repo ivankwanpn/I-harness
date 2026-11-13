@@ -437,6 +437,7 @@ it('settles retained preparation cleanup before a new execute or explicit prepar
     vi.mocked(acquireSessionLock).mockImplementation(async options => {
       const raw = await nativeAcquire(options)
       selected ??= raw
+      if (raw !== selected) return raw
       return { get held() { return raw.held }, async release() { if (raw === selected) { attempts++; if (fault) throw new Error('prepare prerequisite release fault') }; await raw.release() } }
     })
     fault = true

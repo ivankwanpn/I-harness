@@ -332,9 +332,10 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
           if (!task) { task = open(scope); taskFields = Object.getOwnPropertyDescriptors(task); observeTask = method(task,'observe'); confirmTask = method(task,'confirm'); initializeTask = method(task,'stageInitialize'); settleTask = method(task,'settleResources') }
           held ??= heldFactOwner({ sessionId:id, incarnation:randomUUID() },ownership,createArtifactCurrentGuard(()=>claim!.assertHeld()))
           trackHeader(id,held); const retrying = attempted; if (retrying && hasHeaderDebt(id,held)) await settleHeader(id,held); if (retrying && proof && historyReader?.hasDebt()) await historyReader.retryResources(); if (retrying && !proof && historyReader) { await historyReader.settleResources(); historyReader = undefined }; attempted = true
+          observation ??= await observeTask!(); guard()
           if (!proof) {
             try {
-              if (published) proof = await observePublishedBootstrap!(scope,route,held,published.operation,published.seed)
+              if (published && observation.kind === 'present') proof = await observePublishedBootstrap!(scope,route,held,published.operation,published.seed)
               else if (mode === 'new') proof = await observeBootstrap(scope,route,held)
               else {
                 historyReader = mode === 'completed' ? openBootstrapHistory(scope,route,held) : openHistory(scope,held)
@@ -346,9 +347,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
             }
           }
           guard()
-          observation ??= await observeTask!(); guard()
-          if (published) {
-            if (observation.kind !== 'present') { taskConflict = true; throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED') }
+          if (published && observation.kind === 'present') {
             const expected = captureEmpty()
             if (validate(observation.value) !== undefined || canonicalJsonData(observation.value) !== canonicalJsonData(expected.value)) { taskConflict = true; throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED') }
             if (!confirmed) {

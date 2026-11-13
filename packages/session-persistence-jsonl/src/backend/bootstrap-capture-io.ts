@@ -1,7 +1,7 @@
 import { open, type FileHandle } from 'node:fs/promises'
 import { isHeldFactOwner, type HeldFactOwner } from '@i-harness/session-persistence'
 
-export type CaptureResource = { handle: FileHandle; error?: unknown; consumed?: boolean; closing?: Promise<void> }
+export type CaptureResource = { handle: FileHandle; closeOriginal: FileHandle['close']; error?: unknown; consumed?: boolean; closing?: Promise<void> }
 export type CaptureLedger = { id: string; owner: HeldFactOwner['owner']; pending: Set<Promise<unknown>>; handles: Set<CaptureResource>; settled: boolean; diagnostics: unknown[] }
 
 /** One instance per backend. Capture, headers and selected journals retain the
@@ -29,7 +29,7 @@ export function createBootstrapCaptureIO() {
   }
   async function acquire(ledger: CaptureLedger, path: string, flags: string): Promise<CaptureResource> {
     const handle = await open(path, flags)
-    const resource: CaptureResource = { handle }; ledger.handles.add(resource)
+    const resource: CaptureResource = { handle, closeOriginal: handle.close }; ledger.handles.add(resource)
     return resource
   }
   async function close(ledger: CaptureLedger, resource: CaptureResource): Promise<void> {
@@ -37,7 +37,7 @@ export function createBootstrapCaptureIO() {
     if (resource.closing) return resource.closing
     if (resource.consumed) throw resource.error
     const flight = (async () => {
-      try { await resource.handle.close(); ledger.handles.delete(resource); delete resource.error }
+      try { await Reflect.apply(resource.closeOriginal, resource.handle, []); ledger.handles.delete(resource); delete resource.error }
       catch (error) { resource.error = error; resource.consumed = resource.handle.fd < 0; throw error }
     })()
     resource.closing = flight
@@ -53,17 +53,33 @@ export function createBootstrapCaptureIO() {
       return value
     } finally { await close(ledger, resource) }
   }
-  async function settleBootstrapCaptureIO(id: string, owner: HeldFactOwner) {
-    scope(id, owner)
-    const ledger = ledgers.get(owner.owner)
-    if (!ledger || ledger.id !== id) throw new TypeError('Original capture IO owner required')
+  async function settleLedger(ledger: CaptureLedger) {
     while (ledger.pending.size) await Promise.allSettled([...ledger.pending])
     const results = await Promise.allSettled([...ledger.handles].map(resource => close(ledger, resource)))
-    scope(id, owner)
     const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
     if (errors.length) throw new AggregateError(errors, 'Original capture IO cleanup unresolved')
     ledger.settled = true
   }
-  return { scope, tracked, acquire, close, bytes, assertNoCleanupDebt, settleBootstrapCaptureIO }
+  function retainCleanup(id: string, owner: HeldFactOwner) {
+    scope(id, owner)
+    let ledger = ledgers.get(owner.owner)
+    if (!ledger) {
+      ledger = { id, owner: owner.owner, pending: new Set(), handles: new Set(), settled: true, diagnostics: [] }
+      ledgers.set(owner.owner, ledger)
+    }
+    if (ledger.id !== id) throw new TypeError('Original capture IO owner required')
+    const original = ledger
+    // Disposal of already-owned resources grants no new IO or history authority.
+    return Object.freeze({ settle: () => settleLedger(original), hasDebt: () => original.pending.size > 0 || original.handles.size > 0 })
+  }
+  async function settleBootstrapCaptureIO(id: string, owner: HeldFactOwner) {
+    scope(id, owner)
+    const ledger = ledgers.get(owner.owner)
+    if (!ledger || ledger.id !== id) throw new TypeError('Original capture IO owner required')
+    await settleLedger(ledger)
+    scope(id, owner)
+  }
+
+  return { scope, tracked, acquire, close, bytes, assertNoCleanupDebt, settleBootstrapCaptureIO, retainCleanup }
 }
 export type BootstrapCaptureIO = ReturnType<typeof createBootstrapCaptureIO>

@@ -21,7 +21,7 @@ import { upgradeFactJournal, stageOwnedUpgrade } from './backend/format-upgrade.
 import { createBootstrapHeaderBackend, bootstrapArtifacts } from './backend/bootstrap-header.ts'
 import { createPublicationOwner, publicationMarkerId } from './backend/publication.ts'
 import { bootstrapNamespace } from './backend/bootstrap-capture.ts'
-import { ordinaryStageIO } from './backend/bootstrap-stage.ts'
+import { ordinaryStageIO, bootstrapPathsForRoute } from './backend/bootstrap-stage.ts'
 import { createBootstrapCaptureIO } from './backend/bootstrap-capture-io.ts'
 import { resolveSelectedBirth, snapshotSelectedMetadataUpdate } from './backend/selected-birth.ts'
 import { createSelectedFactJournalBackend } from './backend/selected-fact-journal.ts'
@@ -36,7 +36,7 @@ import type { HeldTaskDocumentScope, TaskDocumentBackendSession, HeldFactOwner }
 
 // Only the original constructor below can associate a backend. Byte adapters
 // and callers with structurally identical objects cannot mint this identity.
-const processReadOwners = new WeakMap<object, { capability: ReturnType<typeof createJsonlProcessReadCapability>; assertOriginal(): void; openTask(scope: HeldTaskDocumentScope): TaskDocumentBackendSession; openTransitionTask(scope: HeldTaskDocumentScope): TaskTransitionBackendSession; stageCreateHeader(scope: HeldTaskDocumentScope, meta: SessionMeta, proof: Awaited<ReturnType<ReturnType<typeof createJsonlProcessReadCapability>['observeFreshTaskParent']>>): ReturnType<typeof stageOwnedSessionFile>; stageUpgradeHeader(scope: HeldTaskDocumentScope, proof: Awaited<ReturnType<ReturnType<ReturnType<typeof createJsonlProcessReadCapability>['openTaskHistory']>['observe']>>, held: HeldFactOwner): ReturnType<typeof stageOwnedUpgrade>; trackHeaderOwner(id: string, owner: HeldFactOwner): void; settleTrackedHeaderIO(id: string, owner: HeldFactOwner): Promise<void>; readTrackedState(route: BootstrapRoute, owner: HeldFactOwner): Promise<BootstrapReadState>; hasTrackedHeaderDebt(id: string, owner: HeldFactOwner): boolean; trackedStageIO(id: string, owner: HeldFactOwner): import('./backend/bootstrap-stage.ts').StageLookupIO; resolveTrackedBirth(id: string, owner: HeldFactOwner): ReturnType<ReturnType<typeof createBootstrapHeaderBackend>['resolveTrackedBirth']> }>()
+const processReadOwners = new WeakMap<object, { sessionPath(id:string):string; capability: ReturnType<typeof createJsonlProcessReadCapability>; assertOriginal(): void; openTask(scope: HeldTaskDocumentScope): TaskDocumentBackendSession; openTransitionTask(scope: HeldTaskDocumentScope): TaskTransitionBackendSession; stageCreateHeader(scope: HeldTaskDocumentScope, meta: SessionMeta, proof: Awaited<ReturnType<ReturnType<typeof createJsonlProcessReadCapability>['observeFreshTaskParent']>>): ReturnType<typeof stageOwnedSessionFile>; stageUpgradeHeader(scope: HeldTaskDocumentScope, proof: Awaited<ReturnType<ReturnType<ReturnType<typeof createJsonlProcessReadCapability>['openTaskHistory']>['observe']>>, held: HeldFactOwner): ReturnType<typeof stageOwnedUpgrade>; trackHeaderOwner(id: string, owner: HeldFactOwner): void; settleTrackedHeaderIO(id: string, owner: HeldFactOwner): Promise<void>; readTrackedState(route: BootstrapRoute, owner: HeldFactOwner): Promise<BootstrapReadState>; hasTrackedHeaderDebt(id: string, owner: HeldFactOwner): boolean; trackedStageIO(id: string, owner: HeldFactOwner): import('./backend/bootstrap-stage.ts').StageLookupIO; resolveTrackedBirth(id: string, owner: HeldFactOwner): ReturnType<ReturnType<typeof createBootstrapHeaderBackend>['resolveTrackedBirth']> }>()
 export function lookupJsonlProcessRead(backend: object) {
   const owner = processReadOwners.get(backend)
   if (!owner) return undefined
@@ -96,7 +96,18 @@ export function composeJsonlTaskTransitionCoordinator(backend: PersistenceBacken
           owner.assertOriginal(); scope.assertActive()
           const state = await owner.readTrackedState(route, held)
           scope.assertActive(); owner.assertOriginal()
-          return expected.check(state)
+          const io = owner.trackedStageIO(scope.parentSessionId,held)
+          const targetPath = owner.sessionPath(scope.parentSessionId)
+          const paths = bootstrapPathsForRoute(targetPath,route)
+          const namespace = await io.namespace()
+          const allowed = [basename(paths.stage), basename(paths.publish)]
+          if (namespace.some(name => !allowed.includes(name))) throw new Error('Retained bootstrap namespace conflict')
+          const limit = Math.max(HEADER_READ_MAX_BYTES, operation.headerBytes.byteLength + (seed?.byteLength ?? 0) + 1)
+          const target = await io.read(targetPath,limit)
+          const actualStage = await io.read(paths.stage,262144)
+          const publication = await io.read(paths.publish,65536)
+          io.assertCurrent()
+          return expected.check(state,target,actualStage,publication)
         })
       }, openHistory(scope, held) {
         owner.assertOriginal()
@@ -300,7 +311,7 @@ export function createJsonlBackend(root: string, options?: {
     return serializeHeader({ ...meta, journal }) + '\n'
   }
   const { trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth, ...bootstrapBackend } = createBootstrapHeaderBackend(filePath, assertLegacyNativeAdmission, rootPath, captureIO, publication)
-  const factJournal = createFactJournalBackend(filePath, assertLegacyNativeAdmission, Object.freeze({ filePath, assertNotDeleted: assertLegacyNativeAdmission, enter: (id, owner, batch) => nativePrewrite.enter(id, owner, batch) }), publication)
+  const factJournal = createFactJournalBackend(filePath, assertLegacyNativeAdmission, Object.freeze({ filePath, assertNotDeleted: assertLegacyNativeAdmission, enter: (id, owner, batch) => nativePrewrite.enter(id, owner, batch) }), publication, captureIO)
   const wrappedAppend = options?.wrapOwnedBatch !== undefined && factJournal.appendOwnedBatch !== undefined
     ? options.wrapOwnedBatch(factJournal.appendOwnedBatch) : undefined
   const wrappedReconcile = options?.wrapOwnedReconcile !== undefined && factJournal.reconcileOwnedBatch !== undefined
@@ -674,7 +685,7 @@ export function createJsonlBackend(root: string, options?: {
   const assertOriginal = artifactOwner.assertOriginal
 
   associateArchiveReadResources(backend,archiveReads.association)
-  nativePrewrite.associate(backend, assertOriginal)
+  nativePrewrite.associate(backend, assertOriginal, captureIO.retainCleanup)
   associateOwnedExecutionReader(backend,{assertOriginal,filePath,assertNotDeleted,archive:archiveReads,
     register(id,held){trackHeaderOwner(id,held);if(hasTrackedHeaderDebt(id,held))throw Error('Owned dependency birth cleanup unresolved')},
     qualify:(id,held,prefix)=>assertPublicBootstrap(id,false,prefix,trackedStageIO(id,held)),
@@ -703,7 +714,7 @@ export function createJsonlBackend(root: string, options?: {
     return session
   }
   processReadOwners.set(backend, {
-    capability, assertOriginal, trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth,
+    sessionPath: filePath, capability, assertOriginal, trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth,
     openTask(scope) { return openOwnedTask(scope, false) },
     openTransitionTask(scope) { return openOwnedTask(scope, true) as TaskTransitionBackendSession },
     stageUpgradeHeader(scope, proof, held) {

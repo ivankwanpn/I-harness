@@ -1,3 +1,4 @@
+import { retainManagedJournalCleanup, settleManagedJournalCleanup } from '../native-fact-writer-internal.ts'
 import {associateArtifactCurrentnessReader,createArtifactCurrentGuard,isArtifactCurrentGuard,withImmediateArtifactCurrentChecks} from './artifact-path-association.ts'
 import {runOriginalCurrentnessRead} from '../../../core-session/src/managed/currentness-guards.ts'
 import { hasArchiveHistoryPrefixReader } from '../archive-read-internal.ts'
@@ -35,10 +36,41 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
   function bindRestored(entry:ManagedEntry,document:ManagedDocument){const restored=restoredEntries.get(entry);if(restored&&!restoredBindings.has(document)){bindManagedRestoredStage(document,ownership,restored.stage);restoredBindings.add(document)}}
   const resolved = new Map<string, ReturnType<typeof createManagedDocument>>()
   const documentEntries = new WeakMap<object, { id: string; entry: ManagedEntry }>()
+  const hasJournalDebt = (entry: ManagedEntry) => [...(entry.journalCleanup?.values() ?? [])].some(scope => scope.hasDebt())
+  function primeJournalMutation(id: string, entry: ManagedEntry) {
+    if (!processLatches) return
+    const original = entry.journalMutation ??= {
+      token: processLatches.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'}),
+      users: 0,
+      unknown: false,
+      finished: false,
+    }
+    return original
+  }
+  function beginJournalMutation(id: string, entry: ManagedEntry) {
+    const original = primeJournalMutation(id, entry)
+    if (!original) return
+    original.users++
+    return original
+  }
+  function finishJournalMutation(entry: ManagedEntry, original: ManagedEntry['journalMutation'], outcome: 'settled' | 'unknown') {
+    if (!original) return
+    if (entry.journalMutation !== original || original.users <= 0) throw new Error('Original journal mutation required')
+    original.users--
+    completeJournalMutation(entry,original,outcome)
+  }
+  function completeJournalMutation(entry: ManagedEntry, original: NonNullable<ManagedEntry['journalMutation']>, outcome: 'settled' | 'unknown') {
+    const debt = hasJournalDebt(entry)
+    if (outcome === 'unknown' && !debt) original.unknown = true
+    if (original.users || debt) return
+    original.token.end(original.unknown ? 'unknown' : 'settled')
+    original.finished = true
+    entry.journalMutation = undefined
+  }
   function attach(id:string,entry:ManagedEntry,session:Session|undefined,prefix:JournalPrefix,execution?:Parameters<typeof createManagedDocument>[11]) {
     if(entry.document)return entry.document
     const document=createManagedDocument(id,session,prefix,backend,ownership,options,report,
-      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : entry.selected ? {operationId:entry.selected.route.request.invocation.operationId,selected:true,bind(control){entry.control=control}} : undefined, processLatches, () => assertTaskOutside(id), executionChanges,execution)
+      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : entry.selected ? {operationId:entry.selected.route.request.invocation.operationId,selected:true,bind(control){entry.control=control}} : undefined, processLatches, () => assertTaskOutside(id), executionChanges,execution,entry.journalCleanup ??= new Map())
     entry.document=document
     if(!execution)bindRestored(entry,document)
     documentEntries.set(document,{id,entry})
@@ -54,20 +86,22 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       bootstrap.assertOutsideCapture(id)
       if(closeComplete)return
       if(closeFlight)return closeFlight
-      const token=entry.selected?.cold&&entry.selected.processToken ? undefined : processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
+      let token=entry.selected?.cold&&entry.selected.processToken ? undefined : beginJournalMutation(id,entry)
       let outcome:'settled'|'unknown'='unknown'
       const flight=(async()=>{
         try {
           markManagedEntryRevoked(entry)
           revokeAttached()
           await entry.flight?.catch(()=>{})
+          await settleManagedJournalCleanup(entry.journalCleanup)
           await bootstrap.settleCapture(entry)
           if(entry.headerUnknown)throw new FactRecoveryRequiredError()
           await bootstrap.settlePendingFacts(entry)
-          const cleanup=await Promise.allSettled([restoredEntries.get(entry)?.close(),(async()=>{await revokeTaskOperations(id);await close()})()]);const errors=cleanup.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(errors.length)throw aggregateErrors(errors,'Managed restored read/document cleanup unresolved');await bootstrap.releaseCapture(entry)
-          if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)}
+          const cleanup=await Promise.allSettled([restoredEntries.get(entry)?.close(),(async()=>{await revokeTaskOperations(id);await close()})()]);const errors=cleanup.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(errors.length)throw aggregateErrors(errors,'Managed restored read/document cleanup unresolved');await settleManagedJournalCleanup(entry.journalCleanup);await bootstrap.releaseCapture(entry)
+          finishJournalMutation(entry,token,'settled');token=undefined
+          if(documents.get(id)===entry&&!entry.journalMutation){documents.delete(id);resolved.delete(id)}
           outcome='settled';closeComplete=true
-        }finally{token?.end(outcome)}
+        }finally{finishJournalMutation(entry,token,outcome)}
       })().finally(()=>{if(closeFlight===flight)closeFlight=undefined})
       closeFlight=flight
       return flight
@@ -86,21 +120,31 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     const attachedDocument=()=>entry.document
     if(entry.document){await entry.document.close();return}
     // Retain the original cold fence across failed cleanup instead of poisoning it.
-    const token=entry.selected?.cold&&entry.selected.processToken ? undefined : processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
+    let token=entry.selected?.cold&&entry.selected.processToken ? undefined : beginJournalMutation(id,entry)
     let outcome:'settled'|'unknown'='unknown'
     try {
     revokeManagedEntry(entry);await entry.flight?.catch(()=>{});await restoredEntries.get(entry)?.close()
     // The opening flight may have attached this exact entry while close waited.
     const attached=attachedDocument()
-    if(attached){await attached.close();outcome='settled';return}
+    if (attached) {
+      await attached.close()
+      finishJournalMutation(entry,token,'settled')
+      token=undefined
+      if(documents.get(id)===entry&&!entry.journalMutation){documents.delete(id);resolved.delete(id)}
+      outcome='settled'
+      return
+    }
+    await settleManagedJournalCleanup(entry.journalCleanup)
     await executions.get(entry)?.source.close()
     await bootstrap.settleCapture(entry)
     if(entry.headerUnknown)throw new FactRecoveryRequiredError()
     await bootstrap.settlePendingFacts(entry)
+    await settleManagedJournalCleanup(entry.journalCleanup)
     if(entry.selected)await bootstrap.releaseSelected(entry.selected.route,entry.selected.identity);else await bootstrap.releaseCapture(entry)
-    if(documents.get(id)===entry)documents.delete(id)
+    finishJournalMutation(entry,token,'settled');token=undefined
+    if(documents.get(id)===entry&&!entry.journalMutation)documents.delete(id)
     outcome='settled'
-    } finally { token?.end(outcome) }
+    } finally { finishJournalMutation(entry,token,outcome) }
   }
   const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations,processLatches,transitions,(id,entry)=>{if(documents.get(id)!==entry||!entry.ready||!entry.document)throw new FactRecoveryRequiredError();resolved.set(id,entry.document)},(id,entry)=>{if(documents.get(id)!==entry||entry.ready||!entry.document||entry.revoked)throw new FactRecoveryRequiredError();const document=entry.document;return ()=>{resolved.set(id,document)}})
   function materializeExecution(id:string,existing:ManagedEntry):Promise<ReturnType<typeof createManagedDocument>>{
@@ -117,6 +161,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       const archive = await backend.read(id)
       original.assertCurrent()
       original.held.assertHeld()
+      retainManagedJournalCleanup(existing.journalCleanup ??= new Map(), backend, id, original.held)
       const actual = await backend.readJournalPrefix!(id, original.held)
       original.assertCurrent()
       document.assertObservable()
@@ -232,6 +277,19 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     async assertObservable(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;entry?.document?.assertObservable()},
     async snapshot(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;if(entry&&executions.has(entry)&&entry.document&&!Object.hasOwn(entry.document,'view'))await materializeExecution(id,entry);entry?.document?.assertObservable();return entry?.document?.view},
     closeOne,
+    borrowJournalRetirement(id: string) {
+      assertTaskOutside(id)
+      bootstrap.assertOutsideCapture(id)
+      const entry = documents.get(id)
+      if (!entry || (entry.selected?.cold && entry.selected.processToken)) return
+      const original = primeJournalMutation(id, entry)
+      if (!original) return
+      return Object.freeze({ end(outcome: 'settled' | 'unknown') {
+        if (original.finished) return
+        if (documents.get(id) !== entry || entry.journalMutation !== original) throw new Error('Original journal retirement required')
+        completeJournalMutation(entry,original,outcome)
+      } })
+    },
     async acquireRestoredContext(id:string):Promise<ManagedRestoredContextRead>{
       if(!transitions||!ownership.lockEnabled||!hasArchiveHistoryPrefixReader(backend))throw Object.assign(new Error('Owned restoration source unavailable'),{code:'FACT_OWNER_UNSUPPORTED'})
       let entry=documents.get(id);assertEntry(entry)
@@ -256,23 +314,51 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       const existing=documents.get(id)
       if(existing&&executions.has(existing))return materializeExecution(id,existing)
       if(existing){try{assertEntry(existing)}catch(error){return Promise.reject(error)}
-        if(restoredEntries.has(existing)&&!existing.document){const prior=existing.flight;const operation=(async()=>{await prior;const {session}=await loadOwned(id);return ownership.withSessionOperation(id,async()=>{if(documents.get(id)!==existing||existing.revoked)throw new FactRecoveryRequiredError();const prefix=await backend.readJournalPrefix!(id,heldFactOwner({sessionId:id,incarnation:'restored-compatibility'},ownership,()=>{}));return attach(id,existing,session,prefix)})})();existing.flight=operation;return operation}
+        if (restoredEntries.has(existing) && !existing.document) {
+          const prior = existing.flight
+          const operation = (async () => {
+            await prior
+            const { session } = await loadOwned(id)
+            return ownership.withSessionOperation(id, async () => {
+              if (documents.get(id) !== existing || existing.revoked) throw new FactRecoveryRequiredError()
+              const held = heldFactOwner({sessionId:id,incarnation:'restored-compatibility'},ownership,()=>{})
+              retainManagedJournalCleanup(existing.journalCleanup ??= new Map(), backend, id, held)
+              const prefix = await backend.readJournalPrefix!(id, held)
+              return attach(id, existing, session, prefix)
+            })
+          })()
+          existing.flight = operation
+          return operation
+        }
         return existing.flight ? existing.flight.then(()=>existing.document!) : Promise.resolve(existing.document!)}
-      let token=transitions ? undefined : processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
       const entry:ManagedEntry={};documents.set(id,entry)
+      let token=transitions ? undefined : beginJournalMutation(id,entry)
       const operation=(async()=>{
         const {session}=await loadOwned(id)
-        if (transitions) token=processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
+        if (transitions) token=beginJournalMutation(id,entry)
         return ownership.withSessionOperation(id,async()=>{
           ownership.assertHeld(id)
-          const prefix=await backend.readJournalPrefix!(id,heldFactOwner({sessionId:id,incarnation:'cold-recovery'},ownership,()=>{}))
+          const held=heldFactOwner({sessionId:id,incarnation:'cold-recovery'},ownership,()=>{})
+          retainManagedJournalCleanup(entry.journalCleanup ??= new Map(),backend,id,held)
+          const prefix=await backend.readJournalPrefix!(id,held)
           if(prefix.eventCount!==session.events.length)throw new Error('Managed recovery archive mismatch')
           const birth=await backend.bootstrapRoutes?.resolveBirth?.(id)
           if(birth)entry.route=captureBootstrapRoute(birth.route)
           return attach(id,entry,session,prefix)
         })
       })()
-      const tracked=operation.then(document=>{token?.end('settled');return document},error=>{token?.end('unknown');if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)};throw error})
+      const tracked = operation.then(document => {
+        finishJournalMutation(entry,token,'settled')
+        return document
+      }, error => {
+        finishJournalMutation(entry,token,'unknown')
+        const hasCleanup = hasJournalDebt(entry)
+        if (documents.get(id) === entry && !hasCleanup) {
+          documents.delete(id)
+          resolved.delete(id)
+        }
+        throw error
+      })
       entry.flight=tracked
       return tracked
     },
