@@ -98,7 +98,8 @@ it('original access/pin/operation metadata mismatches deny with calibrated zero 
   } finally { io.stop(); await f.close() }
 })
 
-it.each(['body', 'index', 'manifest.json', 'operation.json', 'access', 'pins'] as const)('preexisting fixture link at %s denies before opening content', async file => {
+for (const file of ['body', 'index', 'manifest.json', 'operation.json', 'access', 'pins'] as const) {
+it(`preexisting fixture link at ${file} denies before opening content`, async context => {
   const f = await fixture(`linked-${file}`)
   try {
     const saved = await commit(f.service, 'linked', Buffer.from('native linked control')); await f.reopen()
@@ -106,13 +107,19 @@ it.each(['body', 'index', 'manifest.json', 'operation.json', 'access', 'pins'] a
     io.reset(); expect(await readManagedResultPage(f.service, { sessionId: 'owner' }, { ref: saved.ref })).toMatchObject({ data: { kind: 'text' } }); expect(contentOpens()).toHaveLength(2); io.stop()
     const path = resolve(f.directory(saved.ref), file), sibling = resolve(f.root, `outside-${file}`)
     await contained(f.root, path); await contained(f.root, sibling); await rename(path, sibling)
-    await symlink(sibling, path, file === 'access' || file === 'pins' ? 'junction' : 'file')
+    try { await symlink(sibling, path, file === 'access' || file === 'pins' ? 'junction' : 'file') }
+    catch (cause) {
+      if (process.platform === 'win32' && file !== 'access' && file !== 'pins' && (cause as NodeJS.ErrnoException).code === 'EPERM')
+        context.skip('Windows file symlink privilege is unavailable, confirmed by the actual fixture link creation')
+      throw cause
+    }
     const before = await inventory(f.root); io.reset()
     const actual = await readManagedResultPage(f.service, { sessionId: 'owner' }, { ref: saved.ref })
     expect(actual).toMatchObject({ kind: 'unavailable' }); expect(contentOpens()).toHaveLength(0); io.stop()
     expect(await inventory(f.root)).toEqual(before)
   } finally { io.stop(); await f.close() }
 })
+}
 
 it.each(['body', 'index'] as const)('discards actual held read after same-length fixture %s identity replacement', async file => {
   const f = await fixture(`held-${file}`), entered = Promise.withResolvers<void>(), released = Promise.withResolvers<void>()

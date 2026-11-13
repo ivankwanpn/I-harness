@@ -252,17 +252,29 @@ it('refuses a redirected publication namespace in an already-open store before o
   } finally { await f.close() }
 })
 
-it('refuses actual target clear without overwriting a symlinked outside inactive disposition', async () => {
-  const f = await legacyFixture(), outside = await mkdtemp(join(tmpdir(), 'ih-l1-clear-outside-'))
+it('refuses actual target clear without overwriting a symlinked outside inactive disposition', async context => {
+  const outside = await mkdtemp(join(tmpdir(), 'ih-l1-clear-outside-'))
+  let f: Awaited<ReturnType<typeof legacyFixture>> | undefined
   try {
+    const protectedFile = join(outside, 'original'), probeLink = join(outside, 'file-link-probe')
+    await writeFile(protectedFile, 'owned file symlink probe')
+    try { await symlink(protectedFile, probeLink, 'file') }
+    catch (cause) {
+      if (process.platform === 'win32' && (cause as NodeJS.ErrnoException).code === 'EPERM')
+        context.skip('Windows file symlink privilege is unavailable, confirmed by an actual owned-file probe before fork setup')
+      throw cause
+    }
+    await unlink(probeLink)
+    f = await legacyFixture()
     expect((await f.run()).kind).toBe('ready')
     const directory = join(f.root, 'context-output', createHash('sha256').update('workspace').digest('hex')), transfers = join(directory, 'legacy-fork-v1'), plan = join(transfers, (await readdir(transfers))[0]!)
-    const bytes = await readFile(join(plan, 'revoke.1')), protectedFile = join(outside, 'original'), owners = await readFile(join(directory, 'owners', f.visible.id + '.json'))
-    await writeFile(protectedFile, bytes); await unlink(join(plan, 'revoke.1')); await symlink(protectedFile, join(plan, 'revoke.1'), 'file')
+    const bytes = await readFile(join(plan, 'revoke.1')), owners = await readFile(join(directory, 'owners', f.visible.id + '.json'))
+    await writeFile(protectedFile, bytes); await unlink(join(plan, 'revoke.1'))
+    await symlink(protectedFile, join(plan, 'revoke.1'), 'file')
     await expect(f.service().clear('target')).rejects.toThrow()
     expect(await readFile(protectedFile)).toEqual(bytes)
     expect(await readFile(join(directory, 'owners', f.visible.id + '.json'))).toEqual(owners)
-  } finally { await f.close() }
+  } finally { await f?.close() }
 })
 
 it.each(['unchanged', 'changed', 'closed', 'lost'])('qualifies the actual %s original witness inside its live host lifetime after a committed page prefix', async kind => {

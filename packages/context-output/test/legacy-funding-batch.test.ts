@@ -115,10 +115,10 @@ cases.forEach(({ name, distinct, observations }) => it(`aggregate-funding ${name
 }, 120000))
 
 type Fixture = Awaited<ReturnType<typeof legacyFixture>>
-type ControlState = { restore: (() => void)[]; expectedClose?: unknown; batchFailure?: unknown; unavailableInventory?: boolean; evidence?: Record<string, unknown> }
+type ControlState = { restore: (() => void)[]; expectedClose?: unknown; batchFailure?: unknown; unavailableInventory?: boolean; evidence?: Record<string, unknown>; skipReason?: string }
 function includesFailure(actual: unknown, wanted: unknown): boolean { return actual === wanted || actual instanceof AggregateError && actual.errors.some(error => includesFailure(error, wanted)) }
 function control(name: string, work: (f: Fixture, directory: string, state: ControlState) => Promise<void>, options: Parameters<typeof legacyFixture>[0] = {}) {
-  it(name, async () => {
+  it(name, async context => {
     const failures: unknown[] = [], state: ControlState = { restore: [] }, record: Record<string, unknown> = { name }
     let fixture: Fixture | undefined
     const receipts = process.env.IH_FUNDING_RECEIPTS ?? join(tmpdir(), 'ih-funding-receipts')
@@ -132,7 +132,7 @@ function control(name: string, work: (f: Fixture, directory: string, state: Cont
     finally {
       fundingHooks.open = undefined; fundingHooks.batch = undefined; fundingHooks.afterRename = undefined; fundingHooks.recovery = undefined; fundingHooks.hash = undefined; fundingHooks.nativeStat = undefined
       for (const restore of state.restore.reverse()) restore()
-      record.evidence = state.evidence; record.observer = lastFundingReceipt; record.batchFailure = state.batchFailure instanceof Error ? { message: String(state.batchFailure), stack: state.batchFailure.stack, errors: state.batchFailure instanceof AggregateError ? state.batchFailure.errors.map(String) : [] } : String(state.batchFailure)
+      record.evidence = state.evidence; record.skipped = state.skipReason; record.observer = lastFundingReceipt; record.batchFailure = state.batchFailure instanceof Error ? { message: String(state.batchFailure), stack: state.batchFailure.stack, errors: state.batchFailure instanceof AggregateError ? state.batchFailure.errors.map(String) : [] } : String(state.batchFailure)
       if (fixture) {
         for (const [name, close] of [['service', () => fixture!.service().close()], ['broker', () => fixture!.broker().close()], ['coordinator', () => fixture!.coordinator().close()]] as const) {
           try { await close(); record[name + 'Close'] = 'original close resolved' } catch (failure) { record[name + 'CloseFailure'] = String(failure); if (!state.expectedClose || !includesFailure(failure, state.expectedClose)) failures.push(failure) }
@@ -141,6 +141,7 @@ function control(name: string, work: (f: Fixture, directory: string, state: Cont
       try { await mkdir(receipts, { recursive: true }); await writeFile(join(receipts, name.replaceAll(/[^a-z0-9-]/g, '-') + '.json'), JSON.stringify(record, null, 2)) } catch (failure) { failures.push(failure) }
     }
     failuresTogether(failures, 'Funding control and original cleanup failed')
+    if (state.skipReason) context.skip(state.skipReason)
   }, 120000)
 }
 async function denied(f: Fixture, directory: string) {
@@ -335,6 +336,16 @@ for (const type of ['terminal-root', 'torn-expiry', 'outside-hardlink', 'outside
   state.unavailableInventory = type === 'outside-symlink' || type === 'outside-junction'
   const outside = join(f.root, 'outside.bin'), protectedBytes = Buffer.alloc(31, 42)
   await writeFile(outside, protectedBytes)
+  if (type === 'outside-symlink') {
+    const probeLink = join(f.root, 'outside-file-link-probe')
+    try { await symlink(outside, probeLink, 'file') }
+    catch (cause) {
+      if (process.platform !== 'win32' || (cause as NodeJS.ErrnoException).code !== 'EPERM') throw cause
+      state.skipReason = 'Windows file symlink privilege is unavailable, confirmed by an actual owned-file probe before funding'
+      return
+    }
+    await unlink(probeLink)
+  }
   fundingHooks.batch = async (store, args, invoke) => {
     const root = args[4], operation = join(directory, 'legacy-fork-v1', recordHash('binding', root.binding.invocation)), base = join(operation, 'revoke')
     if (type === 'outside-hardlink') await link(outside, base + '.0')

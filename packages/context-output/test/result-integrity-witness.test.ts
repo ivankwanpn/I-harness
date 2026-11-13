@@ -58,13 +58,20 @@ it('calibrates selected companion metadata, both policies and zero catalog body 
   } finally { io.stop(); await f.close() }
 })
 
-it.each(['file', 'document', 'memberships'] as const)('rejects fixture companion %s links before content and preserves foreign bytes', async component => {
+for (const component of ['file', 'document', 'memberships'] as const) {
+it(`rejects fixture companion ${component} links before content and preserves foreign bytes`, async context => {
   const f = await witnessFixture()
   try {
     io.reset(); expect(await f.read()).toMatchObject({ frames: [{ data: 'eA==' }] }); expect(contentReads().length).toBeGreaterThan(0); io.stop()
     const path = component === 'file' ? f.path : component === 'document' ? resolve(f.path, '..') : resolve(f.path, '../..')
     const sibling = resolve(f.root, 'outside-companion')
-    await contained(f.root, path); await contained(f.root, sibling); await rename(path, sibling); await symlink(sibling, path, component === 'file' ? 'file' : 'junction')
+    await contained(f.root, path); await contained(f.root, sibling); await rename(path, sibling)
+    try { await symlink(sibling, path, component === 'file' ? 'file' : 'junction') }
+    catch (cause) {
+      if (process.platform === 'win32' && component === 'file' && (cause as NodeJS.ErrnoException).code === 'EPERM')
+        context.skip('Windows file symlink privilege is unavailable, confirmed by the actual fixture link creation')
+      throw cause
+    }
     const before = await inventory(f.root); io.reset()
     await expect(f.read()).rejects.toThrow(/path/); expect(contentOpens()).toHaveLength(0); io.stop()
     expect(await inventory(f.root)).toEqual(before)
@@ -76,6 +83,7 @@ it.each(['file', 'document', 'memberships'] as const)('rejects fixture companion
     }
   } finally { io.stop(); await f.close() }
 })
+}
 
 it('discards verified frame page when its selected companion changes after actual body I/O without repairing it', async () => {
   const f = await witnessFixture()
