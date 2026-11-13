@@ -32,6 +32,39 @@ function terminal(tasks: ReturnType<typeof createTaskRegistry>, text: string) {
   tasks.terminalize({taskId:task.id,outcome:'completed',resultText:text})
   return task
 }
+it.each([1,2] as const)('strictly saves owned live full presentation without a body producer in Task%s',async version=>{
+  const root=await mkdtemp(join(tmpdir(),'legacy-task2-owned-'))
+  const coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+  let tasks:ReturnType<typeof createTaskRegistry>|undefined
+  try {
+    await coordinator.create({sessionId:'parent'})
+    await coordinator.putDocumentStrict!('task-parent',{formatVersion:version,tasks:[],notifications:[]})
+    const document=await coordinator.openManagedDocument('parent')
+    const ownedTask=captureOwnedTaskContext(coordinator,document,document.view,'parent')!
+    tasks=createTaskRegistry({coordinator,stateId:'parent',ownedTask,reportPolicy:SHIPPING_REPORT_POLICY})
+    await tasks.ready
+    const task=tasks.submit({identity:{parentSessionId:'parent'},agentPath:'root/owned',description:'full body',prompt:'unused',agent:'general',delivery:'tool'})
+    await tasks.flushPersistence()
+    const body='original full cancellation body 中文🙂'.repeat(100)
+    tasks.terminalize({taskId:task.id,outcome:'cancelled',error:body})
+    await tasks.retainResult(task.id)
+    await tasks.flushPersistence()
+    expect(task.retention).toBe('durable')
+    expect(task.result).toBeUndefined()
+    expect(task.legacyFormatVersion).toBeUndefined()
+    const saved=await coordinator.getDocument('task-parent') as TaskProtocolDocument
+    expect(saved.formatVersion).toBe(version)
+    expect(saved.tasks[0]).toMatchObject({outcome:'cancelled',error:body})
+    expect(saved.tasks[0]!.result).toBeUndefined()
+    expect(lastOriginalTaskSave(tasks)?.outcome()).toMatchObject({kind:'committed',cleanupPending:false})
+  } finally {
+    await tasks?.closeOwnedLoad()
+    await coordinator.close()
+    const target=resolve(root)
+    if(dirname(target)!==resolve(tmpdir())||!basename(target).startsWith('legacy-task2-owned-'))throw Error('Unsafe owned fixture cleanup')
+    await rm(target,{recursive:true,force:true})
+  }
+})
 it('preserves empty Task2 storage while a live legacy parent strictly retains full presentation',async()=>{
   const {tasks,writes}=legacyStrict()
   tasks.restore({formatVersion:2,tasks:[],notifications:[]})

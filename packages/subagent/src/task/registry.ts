@@ -179,7 +179,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     if (!task) throw new Error(`unknown task: ${taskId}`)
     // Require captured bodies from compositions that own a body producer.
     // Legacy memory parents persist full presentation in the strict document.
-    const capturesBody = ownedTask !== undefined || resultOwner !== undefined
+    const capturesBody = resultOwner !== undefined
     if (!task.result && (task.publication === 'unqualified' || capturesBody && task.legacyFormatVersion !== 1)) {
       throw new Error('Retained task body incomplete')
     }
