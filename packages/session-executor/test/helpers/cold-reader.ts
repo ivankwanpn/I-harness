@@ -11,7 +11,7 @@ import type { ModelClient } from "@i-harness/llm-seam"
  * controlled, so the same overlap can exercise recovering and immutable reads. */
 export async function coldReaderFixture() {
   const root = await mkdtemp(join(tmpdir(), "ih-cold-reader-")), store = join(root, "sessions"), id = "owned"
-  const coordinator = createSessionCoordinator(createJsonlBackend(store), { maxDelayMs: 60_000, lock: { enabled: process.platform === "win32", lockRoot: store } })
+  const coordinator = createSessionCoordinator(createJsonlBackend(store), { maxDelayMs: 60_000, lock: { enabled: true, lockRoot: store } })
   await coordinator.create({ sessionId: id })
   const entered = Promise.withResolvers<void>(), releaseRead = Promise.withResolvers<void>(), streaming = Promise.withResolvers<void>(), releaseModel = Promise.withResolvers<void>()
   let first = true, turn: Promise<void> | undefined
@@ -25,22 +25,33 @@ export async function coldReaderFixture() {
     await releaseRead.promise
     return immutable ? captured! : read()
   }
+  // Observe only the readonly method on the actual owner. The service keeps
+  // the original coordinator identity for execution and writer capabilities.
+  const snapshotDescriptor = Object.getOwnPropertyDescriptor(coordinator, 'snapshot')
+  const originalSnapshot = coordinator.snapshot?.bind(coordinator)
+  if (!snapshotDescriptor || !originalSnapshot) throw Error('Original readonly snapshot unavailable')
+  coordinator.snapshot = sessionId => inspect(() => originalSnapshot(sessionId), true)
+  const restoreSnapshot = () => Object.defineProperty(coordinator, 'snapshot', snapshotDescriptor)
   const observed = { ...coordinator,
     load: (sessionId: string) => inspect(() => coordinator.load(sessionId), false),
     loadOwned: (sessionId: string) => inspect(() => coordinator.loadOwned(sessionId), false),
-    snapshot: (sessionId: string) => inspect(() => coordinator.snapshot!(sessionId), true),
+    snapshot: (sessionId: string) => coordinator.snapshot!(sessionId),
   }
   const model: ModelClient = controlledModel(async function* () {
     yield { type: "reasoning", text: "Owned live reasoning" }
     streaming.resolve(); await releaseModel.promise
     yield { type: "text/chunk", text: "Owned result" }; yield { type: "end" }
   })
-  const service = createSessionService({ workspace: root, coordinator: observed, sandbox: "read-only", sessionFor: createDurableSessionLoader(observed),
+  const service = createSessionService({ workspace: root, coordinator, sandbox: "read-only", sessionFor: createDurableSessionLoader(coordinator),
     modelBindingFor: async () => ({ status: "ready", binding: { model, providerId: "owned", modelId: "held", label: "Owned fixture", contextWindow: 100_000 } }) })
   return { root, store, id, coordinator, observed, service, entered: entered.promise, releaseRead: releaseRead.resolve,
     contents: () => readFile(join(store, `${id}.jsonl`), "utf8"),
-    async startTurn() { turn = service.submit(id, "Owned prompt", new AbortController().signal); await streaming.promise; await coordinator.flush(id) },
+    async startTurn() {
+      turn = service.submit(id, "Owned prompt", new AbortController().signal)
+      await Promise.race([streaming.promise,turn.then(()=>{throw Error('Original turn completed before its controlled model gate')})])
+      await coordinator.flush(id)
+    },
     async finishTurn() { releaseModel.resolve(); await turn; await coordinator.flush(id) },
-    async close() { releaseRead.resolve(); releaseModel.resolve(); await turn?.catch(() => {}); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) },
+    async close() { releaseRead.resolve(); releaseModel.resolve(); await turn?.catch(() => {}); await service.close(); await coordinator.close(); restoreSnapshot(); await rm(root, { recursive: true, force: true }) },
   }
 }

@@ -357,16 +357,16 @@ it('retries the same original entry disposer after failure rather than adopting 
   } finally { fail = false; f.entry.dispose = original; await f.close() }
 })
 
-it('reports a terminal followup chain failure once while finishing independent entry cleanup', async () => {
+it.each([undefined,null,false,0,'',new Error('ordinary chain failed')])('reports ordinary terminal chain failure %j once while finishing independent entry cleanup', async cause => {
   const f = await harness({ resident: true })
   let disposals = 0
-  f.entry.followupChain = Promise.reject(false)
+  f.entry.followupChain = Promise.reject(cause)
   void f.entry.followupChain.catch(() => {})
   f.entry.dispose = async () => { disposals++; await f.document.close() }
   try {
     const failure = await f.sub.dispose().then(() => undefined, error => error)
     expect(failure).toBeInstanceOf(AggregateError)
-    expect(failure.errors.some((error: unknown) => error instanceof AggregateError && error.errors.includes(false))).toBe(true)
+    expect(failure.errors.some((error: unknown) => error instanceof AggregateError && error.errors.includes(cause))).toBe(true)
     expect(disposals).toBe(1)
     await f.sub.dispose()
     expect(disposals).toBe(1)

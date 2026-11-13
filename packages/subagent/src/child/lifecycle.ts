@@ -140,12 +140,13 @@ export async function publishChild(
       if(!hasRequiredOriginalSpawn(opts.onPublished))await retainChildResult(resultOwners, entry, { error }, aborted ? "cancelled" : "error", settled)
     },
   )
-  entry.followupChain = completion.finally(settleInitial)
+  const completionChain = completion.finally(settleInitial)
+  entry.followupChain = completionChain
   void entry.followupChain.catch(() => {})
   try {
     opts.retainPublication?.({kind:'run',value:entry.followupChain})
     opts.retainPublication?.({kind:'entry',value:entry})
-    bindOriginalSpawnRun(opts.onPublished,entry,initialRun,opts.table)
+    bindOriginalSpawnRun(opts.onPublished,entry,initialRun,opts.table,completionChain)
     opts.validateBeforeLaunch?.()
     if((opts.childStart?.kind==='committed-child-birth')&&opts.table.get(childPath))throw Error('Original child publication path occupied')
     opts.table.add(childPath, entry)

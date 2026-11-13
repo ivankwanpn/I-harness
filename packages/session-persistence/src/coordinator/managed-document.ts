@@ -508,8 +508,9 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
         } finally { token?.end(outcome); }
     }
     async function drainOriginalSourceOwners() {
-        assertTaskOutside();held.assertHeld();
+        assertTaskOutside();
         if(closed)return;
+        held.assertHeld();
         const drains = await Promise.allSettled([...sourceDrains.values()].map(entry => entry.closeOriginal()));
         await pump;
         held.assertHeld();

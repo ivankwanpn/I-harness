@@ -44,7 +44,9 @@ afterEach(() => { for (const restore of [...warningRestorers]) restore() })
 
 /** Only provider/physical backend gates are controlled. Task/source, Inbox,
  * receiver and serial lane are the actual service composition. */
-export async function createDeliveryFixture(options: { holdTaskCollector?:boolean;dropTaskACKOnce?:boolean; failPartialPublication?:boolean;b2?:boolean;failBeforePublication?:boolean;jobStatusEvents?:boolean;retiredSourceControl?:boolean;holdTaskACK?:boolean;holdTaskUnknown?:boolean; activeForeground?: boolean; failChild?: boolean; rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
+export async function createDeliveryFixture(options: {
+  holdOriginalSourceCloseACK?: boolean
+  holdTaskCollector?:boolean;dropTaskACKOnce?:boolean; failPartialPublication?:boolean;b2?:boolean;failBeforePublication?:boolean;jobStatusEvents?:boolean;retiredSourceControl?:boolean;holdTaskACK?:boolean;holdTaskUnknown?:boolean; activeForeground?: boolean; failChild?: boolean; rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
   const taskCollectorEntered=Promise.withResolvers<void>(),taskCollectorRelease=Promise.withResolvers<void>();heldTaskCollector.enabled=!!options.holdTaskCollector;heldTaskCollector.entered=taskCollectorEntered.resolve;heldTaskCollector.gate=taskCollectorRelease.promise
   partialPublication.armed=!!options.failPartialPublication
   const projectionStart={...legacyProjectionCalls}
@@ -64,11 +66,26 @@ export async function createDeliveryFixture(options: { holdTaskCollector?:boolea
   // owner recovery controls. No source/received method is replaced.
   const allOriginalSources:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>[]=[]
   const spawnSources: { taskId: string; source: import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome> }[] = []
+  const sourceCloseEntered = Promise.withResolvers<void>()
+  const sourceCloseRelease = Promise.withResolvers<void>()
   const beginAction = originalDocument.beginAction.bind(originalDocument)
   originalDocument.beginAction = signal => {
     const action = beginAction(signal), register = action.registerSettlementSource.bind(action), captureStart = action.captureSubagentStart.bind(action)
     const sources: import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>[] = []
-    action.registerSettlementSource = (...args) => { const source = register(...args); sources.push(source);allOriginalSources.push(source); return source }
+    action.registerSettlementSource = (...args) => {
+      const drain=args[0]
+      let source:ReturnType<typeof register>
+      const controlledDrain:typeof drain=async function(this:unknown) {
+        await Reflect.apply(drain,this,[])
+        if(options.holdOriginalSourceCloseACK&&spawnSources.some(record=>record.source===source)) {
+          sourceCloseEntered.resolve()
+          await sourceCloseRelease.promise
+        }
+      }
+      source=register(options.holdOriginalSourceCloseACK?controlledDrain:drain,args[1],args[2])
+      sources.push(source);allOriginalSources.push(source)
+      return source
+    }
     action.captureSubagentStart = (...args) => {
       const captured = captureStart(...args)
       if (sources.length !== 1) throw new Error('Actual spawn source identity is ambiguous')
@@ -245,7 +262,9 @@ export async function createDeliveryFixture(options: { holdTaskCollector?:boolea
   const mount = () => createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), contextOutput: output,
     rewindStoreRoot: options.rewindFsWrite ? join(root, 'rewind-store') : undefined,
     extensionsFor: options.extensionsFor,
-    prepareTaskChild:options.b2?createUnmanagedTaskChildHost({coordinator,policy:'unmanaged'}):undefined,
+    // Every fixture here owns an isolated non-project workspace. Ordinary and
+    // B2 births both require the original explicit child host.
+    prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: 'unmanaged' }),
     telemetry, jobStatusEvents:options.jobStatusEvents,
     model: parent, modelPolicy: 'test-mock', approveAll: true, sandbox: 'danger-full-access', codeMode: { mode: 'off' }, contextWindow: 100000,
 
@@ -261,7 +280,16 @@ export async function createDeliveryFixture(options: { holdTaskCollector?:boolea
     await writeFile(join(process.env.IH_DELIVERY_EVIDENCE_ROOT, `${label}.json`), JSON.stringify({ root, launches, heldTerminal, terminalKeys, receiptKeys, backendTrace, warnings, telemetryEvents, pending: assembly?.inbox.pending(), deliveryPending: readDeliveries(view).pending(), requests: parentRequests.map(r => r.messages), events: (await backend.read('parent')).events, failure: inspect(failure, { depth: 8 }) }, null, 2))
   }
   return {
-    root, output, stopOriginalTask:()=>{const mounted=originalMounts.get(originalDocument.view),registered=spawnSources[0];if(!mounted||!registered)throw Error('Actual original Task source unavailable');return mounted.tasks.cancelTree(registered.taskId,'Original Stop won')},legacyProjectionCalls:()=>({retainers:legacyProjectionCalls.retainers-projectionStart.retainers,publications:legacyProjectionCalls.publications-projectionStart.publications}),get service() { return service }, get backend() { return backend }, get coordinator() { return coordinator }, parentRequests,
+    root, output,
+    waitForOriginalSourceCloseACK:()=>sourceCloseEntered.promise,
+    releaseOriginalSourceCloseACK:()=>sourceCloseRelease.resolve(),
+    originalSpawnForTest:()=>{
+      const mounted=originalMounts.get(originalDocument.view),record=spawnSources[0]
+      const entry=mounted?.table.get('root/original0'),chain=entry?.followupChain
+      if(!record||!entry||!chain)throw Error('Original published Task entry unavailable')
+      return {entry,chain,source:record.source}
+    },
+    stopOriginalTask:()=>{const mounted=originalMounts.get(originalDocument.view),registered=spawnSources[0];if(!mounted||!registered)throw Error('Actual original Task source unavailable');return mounted.tasks.cancelTree(registered.taskId,'Original Stop won')},legacyProjectionCalls:()=>({retainers:legacyProjectionCalls.retainers-projectionStart.retainers,publications:legacyProjectionCalls.publications-projectionStart.publications}),get service() { return service }, get backend() { return backend }, get coordinator() { return coordinator }, parentRequests,
     launchCount: () => launches, waitForChildStarted:()=>childStarted.promise,waitForChildCancellation:()=>childCancelled.promise,
     waitForForeground: () => foregroundStarted.promise,
     releaseForeground: () => foregroundGate.resolve(),
@@ -305,6 +333,7 @@ export async function createDeliveryFixture(options: { holdTaskCollector?:boolea
     terminalKeys,
     releaseOpen: () => { allowOpen = true },
     releaseParentStep: () => parentGate.resolve(),
+    warningMessages: () => [...warnings],
     executionErrors: () => telemetryEvents.filter(event => event.type === 'session/error'),
     releaseReceiptPreparation: () => receiptGate.resolve(),
     releaseReceipt: () => { allowReceipt = true },
@@ -318,7 +347,7 @@ export async function createDeliveryFixture(options: { holdTaskCollector?:boolea
       await service.assemblyFor('parent')
     },
     async close() {
-      taskCollectorRelease.resolve();heldTaskCollector.enabled=false
+      sourceCloseRelease.resolve();taskCollectorRelease.resolve();heldTaskCollector.enabled=false
       if (closed) return
       childGate.resolve(); foregroundGate.resolve(); terminalGate.resolve(); receiptGate.resolve(); receiptReconcileGate.resolve(); parentGate.resolve(); allowReceipt = true; allowOpen = true; allowTerminal = true; allowTaskSave = true
       const failures: unknown[] = []
@@ -330,7 +359,7 @@ export async function createDeliveryFixture(options: { holdTaskCollector?:boolea
         expect(warnings.filter(message => !expectedWarnings.has(message)), 'unexpected delivery fixture warnings').toEqual([])
         if (options.holdTerminalUnknown&&!options.retiredSourceControl) expect(warnings.some(message => message.includes('Original delivery sources require settlement'))).toBe(true)
         if(options.retiredSourceControl)expect(warnings.filter(message=>message.startsWith('[i-harness] original delivery settlement:')||message.startsWith('[i-harness] delivery reconciliation failed:'))).toEqual([])
-        if (failures.length) { console.info('original-delivery-cleanup-failures', inspect(failures, { depth: 8 })); throw new AggregateError(failures, 'Delivery fixture cleanup failed') }
+        if (failures.length) { console.info('original-delivery-cleanup-failures', inspect(failures, { depth: 18 })); throw new AggregateError(failures, 'Delivery fixture cleanup failed') }
       } finally { restoreWarning() }
     },
   }

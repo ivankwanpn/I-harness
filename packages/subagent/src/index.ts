@@ -1,3 +1,4 @@
+import { isOriginalSpawnChainAcknowledged } from './tools/source-run.ts'
 import {recoverCanonicalTaskPublications,closeTaskOwnerAfterAcceptedWork,canonicalTaskChildren,canonicalTaskChild,captureOriginalTaskRuntimeData,captureOriginalTaskAuxiliaryData} from './task/required-settlement.ts'
 import {managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
 import {forwardTableProjection} from './runtime-projection.ts'
@@ -602,8 +603,9 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       void ownedClosing.catch(() => {})
       const results = await Promise.allSettled([...entryPhases].map(async ([entry, phases]) => {
         const failures: unknown[] = []
+        let chainFailure: { cause: unknown } | undefined
         if (!phases.chainJoined) {
-          try { await phases.chain } catch (error) { failures.push(error) }
+          try { await phases.chain } catch (cause) { chainFailure = { cause } }
           finally { phases.chainJoined = true }
         }
         if (!phases.settled) try { await owner.settleEntryResult(entry); phases.settled = true } catch (error) { failures.push(error) }
@@ -612,6 +614,9 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
           else await phases.unmount?.()
           phases.disposed = true
         } catch (error) { failures.push(error) }
+        if (chainFailure && !isOriginalSpawnChainAcknowledged(entry, phases.chain, chainFailure.cause)) {
+          failures.push(chainFailure.cause)
+        }
         if (!failures.length && phases.sessionId && agents.get(phases.sessionId) === phases.agent) agents.remove(phases.sessionId)
         if (failures.length) throw new AggregateError(failures, 'Original entry cleanup incomplete')
       }))

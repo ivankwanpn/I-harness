@@ -1,7 +1,27 @@
+import {inspect} from 'node:util'
 import { expect, it } from 'vitest'
+import { captureTaskV3Document } from '@i-harness/session-persistence/internal/task-state'
 import { createDeliveryFixture } from './helpers/required-task-delivery-fixture.ts'
 
-it('drives the original active legacy child Task acknowledgment before required end after parent retirement', async () => {
+async function assertCanonicalCancelledProjection(f: Awaited<ReturnType<typeof createDeliveryFixture>>) {
+ const document=captureTaskV3Document(await f.coordinator.getDocument('task-parent'))
+ const rows=document.tasks;expect(rows).toHaveLength(1)
+ const task=rows[0]!
+ expect(task).toMatchObject({status:'cancelled',outcome:'cancelled'})
+ expect(task.childBirth).toBeDefined();expect(task.result?.kind).toBe('retained')
+ const end=(await f.backend.read('parent')).events.find(event=>event.type==='subagent/end')
+ expect(end).toMatchObject({type:'subagent/end',taskId:task.id,outcome:'cancelled',resultRevision:task.result?.revision})
+ const runtime=await f.backend.getDocument('parent') as {jobs:{taskId?:string;sessionId?:string}[];agentTable:{taskId?:string;sessionId?:string}[]}
+ // Required Task rows are canonical; ordinary runtime saves omit duplicate mirrors.
+ for(const entries of [runtime.jobs,runtime.agentTable])expect(entries.some(row=>row.taskId===task.id||row.sessionId===task.childSessionId)).toBe(false)
+ await f.reopen()
+ const projected=f.service.tasks('parent')
+ expect(projected).toContainEqual(expect.objectContaining({group:'subagent',status:'cancelled',canCancel:false}))
+ expect(f.launchCount()).toBe(1)
+ return task
+}
+
+it('drives the original ordinary all-history Task acknowledgment before required end after parent retirement', async () => {
  const f=await createDeliveryFixture({retiredSourceControl:true,expectedWarnings:["[subagent] role 'general' declares 3 tool(s) absent from the parent registry; the child runs without them: code_context_search, code_context_status, code_context_index"]})
  try {
   await f.start()
@@ -15,7 +35,7 @@ it('drives the original active legacy child Task acknowledgment before required 
   expect(events.filter(event=>event.type==='subagent/end')).toHaveLength(1)
   expect(f.launchCount(),JSON.stringify((await f.backend.read('parent')).events.filter(e=>e.type==='tool/result'))).toBe(1)
   const taskDocument=await f.backend.getDocument('task-parent') as {formatVersion:number;tasks:{outcome?:string;result?:{revision:string}}[]}
-  expect(taskDocument.formatVersion).toBe(2);expect(taskDocument.tasks).toHaveLength(1);expect(taskDocument.tasks[0]!.outcome).toBe('cancelled');const runtimeState=await f.backend.getDocument('parent') as {jobs:{status:string;terminal:boolean;result?:{revision:string}}[];agentTable:{status:string;result?:{revision:string}}[]};expect(runtimeState.jobs[0]).toMatchObject({status:'killed',terminal:true});expect(runtimeState.agentTable[0]!.status).toBe('killed');expect(f.legacyProjectionCalls()).toEqual({retainers:0,publications:0});expect(runtimeState.jobs[0]!.result?.revision).toBe(taskDocument.tasks[0]!.result?.revision);expect(runtimeState.agentTable[0]!.result?.revision).toBe(taskDocument.tasks[0]!.result?.revision);console.info('required-original-source-effects',JSON.stringify({root:f.root,runtimeJobs:runtimeState.jobs.map(j=>({status:j.status,terminal:j.terminal})),runtimeAgents:runtimeState.agentTable.map(e=>e.status),launches:f.launchCount(),sources:events.filter(e=>e.type==='agent/delivery-source').length,ends:events.filter(e=>e.type==='subagent/end').length,taskDocument}))
+  expect(taskDocument.formatVersion).toBe(3);expect(taskDocument.tasks).toHaveLength(1);expect(taskDocument.tasks[0]).toHaveProperty('childBirth');expect(taskDocument.tasks[0]!.outcome).toBe('cancelled');await assertCanonicalCancelledProjection(f);expect(f.legacyProjectionCalls()).toEqual({retainers:0,publications:0})
  } catch(cause) {console.info('required-legacy-primary',cause);throw cause} finally {f.releaseChild();await f.close()}
 },20000)
 
@@ -61,7 +81,7 @@ it.each([false,true])('joins original Task and resident projection on direct par
  try{
   await f.start();const parent=await f.coordinator.openManagedDocument('parent'),closing=parent.close();void closing.catch(()=>{});expect(()=>parent.assertReady()).toThrow();expect((await parent.metadata.admit({type:'plan/mode',mode:'on'})).kind).toBe('not-issued')
   await f.waitForChildCancellation();f.releaseChild();await closing
-  const runtime=await f.backend.getDocument('parent') as {jobs:{status:string;terminal:boolean}[];agentTable:{status:string}[]};expect(runtime.jobs[0]).toMatchObject({status:'killed',terminal:true});expect(runtime.agentTable[0]!.status).toBe('killed');expect(f.legacyProjectionCalls()).toEqual({retainers:0,publications:0});expect((await f.backend.read('parent')).events.filter(e=>e.type==='subagent/end')).toHaveLength(1);expect(f.launchCount(),JSON.stringify((await f.backend.read('parent')).events.filter(e=>e.type==='tool/result'))).toBe(1)
+  await assertCanonicalCancelledProjection(f);expect(f.legacyProjectionCalls()).toEqual({retainers:0,publications:0});expect((await f.backend.read('parent')).events.filter(e=>e.type==='subagent/end')).toHaveLength(1);expect(f.launchCount(),JSON.stringify((await f.backend.read('parent')).events.filter(e=>e.type==='tool/result'))).toBe(1)
  }catch(cause){const{inspect}=await import('node:util');console.info('required-parent-projection-primary',inspect(cause,{depth:16}));console.info('required-parent-projection-facts',JSON.stringify((await f.backend.read('parent')).events.filter(e=>e.type==='job/status'||e.type==='subagent/end')));await f.diagnoseOriginalSources();throw cause}finally{f.releaseChild();await f.close()}
 },20000)
 
@@ -76,7 +96,11 @@ it('keeps unavailable original end recovery eligible while refusing retired new 
 },20000)
 
 it('retains undispatched setup failure and original unknown Task save for same-source recovery',async()=>{
- const f=await createDeliveryFixture({failBeforePublication:true,holdTaskUnknown:true,retiredSourceControl:true,expectedWarnings:["[subagent] role 'general' declares 3 tool(s) absent from the parent registry; the child runs without them: code_context_search, code_context_status, code_context_index"]})
+ const controlledWarnings=[
+  '[i-harness] original delivery settlement: AggregateError: Original delivery sources require settlement',
+  '[i-harness] delivery reconciliation failed: AggregateError: Original delivery sources require settlement',
+ ]
+ const f=await createDeliveryFixture({failBeforePublication:true,holdTaskUnknown:true,expectedWarnings:["[subagent] role 'general' declares 3 tool(s) absent from the parent registry; the child runs without them: code_context_search, code_context_status, code_context_index",...controlledWarnings]})
  let primary:{cause:unknown}|undefined
  try{
   const starting=f.start();void starting.catch(()=>{});await f.waitForTaskACK();await starting.catch(()=>{})
@@ -85,7 +109,7 @@ it('retains undispatched setup failure and original unknown Task save for same-s
   const task=(await f.backend.getDocument('task-parent') as {tasks:{outcome:string;result:{envelope:{execution:{dispatch:string}}}}[]}).tasks[0]!
   expect(task.outcome).toBe('error');expect(task.result.envelope.execution.dispatch).toBe('not-dispatched');expect(f.terminalTaskSnapshotCount()).toBe(1);expect(f.launchCount()).toBe(0)
   expect((await f.backend.read('parent')).events.filter(e=>e.type==='subagent/end')).toHaveLength(1);await f.service.close()
- }catch(cause){primary={cause};console.info('required-undispatched-primary',cause)}finally{f.releaseTaskUnknown();f.releaseChild();try{await f.close()}catch(cleanup){throw new AggregateError([...(primary?[primary.cause]:[]),cleanup],'Original undispatched recovery failed')};if(primary)throw primary.cause}
+ }catch(cause){primary={cause};console.info('required-undispatched-primary',cause)}finally{f.releaseTaskUnknown();f.releaseChild();try{await f.close();expect(f.warningMessages().filter(message=>controlledWarnings.includes(message))).toEqual(controlledWarnings)}catch(cleanup){console.info('undispatched-cleanup-primary',inspect({primary,cleanup,warnings:f.warningMessages()},{depth:18}));throw new AggregateError([...(primary?[primary.cause]:[]),cleanup],'Original undispatched recovery failed')};if(primary)throw primary.cause}
 },20000)
 
 it('actual Task3 B2 original child persists its terminal once across real parent close',async()=>{
@@ -117,7 +141,25 @@ it.each(['task-unknown','end-unknown','stop-unknown','partial-publication'] as c
 
 it('actual B2 issued Task UNKNOWN recovers automatically on its same captured operation without producer replay',async()=>{
  const f=await createDeliveryFixture({b2:true,dropTaskACKOnce:true,expectedWarnings:["[subagent] role 'general' declares 3 tool(s) absent from the parent registry; the child runs without them: code_context_search, code_context_status, code_context_index"]})
- try{await f.start();await f.waitForChildStarted();f.releaseChild();await f.waitForTaskACK();expect(f.terminalTaskSnapshotCount()).toBe(1);await f.waitForTerminalCommitted();await f.waitForDeliveryRequest();await f.waitForConsumed();const originalWrites=f.taskWriteSnapshots().filter(text=>(JSON.parse(text) as {tasks:{outcome?:string}[]}).tasks.some(task=>task.outcome!==undefined));expect(originalWrites[1]).toBe(originalWrites[0]);expect(f.terminalTaskSnapshotCount()).toBe(3);expect(f.launchCount()).toBe(1);const events=(await f.backend.read('parent')).events;expect(events.filter(event=>event.type==='subagent/end')).toHaveLength(1);expect(events.filter(event=>event.type==='agent/delivery-received')).toHaveLength(1);expect(f.legacyProjectionCalls()).toEqual({retainers:0,publications:0})}finally{f.releaseChild();await f.close()}
+ try {
+  await f.start();await f.waitForChildStarted();f.releaseChild();await f.waitForTaskACK()
+  expect(f.terminalTaskSnapshotCount()).toBe(1)
+  await f.waitForTerminalCommitted();await f.waitForDeliveryRequest();await f.waitForConsumed()
+  const terminalSnapshots=f.taskWriteSnapshots().filter(text=>(JSON.parse(text) as {tasks:{outcome?:string}[]}).tasks.some(task=>task.outcome!==undefined))
+  const terminalWrites=terminalSnapshots.map(text=>JSON.parse(text) as {tasks:{outcome?:string}[];notifications:{status:string;attempts:number}[]})
+  // The captured terminal write retries its identical bytes; a separate outbox
+  // update acknowledges delivery and durable retention without a new result.
+  expect(terminalWrites).toHaveLength(3)
+  expect(terminalSnapshots[1]).toBe(terminalSnapshots[0])
+  expect(terminalWrites[2]!.tasks).toEqual(terminalWrites[0]!.tasks.map(task=>({...task,retention:'durable'})))
+  expect(terminalWrites[0]!.notifications).toEqual([expect.objectContaining({status:'pending',attempts:0})])
+  expect(terminalWrites[2]!.notifications).toEqual([expect.objectContaining({status:'delivered',attempts:1})])
+  expect(f.terminalTaskSnapshotCount()).toBe(2);expect(f.launchCount()).toBe(1)
+  const events=(await f.backend.read('parent')).events
+  expect(events.filter(event=>event.type==='subagent/end')).toHaveLength(1)
+  expect(events.filter(event=>event.type==='agent/delivery-received')).toHaveLength(1)
+  expect(f.legacyProjectionCalls()).toEqual({retainers:0,publications:0})
+ }finally{f.releaseChild();await f.close()}
 },60000)
 it('actual Stop joins only captured parent journal debt while full Task recovery remains held',async()=>{
  const f=await createDeliveryFixture({b2:true,holdTaskUnknown:true,holdTaskCollector:true,expectedWarnings:["[subagent] role 'general' declares 3 tool(s) absent from the parent registry; the child runs without them: code_context_search, code_context_status, code_context_index"]})

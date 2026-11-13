@@ -1,4 +1,4 @@
-import {registerOriginalSpawnRun,projectOriginalSpawnJob} from './source-run.ts'
+import {registerOriginalSpawnRun,projectOriginalSpawnJob,retainOriginalSpawnRecoveryFailure} from './source-run.ts'
 import {isInsideOriginalSettlementClose,captureOriginalSettlementCloseAck,managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
 import {bindRequiredTaskSettlement,type RequiredTaskSettlement} from '../task/required-settlement.ts'
 import type {TaskTerminalizeInput} from '../task/types.ts'
@@ -137,7 +137,9 @@ export function createSpawnSource(owner: FactOwner | ManagedExecutionDomain['own
     }
     if (taskSaved && terminalOutcome && (terminalOutcome.kind === 'unknown' || terminalOutcome.kind === 'recovery-required')) {
       if (!recoverySignalled) { recoverySignalled = true; try { onTerminalRecovery?.() } catch { /* Original outcome remains authoritative. */ } }
-      return new OriginalTerminalRecoveryError(terminalOutcome, failure)
+      const recovery = new OriginalTerminalRecoveryError(terminalOutcome, failure)
+      if (requiredTask) retainOriginalSpawnRecoveryFailure(originalPublished, recovery)
+      return recovery
     }
     return failure
   }
@@ -181,9 +183,24 @@ export function createSpawnSource(owner: FactOwner | ManagedExecutionDomain['own
       if(requiredTask){taskSave=async()=>{await requiredTask!.settle()};requiredPrepareEnd=async()=>{const settled=await requiredTask!.settle();return {event:{type:'subagent/end',version:1,taskId:task.id,outcome:settled.outcome!,...(settled.result?.kind==='retained'?{envelope:settled.result.envelope,resultRevision:settled.result.revision}:{}),...(settled.resultText!==undefined?{resultText:settled.resultText}:{}),...(settled.error!==undefined?{error:settled.error}:{})},...(base?{output:spawnObservation(base,settled as TaskRecord)}:{})}}}
     },
     hasRequiredTask(){return requiredTask!==undefined},
-    async terminalizeOriginal(input:TaskTerminalizeInput){
-      if(!requiredTask)return undefined;if(!producerInput){producerInput=Object.freeze({...input});producer.resolve(producerInput)}prepareEnd??=requiredPrepareEnd
-      try{return await requiredTask.settle()}catch(cause){const recovery=requiredTask.acknowledgmentRecovery(cause);if(recovery&&!recoverySignalled&&managedExecutionStatus(owner as import('@i-harness/session-persistence').ManagedDocument)!=='retired'){recoverySignalled=true;try{onTerminalRecovery?.()}catch{}}throw recovery??cause}
+    async terminalizeOriginal(input:TaskTerminalizeInput) {
+      if (!requiredTask) return undefined
+      if (!producerInput) {
+        producerInput = Object.freeze({ ...input })
+        producer.resolve(producerInput)
+      }
+      prepareEnd ??= requiredPrepareEnd
+      try { return await requiredTask.settle() }
+      catch (cause) {
+        const recovery = requiredTask.acknowledgmentRecovery(cause)
+        if (recovery) retainOriginalSpawnRecoveryFailure(originalPublished, recovery)
+        if (recovery && !recoverySignalled
+          && managedExecutionStatus(owner as import('@i-harness/session-persistence').ManagedDocument) !== 'retired') {
+          recoverySignalled = true
+          try { onTerminalRecovery?.() } catch { /* Original owner retains the recovery. */ }
+        }
+        throw recovery ?? cause
+      }
     },
     async reconcileCapturedJournalDebt(){
       if(this!==result)throw new TypeError('Foreign original journal source')
@@ -330,6 +347,18 @@ export function createSpawnSource(owner: FactOwner | ManagedExecutionDomain['own
     finish() { finishAction() },
   }
   const originalPublished=result.published
-  registerOriginalSpawnRun(result.published,()=>requiredTask!==undefined,(entry,run,project)=>{if(requiredRun)throw Error('Original spawn run replaced');requiredRun={entry,run,project}},()=>requiredTask!.assertProjectionCurrent(),projectRequiredTerminal,()=>requiredTask!.waitProjectionCurrent())
+  registerOriginalSpawnRun(
+    originalPublished,
+    () => requiredTask !== undefined,
+    (entry, run, project) => {
+      if (requiredRun) throw Error('Original spawn run replaced')
+      requiredRun = { entry, run, project }
+    },
+    () => requiredTask!.assertProjectionCurrent(),
+    projectRequiredTerminal,
+    () => requiredTask!.waitProjectionCurrent(),
+    () => sourceReleased && terminalTaskAcknowledged && terminalSaved && taskSaved
+      && !captureFailure && (handoff?.kind !== 'parent' || handoffReleased),
+  )
   return result
 }
