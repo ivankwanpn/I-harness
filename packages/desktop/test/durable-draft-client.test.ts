@@ -65,3 +65,60 @@ it('does not consume an explicitly new draft whose text matches an earlier admit
  expect(current.prompt).toBe('same text')
  await client.flush()
 })
+
+it('persists submission metadata changed during a save without changing the captured user edit', async () => {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let current = { ...draft('sent'), metadata: 'creating' }
+  let record: DurableDraft = { revision: null, draft: null }, writes = 0
+  const request = async (value: DraftRequest): Promise<DurableDraft> => {
+    if (value.kind === 'desktop/draft/load') return structuredClone(record)
+    expect(value.expectedRevision).toBe(record.revision)
+    if (value.kind === 'desktop/draft/clear') return record = { revision: 'clear', draft: null }
+    const snapshot = structuredClone(value.draft)
+    if (++writes === 1) { entered.resolve(); await release.promise }
+    return record = { revision: String(writes), draft: snapshot }
+  }
+  const client = new DurableDraftClient(scope, request, () => current, value => { current = { ...value, metadata: value.metadata ?? '' } }, () => {})
+  await client.restore()
+  const sent = client.capture()
+  const saving = client.flush()
+  try {
+    await Promise.race([entered.promise, saving.then(() => { throw Error('Original save missed the held boundary') })])
+    current = { ...current, metadata: 'created and input admitted' }
+    client.changed('submission')
+    expect(client.capture()).toBe(sent)
+    release.resolve()
+    await saving
+    expect(writes).toBe(2)
+    expect(record.draft?.metadata).toBe('created and input admitted')
+    expect(await client.admitted(sent, () => { current = { ...current, prompt: '' } })).toBe(true)
+    expect(record.draft?.prompt).toBe('')
+  } finally { release.resolve(); await saving; await client.flush() }
+})
+
+it('clears an admitted edit while saving the latest submission metadata from the pending clear', async () => {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let current = { ...draft('sent'), metadata: 'input retry identity' }
+  let record: DurableDraft = { revision: null, draft: null }, revision = 0
+  const request = async (value: DraftRequest): Promise<DurableDraft> => {
+    if (value.kind === 'desktop/draft/load') return structuredClone(record)
+    expect(value.expectedRevision).toBe(record.revision)
+    if (value.kind === 'desktop/draft/clear') {
+      entered.resolve(); await release.promise
+      return record = { revision: String(++revision), draft: null }
+    }
+    return record = { revision: String(++revision), draft: structuredClone(value.draft) }
+  }
+  const client = new DurableDraftClient(scope, request, () => current, value => { current = { ...value, metadata: value.metadata ?? '' } }, () => {})
+  await client.restore(); await client.flush()
+  const sent = client.capture()
+  const clearing = client.admitted(sent, () => { current = { ...current, prompt: '' } })
+  try {
+    await Promise.race([entered.promise, clearing.then(() => { throw Error('Original clear missed the held boundary') })])
+    current = { ...current, metadata: 'latest selected model only' }
+    client.changed('submission')
+    release.resolve()
+    expect(await clearing).toBe(true)
+    expect(record.draft).toMatchObject({ prompt: '', metadata: 'latest selected model only' })
+  } finally { release.resolve(); await clearing; await client.flush() }
+})
