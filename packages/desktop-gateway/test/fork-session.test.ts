@@ -1,4 +1,4 @@
-import { expect, it, vi } from 'vitest'
+import { expect, it, vi, onTestFinished } from 'vitest'
 import { mkdtemp, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -18,6 +18,7 @@ import { createDesktopHost } from '../src/host.ts'
 import { writeFile, readFile } from 'node:fs/promises'
 import { createGatewayForkFixture } from './helpers/fork-fixture.ts'
 import * as gatewayFork from '../src/fork-session.ts'
+import * as retainedInspection from '@i-harness/session-persistence/internal/retained-inspection'
 
 // Until the production adapter exists, exercise the unchanged original call
 // inside the real owner callback so RED records the actual policy reentry.
@@ -190,24 +191,17 @@ it('Gateway retires old raw manage fork before the actual manager can create a t
   } finally { await f.close() }
 })
 
+// Two genuine forks and retry measured 7.707s; keep the full native pipeline bounded.
 it('actual Desktop host wires new Gateway fork routes and nested recovery without provider assembly', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-c-real-host-')), workspace = join(root, 'workspace'), sessionDir = join(root, 'sessions'), settingsPath = join(root, 'settings.json')
-  await mkdir(workspace); await writeFile(settingsPath, '{}')
-  const seed = createSessionCoordinator(createJsonlBackend(sessionDir), { lock: { enabled: true } })
-  await seed.create({ sessionId: 'source' }); await seed.append('source', [{ type: 'turn/start' }, { type: 'user/message', text: 'real Gateway source' }, { type: 'turn/end' }]); await seed.close()
-  const original = await readFile(join(sessionDir, 'source.jsonl')), frames: RpcMessage[] = []
-  let builds = 0, serial = 0
-  const host = await createDesktopHost({ workspace, sessionDir, settingsPath, onWrite: frame => frames.push(frame), buildProviderClient() { builds++; throw new Error('Fork must not assemble a provider') } })
+  let builds = 0
+  const f = await actualHostFixture(() => {}, () => {}, () => { builds++; throw new Error('Fork must not assemble a provider') })
   const call = async (method: string, params: unknown = {}) => {
-    const id = ++serial; await host.handleLine(JSON.stringify({ jsonrpc: '2.0', id, method, params }))
-    const frame = frames.findLast(frame => 'id' in frame && frame.id === id) as { result?: any; error?: unknown }
+    const frame = await f.call(method, params)
     if (frame.error) throw new Error(JSON.stringify(frame.error))
     return frame.result
   }
   try {
-    expect((await call('initialize')).capabilities['session-fork-bootstrap']).toEqual(['1'])
-    await call('desktop/project/configure', { project: { id: 'p', name: 'P', roots: [workspace], primaryRoot: workspace } })
-    await call('desktop/session/project/bind', { sessionId: 'source', projectId: 'p' })
+    expect(f.initialized.result.capabilities['session-fork-bootstrap']).toEqual(['1'])
     const prepared = await call('session/fork/prepare', { version: 1, sourceSessionId: 'source' })
     if (prepared.kind !== 'prepared') throw new Error('Real host preparation refused')
     const operation = createForkOperation(prepared.prepared, { operationId: 'real-gateway', targetSessionId: 'child', createdAt: new Date().toISOString() })
@@ -217,12 +211,38 @@ it('actual Desktop host wires new Gateway fork routes and nested recovery withou
     const grandchild = createForkOperation(nested.prepared, { operationId: 'real-gateway-nested', targetSessionId: 'grandchild', createdAt: new Date().toISOString() })
     expect(await call('session/fork/begin', { operation: grandchild })).toMatchObject({ kind: 'ready', sessionId: 'grandchild' })
     expect(await call('session/fork/retry', { operation })).toMatchObject({ kind: 'adopted', sessionId: 'child' })
-    expect(builds).toBe(0); expect(await readFile(join(sessionDir, 'source.jsonl'))).toEqual(original)
-  } finally { await host.close() }
-})
+    expect(builds).toBe(0); expect(await readFile(join(f.sessionDir, 'source.jsonl'))).toEqual(f.sourceBytes)
+  } finally { await f.close() }
+}, 20000)
+
 
 it('the original confirmed target scope stays revoked after project ABA and same-operation recovery uses a fresh real scope', async () => {
-  const f = await createGatewayForkFixture(), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let setup: ReturnType<typeof createGatewayForkFixture> | undefined
+  let running: ReturnType<Awaited<ReturnType<typeof createGatewayForkFixture>>['controller']['execute']> | undefined
+  let observedFailure: unknown
+  let retired = false
+  let cleanup: Promise<void> | undefined
+  const close = () => {
+    retired = true
+    release.resolve()
+    if (cleanup) return cleanup
+    const attempt = Promise.resolve().then(async () => {
+      const original = await setup
+      if (!original) return
+      const closing = original.close()
+      const joined = await Promise.allSettled([running, closing])
+      const failures = joined.flatMap(result => result.status === 'rejected' && result.reason !== observedFailure ? [result.reason] : [])
+      if (failures.length) throw new AggregateError(failures, 'Original ABA fork and cleanup failed')
+    })
+    cleanup = attempt
+    void attempt.finally(() => { if (cleanup === attempt) cleanup = undefined }).catch(() => {})
+    return attempt
+  }
+  onTestFinished(close)
+  setup = createGatewayForkFixture()
+  const f = await setup
+  if (retired) throw Error('Original ABA fixture retired during setup')
   const original = f.runtime.prepareBootstrapTransfer.bind(f.runtime)
   let held = false, get!: () => unknown, captures = 0
   const capture = f.coordinator.bootstrapSemanticTargetWithCapture!.bind(f.coordinator)
@@ -240,22 +260,29 @@ it('the original confirmed target scope stays revoked after project ABA and same
     }
     return transfer
   })
-  let running: ReturnType<typeof f.controller.execute> | undefined
+  let primary: { cause: unknown } | undefined
   try {
     await f.coordinator.append('source', [{ type: 'turn/start' }, { type: 'user/message', text: 'scope source' }, { type: 'turn/end' }])
     const operation = await f.prepare('source', 'child', 'target-scope-aba')
     running = f.controller.execute({ operation, mode: 'begin' }); void running.catch(() => {})
-    await entered.promise
+    await Promise.race([entered.promise, running.then(() => { throw Error('Original target operation finished before the confirmed-scope cut') })])
     await f.projects.revoke('p'); expect(() => get()).toThrow()
     await f.projects.configure(f.project); expect(() => get()).toThrow()
     release.resolve()
     const failure = await running.catch(error => error)
     expect(failure).toBeInstanceOf(ForkOperationError)
     expect(failure.hostError).toMatchObject({ reason: 'internal', capture: 'unknown', lastOutcome: { kind: 'blocked', reason: 'dependency-unavailable' } })
+    observedFailure = failure
     expect(captures).toBe(1)
     expect((await f.execute(operation, 'retry')).kind).toBe('ready')
     expect(captures).toBe(1); expect(() => get()).toThrow()
-  } finally { release.resolve(); await running?.catch(() => {}); await f.close() }
+  } catch (cause) { primary = { cause } }
+  finally {
+    const failures: unknown[] = []
+    try { await close() } catch (cause) { failures.push(cause) }
+    if (primary && !failures.length) throw primary.cause
+    if (failures.length) throw new AggregateError([...(primary ? [primary.cause] : []), ...failures], 'Original ABA fixture failed', { cause: primary?.cause })
+  }
 })
 
 it.each(['prepare', 'target'] as const)('Gateway router repeated close joins the exact admitted %s request', async phase => {
@@ -311,41 +338,108 @@ it('Gateway actual host rejects reentrant close before retiring its own real pre
   } finally { factory.mockRestore(); await host?.close() }
 })
 
-async function actualHostFixture(configure: (host: ReturnType<typeof gatewayFork.createGatewayForkHost>, owners: Parameters<typeof gatewayFork.createGatewayForkHost>[0]) => void) {
-  const root = await mkdtemp(join(tmpdir(), 'ih-c-owned-host-')), workspace = join(root, 'workspace'), sessionDir = join(root, 'sessions'), settingsPath = join(root, 'settings.json')
-  await mkdir(workspace); await writeFile(settingsPath, '{}')
-  const seed = createSessionCoordinator(createJsonlBackend(sessionDir), { lock: { enabled: true } })
-  await seed.create({ sessionId: 'source' }); await seed.append('source', [{ type: 'turn/start' }, { type: 'user/message', text: 'actual lifetime source' }, { type: 'turn/end' }]); await seed.close()
-  const original = gatewayFork.createGatewayForkHost, frames: RpcMessage[] = []
-  const factory = vi.spyOn(gatewayFork, 'createGatewayForkHost').mockImplementation(options => { const host = original(options); configure(host, options); return host })
-  let host: Awaited<ReturnType<typeof createDesktopHost>>
-  try { host = await createDesktopHost({ workspace, sessionDir, settingsPath, onWrite: frame => frames.push(frame) }) }
-  catch (error) { factory.mockRestore(); throw error }
-  let serial = 0
-  const call = async (method: string, params: unknown = {}) => {
-    const id = ++serial; await host.handleLine(JSON.stringify({ jsonrpc: '2.0', id, method, params }))
-    return frames.find(frame => 'id' in frame && frame.id === id) as { result?: any; error?: { code: number; data?: any } }
+async function actualHostFixture(
+  configure: (host: ReturnType<typeof gatewayFork.createGatewayForkHost>, owners: Parameters<typeof gatewayFork.createGatewayForkHost>[0]) => void,
+  releaseOwned: () => void = () => {},
+  buildProviderClient?: Parameters<typeof createDesktopHost>[0]['buildProviderClient'],
+) {
+  let host: Awaited<ReturnType<typeof createDesktopHost>> | undefined
+  let seed: ReturnType<typeof createSessionCoordinator> | undefined
+  let factory: { mockRestore(): void } | undefined
+  let retired = false, complete = false
+  let closing: Promise<void> | undefined
+  const setupFinished = Promise.withResolvers<void>()
+  const close = (): Promise<void> => {
+    retired = true
+    releaseOwned()
+    if (complete) return Promise.resolve()
+    if (closing) return closing
+    const attempt = Promise.resolve().then(async () => {
+      await setupFinished.promise
+      const failures: unknown[] = []
+      try { await host?.close() } catch (cause) { failures.push(cause) }
+      if (seed) {
+        try { await seed.close(); seed = undefined }
+        catch (cause) { failures.push(cause) }
+      }
+      factory?.mockRestore()
+      if (failures.length) throw new AggregateError(failures, 'Original host fixture cleanup failed')
+      complete = true
+    })
+    closing = attempt
+    void attempt.finally(() => { if (closing === attempt) closing = undefined }).catch(() => {})
+    return attempt
   }
-  await call('initialize'); await call('desktop/project/configure', { project: { id: 'p', name: 'P', roots: [workspace], primaryRoot: workspace } }); await call('desktop/session/project/bind', { sessionId: 'source', projectId: 'p' })
-  return { host, root, sessionDir, frames, call, async prepare() {
-    const reply = await call('session/fork/prepare', { version: 1, sourceSessionId: 'source' })
-    if (reply.result?.kind !== 'prepared') throw new Error('Actual lifetime preparation refused: ' + JSON.stringify(reply))
-    return createForkOperation(reply.result.prepared, { operationId: 'actual-host-lifetime', targetSessionId: 'child', createdAt: new Date().toISOString() })
-  }, async close() { try { await host.close() } finally { factory.mockRestore() } } }
+  // Registered before the first setup await. It joins this setup only, never
+  // the whole test body, and also owns a host that returns after test timeout.
+  onTestFinished(close)
+  try {
+    const root = await mkdtemp(join(tmpdir(), 'ih-c-owned-host-'))
+    const workspace = join(root, 'workspace'), sessionDir = join(root, 'sessions'), settingsPath = join(root, 'settings.json')
+    await mkdir(workspace)
+    await writeFile(settingsPath, '{}')
+    seed = createSessionCoordinator(createJsonlBackend(sessionDir), { lock: { enabled: true } })
+    let seedFailure: { cause: unknown } | undefined
+    try {
+      await seed.create({ sessionId: 'source' })
+      await seed.append('source', [{ type: 'turn/start' }, { type: 'user/message', text: 'actual lifetime source' }, { type: 'turn/end' }])
+    } catch (cause) { seedFailure = { cause } }
+    const seedCleanupFailures: unknown[] = []
+    try { await seed.close(); seed = undefined }
+    catch (cause) { seedCleanupFailures.push(cause) }
+    if (seedFailure && !seedCleanupFailures.length) throw seedFailure.cause
+    if (seedCleanupFailures.length) {
+      throw new AggregateError([...(seedFailure ? [seedFailure.cause] : []), ...seedCleanupFailures], 'Original seed setup and cleanup failed', { cause: seedFailure?.cause })
+    }
+    const sourceBytes = await readFile(join(sessionDir, 'source.jsonl'))
+    if (retired) throw Error('Original host fixture retired during setup')
+    const original = gatewayFork.createGatewayForkHost, frames: RpcMessage[] = []
+    factory = vi.spyOn(gatewayFork, 'createGatewayForkHost').mockImplementation(options => {
+      const created = original(options)
+      configure(created, options)
+      return created
+    })
+    host = await createDesktopHost({ workspace, sessionDir, settingsPath, onWrite: frame => frames.push(frame), ...(buildProviderClient ? { buildProviderClient } : {}) })
+    if (retired) throw Error('Original host fixture retired during host construction')
+    const ownedHost = host
+    let serial = 0
+    const call = async (method: string, params: unknown = {}) => {
+      if (retired) throw Error('Original host fixture retired')
+      const id = ++serial
+      await ownedHost.handleLine(JSON.stringify({ jsonrpc: '2.0', id, method, params }))
+      return frames.find(frame => 'id' in frame && frame.id === id) as { result?: any; error?: { code: number; data?: any } }
+    }
+    const initialized = await call('initialize')
+    if (initialized.error) throw new Error('Actual host initialization refused', { cause: initialized.error })
+    await call('desktop/project/configure', { project: { id: 'p', name: 'P', roots: [workspace], primaryRoot: workspace } })
+    await call('desktop/session/project/bind', { sessionId: 'source', projectId: 'p' })
+    return { host: ownedHost, root, sessionDir, frames, initialized, sourceBytes, call, async prepare() {
+      const reply = await call('session/fork/prepare', { version: 1, sourceSessionId: 'source' })
+      if (reply.result?.kind !== 'prepared') throw new Error('Actual lifetime preparation refused: ' + JSON.stringify(reply))
+      return createForkOperation(reply.result.prepared, { operationId: 'actual-host-lifetime', targetSessionId: 'child', createdAt: new Date().toISOString() })
+    }, close }
+  } finally { setupFinished.resolve() }
 }
 
 it.each(['prepare', 'target'] as const)('actual Gateway host retains project/native/coordinator owners through held %s cleanup', async phase => {
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   let nativeCloses = 0, projectCloses = 0, coordinatorCloses = 0, callbacks = 0
+  let retainedClose: { mockRestore(): void } | undefined
+  onTestFinished(() => retainedClose?.mockRestore())
   const f = await actualHostFixture((host, owners) => {
-    const nativeClose = owners.nativeContext.close.bind(owners.nativeContext), projectClose = owners.projects.close.bind(owners.projects), coordinatorClose = owners.coordinator.close.bind(owners.coordinator)
+    const nativeClose = owners.nativeContext.close.bind(owners.nativeContext), projectClose = owners.projects.close.bind(owners.projects)
     owners.nativeContext.close = async () => { nativeCloses++; return nativeClose() }
     owners.projects.close = async () => { projectCloses++; return projectClose() }
-    owners.coordinator.close = async () => { coordinatorCloses++; return coordinatorClose() }
+    const closeOriginal = retainedInspection.closeCoordinatorWithRetainedCleanupOperation
+    retainedClose = vi.spyOn(retainedInspection, 'closeCoordinatorWithRetainedCleanupOperation').mockImplementation((coordinator, operation) => {
+      if (coordinator === owners.coordinator) coordinatorCloses++
+      return closeOriginal(coordinator, operation)
+    })
     if (phase === 'prepare') { const original = host.resolvePreparation.bind(host); host.resolvePreparation = async (...args) => { callbacks++; entered.resolve(); await release.promise; return original(...args) } }
     else { const original = host.withReadyTarget.bind(host); host.withReadyTarget = async (...args) => { callbacks++; entered.resolve(); await release.promise; return original(...args) } }
-  })
+  }, () => release.resolve())
   let running: ReturnType<typeof f.call> | undefined, closing: Promise<void> | undefined
+  let primary: { cause: unknown } | undefined
   try {
     if (phase === 'prepare') running = f.call('session/fork/prepare', { version: 1, sourceSessionId: 'source' })
     else running = f.call('session/fork/begin', { operation: await f.prepare() })
@@ -358,21 +452,38 @@ it.each(['prepare', 'target'] as const)('actual Gateway host retains project/nat
     expect(reply.error).toMatchObject({ code: -32603 })
     if (phase === 'target') expect(reply.error?.data).toMatchObject({ kind: 'session-fork-error', capture: 'captured', lastOutcome: { kind: 'ready', sessionId: 'child' } })
     await closing; expect(callbacks).toBe(1); expect([projectCloses, nativeCloses, coordinatorCloses]).toEqual([1, 1, 1])
-  } finally { release.resolve(); await running; await closing; await f.close() }
+  } catch (cause) { primary = { cause } }
+  finally {
+    release.resolve()
+    const joined = await Promise.allSettled([running, closing])
+    const samePrimary = (cause: unknown) => !!primary && cause === primary.cause && (typeof cause === 'function' || typeof cause === 'object' && cause !== null)
+    const failures = joined.flatMap(result => result.status === 'rejected' && !samePrimary(result.reason) ? [result.reason] : [])
+    try { await f.close() } catch (cause) { if (!samePrimary(cause)) failures.push(cause) }
+    finally { retainedClose?.mockRestore() }
+    if (primary && !failures.length) throw primary.cause
+    if (failures.length) throw new AggregateError([...(primary ? [primary.cause] : []), ...failures], 'Original fork flight and cleanup failed', { cause: primary?.cause })
+  }
 })
 
 it('actual Gateway host retains the exact original L1 cleanup debt and its dependencies until acknowledgment', async () => {
   let fail = true, captures = 0, nativeCloses = 0, coordinatorCloses = 0
+  let retainedClose: { mockRestore(): void } | undefined
+  onTestFinished(() => retainedClose?.mockRestore())
+  let primary: { cause: unknown } | undefined
   const scopes: unknown[] = []
   const f = await actualHostFixture((_host, owners) => {
     const close = owners.nativeContext.contextOutput.closeLegacyForkTransfer.bind(owners.nativeContext.contextOutput)
     owners.nativeContext.contextOutput.closeLegacyForkTransfer = async scope => { scopes.push(scope); if (fail) throw new Error('Actual original Gateway L1 cleanup held'); return close(scope) }
-    const nativeClose = owners.nativeContext.close.bind(owners.nativeContext), coordinatorClose = owners.coordinator.close.bind(owners.coordinator)
+    const nativeClose = owners.nativeContext.close.bind(owners.nativeContext)
     owners.nativeContext.close = async () => { nativeCloses++; return nativeClose() }
-    owners.coordinator.close = async () => { coordinatorCloses++; return coordinatorClose() }
+    const closeOriginal = retainedInspection.closeCoordinatorWithRetainedCleanupOperation
+    retainedClose = vi.spyOn(retainedInspection, 'closeCoordinatorWithRetainedCleanupOperation').mockImplementation((coordinator, operation) => {
+      if (coordinator === owners.coordinator) coordinatorCloses++
+      return closeOriginal(coordinator, operation)
+    })
     const capture = owners.coordinator.bootstrapSemanticTargetWithCapture!.bind(owners.coordinator)
     owners.coordinator.bootstrapSemanticTargetWithCapture = (input, guards, use) => capture(input, guards, async () => { captures++; return use() })
-  })
+  }, () => { fail = false })
   try {
     const operation = await f.prepare(), response = await f.call('session/fork/begin', { operation })
     expect(response.error?.data).toMatchObject({ kind: 'session-fork-error', reason: 'cleanup-incomplete', lastOutcome: { kind: 'ready', sessionId: 'child' } })
@@ -381,9 +492,20 @@ it('actual Gateway host retains the exact original L1 cleanup debt and its depen
     fail = false; await f.host.close()
     expect(scopes).toHaveLength(3); expect(new Set(scopes).size).toBe(1); expect(captures).toBe(1)
     expect([nativeCloses, coordinatorCloses]).toEqual([1, 1])
-  } finally { fail = false; await f.close() }
+  } catch (cause) { primary = { cause } }
+  finally {
+    fail = false
+    const failures: unknown[] = []
+    const samePrimary = (cause: unknown) => !!primary && cause === primary.cause && (typeof cause === 'function' || typeof cause === 'object' && cause !== null)
+    try { await f.close() }
+    catch (cause) { if (!samePrimary(cause)) failures.push(cause) }
+    finally { retainedClose?.mockRestore() }
+    if (primary && !failures.length) throw primary.cause
+    if (failures.length) throw new AggregateError([...(primary ? [primary.cause] : []), ...failures], 'Original L1 cleanup failed', { cause: primary?.cause })
+  }
 })
 
+// Managed + L1 transfer, source release and cold reads measured 10.356s.
 it('actual createDesktopHost transfers nonempty managed and L1 data before READY and reads after source release', async () => {
   let owners!: Parameters<typeof gatewayFork.createGatewayForkHost>[0], producerAlive = true, heldProfiles = 0
   const active = new (await import('node:async_hooks')).AsyncLocalStorage<{ ids: Set<string>; active: boolean }>()
@@ -425,4 +547,4 @@ it('actual createDesktopHost transfers nonempty managed and L1 data before READY
     expect((await f.call('session/fork/retry', { operation })).result).toMatchObject({ kind: 'adopted', sessionId: 'child' })
     expect(heldProfiles).toBe(0)
   } finally { producerAlive = false; await f.close() }
-})
+}, 20000)

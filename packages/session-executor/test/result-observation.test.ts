@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expect, it, vi } from 'vitest'
+import { expect, it, vi, onTestFinished } from 'vitest'
 import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { contextSourceIdentity } from '@i-harness/context-output'
@@ -71,11 +71,49 @@ it('actual shared service reads real managed and legacy data under held source w
   } finally { await lease.release(); await c.close(); await rm(root, { recursive: true, force: true }) }
 })
 it('reads and searches real READY L1 bytes after manifest-only shadow, including cold retained reads', async () => {
-  const f = await legacyFixture(), scopes = api.createResultObservationScope()
+  // Real fork, live/cold observed reads and shadowing measured 8.076s.
+  // Own admitted operations so a deadline cannot orphan a late setup/reopen.
+  const pending = new Set<Promise<unknown>>()
+  let retired = false, complete = false
+  let initializing: ReturnType<typeof legacyFixture> | undefined
+  let closing: Promise<void> | undefined
+  let primary: { cause: unknown } | undefined
+  const runOwned = <T,>(run: () => Promise<T>): Promise<T> => {
+    if (retired) throw Error('Original READY fixture retired')
+    const original = run()
+    pending.add(original)
+    void original.then(() => pending.delete(original), () => pending.delete(original))
+    return original
+  }
+  const close = (): Promise<void> => {
+    retired = true
+    if (complete) return Promise.resolve()
+    if (closing) return closing
+    const attempt = Promise.resolve().then(async () => {
+      const failures: unknown[] = []
+      let original: Awaited<ReturnType<typeof legacyFixture>> | undefined
+      try { original = await initializing } catch (cause) { failures.push(cause) }
+      const joined = await Promise.allSettled([...pending])
+      for (const result of joined) {
+        if (result.status === 'rejected' && (!primary || result.reason !== primary.cause)) failures.push(result.reason)
+      }
+      try { await original?.close() } catch (cause) { failures.push(cause) }
+      if (failures.length) throw new AggregateError([...(primary ? [primary.cause] : []), ...failures], 'Original READY fixture cleanup failed', { cause: primary?.cause })
+      complete = true
+    })
+    closing = attempt
+    void attempt.finally(() => { if (closing === attempt) closing = undefined }).catch(() => {})
+    return attempt
+  }
+  onTestFinished(close)
+  initializing = runOwned(() => legacyFixture())
+  const f = await initializing
+  if (retired) throw Error('Original READY fixture retired during setup')
+  const scopes = api.createResultObservationScope()
   try {
-    expect((await f.run()).kind).toBe('ready')
-    const target = await f.coordinator().openManagedDocument('target')
-    expect((await target.compaction.commit([{ type: 'compaction/summary', text: 'manifest metadata marker', shadowedSeqs: [0] }])).kind).toBe('committed')
+    expect((await runOwned(() => f.run())).kind).toBe('ready')
+    const target = await runOwned(() => f.coordinator().openManagedDocument('target'))
+    expect((await runOwned(() => target.compaction.commit([{ type: 'compaction/summary', text: 'manifest metadata marker', shadowedSeqs: [0] }]))).kind).toBe('committed')
     expect(projectConversation(target.view).items.filter(item => item.provenance.kind === 'inherited')).toHaveLength(1)
     const readCurrent = async (visible: boolean) => {
       const c = f.coordinator(), document = await c.openManagedDocument('target'), getter = (await f.broker().resultReadScopeFor('target'))!, binding = getter()
@@ -98,14 +136,16 @@ it('reads and searches real READY L1 bytes after manifest-only shadow, including
       }))
       await expect(f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, escaped)).rejects.toThrow('expired')
     }
-    await readCurrent(true)
-    await f.sourceClear(); await f.reopen()
+    await runOwned(() => readCurrent(true))
+    await runOwned(() => f.sourceClear())
+    await runOwned(() => f.reopen())
     const sourceCalls = f.sourceCalls()
-    expect((await f.run(true)).kind).toBe('already-ready')
+    expect((await runOwned(() => f.run(true))).kind).toBe('already-ready')
     expect(f.sourceCalls()).toBe(sourceCalls)
-    await readCurrent(true)
-    const cold = await f.coordinator().openManagedDocument('target')
-    expect((await cold.compaction.commit([{ type: 'compaction/summary', text: 'group shadowed', shadowedSeqs: [1] }])).kind).toBe('committed')
-    await readCurrent(false)
-  } finally { await f.close() }
-})
+    await runOwned(() => readCurrent(true))
+    const cold = await runOwned(() => f.coordinator().openManagedDocument('target'))
+    expect((await runOwned(() => cold.compaction.commit([{ type: 'compaction/summary', text: 'group shadowed', shadowedSeqs: [1] }]))).kind).toBe('committed')
+    await runOwned(() => readCurrent(false))
+  } catch (cause) { primary = { cause }; throw cause }
+  finally { await close() }
+}, 20000)

@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, rm, writeFile, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
@@ -51,17 +51,41 @@ it.each(['global', 'session'] as const)('joins a complete %s read including acqu
   const f = await fixture(), entered = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>()
   const profile = f.coordinator.profile.bind(f.coordinator)
   let held = false
-  const observed = { ...f.coordinator, profile: async (id: string) => { if (!held) { held = true; entered.resolve(); await resume.promise }; return profile(id) } }
-  const service = createSessionService({ workspace: f.root, coordinator: observed, contextOutputSettingsPath: f.settings })
+  const heldProfile = vi.spyOn(f.coordinator, 'profile').mockImplementation(async id => {
+    if (!held) { held = true; entered.resolve(); await resume.promise }
+    return profile(id)
+  })
+  const service = createSessionService({ workspace: f.root, coordinator: f.coordinator, contextOutputSettingsPath: f.settings })
+  let read: ReturnType<NonNullable<typeof service.readResultPage>> | undefined
+  let closing: Promise<void> | undefined
+  let primary: { cause: unknown } | undefined
   try {
     expect(service.readResultPage).toEqual(expect.any(Function))
-    const read = service.readResultPage!('s', { ref: f.ref }); await entered.promise
+    read = service.readResultPage!('s', { ref: f.ref })
+    void read.catch(() => {})
+    await Promise.race([entered.promise, read.then(result => { throw new Error('Original page read finished before profile acquisition', { cause: result }) })])
     let closed = false
-    const closing = (mode === 'global' ? service.close() : service.closeSession('s')).then(() => { closed = true })
+    closing = (mode === 'global' ? service.close() : service.closeSession('s')).then(() => { closed = true })
+    void closing.catch(() => {})
     await new Promise(resolve => setImmediate(resolve)); expect(closed).toBe(false)
     resume.resolve(); expect(await read).toEqual({ kind: 'unavailable', reason: 'unavailable' }); await closing
     if (mode === 'session') expect(await service.readResultPage!('s', { ref: f.ref })).toMatchObject({ eof: true })
-  } finally { resume.resolve(); await service.close(); await f.lease.release(); await f.coordinator.close(); await rm(f.root, { recursive: true, force: true }) }
+  } catch (cause) { primary = { cause } }
+  finally {
+    resume.resolve()
+    const joined = await Promise.allSettled([read, closing])
+    const failures = joined.flatMap(result => result.status === 'rejected' && (!primary || result.reason !== primary.cause) ? [result.reason] : [])
+    for (const close of [() => service.close(), () => f.lease.release(), () => f.coordinator.close()]) {
+      try { await close() } catch (cause) { failures.push(cause) }
+    }
+    heldProfile.mockRestore()
+    const target = resolve(f.root)
+    if (dirname(target) !== resolve(tmpdir()) || !basename(target).startsWith('result-reader-')) failures.push(Error('Unexpected owned reader fixture root'))
+    else if (!primary && !failures.length) try { await rm(target, { recursive: true, force: true }) } catch (cause) { failures.push(cause) }
+    if (primary || failures.length) console.error('Preserved failed reader fixture:', target)
+    if (primary && !failures.length) throw primary.cause
+    if (failures.length) throw new AggregateError([...(primary ? [primary.cause] : []), ...failures], 'Original page read and cleanup failed', { cause: primary?.cause })
+  }
 })
 
 it('borrows the supplied original owner without configuring or closing it', async () => {
