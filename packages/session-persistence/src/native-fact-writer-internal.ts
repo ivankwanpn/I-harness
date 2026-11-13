@@ -61,9 +61,22 @@ export function retainManagedJournalCleanup(scopes: Map<object, NativeJournalCle
   const cleanup = retainOriginalNativeJournalCleanup(backend, id, held)
   if (cleanup) scopes.set(held.owner, cleanup)
 }
-export async function settleManagedJournalCleanup(scopes: ReadonlyMap<object, NativeJournalCleanup> | undefined) {
-  if (!scopes?.size) return
-  const results = await Promise.allSettled([...scopes.values()].filter(scope => scope.hasDebt()).map(scope => scope.settle()))
-  const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
-  if (errors.length) throw Object.assign(new FactRecoveryRequiredError(), { cause: new AggregateError(errors, 'Original journal cleanup unresolved') })
+export function settleManagedJournalCleanup(scopes: ReadonlyMap<object, NativeJournalCleanup> | undefined): Promise<void> | undefined {
+  let work: NativeJournalCleanup[]
+  try {
+    if (!scopes?.size) return
+    work = [...scopes.values()].filter(scope => scope.hasDebt())
+    if (!work.length) return
+  } catch (cause) {
+    // Existing await callers continue receiving failures as rejected promises.
+    return Promise.reject(cause)
+  }
+  const flights = work.map(scope => {
+    try { return scope.settle() }
+    catch (cause) { return Promise.reject(cause) }
+  })
+  return Promise.allSettled(flights).then(results => {
+    const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+    if (errors.length) throw Object.assign(new FactRecoveryRequiredError(), { cause: new AggregateError(errors, 'Original journal cleanup unresolved') })
+  })
 }

@@ -36,10 +36,11 @@ import { join } from 'node:path'
 import { EMPTY_SEMANTIC_SEED_DIGEST, EMPTY_SEMANTIC_DEPENDENCY_DIGEST } from '@i-harness/core-session'
 import { createJsonlBackend } from '../src/backend-factory.ts'
 import { isHeldFactOwner } from '@i-harness/session-persistence'
-import { retainOriginalNativeJournalCleanup } from '../../session-persistence/src/native-fact-writer-internal.ts'
+import { retainOriginalNativeJournalCleanup, canJoinOriginalNativePrewrite } from '../../session-persistence/src/native-fact-writer-internal.ts'
 import { createSessionCoordinator } from './helpers/composed.ts'
 
-function backendAt(root: string) {
+type AppendInput = Parameters<NonNullable<import('@i-harness/session-persistence').PersistenceBackend['appendOwnedBatch']>>
+function backendAt(root: string, observeAppend?: (...args: AppendInput) => void) {
   return createJsonlBackend(root, { wrap(backend) {
     const readOriginal = backend.read
     backend.read = async (...args) => {
@@ -52,12 +53,44 @@ function backendAt(root: string) {
       if (!original) throw new Error('Missing native journal method ' + name)
       // Constructor-owned interception, stable before nominal association.
       Object.defineProperty(backend, name, { configurable: true, enumerable: true, writable: true, value: async (...args: unknown[]) => {
+        if (name === 'appendOwnedBatch') observeAppend?.(...args as AppendInput)
         const before = fault.stage, beforeOwner = fault.owner; fault.stage = name; fault.owner = args[1]; fault.observed.push({ stage: name, owner: args[1] })
         try { const result = await Reflect.apply(original, backend, args); fault.results.push({ stage: name, result }); if (name === 'appendOwnedBatch' && fault.loseAppendAck) { fault.loseAppendAck = false; throw new Error('Original append delivery lost after native result') }; return result } finally { if(name === 'readJournalPrefix' && fault.prefixCut){const cut=fault.prefixCut;fault.prefixCut=undefined;await cut()}; fault.stage = before; fault.owner = beforeOwner }
       } })
     }
   } })
 }
+
+it('removes original prewrite scheduling evidence when retained native cleanup refuses entry', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-prewrite-cleanup-debt-'))
+  leases.root = root
+  let input: AppendInput | undefined
+  const backend = backendAt(root, (...args) => { input = args })
+  const coordinator = createSessionCoordinator(backend)
+  try {
+    const { id } = await coordinator.create()
+    const document = await coordinator.openManagedDocument(id)
+    fault.path = join(root, id + '.jsonl')
+    fault.mode = 'before'
+    fault.armed = 'appendOwnedBatch'
+    expect(await document.metadata.admit({ type: 'plan/mode', mode: 'on' })).toMatchObject({ kind: 'committed' })
+    expect(input).toBeDefined()
+    expect(fault.resources).toHaveLength(1)
+    const original = input!
+    const bytes = await readFile(fault.path)
+    // Use the actual original request/issuer, not a copied authority. The
+    // ledger's retained native close error must refuse this call before batch
+    // validation/issuance, and its scheduling token must not survive rejection.
+    await expect(backend.appendOwnedBatch!(...original)).rejects.toThrow('issue88 close before native ACK')
+    expect(canJoinOriginalNativePrewrite(backend, original[0], original[1], original[3])).toBe(false)
+    expect(await readFile(fault.path)).toEqual(bytes)
+    expect(fault.resources).toHaveLength(1)
+    fault.armed = ''
+    await coordinator.close()
+  } finally {
+    await rawCleanup(coordinator, root)
+  }
+})
 async function rawCleanup(coordinator: ReturnType<typeof createSessionCoordinator>, root: string) {
   // All callers await their original operation/close before this finally.
   // This is test hygiene, NOT a logical disposal ACK assertion.

@@ -10,6 +10,7 @@ type Binding={
  job?:{registration:object;project:TerminalProjection}
  chain?:Promise<void>
  recoveryFailure?:Error
+ recoveryVerified?:()=>boolean
  recoveryReleased?:()=>boolean
  entry?:ChildAgentEntry
 }
@@ -73,12 +74,15 @@ export function projectOriginalSpawnJob(published:Function,terminal:import('../r
 }
 export function hasRequiredOriginalSpawn(published:Function|undefined){return !!published&&runs.get(published)?.required()===true}
 
-/** Called only by the original source after its bound RequiredTaskSettlement
- * issues a nominal ACK-recovery error. Keep the first initial-chain occurrence. */
-export function retainOriginalSpawnRecoveryFailure(published: Function, failure: Error): void {
+/** Retain the first constructor-issued ACK, terminal, or exact parent-readiness
+ * occurrence. A readiness occurrence also retains its original resolution check. */
+export function retainOriginalSpawnRecoveryFailure(published: Function, failure: Error, recovered?: () => boolean): void {
   const owner = runs.get(published)
   if (!owner || !owner.required()) throw Error('Original required spawn unavailable')
-  owner.recoveryFailure ??= failure
+  if (!owner.recoveryFailure) {
+    owner.recoveryFailure = failure
+    owner.recoveryVerified = recovered
+  }
 }
 
 /** A nominal marker alone is insufficient: the exact source and completion
@@ -92,4 +96,5 @@ export function isOriginalSpawnChainAcknowledged(
   if (!chain || !owner || owner.entry !== entry || owner.chain !== chain || !owner.required()) return false
   return owner.recoveryFailure !== undefined && owner.recoveryFailure === cause
     && owner.recoveryReleased?.() === true
+    && (!owner.recoveryVerified || owner.recoveryVerified())
 }

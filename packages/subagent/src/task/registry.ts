@@ -736,6 +736,11 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         const pending=acknowledge();flight=pending;void pending.catch(()=>{if(flight===pending)flight=undefined});return pending
       },
       acknowledgmentRecovery(cause:unknown){if(this!==result)throw Error('Invalid required Task receiver');return save&&capturedTaskAcknowledgmentFailure(save,cause)},
+      captureProjectionRecovery(cause:unknown){
+        if(this!==result||!consumed||released||!parent)throw Error('Original Task projection unavailable');
+        checkData();
+        return ownedTask.operations.captureRequiredWriterRecovery(parent,cause);
+      },
       async waitProjectionCurrent(){if(this!==result||!consumed||released)throw Error('Original Task projection unavailable');await joinWriter();result.assertProjectionCurrent()},
       assertProjectionCurrent(){if(this!==result||!consumed||released)throw Error('Original Task projection unavailable');check();if(saveIdentity&&!sameRetention(saveIdentity,task)||sealedTerminal&&terminalFingerprint(sealedTerminal)!==terminalFingerprint(task))throw Error('Original Task projection changed')},
       async release(){if(this!==result)throw Error('Invalid required Task receiver');if(!consumed)throw Error('Original required Task acknowledgment unavailable');if(!released){await ownedTask.operations.releaseRequiredParent(parent!);released=true;requiredTerminalRoutes.delete(task);requiredClaimRoutes.delete(task);requiredTasks.delete(task)}}

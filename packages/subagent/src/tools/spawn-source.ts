@@ -81,9 +81,18 @@ export function createSpawnSource(owner: FactOwner | ManagedExecutionDomain['own
   let preparingEnd: Promise<void> | undefined
   let terminalSettlement: Promise<void> | undefined
 
+  const waitRequiredProjection=async()=>{
+    try{await requiredTask!.waitProjectionCurrent()}
+    catch(cause){
+      let recovered:(()=>boolean)|undefined;
+      try{recovered=requiredTask!.captureProjectionRecovery?.(cause)}catch{ /* A changed proof never recognizes the original occurrence. */ }
+      if(recovered&&cause instanceof Error)retainOriginalSpawnRecoveryFailure(originalPublished,cause,recovered);
+      throw cause;
+    }
+  };
   let localProjection:Promise<void>|undefined
   const projectRequiredTerminal=()=>{
-    const pending=localProjection??=(async()=>{if(requiredTask){const original=await requiredTask.settle();terminalTaskAcknowledged=true;await requiredTask.waitProjectionCurrent();if(requiredRun)await requiredRun.project(original);else await projectOriginalSpawnJob(originalPublished,original);await requiredTask.waitProjectionCurrent()}})()
+    const pending=localProjection??=(async()=>{if(requiredTask){const original=await requiredTask.settle();terminalTaskAcknowledged=true;await waitRequiredProjection();if(requiredRun)await requiredRun.project(original);else await projectOriginalSpawnJob(originalPublished,original);await waitRequiredProjection()}})()
     void pending.catch(()=>{if(localProjection===pending)localProjection=undefined});return pending
   }
 

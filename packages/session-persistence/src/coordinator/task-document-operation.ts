@@ -16,7 +16,7 @@ import type { createProcessReadLatches } from './process-read-latches.ts'
 
 type TaskSource=SettlementFacts<ProducerFactOutcome>
 
-type Parent = { id: string; assertCurrent(): void; assertOriginal?():void; assertTaskV3Parent?(): void; joinIssuedWriter?():Promise<void>;acquireWriter?():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>> }
+type Parent = { captureWriterRecovery?(cause:unknown):(()=>boolean)|undefined; id: string; assertCurrent(): void; assertOriginal?():void; assertTaskV3Parent?(): void; joinIssuedWriter?():Promise<void>;acquireWriter?():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>> }
 /**
  * S-06: one task-document size limit shared by the staging, observation and
  * publication layers. The format is a single JSON object replaced atomically,
@@ -266,6 +266,13 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
       assertConfiguration()
       captured!.assertOriginal!()
     })
+  }, captureRequiredWriterRecovery(token:object,cause:unknown){
+    if(this!==operations||!requiredParents.has(token))fail();
+    const captured=parents.get(token);
+    assertConfiguration();
+    const recovered=captured?.captureWriterRecovery?.(cause);
+    if(!recovered)return undefined;
+    return ()=>{try{assertConfiguration();return (!parents.has(token)||parents.get(token)===captured)&&recovered()}catch{return false}};
   }, assertOriginalRequiredParent(token:object,id:string){if(this!==operations||!requiredParents.has(token))fail();const captured=parents.get(token);if(!captured||captured.id!==id||!captured.assertOriginal)fail();assertConfiguration();captured!.assertOriginal!()}, async joinRequiredWriter(token:object){if(this!==operations||!requiredParents.has(token))fail();const captured=parents.get(token);if(!captured?.joinIssuedWriter)fail();assertConfiguration();await captured!.joinIssuedWriter!();captured!.assertCurrent()}, begin, assertParentSession(token: object, id: string) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = parents.get(token);return readParent(captured,()=>{if (!captured || captured.id !== id) throw new Error('TASK_DOCUMENT_CONFLICT'); captured.assertCurrent()}) }, assertTaskV3Parent(token: object, id: string) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = parents.get(token), eligible = parentEligibility.get(token);return readParent(captured,()=>{if (!captured || captured.id !== id || !eligible) throw new Error('TASK_DOCUMENT_CONFLICT'); assertConfiguration(); captured.assertCurrent(); eligible()}) }, cleanupFor(error: unknown) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); return typeof error === 'object' && error !== null ? failures.get(error) : undefined }, async joinTaskDocumentIO() { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const result = await Promise.allSettled([...records].map(record => record.finite())); const errors = result.flatMap(row => row.status === 'rejected' ? [row.reason] : []); if (errors.length) throw new AggregateError(errors, 'Task document cleanup unresolved') } })
   for(const key of ['assertParentSession','assertTaskV3Parent'])associateArtifactCurrentnessReader(operations,key)
   return operations

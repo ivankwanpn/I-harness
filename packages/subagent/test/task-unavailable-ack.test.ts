@@ -1,6 +1,6 @@
 import {it,expect,vi} from 'vitest'
 const scopeCut=vi.hoisted(()=>({path:'',armed:false,cause:undefined as unknown,attempts:0,entered:undefined as undefined|(()=>void),gate:undefined as undefined|Promise<void>}))
-vi.mock('../../fs-lock/src/index.ts',async original=>{const real=await original<typeof import('../../fs-lock/src/index.ts')>();return {...real,async acquireSessionLock(options:import('../../fs-lock/src/index.ts').AcquireOptions){const lock=await real.acquireSessionLock(options);return {get held(){return lock.held},async release(){if(options.lockPath===scopeCut.path){scopeCut.entered?.();await scopeCut.gate;if(scopeCut.armed){scopeCut.attempts++;throw scopeCut.cause}}await lock.release()}}}}})
+vi.mock('../../fs-lock/src/index.ts',async original=>{const real=await original<typeof import('../../fs-lock/src/index.ts')>();return {...real,async acquireSessionLock(options:import('../../fs-lock/src/index.ts').AcquireOptions){const lock=await real.acquireSessionLock(options);if(options.lockPath!==scopeCut.path)return lock;return {get held(){return lock.held},async release(){if(options.lockPath===scopeCut.path){scopeCut.entered?.();await scopeCut.gate;if(scopeCut.armed){scopeCut.attempts++;throw scopeCut.cause}}await lock.release()}}}}})
 import {mkdtemp,rm} from 'node:fs/promises'
 import {join} from 'node:path'
 import {createJsonlTaskTransitionCoordinator} from '../../session-persistence-jsonl/src/task-document-factory.ts'

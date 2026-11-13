@@ -1,7 +1,7 @@
 import {lockPathFor} from '../../fs-lock/src/index.ts'
 import {artifactPathsFor} from '../../session-persistence/src/coordinator/artifact-path-association.ts'
 import {createJsonlBackend} from '../../session-persistence-jsonl/src/index.ts'
-vi.mock('../../fs-lock/src/index.ts',async load=>{const original=await load<typeof import('../../fs-lock/src/index.ts')>();return {...original,async acquireSessionLock(options:import('../../fs-lock/src/index.ts').AcquireOptions){const lock=await original.acquireSessionLock(options);queueGate.locks.set(options.lockPath,lock);return {get held(){return lock.held},async release(){if(options.lockPath===queueGate.closePath){queueGate.closeEntered?.();await queueGate.closeGate;if(queueGate.closeArmed){queueGate.closeAttempts++;throw queueGate.closeCause}}await lock.release()}}}}})
+vi.mock('../../fs-lock/src/index.ts',async load=>{const original=await load<typeof import('../../fs-lock/src/index.ts')>();return {...original,async acquireSessionLock(options:import('../../fs-lock/src/index.ts').AcquireOptions){const lock=await original.acquireSessionLock(options);queueGate.locks.set(options.lockPath,lock);if(options.lockPath!==queueGate.closePath)return lock;return {get held(){return lock.held},async release(){if(options.lockPath===queueGate.closePath){queueGate.closeEntered?.();await queueGate.closeGate;if(queueGate.closeArmed){queueGate.closeAttempts++;throw queueGate.closeCause}}await lock.release()}}}}})
 const queueGate=vi.hoisted(()=>({root:'',blocked:false,ackEntered:undefined as undefined|(()=>void),ackGate:undefined as undefined|Promise<void>,stages:[] as string[],closePath:'',closeArmed:false,closeCause:undefined as unknown,closeAttempts:0,closeEntered:undefined as undefined|(()=>void),closeGate:undefined as undefined|Promise<void>,locks:new Map<string,{readonly held:boolean;release():void|Promise<void>}>()}))
 vi.mock('../../session-persistence-jsonl/src/backend/document-write.ts',async load=>{
  const original=await load<typeof import('../../session-persistence-jsonl/src/backend/document-write.ts')>()
@@ -120,7 +120,10 @@ it('refuses genuine original Native ownership loss before Task write and retains
  const capture=artifactPathsFor(createJsonlBackend(root))!.session('parent') as {key:string},lock=queueGate.locks.get(lockPathFor(root,'artifact-ownership:'+capture.key))!;expect(lock?.held).toBe(true)
  const before=lastOriginalTaskSave(tasks);await lock.release();expect(lock.held).toBe(false)
  await expect(required.settle()).rejects.toThrow();expect(lastOriginalTaskSave(tasks)).toBe(before);expect(()=>document.assertReady()).toThrow()
- await expect(c.close()).rejects.toThrow();await tasks.closeOwnedLoad()
+ await expect(c.close()).rejects.toThrow();await expect(tasks.closeOwnedLoad()).rejects.toThrow('Original Task owner cleanup unresolved')
+ // The logical source remains refused. Close only test-owned original OS
+ // handles, without reporting that its unresolved source cleanup acknowledged.
+ for(const [path,held]of queueGate.locks)if(path.startsWith(root)&&held.held)await held.release()
 })
 
 it('refuses a changed terminal alias after native Task ACK instead of publishing a different outcome',async()=>{
@@ -176,7 +179,7 @@ it.each([false,true])('holds native Task IO and parks only its parent exclusion 
   const action=document.beginAction(),source=action.registerSettlementSource(async()=>{await required?.settle()});required=(await bindRequiredTaskSettlement(tasks,task,source,async()=>({taskId:task.id,outcome:'cancelled'})))!
   queueGate.root=root;queueGate.stages=[];queueGate.blocked=unknown;queueGate.ackEntered=entered.resolve;queueGate.ackGate=release.promise
   const settling=required.settle();void settling.catch(()=>{});await entered.promise;const save=lastOriginalTaskSave(tasks),count=document.view.events.length
-  let admitted=false;const parentFact=action.facts.metadata.admit({type:'plan/mode',mode:'on'}).then(outcome=>{admitted=true;return outcome})
+  let admitted=false;const parentFact=action.captureMetadata!({type:'plan/mode',mode:'on'}).admit().then(outcome=>{admitted=true;return outcome})
   await Promise.resolve();await Promise.resolve();expect(admitted).toBe(false);expect(document.view.events).toHaveLength(count)
   release.resolve();if(unknown){await expect(settling).rejects.toThrow();expect(await parentFact).toMatchObject({kind:'committed'});expect(()=>required!.assertProjectionCurrent()).toThrow();expect(lastOriginalTaskSave(tasks)).toBe(save);queueGate.blocked=false;await required.reconcile()}else await settling
   expect(await parentFact).toMatchObject({kind:'committed'});expect(queueGate.stages).toHaveLength(1);expect(lastOriginalTaskSave(tasks)).toBe(save)
@@ -189,7 +192,7 @@ it('parks parent scheduling after native UNKNOWN and cleanup failure, then resum
  try{
   await c.create({sessionId:'parent'});const document=await c.openManagedDocument('parent');tasks=createTaskRegistry({coordinator:c,stateId:'parent',ownedTask:captureOwnedTaskContext(c,document,document.view,'parent'),reportPolicy:SHIPPING_REPORT_POLICY,results:createTaskResultRetention(undefined,undefined,'parent')});await tasks.ready
   const task=tasks.submit({identity:{parentSessionId:'parent'},agentPath:'one',description:'one',prompt:'work',agent:'general',delivery:'tool'});await tasks.flushPersistence();const action=document.beginAction(),source=action.registerSettlementSource(async()=>{await required?.settle()});required=(await bindRequiredTaskSettlement(tasks,task,source,async()=>({taskId:task.id,outcome:'cancelled'})))!
-  queueGate.root=root;queueGate.stages=[];queueGate.blocked=true;await expect(required.settle()).rejects.toThrow();const save=lastOriginalTaskSave(tasks),target=artifactPathsFor(createJsonlBackend(root))!.document('task-parent') as {key:string};queueGate.blocked=false;queueGate.closePath=lockPathFor(root,'artifact-document-lease:'+target.key);queueGate.closeCause=false;queueGate.closeArmed=true
+  const target=artifactPathsFor(createJsonlBackend(root))!.document('task-parent') as {key:string};queueGate.closePath=lockPathFor(root,'artifact-document-lease:'+target.key);queueGate.root=root;queueGate.stages=[];queueGate.blocked=true;await expect(required.settle()).rejects.toThrow();const save=lastOriginalTaskSave(tasks);queueGate.blocked=false;queueGate.closeCause=false;queueGate.closeArmed=true
   let cleanupFailed=false;await required.recoverCapturedAcknowledgment().catch(cause=>{cleanupFailed=true;expect(cause).toBe(false)});expect(cleanupFailed).toBe(true);expect(()=>required!.assertProjectionCurrent()).toThrow();expect(await action.facts.metadata.admit({type:'plan/mode',mode:'on'})).toMatchObject({kind:'committed'});expect(queueGate.stages).toHaveLength(1);expect(lastOriginalTaskSave(tasks)).toBe(save)
   queueGate.closeArmed=false;await required.reconcile();expect(lastOriginalTaskSave(tasks)).toBe(save);expect(queueGate.stages).toHaveLength(1);await required.release();await source.close();action.finish();await tasks.closeOwnedLoad()
  }finally{queueGate.blocked=false;queueGate.root='';queueGate.closeArmed=false;queueGate.closePath='';await tasks?.closeOwnedLoad();await c.close()}

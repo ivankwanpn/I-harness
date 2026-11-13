@@ -1,6 +1,6 @@
 import type { SettlementFacts } from '@i-harness/core-session'
 import type { TaskRegistry,TaskRecord,TaskTerminalizeInput } from './types.ts'
-export interface RequiredTaskSettlement {settle():Promise<Readonly<TaskRecord>>;reconcile():Promise<Readonly<TaskRecord>>;recoverCapturedAcknowledgment():Promise<Readonly<TaskRecord>|undefined>;acknowledgmentRecovery(cause:unknown):Error|undefined;waitProjectionCurrent():Promise<void>;assertProjectionCurrent():void;release():Promise<void>}
+export interface RequiredTaskSettlement {captureProjectionRecovery?(cause:unknown):(()=>boolean)|undefined;settle():Promise<Readonly<TaskRecord>>;reconcile():Promise<Readonly<TaskRecord>>;recoverCapturedAcknowledgment():Promise<Readonly<TaskRecord>|undefined>;acknowledgmentRecovery(cause:unknown):Error|undefined;waitProjectionCurrent():Promise<void>;assertProjectionCurrent():void;release():Promise<void>}
 export type NotificationTaskAccess=Pick<TaskRegistry,'get'|'notifications'|'updateNotification'|'retainResult'|'save'>
 export interface TaskNotificationProgress {readonly tasks:NotificationTaskAccess;close():Promise<void>}
 type Bind=(task:TaskRecord,source:SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>,producer:()=>Promise<TaskTerminalizeInput>)=>Promise<RequiredTaskSettlement|undefined>

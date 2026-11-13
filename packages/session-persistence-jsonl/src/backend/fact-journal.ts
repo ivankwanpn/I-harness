@@ -153,60 +153,65 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
     },
     async appendOwnedBatch(id, owner, prefix, batch) {
       scope(id, owner)
-      return captureIO.tracked<Awaited<ReturnType<OwnedFactBackend['appendOwnedBatch']>>>(id, owner, async ledger => {
-        scope(id, owner)
-        const decoded = checkBatch(prefix, batch)
-        // Only the original JSONL constructor pairs these exact native-only closures.
-        // Custom callback-bearing factories never receive this observation.
-        let leavePrewrite = nativePrewrite?.enter(id, owner, batch)
-        try { await assertNotDeleted('session', id) } catch (error) { leavePrewrite?.(); throw error }
-        let handle: FileHandle | undefined, resource: CaptureResource | undefined, issued = false, synced = false, position = 0
-        let outcome: BackendFactOutcome
-        try {
-          resource = await captureIO.acquire(ledger, filePath(id), 'r+'); handle = resource.handle
-          const h = await header(handle, filePath(id), batch)
-          position = h.bytes + prefix.bodyBytes
-          if ((await handle.stat()).size !== position) return { kind: 'conflict', key: batch.key }
-          await checkPrefix(handle, h, prefix)
-          // No await is permitted between the final fence and the first write.
+      // Register scheduling identity after the original scope check, before the
+      // tracked IO scheduler yields. Opaque constructor wrappers have not
+      // entered this original method and receive no prewrite observation.
+      let leavePrewrite = nativePrewrite?.enter(id, owner, batch)
+      try {
+        return await captureIO.tracked<Awaited<ReturnType<OwnedFactBackend['appendOwnedBatch']>>>(id, owner, async ledger => {
           scope(id, owner)
-          leavePrewrite?.(); leavePrewrite = undefined
-          owner.beforeIssue()
-          issued = true
-          let written = 0
-          while (written < batch.bytes.length) {
-            const result = await handle.write(batch.bytes, written, batch.bytes.length - written, position + written)
-            if (!Number.isSafeInteger(result.bytesWritten) || result.bytesWritten <= 0) throw new Error('Fact write made no progress')
-            written += result.bytesWritten
+          const decoded = checkBatch(prefix, batch)
+          try { await assertNotDeleted('session', id) } catch (error) { leavePrewrite?.(); leavePrewrite = undefined; throw error }
+          let handle: FileHandle | undefined, resource: CaptureResource | undefined, issued = false, synced = false, position = 0
+          let outcome: BackendFactOutcome
+          try {
+            resource = await captureIO.acquire(ledger, filePath(id), 'r+'); handle = resource.handle
+            const h = await header(handle, filePath(id), batch)
+            position = h.bytes + prefix.bodyBytes
+            if ((await handle.stat()).size !== position) return { kind: 'conflict', key: batch.key }
+            await checkPrefix(handle, h, prefix)
+            // No await is permitted between the final fence and the first write.
+            scope(id, owner)
+            leavePrewrite?.(); leavePrewrite = undefined
+            owner.beforeIssue()
+            issued = true
+            let written = 0
+            while (written < batch.bytes.length) {
+              const result = await handle.write(batch.bytes, written, batch.bytes.length - written, position + written)
+              if (!Number.isSafeInteger(result.bytesWritten) || result.bytesWritten <= 0) throw new Error('Fact write made no progress')
+              written += result.bytesWritten
+            }
+            await handle.sync()
+            synced = true
+            outcome = { kind: 'committed', receipt: receipt(owner, batch, decoded.prefixDigest) }
+          } catch (error) {
+            const code = (error as { code?: string } | null | undefined)?.code
+            if (!issued) outcome = error instanceof JournalPrefixConflict ? { kind: 'conflict', key: batch.key } : code === 'FACT_CANCELLED' || code === 'FACT_CLOSED' || code === 'FACT_OWNER_UNSUPPORTED' || code === 'FACT_RECOVERY_REQUIRED' || code === 'FACT_PRECONDITION_STALE'
+              ? { kind: 'not-issued', code } : { kind: 'absent', key: batch.key }
+            else {
+              outcome = { kind: 'unknown', key: batch.key }
+              try {
+                scope(id, owner)
+                await handle!.truncate(position)
+                await handle!.sync()
+                outcome = { kind: 'absent', key: batch.key }
+              } catch { /* absence needs both truncate and sync under the same lease */ }
+            }
+          } finally {
+            leavePrewrite?.(); leavePrewrite = undefined
+            if (handle) try { await captureIO.close(ledger, resource!) } catch {
+              // A successful fsync is already a durable commit. Cleanup cannot
+              // erase that receipt or authorize rewriting the committed batch.
+              if (synced && outcome!.kind === 'committed') outcome = { ...outcome!, cleanupDiagnostic: 'file-close-failed' }
+              else if (!synced && issued) outcome = { kind: 'unknown', key: batch.key }
+            }
           }
-          await handle.sync()
-          synced = true
-          outcome = { kind: 'committed', receipt: receipt(owner, batch, decoded.prefixDigest) }
-        } catch (error) {
-          const code = (error as { code?: string } | null | undefined)?.code
-          if (!issued) outcome = error instanceof JournalPrefixConflict ? { kind: 'conflict', key: batch.key } : code === 'FACT_CANCELLED' || code === 'FACT_CLOSED' || code === 'FACT_OWNER_UNSUPPORTED' || code === 'FACT_RECOVERY_REQUIRED' || code === 'FACT_PRECONDITION_STALE'
-            ? { kind: 'not-issued', code } : { kind: 'absent', key: batch.key }
-          else {
-            outcome = { kind: 'unknown', key: batch.key }
-            try {
-              scope(id, owner)
-              await handle!.truncate(position)
-              await handle!.sync()
-              outcome = { kind: 'absent', key: batch.key }
-            } catch { /* absence needs both truncate and sync under the same lease */ }
-          }
-        } finally {
-          leavePrewrite?.(); leavePrewrite = undefined
-          if (handle) try { await captureIO.close(ledger, resource!) } catch {
-            // A successful fsync is already a durable commit. Cleanup cannot
-            // erase that receipt or authorize rewriting the committed batch.
-            if (synced && outcome!.kind === 'committed') outcome = { ...outcome!, cleanupDiagnostic: 'file-close-failed' }
-            else if (!synced && issued) outcome = { kind: 'unknown', key: batch.key }
-          }
-        }
-        if (outcome!.kind === 'committed' && decoded.events.some(event => event.type === 'session/bootstrap')) await publication?.end(id, filePath(id))
-        return outcome!
-      })
+          if (outcome!.kind === 'committed' && decoded.events.some(event => event.type === 'session/bootstrap')) await publication?.end(id, filePath(id))
+          return outcome!
+        })
+      } finally {
+        leavePrewrite?.()
+      }
     },
     async reconcileOwnedBatch(id, owner, prefix, batch) {
       scope(id, owner)

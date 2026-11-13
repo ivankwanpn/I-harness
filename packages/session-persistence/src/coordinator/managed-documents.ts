@@ -235,7 +235,12 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       if(entry.revoked||documents.get(id)!==entry||entry.document!==document||!transitions||entry.headerUnknown)throw new FactRecoveryRequiredError();
       const original=captureManagedRequiredParent(document,ownership,source);
       const checkIdentity=()=>{if(documents.get(id)!==entry||entry.document!==document||entry.headerUnknown||((entry.bootstrap||entry.selected)&&!entry.ready))throw new FactRecoveryRequiredError();original.assertOriginal()};const check=()=>{checkIdentity();original.assertCurrent()};check();
-      const result=Object.freeze({id,assertOriginal(){if(this!==result)throw new TypeError('Invalid required parent');checkIdentity()},async acquireWriter(){if(this!==result)throw new TypeError('Invalid required parent');const lease=await original.acquireWriter();try{check();return lease}catch(error){lease.release();throw error}},async joinIssuedWriter(){if(this!==result)throw new TypeError('Invalid required parent');await original.joinIssuedWriter();check()},assertCurrent(){if(this!==result)throw new TypeError('Invalid required parent');check()},assertTaskV3Parent(){if(this!==result)throw new TypeError('Invalid required parent');check();original.assertTask14Ready()}});return result;
+      const result=Object.freeze({id,captureWriterRecovery(cause:unknown){
+        if(this!==result||documents.get(id)!==entry||entry.document!==document||entry.headerUnknown)throw new FactRecoveryRequiredError();
+        const recovered=original.captureWriterRecovery?.(cause);
+        if(!recovered)return undefined;
+        return ()=>!entry.headerUnknown&&(!documents.has(id)||documents.get(id)===entry)&&entry.document===document&&recovered();
+      },assertOriginal(){if(this!==result)throw new TypeError('Invalid required parent');checkIdentity()},async acquireWriter(){if(this!==result)throw new TypeError('Invalid required parent');const lease=await original.acquireWriter();try{check();return lease}catch(error){lease.release();throw error}},async joinIssuedWriter(){if(this!==result)throw new TypeError('Invalid required parent');await original.joinIssuedWriter();check()},assertCurrent(){if(this!==result)throw new TypeError('Invalid required parent');check()},assertTaskV3Parent(){if(this!==result)throw new TypeError('Invalid required parent');check();original.assertTask14Ready()}});return result;
     },
     captureParent(owner: import('@i-harness/core-session/internal/execution').ManagedExecutionOwner) {
       const association = documentEntries.get(owner)

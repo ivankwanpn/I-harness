@@ -26,7 +26,7 @@ import { ownBackendOutcome, sameBatchKey } from './fact-outcome.ts';
 import { createActionCaptures } from './action-captures.ts';
 import type { createProcessReadLatches } from './process-read-latches.ts';
 type TaskMetadataUpdate={before(meta:unknown):void;after(meta:unknown):void;finish(success:boolean):void}
-type RequiredTaskParentReadiness={assertOriginal():void;assertCurrent():void;assertTask14Ready():void;joinIssuedWriter():Promise<void>;acquireWriter():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>>}
+type RequiredTaskParentReadiness={captureWriterRecovery?(cause:unknown):(()=>boolean)|undefined;assertOriginal():void;assertCurrent():void;assertTask14Ready():void;joinIssuedWriter():Promise<void>;acquireWriter():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>>}
 
 type TaskParentReadiness=Readonly<{view:SessionView;assertCurrent():void;assertOriginal():void;assertTask14Ready():void}>
 type Ticket = {
@@ -68,6 +68,7 @@ type Pending = {
     settlement: ReturnType<typeof Promise.withResolvers<void>>;
     settlementSettled: boolean;
     cleanupReported?: boolean;
+    resolved?: 'committed' | 'absent';
     installationFailure?: { error: unknown };
 };
 export interface ManagedReadyObservation {
@@ -89,7 +90,7 @@ export function originalManagedExecution(document:ManagedDocument,ownership:Owne
 export function managedExecutionStatus(document: ManagedDocument): 'available' | 'unavailable' | 'retired' {
     return executionStatuses.get(document)?.() ?? 'unavailable';
 }
-const readyOwners = new WeakMap<object, { ownership: Ownership; ownerToken(): HeldFactOwner['owner']; invalidateMetadata(revision:object):void; captureTaskParent():TaskParentReadiness;beginTaskMetadata():TaskMetadataUpdate; capture(): ManagedReadyObservation; captureOriginalReady(): (() => void) | undefined; retainSelected(onRevoke:()=>void):SelectedSourceRead; captureRequiredParent(source: import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>): Readonly<{view:SessionView;assertCurrent():void;assertOriginal():void;assertTask14Ready():void;joinIssuedWriter():Promise<void>;acquireWriter():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>>}>; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void; assertOriginal():void; assertTask14Ready(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
+const readyOwners = new WeakMap<object, { ownership: Ownership; ownerToken(): HeldFactOwner['owner']; invalidateMetadata(revision:object):void; captureTaskParent():TaskParentReadiness;beginTaskMetadata():TaskMetadataUpdate; capture(): ManagedReadyObservation; captureOriginalReady(): (() => void) | undefined; retainSelected(onRevoke:()=>void):SelectedSourceRead; captureRequiredParent(source: import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>): Readonly<{captureWriterRecovery?(cause:unknown):(()=>boolean)|undefined;view:SessionView;assertCurrent():void;assertOriginal():void;assertTask14Ready():void;joinIssuedWriter():Promise<void>;acquireWriter():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>>}>; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void; assertOriginal():void; assertTask14Ready(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
 /** Same original document/ownership lookup; no incoming token or callback is enrolled. */
 export function originalManagedDocumentOwner(document: ManagedDocument, ownership: Ownership): HeldFactOwner['owner'] {
   const execution = privateExecutionOwners.get(document)
@@ -288,6 +289,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                 return { results: current.entries.map(() => ({ kind: 'recovery-required', code: 'FACT_INSTALL_FAILED', receipt })), observe: false, cleanupDiagnostic };
             }
             prefix = { eventCount: prefix.eventCount + current.batch.key.count, bodyBytes: prefix.bodyBytes + current.batch.bytes.length, prefixDigest: receipt.prefixDigest };
+            current.resolved = 'committed';
             pending = undefined;
             const results = current.entries.map(entry => {
                 const seqs = entry.seqs!;
@@ -304,6 +306,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
             failQueued();
         else {
             if(current.staged){if(outcome.kind==='absent')current.staged.settleAbsent({kind:'absent',key:outcome.key});else if(!current.issued)current.staged.discardUnissued()}
+            if(outcome.kind==='absent')current.resolved='absent';
             pending = undefined;
             for (const entry of current.entries) {
                 entry.ticket.release();
@@ -388,7 +391,8 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                     if (bootstrap?.selected && selectedIOStarted) await settleSelected();
                     if (requiredWriter) throw new FactRecoveryRequiredError();
                     if(bootstrap?.selected)selectedIOStarted=true;
-                    await settleManagedJournalCleanup(journalScopes);
+                    const cleanup = settleManagedJournalCleanup(journalScopes);
+                    if (cleanup) await cleanup;
                     const outcome = bootstrap?.selected ? await selectedJournal!.appendOwnedBatch(id,issuer,selectedLane!,prefix,batch) : await backend.appendOwnedBatch!(id,issuer,prefix,batch);
                     completed = finish(current, outcome);
                 }
@@ -821,10 +825,13 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
         const revision=taskRevision;taskMetadataPending++;let done=false,before:string|undefined,after:string|undefined,invalid=false;
         return Object.freeze({before(meta:unknown){if(done)throw TypeError('Metadata operation finished');try{before=taskParentMetadataProjection(meta)}catch{invalid=true}},after(meta:unknown){if(done)throw TypeError('Metadata operation finished');try{after=taskParentMetadataProjection(meta)}catch{invalid=true}},finish(success:boolean){if(done)return;done=true;taskMetadataPending--;try{held.assertHeld()}catch{success=false}if(!success||invalid||before===undefined||after===undefined||before!==after||revision!==taskRevision||closed||closing){taskRevision={};taskMetadataStale=true}}});
     }
-    function captureRequiredWriterProof<T extends object>(source:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>,checkIdentity:()=>void,check:()=>void,extra:T) {
+    function captureRequiredWriterProof<T extends object>(source:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>,checkIdentity:()=>void,check:()=>void,extra:T,captureRecovery?:(cause:unknown)=>(()=>boolean)|undefined) {
         const joinableWriter=()=>{ownership.assertOutsideSessionOperation(id);checkIdentity();const batch=pending;if(batch){if(batch.settlementSettled||(!batch.issued&&(!batch.issuer||!canJoinOriginalNativePrewrite(backend,id,batch.issuer,batch.batch)))||batch.entries.some(entry=>entry.authorization.source===source)||batch.receipt||batch.installationFailure)throw Object.assign(new FactRecoveryRequiredError(),{cause:{originalBatchIssued:batch.issued,sameRequiredSource:batch.entries.some(entry=>entry.authorization.source===source),receipt:!!batch.receipt,installationFailure:!!batch.installationFailure,eventTypes:batch.events.map(event=>event.type)}});}return batch};
         const joinIssuedWriter=async()=>{const batch=joinableWriter();if(batch)await batch.settlement.promise;check()};
-        const result=Object.freeze({...extra,assertOriginal(){if(this!==result)throw new TypeError('Invalid required parent');checkIdentity()},async acquireWriter(){
+        const result=Object.freeze({...extra,captureWriterRecovery(cause:unknown){
+          if(this!==result)throw new TypeError('Invalid required parent');
+          return captureRecovery?.(cause);
+        },assertOriginal(){if(this!==result)throw new TypeError('Invalid required parent');checkIdentity()},async acquireWriter(){
           if(this!==result)throw new TypeError('Invalid required parent')
           let retired=false,held=false,gate=Promise.withResolvers<void>();gate.resolve()
           const writer={get released(){return gate.promise},release(){if(requiredWriter===writer){requiredWriter=undefined;held=false;gate.resolve()}}}
@@ -841,10 +848,73 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
       const original=source&&sourceDrains.get(source);
       if(source&&(!original?.action||original.action.stopped||original.closeRequested||!original.sourceMethods||!original.deliveryMethods||formatVersion!==14))throw new FactRecoveryRequiredError();
       const originalReady=originalPrivateReady,revision=taskRevision;
+      let recoveryOccurrence:{error:FactRecoveryRequiredError;batch:Pending}|undefined;
+      const assertSourceNamespace=()=>{
+        if(source){
+          for(const [object,fields]of [[source,original!.sourceMethods!],[original!.sourceMethods!.delivery!.value as object,original!.deliveryMethods!]] as const){
+            for(const key of Reflect.ownKeys(fields)){
+              const field=Reflect.get(fields,key) as PropertyDescriptor,now=Object.getOwnPropertyDescriptor(object,key);
+              if(!now||!('value'in now)||now.value!==field.value)throw new FactRecoveryRequiredError();
+            }
+          }
+        }
+      };
+      const assertNamespace=()=>{
+        if(taskMetadataPending||taskMetadataStale||revision!==taskRevision||sourceFault
+          ||Object.getOwnPropertyDescriptor(document,'assertReady')?.value!==originalReady)throw new FactRecoveryRequiredError();
+        assertSourceNamespace();
+      };
       const rawIdentity=()=>{
-        if(closed||taskMetadataPending||taskMetadataStale||revision!==taskRevision||Object.getOwnPropertyDescriptor(document,'assertReady')?.value!==originalReady||quarantined||sourceFault)throw new FactRecoveryRequiredError();
+        if(!source||!originalIdentity){
+          // Opaque dependencies keep their original refusal and callback order.
+          // They cannot issue a nominal recovery occurrence.
+          if(closed||taskMetadataPending||taskMetadataStale||revision!==taskRevision
+            ||Object.getOwnPropertyDescriptor(document,'assertReady')?.value!==originalReady
+            ||quarantined||sourceFault)throw new FactRecoveryRequiredError();
+          execution!.assertCurrent();held.assertHeld();
+          if(source){
+            if(!sourceDrains.has(source))throw new FactRecoveryRequiredError();
+            assertSourceNamespace();source.assertHeld();
+          }
+          return;
+        }
+        assertGuardMethods();
+        assertNamespace();
+        if(closed)throw new FactRecoveryRequiredError();
         execution!.assertCurrent();held.assertHeld();
-        if(source){if(!sourceDrains.has(source))throw new FactRecoveryRequiredError();for(const [object,fields]of [[source,original!.sourceMethods!],[original!.sourceMethods!.delivery!.value as object,original!.deliveryMethods!]] as const)for(const key of Reflect.ownKeys(fields)){const field=Reflect.get(fields,key) as PropertyDescriptor,now=Object.getOwnPropertyDescriptor(object,key);if(!now||!('value'in now)||now.value!==field.value)throw new FactRecoveryRequiredError()}source.assertHeld()}
+        if(source){
+          if(sourceDrains.get(source)!==original)throw new FactRecoveryRequiredError();
+          source.assertHeld();
+          assertNamespace();
+          assertGuardMethods();
+        }
+        if(quarantined){
+          const batch=pending;
+          if(originalIdentity&&source&&batch?.issued&&!batch.receipt&&!batch.installationFailure
+            &&!batch.entries.some(entry=>entry.authorization.source===source)){
+            if(recoveryOccurrence?.batch!==batch)recoveryOccurrence={error:new FactRecoveryRequiredError(),batch};
+            throw recoveryOccurrence.error;
+          }
+          throw new FactRecoveryRequiredError();
+        }
+      };
+      const captureRecovery=(cause:unknown)=>{
+        const occurrence=recoveryOccurrence;
+        if(!originalIdentity||!source||!occurrence||occurrence.error!==cause)return undefined;
+        // Only this original proof can recognize its own failure. Recognition
+        // supplies no admission and does not resolve the pending native batch.
+        assertGuardMethods();assertNamespace();execution!.assertCurrent();held.assertHeld();
+        if(closed||sourceDrains.get(source)!==original)throw new FactRecoveryRequiredError();
+        source.assertHeld();
+        assertNamespace();assertGuardMethods();
+        return ()=>{
+          try{
+            assertGuardMethods();assertNamespace();
+            if(!closed){execution!.assertCurrent();held.assertHeld();assertGuardMethods();assertNamespace()}
+            return !pending&&!quarantined
+              &&(occurrence.batch.resolved==='committed'||occurrence.batch.resolved==='absent');
+          }catch{return false}
+        };
       };
       const sourceField=source&&!types.isProxy(source)?Object.getOwnPropertyDescriptor(source,'assertHeld'):undefined
       const sourceGuard=sourceField&&'value'in sourceField&&typeof sourceField.value==='function'&&isArtifactCurrentGuard(sourceField.value)?sourceField.value as ()=>void:undefined
@@ -852,7 +922,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
       const checkIdentity=originalIdentity?createArtifactCurrentGuard(()=>{assertGuardMethods();if(source&&Object.getOwnPropertyDescriptor(source,'assertHeld')?.value!==sourceGuard)throw new FactRecoveryRequiredError();rawIdentity()}):()=>withImmediateArtifactCurrentChecks(rawIdentity)
       const rawCheck=()=>{checkIdentity();if(source){if(pending)throw new FactRecoveryRequiredError()}else Reflect.apply(originalReady,document,[])}
       const check=originalIdentity&&(source||isArtifactCurrentGuard(originalReady))?createArtifactCurrentGuard(rawCheck):()=>withImmediateArtifactCurrentChecks(rawCheck);check();
-      if(source)return captureRequiredWriterProof(source,checkIdentity,check,{});
+      if(source)return captureRequiredWriterProof(source,checkIdentity,check,{},captureRecovery);
       const proof=Object.freeze({assertOriginal(){if(this!==proof)throw TypeError('Invalid original Task parent');checkIdentity()},assertCurrent(){if(this!==proof)throw TypeError('Invalid original Task parent');check()},assertTask14Ready(){if(this!==proof)throw TypeError('Invalid original Task parent');check();if(formatVersion!==14)throw new FactRecoveryRequiredError()}});return proof;
     }
     executionStatuses.set(document, executionStatus);

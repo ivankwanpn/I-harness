@@ -33,21 +33,24 @@ it('retains the same Task projection across UNKNOWN parent writer',async()=>{
  const childServer=await createLoopbackProvider('/v1/chat/completions',[async response=>{response.end(wire(false))}]),child=createOpenAICompatibleClient({apiKey:'loopback',model:'child',baseUrl:childServer.baseUrl}),output=createContextOutputService({root:join(root,'output'),workspaceId:'private-task'})
  const mounted=registerSubagent(ctx,pair.registry,{managedParent:{domain:origin.domain,execution},parentModel:child,exec:registerExec(ctx),resolveModel:async()=>({status:'unconfigured',reason:'unused'}),prepareTaskChild:createUnmanagedTaskChildHost({coordinator,policy:'unmanaged'}),generationFactoryFor:(owner,id,selected)=>(owned,deps)=>createGenerationLifecycle(owner.view,id,owned,{enabled:false,selectedClient:selected},deps),reportPolicy:SHIPPING_REPORT_POLICY,results:createTaskResultRetention(output,undefined,'parent'),parentNotify,persist:{coordinator,stateId:'parent',parentSessionId:'parent'}})
  const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{response.end(wire(true))},async response=>{response.end(wire(false))}])
- let primary:unknown
+ let primary:{cause:unknown}|undefined
+ let writerAction:ReturnType<typeof execution.owner.beginAction>|undefined
+ let writerFinished=false
+ let writer:Promise<import('@i-harness/core-session').ProducerFactOutcome>|undefined
  try{
   await mounted.ready;await mounted.drainParentNotifications()
   const agent=createManagedAgent(ctx,{execution,domain:origin.domain,hooks:captureExecutionHookChannel(ctx),modelCallOrigin:origin.bind(pair.registry,pair.driver),tools:pair.registry,model:createOpenAICompatibleClient({apiKey:'loopback',model:'parent',baseUrl:server.baseUrl}),systemPrompt:'system',budget:{contextWindow:32000},maxOutputTokens:128,generationFactory:(action,deps)=>createExecutionGenerationLifecycle(execution,'parent',action,undefined,deps)})
   expect((await agent.run('delegate work',undefined,undefined,undefined,{provenance:{kind:'human',authority:'request',scope:'turn',producer:'session.prompt'}})).finalText).toBe('continued')
   const task=await mounted.tasks.wait('task-1',60000);expect(task?.status).toBe('completed');await terminalAck.promise
-  const writerAction=execution.owner.beginAction();cut.enabled=true;cut.entered=writerEntered.resolve;cut.release=releaseWriter.promise
-  const capture=writerAction.captureMetadata!({type:'plan/mode',mode:'on'}),writer=capture.admit();await writerEntered.promise;continueTerminal.resolve();await endEntered.promise
-  await Promise.resolve();expect(endAcknowledged).toBe(false);releaseWriter.resolve();expect((await writer).kind).toBe('unknown');await endFailed.promise;expect(()=>mounted.tasks.list()).toThrow();expect((await backend.read('parent')).events.filter(e=>e.type==='subagent/end')).toHaveLength(0);expect((await capture.reconcile()).kind).toBe('committed');writerAction.finish();await mounted.drainParentNotifications()
+  writerAction=execution.owner.beginAction();cut.enabled=true;cut.entered=writerEntered.resolve;cut.release=releaseWriter.promise
+  const capture=writerAction.captureMetadata!({type:'plan/mode',mode:'on'});writer=capture.admit();await writerEntered.promise;continueTerminal.resolve();await endEntered.promise
+  await Promise.resolve();expect(endAcknowledged).toBe(false);releaseWriter.resolve();expect((await writer).kind).toBe('unknown');await endFailed.promise;expect(()=>mounted.tasks.list()).toThrow();expect((await backend.read('parent')).events.filter(e=>e.type==='subagent/end')).toHaveLength(0);expect((await capture.reconcile()).kind).toBe('committed');writerAction.finish();writerFinished=true;await mounted.drainParentNotifications()
   await awakened.promise;expect(wakes).toBeGreaterThan(0);expect(mounted.tasks.list()).toHaveLength(1)
   expect(inputs.inbox.pending()).toEqual(expect.arrayContaining([expect.objectContaining({intent:'system'})]))
   const events=(await backend.read('parent')).events;expect(events.filter(e=>e.type==='subagent/start')).toHaveLength(1);expect(events.filter(e=>e.type==='subagent/end')).toHaveLength(1);expect(events.filter(e=>e.type==='agent/delivery-received')).toHaveLength(1)
- }catch(error){primary=error}finally{
+ }catch(error){primary={cause:error}}finally{
   continueTerminal.resolve();releaseWriter.resolve();cut.enabled=false;const failures:unknown[]=[]
-  for(const close of [()=>mounted.dispose(),()=>inputs.close(),()=>output.close(),()=>coordinator.close(),()=>server.close(),()=>childServer.close()])try{await close()}catch(error){failures.push(error)}
-  spy.mockRestore();if(primary||failures.length){console.dir({primary,failures},{depth:12});throw new AggregateError([...(primary?[primary]:[]),...failures],'Private Task control failed')}
+  for(const close of [async()=>{try{await writer}finally{if(!writerFinished){writerAction?.finish();writerFinished=true}}},()=>mounted.dispose(),()=>inputs.close(),()=>ctx.scope.unmount(),()=>execution.close(),()=>output.close(),()=>coordinator.close(),()=>server.close(),()=>childServer.close()])try{await close()}catch(error){failures.push(error)}
+  spy.mockRestore();if(primary||failures.length){console.dir({primary,failures},{depth:12});throw new AggregateError([...(primary?[primary.cause]:[]),...failures],'Private Task control failed')}
  }
 },120000)

@@ -7,8 +7,7 @@ import { decodeFactBatch, type BatchKey } from '@i-harness/core-session'
 import { createContext } from '@i-harness/core-plugin'
 import { createToolRegistry } from '@i-harness/core-tools'
 import { createAgent, createAgentRegistry } from '@i-harness/core-agent'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
-import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
+import { createSessionCoordinator, createControlledJsonlBackend as createJsonlBackend, ownedControls } from '../../session-persistence/test/helpers/composed.ts'
 import { createSpawnTool } from '../src/tools/spawn.ts'
 import { createTaskRegistry } from '../src/task-protocol.ts'
 import { createRoleRegistry } from '../src/roles.ts'
@@ -37,14 +36,35 @@ async function fixture() {
     }),
   })
   tools.register({ ...spawn, execute: async (args, exec) => { bodies++; return spawn.execute(args, exec) } })
+  const parentFlights: Promise<unknown>[] = []
   return {
-    backend, coordinator, document, id, ctx, tools, table, tasks, entered, finish,
+    backend, control: ownedControls(backend), coordinator, document, id, ctx, tools, table, tasks, entered, finish,
     counts: () => ({ childSends, bodies }),
+    launch(args: Record<string,unknown>, signal = new AbortController().signal) {
+      let requests = 0
+      const parent = createAgent(ctx, {
+        session: document.view, factOwner: document, tools, sessionId: id, systemPrompt: '',
+        generationFactory: action => fixtureGenerationFor(document, id, () => undefined)(action),
+        model: controlledModel(async function* () {
+          if (requests++ === 0) yield { type: 'tool_call', call: { id: 'original-spawn', name: 'spawn_agent', args } }
+          else yield { type: 'text/chunk', text: 'parent done' }
+          yield { type: 'end' }
+        }),
+      })
+      const flight = parent.run('launch once', signal)
+      parentFlights.push(flight);void flight.catch(()=>{})
+      return flight
+    },
     async close() {
       finish.resolve()
-      for (const entry of [...table.entries().values()]) await entry.dispose?.().catch(() => {})
-      await coordinator.close().catch(() => {})
-      await ctx.scope.unmount()
+      const entries = [...table.entries().values()], failures: unknown[] = []
+      for (const entry of entries) entry.controller.abort()
+      await Promise.allSettled([...parentFlights,...entries.map(entry=>entry.followupChain)])
+      // Original owners classify cleanup debt; joining a rejected body is not
+      // by itself a failed native disposal or permission to replay it.
+      for (const entry of entries) try { await entry.dispose?.() } catch(cause){failures.push(cause)}
+      for (const close of [()=>ctx.scope.unmount(),()=>coordinator.close()])try{await close()}catch(cause){failures.push(cause)}
+      if(failures.length)throw new AggregateError(failures,'Original legacy-mode spawn cleanup failed')
     },
   }
 }
@@ -52,7 +72,13 @@ async function fixture() {
 it.each([true, false])('actual parent dispatch retains a published child across claim failure (background=%s)', async background => {
   const f = await fixture()
   const claimError = new Error('original claim save failed')
-  const claim = vi.spyOn(f.tasks, 'claim').mockImplementation(() => { throw claimError })
+  const claimEntered = Promise.withResolvers<void>()
+  const claim = vi.spyOn(f.tasks, 'claim').mockImplementation(() => {
+    expect(f.tasks.list()[0]!.outcome).toBeUndefined()
+    expect(f.document.view.events.filter(event => event.type === 'tool/result')).toEqual([])
+    claimEntered.resolve()
+    throw claimError
+  })
   let parentSends = 0, finalized = 0
   f.ctx.on('tools/post-execute', event => { if ((event as { name: string }).name === 'spawn_agent') finalized++ })
   const agent = createAgent(f.ctx, {
@@ -64,7 +90,13 @@ it.each([true, false])('actual parent dispatch retains a published child across 
     }),
   })
   try {
-    const failure = await agent.run('launch once').then(() => { throw new Error('Expected original bookkeeping recovery') }, error => error)
+    const running = agent.run('launch once');void running.catch(()=>{})
+    if (!background) {
+      await Promise.race([f.entered.promise,running.then(()=>{throw Error('Foreground dispatch ended before child transport')})])
+      await claimEntered.promise
+      f.finish.resolve()
+    }
+    const failure = await running.then(() => { throw new Error('Expected original bookkeeping recovery') }, error => error)
     const causes: unknown[] = [failure]
     const seen = new Set<unknown>()
     while (causes.length) {
@@ -79,12 +111,11 @@ it.each([true, false])('actual parent dispatch retains a published child across 
     expect(f.counts()).toEqual({ childSends: 1, bodies: 1 })
     expect(claim).toHaveBeenCalledOnce()
     expect(f.tasks.list()).toHaveLength(1)
-    expect(f.tasks.list()[0]!.outcome).toBeUndefined()
+    if (background) expect(f.tasks.list()[0]!.outcome).toBeUndefined()
     const before = f.document.view.events.filter(event => event.type === 'tool/result')
     expect(before.every(event => !JSON.stringify(event.output).includes('TOOL_FAILED'))).toBe(true)
-    if (!background) expect(before).toEqual([])
     f.document.revokeNewWork()
-    await expect(f.document.close()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    if (background) await expect(f.document.close()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
     f.finish.resolve()
     await f.table.get('root/one')!.followupChain
     await f.document.close()
@@ -103,9 +134,9 @@ it.each([true, false])('actual parent dispatch retains a published child across 
 
 it.each(['unknown', 'absent'] as const)('retains the original parent start disposition without reissuing or launching (%s)', async disposition => {
   const f = await fixture()
-  const actual = f.backend.appendOwnedBatch!, actualReconcile = f.backend.reconcileOwnedBatch!
+  const actual = f.control.originalAppend, actualReconcile = f.control.originalReconcile
   let key: BatchKey | undefined, startWrites = 0, reconcileHeld = true
-  f.backend.appendOwnedBatch = async (...args) => {
+  f.control.append = async (...args) => {
     if (args[0] === f.id && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'subagent/start')) {
       startWrites++; key = args[3].key
       if (disposition === 'absent') return { kind: 'absent', key }
@@ -114,15 +145,18 @@ it.each(['unknown', 'absent'] as const)('retains the original parent start dispo
     }
     return actual(...args)
   }
-  f.backend.reconcileOwnedBatch = async (...args) => reconcileHeld && key ? { kind: 'unknown', key } : actualReconcile(...args)
+  f.control.reconcile = async (...args) => reconcileHeld && key ? { kind: 'unknown', key } : actualReconcile(...args)
   try {
-    await expect(f.tools.get('spawn_agent')!.execute({ message: 'work', task_name: 'one', agent_type: 'probe' }, { session: f.document.view, sessionId: f.id })).rejects.toThrow()
+    const launching = f.launch({ message: 'work', task_name: 'one', agent_type: 'probe' })
+    if (disposition === 'unknown') await expect(launching).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    else expect((await launching).finalText).toBe('parent done')
     expect(f.counts().childSends).toBe(0)
     expect([...f.table.entries().values()]).toEqual([])
     expect(f.tasks.list()[0]).toMatchObject({ outcome: 'error' })
     if (disposition === 'unknown') {
       await expect(f.document.close()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
       reconcileHeld = false
+      expect((await f.document.reconcile(key!)).kind).toBe('committed')
     }
     await f.document.close()
     expect(startWrites).toBe(1)
@@ -135,19 +169,19 @@ it.each(['unknown', 'absent'] as const)('retains the original parent start dispo
 
 it('checks the original launch fence after a held child admission and preserves actual cancellation with zero sends', async () => {
   const f = await fixture(), controller = new AbortController()
-  const actual = f.backend.appendOwnedBatch!
+  const actual = f.control.originalAppend
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   let childId = ''
-  f.backend.appendOwnedBatch = async (...args) => {
+  f.control.append = async (...args) => {
     if (args[0].startsWith('child-') && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/admitted')) {
       childId = args[0]; const outcome = await actual(...args); entered.resolve(); await release.promise; return outcome
     }
     return actual(...args)
   }
-  const spawning = f.tools.get('spawn_agent')!.execute({ message: 'original input', task_name: 'one', agent_type: 'probe' }, { session: f.document.view, sessionId: f.id, abortSignal: controller.signal })
+  const spawning = f.launch({ message: 'original input', task_name: 'one', agent_type: 'probe' }, controller.signal)
   void spawning.catch(() => {})
   try {
-    await entered.promise
+    await Promise.race([entered.promise,spawning.then(()=>{throw Error('Original launch ended before held admission')})])
     controller.abort(new Error('real prelaunch Stop'))
     release.resolve()
     await expect(spawning).rejects.toThrow()
@@ -164,32 +198,31 @@ it.each(['refused', 'unknown'] as const)('settles a real pre-publication seed fa
   const f = await fixture()
   await f.document.inputs.start(undefined, { type: 'user/message', text: 'inherited parent input' })
   await f.document.agent.lifecycle({ type: 'turn/end' })
-  const actual = f.backend.appendOwnedBatch!, actualReconcile = f.backend.reconcileOwnedBatch!
+  const actual = f.control.originalAppend, actualReconcile = f.control.originalReconcile
   let childId = '', key: BatchKey | undefined, seedWrites = 0, hold = true
-  f.backend.appendOwnedBatch = async (...args) => {
+  let physicalSeed: Awaited<ReturnType<typeof actual>> | undefined
+  f.control.append = async (...args) => {
     if (args[0].startsWith('child-') && args[3].key.firstSeq === 0) {
       childId = args[0]; key = args[3].key; seedWrites++
       if (disposition === 'refused') return { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' }
-      await actual(...args)
+      physicalSeed = await actual(...args)
       return { kind: 'unknown', key }
     }
     return actual(...args)
   }
-  f.backend.reconcileOwnedBatch = async (...args) => hold && args[0] === childId && key
+  f.control.reconcile = async (...args) => hold && args[0] === childId && key
     ? { kind: 'unknown', key } : actualReconcile(...args)
   try {
-    await expect(f.tools.get('spawn_agent')!.execute({ message: 'work', task_name: 'one', agent_type: 'probe', fork_turns: 'all' }, { session: f.document.view, sessionId: f.id })).rejects.toThrow()
+    expect((await f.launch({ message: 'work', task_name: 'one', agent_type: 'probe', fork_turns: 'all' })).finalText).toBe('parent done')
     expect(f.counts().childSends).toBe(0)
     expect(f.tasks.list()).toEqual([expect.objectContaining({ outcome: 'error' })])
     expect([...f.table.entries().values()]).toEqual([])
     expect((await f.backend.read(f.id)).events.filter(event => event.type === 'subagent/end')).toEqual([expect.objectContaining({ outcome: 'error' })])
     if (disposition === 'unknown') {
-      const child = await f.coordinator.openManagedDocument(childId)
-      expect(child.view.events).toEqual([])
+      await expect(f.coordinator.openManagedDocument(childId)).rejects.toMatchObject({ name: 'SessionBindingObservationError', code: 'FACT_RECOVERY_REQUIRED' })
+      expect(physicalSeed).toMatchObject({ kind: 'committed', receipt: { key } })
       await expect(f.coordinator.close()).rejects.toThrow()
-      expect((await f.coordinator.openManagedDocument(childId)).view).toBe(child.view)
       hold = false
-      expect(await child.reconcile(key!)).toMatchObject({ kind: 'committed' })
     }
     await f.coordinator.close()
     expect(seedWrites).toBe(1)
