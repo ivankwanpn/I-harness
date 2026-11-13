@@ -26,6 +26,23 @@ it('keeps a late Stop winner in the original job and entry instead of publishing
  const jobs=createJobRegistry(),registration=jobs.registerJob('root','subagent','one',undefined,undefined,undefined,{agentPath:'root/one'}),table=createAgentTable(),actual=entry();table.add(actual.path,actual)
  const job=captureJobProjection(registration),agent=captureTableProjection(table,actual);jobs.kill(registration.id);table.update(actual.path,actual,{status:'killed',error:'Stop won'});await Promise.all([job(terminal('completed')),agent(terminal('completed'))]);expect(jobs.read(registration.id).status).toBe('killed');expect(jobs.read(registration.id).output).toBe('');expect(actual.status).toBe('killed');expect(actual.finalText).toBeUndefined();expect(actual.error).toBe('Stop won')
 })
+
+it('attaches the original Task identity after the producer has already finished once', async () => {
+  const jobs = createJobRegistry()
+  const receipt = jobs.registerJob('root', 'subagent', 'one', undefined, undefined, () => {}, { agentPath: 'root/one' })
+  const changes: ReturnType<typeof jobs.read>[] = []
+  jobs.subscribe(receipt.id, snapshot => changes.push(snapshot))
+  receipt.finish!('killed', 'partial')
+  receipt.finish!('killed', 'ignored')
+  expect(changes).toHaveLength(1)
+  const task = terminal('cancelled')
+  const project = captureJobProjection(receipt)
+  await project(task)
+  await project(task)
+  expect(changes).toHaveLength(2)
+  expect(jobs.read(receipt.id)).toMatchObject({ status: 'killed', output: 'partial', taskId: task.id })
+  expect(changes[1]!.endedAt).toBe(changes[0]!.endedAt)
+})
 it('retains the exact acquired receipt before a throwing publication callback and preserves original save failure',async()=>{
  const original=createJobRegistry();let captured:JobRegistration|undefined,saves=0;const cause=false,jobs=persistentJobRegistry(original,async()=>{saves++;throw cause})
  let threw=false;try{jobs.registerJob('root','subagent','one',undefined,undefined,undefined,{agentPath:'root/one'},registration=>{captured=registration;throw cause})}catch(error){threw=true;expect(error).toBe(cause)}expect(threw).toBe(true)

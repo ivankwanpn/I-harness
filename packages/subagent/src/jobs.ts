@@ -101,6 +101,9 @@ export function createJobRegistry(): JobRegistry {
       const finish=(status:Exclude<JobStatus,'running'|'recovery-required'>,output:string,terminal?:import('./runtime-projection.ts').OriginalTerminal)=>{
         const rec=records.get(resolved);if(rec!==originalRecord)return false
         if(rec.terminal&&rec.status!==status)return true
+        // A producer can repeat completion after its original outcome settled.
+        // The original Task projection can still attach its terminal identity.
+        if (settled && !terminal) return true
         if(terminal){if(terminal.agentPath!==identity?.agentPath||(terminal.outcome===undefined||terminal.outcome==='recovery-required'))throw Error('Original job terminal identity changed');rec.taskId=terminal.id;if(terminal.result)rec.result=terminal.result}
         if(!settled){rec.status=status;rec.output=output;rec.terminal=true;rec.endedAt??=Date.now();cancellation.delete(resolved);settled=true}
         publish(rec);return true
