@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 import { rm, stat } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { resolve, toNamespacedPath } from 'node:path'
 import { lexicalChunks } from '../bytes.ts'
 import type { ContextResultRef } from '../types.ts'
 import type { ContextStore } from '../store.ts'
@@ -166,7 +166,7 @@ export class LegacyIndexLifecycle {
     }
     if (content !== retained.content || !await this.noJournal()) { this.invalidate(Error('Retained derived file changed')); return false }
     this.assert(turn, lease)
-    const db = new DatabaseSync(this.path), original: Handle = { db, generation: Symbol('resumed derived generation'), closed: false, uncertain: false, disposition: 'remove' }
+    const db = new DatabaseSync(toNamespacedPath(this.path)), original: Handle = { db, generation: Symbol('resumed derived generation'), closed: false, uncertain: false, disposition: 'remove' }
     this.handle = original; this.state = 'building'
     try {
       if (this.schema(db) !== retained.schema || this.scalar(db, 'journal_mode') !== 'delete' || Number(this.scalar(db, 'page_size')) !== 4096) throw Error('Retained derived schema/settings changed')
@@ -266,7 +266,7 @@ export class LegacyIndexLifecycle {
     const originalBytes = await this.ports.physicalBytes(), allowance = safe(safe(originalBytes + growth) + 8192), ceiling = Math.floor((quota - allowance) / 4096)
     this.assert(turn, lease)
     if (ceiling < 21) { this.capacity(); return undefined }
-    const db = new DatabaseSync(this.path), original: Handle = { db, generation: Symbol('derived generation'), closed: false, uncertain: false, disposition: 'remove' }
+    const db = new DatabaseSync(toNamespacedPath(this.path)), original: Handle = { db, generation: Symbol('derived generation'), closed: false, uncertain: false, disposition: 'remove' }
     this.handle = original; this.state = 'building'
     let phase: 'building' | 'committed' | 'published' | 'discarded' = 'building'
     let discardFlight: Promise<void> | undefined
