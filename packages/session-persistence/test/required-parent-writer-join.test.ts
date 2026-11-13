@@ -170,3 +170,28 @@ it('marks the original attached entry before synchronous Task revocation port re
   expect(drains).toBe(1);expect(acknowledged).toBe(false);f.source.assertHeld();failing=false;await close();await ack;expect(acknowledged).toBe(true);expect(drains).toBe(2);expect(admitted).toEqual([]);expect(await readFile(join(f.root,'parent.jsonl'))).toEqual(before)
  }finally{failing=false;await f.source.close();await f.close()}
 })
+
+it('does not revive a retired parked exclusion after its original issued writer join',async()=>{
+ const f=await fixture(),writer=await f.parent.acquireWriter()
+ const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ writer.park()
+ let fact:Promise<import('@i-harness/core-session').FactOutcome>|undefined,resuming:Promise<void>|undefined
+ try {
+  cut.run=async next=>{const result=await next();entered.resolve();await release.promise;return result}
+  fact=f.action.facts.metadata.admit({type:'plan/mode',mode:'on'})
+  await entered.promise
+  resuming=writer.resume();void resuming.catch(()=>{})
+  writer.release()
+  release.resolve()
+  expect(await fact).toMatchObject({kind:'committed'})
+  await expect(resuming).rejects.toThrow('Retired original writer exclusion')
+  cut.run=undefined
+  expect(await f.action.facts.metadata.admit({type:'plan/mode',mode:'off'})).toMatchObject({kind:'committed'})
+ } finally {
+  release.resolve()
+  await resuming?.catch(()=>{})
+  writer.release()
+  await fact?.catch(()=>{})
+  await f.close()
+ }
+})

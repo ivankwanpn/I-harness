@@ -71,6 +71,14 @@ type Pending = {
     resolved?: 'committed' | 'absent';
     installationFailure?: { error: unknown };
 };
+type PreparingWrite = {
+    entries: Entry[];
+    ready: ReturnType<typeof Promise.withResolvers<void>>;
+    settlement: Pending['settlement'];
+    pending?: Pending;
+    notified: boolean;
+    failure?: { cause: unknown };
+};
 export interface ManagedReadyObservation {
     readonly document: ManagedDocument; readonly held: HeldFactOwner;
     readonly view: SessionView; readonly events: SessionView['events']; readonly eventCount: number;
@@ -193,6 +201,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
     const fenceFault = () => { faultWitness ??= processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' }); };
     const releaseRecoveryWitness = (source: object) => { const token = recoveryWitnesses.get(source); if (token) { recoveryWitnesses.delete(source); token.end('settled'); } };
     let prefix = initialPrefix, pending: Pending | undefined, closing = false, closed = false, scheduled = false, quarantined = false, sourceFault = false;
+    let preparingWrite: PreparingWrite | undefined;
     let metadataRevision:object={},metadataStale=false;
     let taskRevision:object={},taskMetadataPending=0,taskMetadataStale=false;
     const selectedListeners=new Set<()=>void>();
@@ -329,104 +338,124 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
         while (queue.length && !pending) {
             if (requiredWriter) { await requiredWriter.released; continue; }
             let current: Pending | undefined, completed: ReturnType<typeof finish> | undefined;
-            await ownership.withSessionOperation(id, async () => {
-                if (requiredWriter) return;
-                const entries: Entry[] = [], events: ReturnType<typeof resolveFactGroup> = [];
-                let bytes = 0;
-                while (queue.length && (!entries.length || bytes + queue[0]!.bytes <= targetBytes
-                    && queue[0]!.authorization.action === entries[0]!.authorization.action
-                    && queue[0]!.authorization.source === entries[0]!.authorization.source
-                    && queue[0]!.authorization.required === entries[0]!.authorization.required
-                    && !queue[0]!.bootstrap && !entries[0]!.bootstrap)) {
-                    const entry = queue.shift()!;
-                    try {
-                        assertAuthorized(entry.authorization);
-                        // Check the original delivery fence before staging a Code
-                        // handoff. A closed generation otherwise looks like an
-                        // invalid transition before the stale fence is consulted.
-                        if (entry.group?.kind === 'delivery' && entry.group.event.type === 'agent/delivery-handoff' && (entry.group.event.kind === 'code' || entry.group.event.kind === 'workflow'))
-                            deliveryControl.assert([entry.group.event]);
-                        const suffix = core ? [] : entry.bootstrap ? [...entry.bootstrap.events] : resolveFactGroup(entry.group!, state!.view, prefix.eventCount + events.length);
-                        if (entry.bootstrap && suffix.some((event, position) => event.seq !== prefix.eventCount + events.length + position)) throw new TypeError('Invalid bootstrap phase sequence');
-                        entry.seqs = Object.freeze(suffix.map(event => event.seq!));
-                        entries.push(entry);
-                        events.push(...suffix);
-                        bytes += entry.bytes;
-                    }
-                    catch (error) {
-                        entry.ticket.release();
-                        entry.resolve({ kind: 'not-issued', code: (error as {
-                                code?: 'FACT_CLOSED' | 'FACT_CANCELLED' | 'FACT_RECOVERY_REQUIRED' | 'FACT_PRECONDITION_STALE';
-                            }|null)?.code ?? 'FACT_INVALID_GROUP' });
-                    }
-                }
-                if (!entries.length)
-                    return;
-                let executionStage:Pending['staged'];
-                try {
-                    executionStage=core?await core.prepareWrite(entries.map(entry=>entry.group!),true):undefined;
-                    if(executionStage)for(const rejection of executionStage.rejected){for(let index=entries.length-1;index>=0;index--)if(entries[index]!.group===rejection.group){const entry=entries.splice(index,1)[0]!;entry.ticket.release();entry.resolve({kind:'not-issued',code:'FACT_INVALID_GROUP'})}}
-                    if(!entries.length){executionStage?.discardUnissued();return}
-                    for(const entry of entries)assertAuthorized(entry.authorization);
-                    const staged = executionStage??state!.stage(events);
-                    if(executionStage)for(const [index,entry]of entries.entries())entry.seqs=Object.freeze(executionStage.members[index]!.events.map(event=>event.seq!));
-                    deliveryControl.assert(staged.events);
-                    preflightBatchShape(formatVersion, staged.events as readonly import('@i-harness/core-session').SessionEvent[]);
-                    const restored = restoredStages.get(document)?.(staged.events, position => state!.view.events[position]);
-                    const batch = encodeFactBatch(entries[0]!.bootstrap?.batchId ?? randomUUID(), prefix.prefixDigest, staged.events);
-                    const operation:Pending = { batch, prefix, entries, events: staged.events,staged:executionStage, install(receipt) { if(executionStage)executionStage.install(batch,receipt);else (staged as ReturnType<NonNullable<typeof state>['stage']>).install(); restored?.install(batch,receipt) }, issued: false, settlement: Promise.withResolvers<void>(), settlementSettled: false };
-                    pending = current = operation;
-                    operation.active = true;
-                    const issuer = issuingFactOwner(held, () => {
-                        if (requiredWriter) throw new FactRecoveryRequiredError();
-                        if (operation.issued)
-                            throw new FactRecoveryRequiredError();
-                        for (const entry of entries)
-                            assertAuthorized(entry.authorization);
-                        deliveryControl.assert(operation.events);
-                        operation.staged?.beforeIssue(operation.batch);
-                        operation.issued = true;
-                    });
-                    current.issuer = issuer;
-                    if (bootstrap?.selected && selectedIOStarted) await settleSelected();
-                    if (requiredWriter) throw new FactRecoveryRequiredError();
-                    if(bootstrap?.selected)selectedIOStarted=true;
-                    const cleanup = settleManagedJournalCleanup(journalScopes);
-                    if (cleanup) await cleanup;
-                    const outcome = bootstrap?.selected ? await selectedJournal!.appendOwnedBatch(id,issuer,selectedLane!,prefix,batch) : await backend.appendOwnedBatch!(id,issuer,prefix,batch);
-                    completed = finish(current, outcome);
-                }
-                catch (error) {
-                    if (current?.issued) {
-                        // The append may have committed before the failure. Ask the
-                        // backend to reconcile that exact batch before declaring an
-                        // unknown outcome: an unreconciled unknown leaves the
-                        // execution's pending write set forever and wedges every
-                        // later write in the process.
-                        let reconciled: BackendFactOutcome | undefined
+            let preparing: PreparingWrite | undefined;
+            try {
+                await ownership.withSessionOperation(id, async () => {
+                    if (requiredWriter) return;
+                    const entries: Entry[] = [], events: ReturnType<typeof resolveFactGroup> = [];
+                    let bytes = 0;
+                    while (queue.length && (!entries.length || bytes + queue[0]!.bytes <= targetBytes
+                        && queue[0]!.authorization.action === entries[0]!.authorization.action
+                        && queue[0]!.authorization.source === entries[0]!.authorization.source
+                        && queue[0]!.authorization.required === entries[0]!.authorization.required
+                        && !queue[0]!.bootstrap && !entries[0]!.bootstrap)) {
+                        const entry = queue.shift()!;
                         try {
-                            reconciled = bootstrap?.selected
-                                ? await selectedJournal!.reconcileOwnedBatch(id, held, selectedLane!, prefix, current.batch)
-                                : await backend.reconcileOwnedBatch!(id, held, prefix, current.batch)
-                        } catch { reconciled = undefined }
-                        completed = finish(current, reconciled ?? { kind: 'unknown', key: current.batch.key });
-                    }
-                    else {
-                        (current?.staged??executionStage)?.discardUnissued();
-                        pending = undefined;
-                        for (const entry of entries) {
+                            assertAuthorized(entry.authorization);
+                            // Check the original delivery fence before staging a Code
+                            // handoff. A closed generation otherwise looks like an
+                            // invalid transition before the stale fence is consulted.
+                            if (entry.group?.kind === 'delivery' && entry.group.event.type === 'agent/delivery-handoff' && (entry.group.event.kind === 'code' || entry.group.event.kind === 'workflow'))
+                                deliveryControl.assert([entry.group.event]);
+                            const suffix = core ? [] : entry.bootstrap ? [...entry.bootstrap.events] : resolveFactGroup(entry.group!, state!.view, prefix.eventCount + events.length);
+                            if (entry.bootstrap && suffix.some((event, position) => event.seq !== prefix.eventCount + events.length + position)) throw new TypeError('Invalid bootstrap phase sequence');
+                            entry.seqs = Object.freeze(suffix.map(event => event.seq!));
+                            entries.push(entry);
+                            events.push(...suffix);
+                            bytes += entry.bytes;
+                        }
+                        catch (error) {
                             entry.ticket.release();
-                            const code = (error as { code?: string }|null)?.code;
-                            entry.resolve({ kind: 'not-issued', code: code === 'FACT_PRECONDITION_STALE' || code === 'FACT_CANCELLED' || code === 'FACT_CLOSED' || code === 'FACT_RECOVERY_REQUIRED' ? code : 'FACT_INVALID_GROUP' });
+                            entry.resolve({ kind: 'not-issued', code: (error as {
+                                    code?: 'FACT_CLOSED' | 'FACT_CANCELLED' | 'FACT_RECOVERY_REQUIRED' | 'FACT_PRECONDITION_STALE';
+                                }|null)?.code ?? 'FACT_INVALID_GROUP' });
                         }
                     }
-                }
-            });
-            // Join only this original batch, after its disposition and outside its lane.
-            if (current) {
-                current.active = false;
-                current.settlementSettled = true;
-                current.settlement.resolve();
+                    if (!entries.length)
+                        return;
+                    preparing = { entries, ready: Promise.withResolvers<void>(), settlement: Promise.withResolvers<void>(), notified: false };
+                    void preparing.ready.promise.catch(() => {});
+                    preparingWrite = preparing;
+                    let executionStage:Pending['staged'];
+                    try {
+                        executionStage=core?await core.prepareWrite(entries.map(entry=>entry.group!),true):undefined;
+                        if(executionStage)for(const rejection of executionStage.rejected){for(let index=entries.length-1;index>=0;index--)if(entries[index]!.group===rejection.group){const entry=entries.splice(index,1)[0]!;entry.ticket.release();entry.resolve({kind:'not-issued',code:'FACT_INVALID_GROUP'})}}
+                        if(!entries.length){executionStage?.discardUnissued();return}
+                        for(const entry of entries)assertAuthorized(entry.authorization);
+                        const staged = executionStage??state!.stage(events);
+                        if(executionStage)for(const [index,entry]of entries.entries())entry.seqs=Object.freeze(executionStage.members[index]!.events.map(event=>event.seq!));
+                        deliveryControl.assert(staged.events);
+                        preflightBatchShape(formatVersion, staged.events as readonly import('@i-harness/core-session').SessionEvent[]);
+                        const restored = restoredStages.get(document)?.(staged.events, position => state!.view.events[position]);
+                        const batch = encodeFactBatch(entries[0]!.bootstrap?.batchId ?? randomUUID(), prefix.prefixDigest, staged.events);
+                        const operation:Pending = { batch, prefix, entries, events: staged.events,staged:executionStage, install(receipt) { if(executionStage)executionStage.install(batch,receipt);else (staged as ReturnType<NonNullable<typeof state>['stage']>).install(); restored?.install(batch,receipt) }, issued: false, settlement: preparing.settlement, settlementSettled: false };
+                        pending = current = operation;
+                        preparing.pending = operation;
+                        operation.active = true;
+                        const issuer = issuingFactOwner(held, () => {
+                            if (requiredWriter) throw new FactRecoveryRequiredError();
+                            if (operation.issued)
+                                throw new FactRecoveryRequiredError();
+                            for (const entry of entries)
+                                assertAuthorized(entry.authorization);
+                            deliveryControl.assert(operation.events);
+                            operation.staged?.beforeIssue(operation.batch);
+                            operation.issued = true;
+                        });
+                        current.issuer = issuer;
+                        if (bootstrap?.selected && selectedIOStarted) await settleSelected();
+                        if (requiredWriter) throw new FactRecoveryRequiredError();
+                        if(bootstrap?.selected)selectedIOStarted=true;
+                        const cleanup = settleManagedJournalCleanup(journalScopes);
+                        if (cleanup) await cleanup;
+                        const writing = bootstrap?.selected ? selectedJournal!.appendOwnedBatch(id,issuer,selectedLane!,prefix,batch) : backend.appendOwnedBatch!(id,issuer,prefix,batch);
+                        // Wake early waiters only after the actual backend has entered.
+                        // They must still qualify its original Pending/native prewrite.
+                        preparing.notified = true;
+                        preparing.ready.resolve();
+                        const outcome = await writing;
+                        completed = finish(current, outcome);
+                    }
+                    catch (error) {
+                        if (!preparing.notified) preparing.failure = { cause: error };
+                        if (current?.issued) {
+                            // The append may have committed before the failure. Ask the
+                            // backend to reconcile that exact batch before declaring an
+                            // unknown outcome: an unreconciled unknown leaves the
+                            // execution's pending write set forever and wedges every
+                            // later write in the process.
+                            let reconciled: BackendFactOutcome | undefined
+                            try {
+                                reconciled = bootstrap?.selected
+                                    ? await selectedJournal!.reconcileOwnedBatch(id, held, selectedLane!, prefix, current.batch)
+                                    : await backend.reconcileOwnedBatch!(id, held, prefix, current.batch)
+                            } catch { reconciled = undefined }
+                            completed = finish(current, reconciled ?? { kind: 'unknown', key: current.batch.key });
+                        }
+                        else {
+                            (current?.staged??executionStage)?.discardUnissued();
+                            pending = undefined;
+                            for (const entry of entries) {
+                                entry.ticket.release();
+                                const code = (error as { code?: string }|null)?.code;
+                                entry.resolve({ kind: 'not-issued', code: code === 'FACT_PRECONDITION_STALE' || code === 'FACT_CANCELLED' || code === 'FACT_CLOSED' || code === 'FACT_RECOVERY_REQUIRED' ? code : 'FACT_INVALID_GROUP' });
+                            }
+                        }
+                    }
+                });
+            } catch (cause) {
+                if (preparing && !preparing.notified) preparing.failure = { cause };
+                throw cause;
+            } finally {
+                // A failed preparation wakes only after its cleanup and lane exit.
+                if (preparingWrite === preparing) preparingWrite = undefined;
+                if (current) {
+                    current.active = false;
+                    current.settlementSettled = true;
+                    current.settlement.resolve();
+                } else preparing?.settlement.resolve();
+                if (preparing?.failure) preparing.ready.reject(preparing.failure.cause);
+                else preparing?.ready.resolve();
             }
             // The operation lane is released before any observer may append again.
             if (current && completed) {
@@ -826,8 +855,46 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
         return Object.freeze({before(meta:unknown){if(done)throw TypeError('Metadata operation finished');try{before=taskParentMetadataProjection(meta)}catch{invalid=true}},after(meta:unknown){if(done)throw TypeError('Metadata operation finished');try{after=taskParentMetadataProjection(meta)}catch{invalid=true}},finish(success:boolean){if(done)return;done=true;taskMetadataPending--;try{held.assertHeld()}catch{success=false}if(!success||invalid||before===undefined||after===undefined||before!==after||revision!==taskRevision||closed||closing){taskRevision={};taskMetadataStale=true}}});
     }
     function captureRequiredWriterProof<T extends object>(source:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>,checkIdentity:()=>void,check:()=>void,extra:T,captureRecovery?:(cause:unknown)=>(()=>boolean)|undefined) {
-        const joinableWriter=()=>{ownership.assertOutsideSessionOperation(id);checkIdentity();const batch=pending;if(batch){if(batch.settlementSettled||(!batch.issued&&(!batch.issuer||!canJoinOriginalNativePrewrite(backend,id,batch.issuer,batch.batch)))||batch.entries.some(entry=>entry.authorization.source===source)||batch.receipt||batch.installationFailure)throw Object.assign(new FactRecoveryRequiredError(),{cause:{originalBatchIssued:batch.issued,sameRequiredSource:batch.entries.some(entry=>entry.authorization.source===source),receipt:!!batch.receipt,installationFailure:!!batch.installationFailure,eventTypes:batch.events.map(event=>event.type)}});}return batch};
-        const joinIssuedWriter=async()=>{const batch=joinableWriter();if(batch)await batch.settlement.promise;check()};
+        const joinableWriter = (accepted?: Pending) => {
+          ownership.assertOutsideSessionOperation(id);
+          checkIdentity();
+          const batch = pending ?? accepted;
+          if (batch) {
+            const ownSource = batch.entries.some(entry => entry.authorization.source === source);
+            const installed = batch.resolved === 'committed' || batch.resolved === 'absent';
+            if (batch.settlementSettled || ownSource || batch.installationFailure
+              || !installed && (batch.receipt || !batch.issued && (!batch.issuer || !canJoinOriginalNativePrewrite(backend,id,batch.issuer,batch.batch)))) {
+              throw Object.assign(new FactRecoveryRequiredError(), { cause: {
+                originalBatchIssued: batch.issued,
+                sameRequiredSource: ownSource,
+                receipt: !!batch.receipt,
+                installationFailure: !!batch.installationFailure,
+                eventTypes: batch.events.map(event => event.type),
+              } });
+            }
+          }
+          return batch;
+        };
+        const writerSettlement = (): Promise<void> | undefined => {
+          ownership.assertOutsideSessionOperation(id);
+          checkIdentity();
+          const preparing = preparingWrite;
+          if (preparing) {
+            if (preparing.entries.some(entry => entry.authorization.source === source)) throw new FactRecoveryRequiredError();
+            return preparing.ready.promise.then(() => {
+              // Qualify the exact batch and native prewrite after the wake-up.
+              if (preparingWrite !== preparing) return;
+              const batch = joinableWriter(preparing.pending);
+              return batch ? batch.settlement.promise : preparing.settlement.promise;
+            });
+          }
+          return joinableWriter()?.settlement.promise;
+        };
+        const joinIssuedWriter = async () => {
+          const waiting = writerSettlement();
+          if (waiting) await waiting;
+          check();
+        };
         const result=Object.freeze({...extra,captureWriterRecovery(cause:unknown){
           if(this!==result)throw new TypeError('Invalid required parent');
           return captureRecovery?.(cause);
@@ -836,7 +903,28 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
           let retired=false,held=false,gate=Promise.withResolvers<void>();gate.resolve()
           const writer={get released(){return gate.promise},release(){if(requiredWriter===writer){requiredWriter=undefined;held=false;gate.resolve()}}}
           const lease=Object.freeze({
-            async resume(){if(this!==lease||retired)throw new TypeError('Retired original writer exclusion');if(held&&requiredWriter===writer){check();return}for(;;){const batch=joinableWriter();if(!batch)break;await batch.settlement.promise}check();if(requiredWriter)throw new FactRecoveryRequiredError();gate=Promise.withResolvers<void>();requiredWriter=writer;held=true},
+            async resume() {
+                if (this !== lease || retired)
+                    throw new TypeError('Retired original writer exclusion');
+                if (held && requiredWriter === writer) {
+                    check();
+                    return;
+                }
+                for (;;) {
+                    const waiting = writerSettlement();
+                    if (!waiting)
+                        break;
+                    await waiting;
+                }
+                check();
+                if (retired)
+                    throw new TypeError('Retired original writer exclusion');
+                if (requiredWriter)
+                    throw new FactRecoveryRequiredError();
+                gate = Promise.withResolvers<void>();
+                requiredWriter = writer;
+                held = true;
+            },
             park(){if(this!==lease)throw new TypeError('Invalid original writer exclusion');writer.release()},
             release(){if(this!==lease)throw new TypeError('Invalid original writer exclusion');retired=true;writer.release()},
           });await lease.resume();return lease
