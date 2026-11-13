@@ -226,33 +226,87 @@ describe("spawnChild", () => {
   }, 10_000)
 })
 
-const ownedCoordinators: SessionCoordinator[] = []
+const ownedCoordinators: {coordinator: SessionCoordinator; cleanups: (() => Promise<void>)[]}[] = []
 afterEach(async () => {
-  await Promise.allSettled(ownedCoordinators.splice(0).map(coordinator => coordinator.close()))
+  const closed = await Promise.allSettled(ownedCoordinators.splice(0).map(async owner => {
+    const failures: unknown[] = []
+    for (const cleanup of owner.cleanups) try { await cleanup() } catch (error) { failures.push(error) }
+    try { await owner.coordinator.close() } catch (error) { failures.push(error) }
+    if (failures.length) throw new AggregateError(failures, 'Original child scope cleanup failed')
+  }))
+  const failures = closed.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+  if (failures.length) throw new AggregateError(failures, 'Original child coordinators require cleanup')
 })
 
 function ownedCoordinatorFixture() {
-  const backend = createJsonlBackend(mkdtempSync(join(tmpdir(), 'ih-f1-child-consumer-')))
-  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
-  ownedCoordinators.push(coordinator)
   const created: SessionMeta[] = []
   const enqueued: { id: string; events: SessionEvent[] }[] = []
   const flushed: { id: string; types: string[] }[] = []
-  const actualCreate = coordinator.create.bind(coordinator), actualAppend = backend.appendOwnedBatch!
-  coordinator.create = async meta => {
-    const result = await actualCreate(meta)
-    created.push((await coordinator.profile(result.id)).meta)
-    return result
-  }
-  backend.appendOwnedBatch = async (...args) => {
-    const events = [...decodeFactBatch(args[3].bytes).events]
-    enqueued.push({ id: args[0], events })
-    const outcome = await actualAppend(...args)
-    if (outcome.kind === 'committed') flushed.push({ id: args[0], types: enqueued.filter(batch => batch.id === args[0]).flatMap(batch => batch.events.map(event => event.type)) })
-    return outcome
-  }
-  return Object.assign(coordinator, { created, enqueued, flushed })
+  const backend = createJsonlBackend(mkdtempSync(join(tmpdir(), 'ih-f1-child-consumer-')), {
+    wrap(methods) {
+      const prepare = methods.prepareBootstrapHeader
+      if (!prepare) throw Error('Original bootstrap header constructor unavailable')
+      methods.prepareBootstrapHeader = async function(...args) {
+        const outcome = await Reflect.apply(prepare, this, args)
+        if (outcome.kind === 'committed') {
+          created.push(JSON.parse(Buffer.from(args[2].headerBytes).toString('utf8')) as SessionMeta)
+        }
+        return outcome
+      }
+    },
+    wrapOwnedBatch: actualAppend => async (...args) => {
+      const events = [...decodeFactBatch(args[3].bytes).events]
+      enqueued.push({ id: args[0], events })
+      const outcome = await actualAppend(...args)
+      if (outcome.kind === 'committed') flushed.push({ id: args[0], types: enqueued.filter(batch => batch.id === args[0]).flatMap(batch => batch.events.map(event => event.type)) })
+      return outcome
+    },
+  })
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const cleanups: (() => Promise<void>)[] = []
+  ownedCoordinators.push({coordinator,cleanups})
+  return Object.assign(coordinator, { created, enqueued, flushed,
+    keepScope(ctx: ReturnType<typeof createContext>, table: ReturnType<typeof createAgentTable>) {
+      const unmount = ctx.scope.unmount.bind(ctx.scope)
+      cleanups.push(async () => {
+        const entries = [...table.entries().values()], failures: unknown[] = []
+        for (const entry of entries) entry.controller.abort()
+        const joined = await Promise.allSettled(entries.map(entry => entry.followupChain))
+        for (const result of joined) if (result.status === 'rejected') failures.push(result.reason)
+        for (const entry of entries) try { await entry.dispose?.() } catch (error) { failures.push(error) }
+        try { await unmount() } catch (error) { failures.push(error) }
+        if (failures.length) throw new AggregateError(failures, 'Original child body and context require cleanup')
+      })
+    },
+  })
 }
+function assertSemanticChildBirth(
+  coordinator: ReturnType<typeof ownedCoordinatorFixture>,
+  sessionId: string,
+  parentSession: ReturnType<typeof createSession>,
+  childSession: import('@i-harness/core-session').SessionView,
+  initialText: string,
+): number {
+  const header = coordinator.created.find(meta => meta.sessionId === sessionId)
+  if (!header || typeof header.seedLength !== 'number') throw Error('Original committed child header unavailable')
+  const seed = coordinator.enqueued.find(batch => batch.id === sessionId && batch.events[0]?.type === 'conversation/seed-manifest')
+  if (!seed) throw Error('Original inherited semantic seed unavailable')
+  expect(seed.events).toHaveLength(header.seedLength)
+  expect(seed.events[0]).toMatchObject({ type: 'conversation/seed-manifest', groupCount: seed.events.length - 1 })
+  expect(seed.events.slice(1).map(event => event.type)).toEqual(Array(seed.events.length - 1).fill('conversation/seed-group'))
+  const shown = (view: import('@i-harness/core-session').SessionView) => deriveMessages(view).map(({role,content}) => ({role,content}))
+  const sourceMessages = shown(parentSession)
+  expect(shown(childSession).slice(0, sourceMessages.length)).toEqual(sourceMessages)
+  const events = coordinator.enqueued.filter(batch => batch.id === sessionId).flatMap(batch => batch.events)
+  expect(events.filter(event => event.type === 'session/bootstrap')).toHaveLength(1)
+  const initial = events.filter(event => event.type === 'agent/input/admitted' && event.provenance?.producer === 'subagent.initial')
+  expect(initial).toEqual([expect.objectContaining({ text: initialText, delivery: 'queue', intent: 'user' })])
+  expect(childSession.events.map(event => event.seq)).toEqual(childSession.events.map((_,index) => index))
+  expect(childSession.events[header.seedLength]).toMatchObject({type:'session/bootstrap'})
+  expect(childSession.events[header.seedLength + 1]).toMatchObject({type:'agent/input/admitted',text:initialText})
+  return header.seedLength
+}
+
 describe("spawnChild durable child sessions (M8)", () => {
   it("S18: waits for inherited ownership before mounting tools and keeps host prompt callbacks live", async () => {
     const parentCtx = createContext(), parentRegistry = createToolRegistry(parentCtx)
@@ -290,8 +344,13 @@ describe("spawnChild durable child sessions (M8)", () => {
       },
     }
     const spawning = spawnChild(opts)
+    const observed = spawning.then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error }))
+    let failed = false, primary: unknown
     try {
-      await inherited.promise
+      await Promise.race([inherited.promise, observed.then(outcome => {
+        if (!outcome.ok) throw outcome.error
+        throw Error('Original child completed before its inherited ownership gate')
+      })])
       expect(table.entries().size).toBe(0)
       expect(jobs.listAll()).toEqual([])
       expect(order).toEqual(["inherited"])
@@ -306,12 +365,20 @@ describe("spawnChild durable child sessions (M8)", () => {
       expect(prompts).toHaveLength(2)
       expect(prompts[1]).toContain("context two")
       expect(prompts[1]).not.toContain("context one")
-      expect(entry.session.header).toMatchObject({ parentSession: "parent", seedLength: 3, delegationDepth: 1 })
-    } finally {
+      const seedLength = assertSemanticChildBirth(coordinator, spawned.sessionId!, parentSession, entry.session, 'initial')
+      expect(entry.session.header).toMatchObject({ parentSession: "parent", seedLength, delegationDepth: 1 })
+    } catch (error) { failed = true; primary = error } finally {
       release.resolve()
-      await spawning
-      for (const entry of table.entries().values()) await entry.dispose?.()
-      await parentCtx.scope.unmount()
+      const outcome = await observed, errors: unknown[] = []
+      if (!outcome.ok && (!failed || outcome.error !== primary)) errors.push(outcome.error)
+      const entries = [...table.entries().values()]
+      for (const entry of entries) entry.controller.abort()
+      const joined = await Promise.allSettled(entries.map(entry => entry.followupChain))
+      for (const result of joined) if (result.status === 'rejected') errors.push(result.reason)
+      for (const entry of entries) try { await entry.dispose?.() } catch (error) { errors.push(error) }
+      try { await parentCtx.scope.unmount() } catch (error) { errors.push(error) }
+      if (errors.length) throw new AggregateError([...(failed ? [primary] : []), ...errors], 'Original inherited child cleanup failed', { cause: primary })
+      if (failed) throw primary
     }
   })
 
@@ -322,6 +389,7 @@ describe("spawnChild durable child sessions (M8)", () => {
     const roles = createRoleRegistry()
     roles.register({ name: "general", description: "d", systemPrompt: "p", tools: [] })
     const ctx = createContext()
+    coordinator.keepScope(ctx, table)
     const parentRegistry = createToolRegistry(ctx)
     const parentSession = createSession()
     // two parent turns so forkTurns("all") has seed content
@@ -349,16 +417,15 @@ describe("spawnChild durable child sessions (M8)", () => {
     expect(sessionId).toMatch(/^child-/)
     expect(path).toBe("root/helper")
     expect(coordinator.created).toHaveLength(1)
-    expect(coordinator.created[0]).toMatchObject({ sessionId, parentSession: "sess-main", origin: "subagent", seedLength: 4, delegationDepth: 1 })
-    // The trusted seed is one atomic frame before the initial admission.
+    const entry = table.get("root/helper")!
+    await entry.followupChain
+    const seedLength = assertSemanticChildBirth(coordinator, sessionId!, parentSession, entry.session, 'hi')
+    expect(coordinator.created[0]).toMatchObject({ sessionId, parentSession: "sess-main", origin: "subagent", seedLength, delegationDepth: 1 })
+    // The semantic seed frame commits before the completion/initial admission.
     expect(coordinator.enqueued.length).toBeGreaterThanOrEqual(2)
     expect(coordinator.enqueued[0]!.id).toBe(sessionId)
-    expect(coordinator.enqueued[0]!.events).toHaveLength(4)
-    expect(coordinator.enqueued[0]!.events.map(event => event.type))
-      .toEqual(["turn/start", "user/message", "assistant/message", "turn/end"])
-    const entry = table.get("root/helper")
     expect(entry?.sessionId).toBe(sessionId)
-    expect(entry?.session.header).toMatchObject({ parentSession: "sess-main", origin: "subagent", delegationDepth: 1, seedLength: 4 })
+    expect(entry?.session.header).toMatchObject({ parentSession: "sess-main", origin: "subagent", delegationDepth: 1, seedLength })
     expect(agents.get(sessionId!)).toBeDefined() // agent retained in the registry
     await vi.waitFor(() => expect(requests).toHaveLength(1))
     expect(requests[0]!.requestScope).toMatchObject({ sessionId, isSubagent: true, turnId: expect.any(String) })
@@ -376,6 +443,7 @@ describe("spawnChild durable child sessions (M8)", () => {
     const roles = createRoleRegistry()
     roles.register({ name: "general", description: "d", systemPrompt: "p", tools: ["read"] })
     const ctx = createContext()
+    coordinator.keepScope(ctx, table)
     const parentRegistry = createToolRegistry(ctx)
     const parentSession = createSession()
 
@@ -416,7 +484,9 @@ describe("spawnChild durable child sessions (M8)", () => {
       childSessions: { coordinator, parentSessionId: "sess-main" },
       onSettled: () => settled!(),
     })
-    await runDone
+    const chain = table.get('root/checkpointed')!.followupChain!
+    await Promise.race([runDone, chain.then(() => { throw Error('Original child completed before its settlement callback') })])
+    await chain
 
     // The body DID run (otherwise "no flush before it" would be trivially true).
     expect(bodies).toBe(1)
@@ -441,6 +511,7 @@ describe("spawnChild durable child sessions (M8)", () => {
     const roles = createRoleRegistry()
     roles.register({ name: "general", description: "d", systemPrompt: "p", tools: [] })
     const ctx = createContext()
+    coordinator.keepScope(ctx, table)
     const parentRegistry = createToolRegistry(ctx)
     const parentSession = createSession()
     // The parent is itself a depth-1 subagent → the child must be depth 2.
@@ -466,9 +537,11 @@ describe("spawnChild durable child sessions (M8)", () => {
       forkTurns: "all",
     })
     expect(sessionId).toMatch(/^child-/)
-    expect(coordinator.created[0]).toMatchObject({ sessionId, parentSession: "sess-child", origin: "subagent", seedLength: 4, delegationDepth: 2 })
-    const entry = table.get("root/helper/grandchild")
-    expect(entry?.session.header).toMatchObject({ parentSession: "sess-child", origin: "subagent", delegationDepth: 2, seedLength: 4 })
+    const entry = table.get("root/helper/grandchild")!
+    await entry.followupChain
+    const seedLength = assertSemanticChildBirth(coordinator, sessionId!, parentSession, entry.session, 'hi')
+    expect(coordinator.created[0]).toMatchObject({ sessionId, parentSession: "sess-child", origin: "subagent", seedLength, delegationDepth: 2 })
+    expect(entry?.session.header).toMatchObject({ parentSession: "sess-child", origin: "subagent", delegationDepth: 2, seedLength })
   })
 
   it("without childSessions behaves exactly as today (anonymous session, no sessionId)", async () => {
@@ -495,12 +568,13 @@ describe("spawnChild durable child sessions (M8)", () => {
 // ── M76 (design §1.2 + §1.3): the seed's bound ──────────────────────────────
 // Two changes, one order and one line of visibility. The ORDER: the declared
 // F4 opens the child-owned delegation before asynchronous model resolution.
-// Failed binding retains the original admission and closed failed action;
+// Failed binding retains the original admission and closes the setup action as stopped;
 // tools, model transport, publication and job registration still do not run.
 describe("M76: the seed's bound — early child ownership and an over-window seed are visible", () => {
-  it("a spawn whose binding fails retains its original child admission and failed action without publication", async () => {
+  it("a spawn whose binding fails retains its original child admission and stopped setup action without publication", async () => {
     const f = spawnFixture()
     const coordinator = ownedCoordinatorFixture()
+    coordinator.keepScope(f.parentCtx, f.table)
     append(f.parentSession, { type: "turn/start" })
     append(f.parentSession, { type: "user/message", text: "inherited question" })
     append(f.parentSession, { type: "assistant/message", text: "inherited answer" })
@@ -522,7 +596,7 @@ describe("M76: the seed's bound — early child ownership and an over-window see
     const events = failed.view.events
     expect(events.filter(event => event.type === 'agent/input/admitted')).toEqual([expect.objectContaining({ text: 'do the thing' })])
     expect(events.filter(event => event.type === 'context/action' && event.op === 'open')).toHaveLength(1)
-    expect(events.filter(event => event.type === 'context/action' && event.op === 'close')).toEqual([expect.objectContaining({ disposition: 'failed' })])
+    expect(events.filter(event => event.type === 'context/action' && event.op === 'close')).toEqual([expect.objectContaining({ disposition: 'stopped' })])
     expect(events.some(event => event.type === 'context/attempt' || event.type === 'tool/dispatch' || event.type === 'model/exchange-accepted')).toBe(false)
     expect(f.table.entries().size).toBe(0)
     expect(f.jobs.listAll()).toHaveLength(0)
@@ -1380,49 +1454,25 @@ describe("the child's request carries the resolved budget", () => {
     expect(f.jobs.read(jobId).status).toBe("completed")
     // …and the model really was asked to summarise (the child's own engine)
     expect(requests.length).toBeGreaterThan(1)
-    // The summarizer's call is a byte-prefix of the child's own request — that is
-    // what requestShape buys, and core-agent builds it from THIS child's deps.
-    // (The legacy text form would carry systemPrompt: "".)
+    // Summary admission owns a dedicated text request. It preserves the selected
+    // inherited conversation without copying the main role prompt or tools.
     const summarizerReq = requests.find((r) => {
       const last = r.messages.at(-1)
       return typeof last?.content === "string" && last.content.includes("summar")
     })
-    expect(summarizerReq?.systemPrompt).toBe(requests.at(-1)?.systemPrompt)
-    expect(summarizerReq?.systemPrompt).toContain("root/helper")
+    expect(summarizerReq).toBeDefined()
+    expect(summarizerReq!.systemPrompt).toBe('')
+    expect(summarizerReq!.tools).toEqual([])
+    expect(summariesOf(summarizerReq!)).toContain('q0')
+    expect(requests.at(-1)!.systemPrompt).toContain('root/helper')
   }, 15_000)
 
-  // M74 (final review, fix wave): the same regime as the case above, behind a
-  // client that enforces the provider's own rule instead of answering anything.
-  // THIS fixture's inherited surface is ONE INDIVISIBLE BLOCK — a single
-  // ~3 750-token head turn — and that is what this case is scoped to: no piece
-  // can carry a block that size (the M75 design's §4.4 residual), so the reset
-  // below is the answer for THIS shape, not for a strict provider in general.
-  // M75's fallback DOES take the other half: a divisible over-window region is
-  // sliced and summarised ("an over-window child region that CAN be split", the
-  // case after this one, on identical numbers). What this case still measures is
-  // the undivided regime: the summarizer builds its request from
-  // `deriveMessagesUpTo(session, lastShadowed)` — for a child's FIRST
-  // compaction, the entire inherited surface — plus the directive, the system
-  // prompt and the tool schemas (compaction/index.ts); the cap it carries is
-  // `clampOutputCap`'s, which returns the RAW value exactly when the input
-  // already fills the window (llm-seam clampOutputCap, the `!(hardRoom >= 1)`
-  // arm). A block too large to be a piece reaches the wire over-window and a
-  // real provider rejects it (`input + max_tokens > context`). MEASURED here: 2
-  // summarizer requests rejected (maybeCompact's pass and enforceBudget's layer
-  // 1 — one per pass, since the chain stops at piece 1), the summarizer fails
-  // SOFT, and the ladder's layer 2 rescues — `resetWindowOnce` keeps the last 20
-  // events and the child CONTINUES with its inherited context DROPPED, not
-  // summarised. The permissive clients the other compaction cases use are what
-  // let that over-window request look harmless — they answer it, so the summary
-  // path is what those cases measure; this one is what a real provider yields
-  // for a region no piece can fit.
-  it("a strict provider blocks an indivisible inherited region and retains the child history", async () => {
+  // At 512 the required output floor leaves no input room. The original 3k
+  // window instead admits two legal dedicated summary attempts, whose malformed
+  // replies still cannot replace or drop the inherited history.
+  it.each([512, 3000])("a strict provider preserves the inherited history after bounded summary failure (window=%s)", async contextWindow => {
     const f = spawnFixture()
-    // The parent's head turn is what fills the window; the six small turns after
-    // it are the tail the reset will keep. Both halves matter: without the head
-    // the child never compacts, and without a tail long enough that the last 20
-    // events are small, the reset would keep the surface over budget and the
-    // child would fail closed instead (that is the case above).
+    // A large inherited head still requires reduction; admission must not drop it.
     const HEAD = "INHERITED-HEAD-SENTINEL " + "big ".repeat(1500)
     append(f.parentSession, { type: "turn/start" })
     append(f.parentSession, { type: "user/message", text: HEAD })
@@ -1434,17 +1484,13 @@ describe("the child's request carries the resolved budget", () => {
       append(f.parentSession, { type: "assistant/message", text: `a${i}` })
       append(f.parentSession, { type: "turn/end" })
     }
-    // MEASURED: the 28-event seed prices at 3080 active tokens + this role's
-    // 256 overhead = 3336 against a 1600 gate (0.8 × 2000) and an 1800 budget;
-    // the summarizer's own request prices at 3792, over the 2000 window by
-    // itself — the raw 4_242 cap the clamp leaves on it makes that worse.
-    const client = windowEnforcedClient(createMockClient([{ role: "assistant", text: "child done" }]), 3_000)
+    const client = windowEnforcedClient(createMockClient([{ role: "assistant", text: "child done" }]), contextWindow)
     const { path, jobId } = await spawnChild({
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: f.roles.get("general")!,
       summaryFactory: createSummaryPort, parentModel: client, resolveModel: noRoleModel,
-      contextWindow: 3_000,
+      contextWindow,
       maxOutputTokens: 4_242,
       forkTurns: "all",
       jobs: f.jobs, table: f.table, agents: f.agents,
@@ -1455,35 +1501,31 @@ describe("the child's request carries the resolved budget", () => {
 
     expect(f.jobs.read(jobId).status).toBe("error")
     expect(f.jobs.read(jobId).output).toMatch(/prompt_too_long/)
-    expect(client.served).toHaveLength(0)
+    if (contextWindow === 512) expect(client.served).toHaveLength(0)
+    else {
+      // The original 3k window fits dedicated summary requests. Their malformed
+      // replies exhaust bounded attempts; a main request still cannot fit.
+      expect(client.served).toHaveLength(2)
+      for (const request of client.served) {
+        expect(request.systemPrompt).toBe('')
+        expect(request.tools).toEqual([])
+        const sourceText = request.messages.slice(0, -1).flatMap(message => typeof message.content === 'string'
+          ? [message.content] : message.content.filter(part => part.type === 'text').map(part => part.text)).join('\n')
+        expect(sourceText).toContain('INHERITED-HEAD-SENTINEL')
+        expect(String(request.messages.at(-1)?.content)).toContain('summar')
+        const input = estimateContent(request.messages) + estimateChildOverhead(request.systemPrompt, request.tools)
+        expect(input + (request.maxOutputTokens ?? 0)).toBeLessThanOrEqual(contextWindow)
+      }
+    }
+    expect(client.rejected).toHaveLength(0)
     const childSession = f.table.get(path)!.session
     expect(childSession.events.some(event => event.type === "compaction/reset")).toBe(false)
     expect(deriveMessages(childSession).map(message => String(message.content)).join("\n")).toContain("INHERITED-HEAD-SENTINEL")
   }, 15_000)
 
-  // M75 (spec §2.1's child half). The case above and this one are a PAIR: same
-  // window (2 000), same cap (4 242), same window-enforcing client, same role —
-  // ONE variable changes, the inherited surface's DIVISIBILITY. There the region
-  // is a single ~3 750-token head turn, so no piece can carry it whole (the
-  // design's §4.4 residual) and the reset is the answer; here it is twelve small
-  // parent turns, so the summarizer's fallback CAN slice it and the child keeps
-  // its context as a summary where the case above drops it. Holding every other
-  // number fixed is what makes the pair a measurement: the fixture alone decides
-  // which outcome is reachable.
-  //
-  // MEASURED on this fixture. The inherited seed prices at 2 647 tokens (the
-  // assertion below is that arithmetic, taken with the public meter), and with
-  // the child's own 7-token task message the fold is 2 654 — so the SINGLE
-  // request prices at 3 359 (fold + the 449-token directive + this role's 256
-  // overhead) and the wire rejects it. Measured, that is what a gate-less build
-  // sends: `input 3359 + max_tokens 4242 > context 2000`, TWICE (maybeCompact's
-  // pass and enforceBudget's layer 1), and the ladder's reset follows. With the
-  // gate the pass makes 13 calls — one per segment, because the piece budget
-  // `2 000 − allowance − maxTokens 1 024` lands below one turn — and each is
-  // priced at exactly the window by the clamp's own arithmetic (message prices
-  // 676 / 886 × 11 / 673, plus the 256 overhead, plus the clamped cap === 2 000),
-  // so the strict client rejected NOTHING where the case above had 2 rejections.
-  // The one request it would have rejected is never built.
+  // M75: with room for its required checkpoint output, an over-window
+  // divisible inherited region is summarised by legal strict-provider requests.
+  // The assertions below prove source coverage, retained summary and no reset.
   it("M75: an over-window child region that CAN be split is summarised, not reset", async () => {
     const f = spawnFixture()
     // The head carries a sentinel for the two claims that distinguish
