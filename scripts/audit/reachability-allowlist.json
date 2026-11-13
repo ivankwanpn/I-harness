@@ -290,12 +290,6 @@
       "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
     },
     {
-      "key": "unused-export\t@i-harness/sdk#SdkConnectionError",
-      "dated": "2026-09-16",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md §6.3 — lines 872-875 (as of the 2026-09-17 Task 3B revision, re-matched after §9 was added; class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md §3.M2 — line 120 (as of the 2026-09-15 revision; the M2 sanction quoted in `reason`), §3.M1 — line 101 (M1 completion definition)",
-      "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
-    },
-    {
       "key": "unused-export\t@i-harness/sdk#createHarnessClient",
       "dated": "2026-09-16",
       "source": "docs/audit/2026-09-15-reachability-baseline.md §6.3 — lines 872-875 (as of the 2026-09-17 Task 3B revision, re-matched after §9 was added; class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md §3.M2 — line 120 (as of the 2026-09-15 revision; the M2 sanction quoted in `reason`), §3.M1 — line 101 (M1 completion definition)",
