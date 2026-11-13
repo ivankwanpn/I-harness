@@ -878,6 +878,9 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
         const writerSettlement = (): Promise<void> | undefined => {
           ownership.assertOutsideSessionOperation(id);
           checkIdentity();
+          // An existing Pending must prove native entry before it can be joined.
+          // Preparation notification is only for callers arriving before Pending.
+          if (pending) return joinableWriter()!.settlement.promise;
           const preparing = preparingWrite;
           if (preparing) {
             if (preparing.entries.some(entry => entry.authorization.source === source)) throw new FactRecoveryRequiredError();
