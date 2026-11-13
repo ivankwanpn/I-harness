@@ -1001,7 +1001,12 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
       if (message === undefined) return null // malformed → ignored
       if (isRpcNotification(message)) return null // client → server notifications are accepted-and-ignored in v1
       if (!isRpcRequest(message)) return null
-      const reply = await handleRequest(message.method, message.params, message.id, controls?.fork)
+      let reply: RpcMessage
+      try {
+        reply = await handleRequest(message.method, message.params, message.id, controls?.fork)
+      } catch (error) {
+        reply = hostMethodFailure(message.id, message.method, error)
+      }
       emitMessage(reply)
       return encodeFrame(reply)
     },
