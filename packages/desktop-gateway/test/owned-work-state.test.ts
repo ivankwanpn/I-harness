@@ -1,3 +1,9 @@
+import { AsyncResource } from 'node:async_hooks'
+import { committedFactSeqs } from '@i-harness/core-session'
+import { basename, dirname, resolve } from 'node:path'
+import { onTestFinished } from 'vitest'
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
+import { originalManagedExecutionFor, prepareOriginalManagedRuntime, retainManagedExecutionCleanup } from '../../session-executor/src/host-managed-execution.ts'
 import {expect,it,vi} from 'vitest'
 const probe=vi.hoisted(()=>({unknown:false,allow:false,key:'',keys:[] as string[],appends:0,onHuman:undefined as undefined|(()=>void)}))
 vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async load=>{
@@ -93,3 +99,87 @@ it('preserves cold public Todo read/write/CAS on the original composed coordinat
   expect(service.hasAssembly('public')).toBe(false)
  }finally{await state.close();await service.close();await coordinator.close();await rm(root,{recursive:true,force:true})}
 },30000)
+
+it('reads the committed private fold through the real host lookup while an original writer is held', async () => {
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const outside = new AsyncResource('work-state-committed-read')
+  let writing: Promise<import('@i-harness/core-session').FactOutcome> | undefined
+  let cleanupNative: (() => Promise<void>) | undefined
+  onTestFinished(async () => {
+    release.resolve()
+    await writing?.catch(() => {})
+    try { await cleanupNative?.() } finally { outside.emitDestroy() }
+  })
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'owned-work-state-held-'))
+  const backend = createJsonlBackend(root, {
+    wrapOwnedBatch: append => async (...args) => {
+      if (Buffer.from(args[3].bytes).toString('utf8').includes('after original ACK')) {
+        entered.resolve()
+        await release.promise
+      }
+      return append(...args)
+    },
+  })
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, {
+    lock: { enabled: true }, originalExecutionFoldFactory: createOwnedMetadataFold,
+  }, taskDocumentStorageContract)
+  let models = 0
+  const service = createSessionService({
+    workspace: root, coordinator, managedRuntime: { systemPrompt: 'system', tools: [] },
+    contextWindow: 4096, maxOutputTokens: 128,
+    model: controlledModel(async function* () { models++; yield { type: 'text/chunk', text: 'unused' }; yield { type: 'end' } }),
+  })
+  const current = vi.fn((id: string) => originalManagedExecutionFor(service, id))
+  const state = createDesktopWorkState(coordinator, service, { managed: {
+    current, retain: (id, execution, close) => retainManagedExecutionCleanup(service, id, execution, close),
+  } })
+  let primary: { cause: unknown } | undefined
+  let action: ReturnType<Awaited<ReturnType<typeof acquireManagedExecution>>['owner']['beginAction']> | undefined
+  let closing: Promise<void> | undefined
+  cleanupNative = () => closing ??= (async () => {
+    action?.finish()
+    const failures: unknown[] = []
+    for (const close of [() => state.close(), () => service.close(), () => coordinator.close()]) {
+      try { await close() } catch (cause) { failures.push(cause) }
+    }
+    if (failures.length) throw new AggregateError(failures, 'Original held-writer owner cleanup failed')
+  })()
+  try {
+    await coordinator.create({ sessionId: 'main' })
+    const runtime = await prepareOriginalManagedRuntime(service, 'main')
+    expect(runtime).toBeDefined()
+    const execution = originalManagedExecutionFor(service, 'main')!
+    expect(execution).toBe(runtime!.execution)
+    expect(Object.hasOwn(execution.owner, 'view')).toBe(false)
+    expect(service.hasAssembly('main')).toBe(false)
+    action = execution.owner.beginAction()
+    committedFactSeqs(await action.facts.metadata.admit({ type: 'todo/write', version: 1, items: [{ content: 'before original ACK', status: 'pending' }] }))
+    writing = action.facts.metadata.admit({ type: 'todo/write', version: 1, items: [{ content: 'after original ACK', status: 'completed' }] })
+    void writing.catch(() => {})
+    await Promise.race([entered.promise, writing.then(() => { throw Error('Original writer missed its held native boundary') })])
+    expect(() => runtime!.domain.assertCurrent()).toThrow()
+    expect(originalManagedExecutionFor(service, 'main')).toBe(execution)
+    const during = await outside.runInAsyncScope(() => state.read('main'))
+    expect(during).toMatchObject({ todos: [{ content: 'before original ACK', status: 'pending' }], todosRevision: 1 })
+    expect(service.hasAssembly('main')).toBe(false)
+    expect(models).toBe(0)
+    release.resolve()
+    committedFactSeqs(await writing)
+    expect(await state.read('main')).toMatchObject({ todos: [{ content: 'after original ACK', status: 'completed' }], todosRevision: 2 })
+    expect(current).toHaveBeenCalledWith('main')
+    expect(models).toBe(0)
+  } catch (cause) { primary = { cause } }
+  finally {
+    release.resolve()
+    const failures: unknown[] = []
+    try { await writing } catch (cause) { if (!primary || primary.cause !== cause) failures.push(cause) }
+    try { await cleanupNative() } catch (cause) { failures.push(cause) }
+    // Preserve failed roots for first-cause and original-owner inspection.
+    const target = resolve(root)
+    if (dirname(target) !== resolve(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!) || !basename(target).startsWith('owned-work-state-held-')) failures.push(Error('Unexpected owned held-writer fixture path'))
+    else if (!primary && !failures.length) await rm(target, { recursive: true, force: true })
+    if (primary && !failures.length) throw primary.cause
+    if (failures.length) throw new AggregateError([...(primary ? [primary.cause] : []), ...failures], 'Original held writer and read cleanup failed', { cause: primary?.cause })
+  }
+}, 30000)

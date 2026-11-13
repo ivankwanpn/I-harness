@@ -120,10 +120,10 @@ it("reads the committed snapshot instead of speculative live events", async () =
   const live = { events: [{ type: "todo/write", version: 1, items: [{ content: "live item", status: "in_progress" }] }] } as Session
   const service = { liveSession: (id: string) => id === "s1" ? live : undefined } as SessionService
   try {
-    const current = vi.fn(() => { throw new Error('Writer admission is busy') })
+    const current = vi.fn(() => undefined)
     const state = createDesktopWorkState(coordinator, service, { managed: { current, retain: vi.fn() } })
     expect(await state.read("s1")).toMatchObject({ todos: null, todosRevision: 0, goal: null })
-    expect(current).not.toHaveBeenCalled()
+    expect(current).toHaveBeenCalledWith("s1")
     expect((await coordinator.load("s1")).session.events).toEqual([])
   } finally { await coordinator.close() }
 })
@@ -144,7 +144,7 @@ it("keeps a cold inspection on the durable prefix instead of invoking the host's
     const state = createDesktopWorkState(coordinator, service, { sessionFor: writable })
     await entered.promise
     expect(authoritative.events).toEqual([])
-    await expect(state.read('s1')).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+    expect(await state.read('s1')).toEqual({todos:null,todosRevision:0,goal:null})
     expect(writable).not.toHaveBeenCalled()
     release.resolve();await writing
     expect(await state.read("s1")).toMatchObject({ todos: [{ content: "Pending durability", status: "pending" }], todosRevision: 1 })

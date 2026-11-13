@@ -39,11 +39,12 @@ function validatedInput(input: DesktopTodoWriteInput): DesktopTodoWriteInput {
   return { items, expectedRevision: input.expectedRevision }
 }
 
-/** Public inspection folds the coordinator's committed snapshot without entering
- * a live writer's admission gate. Human replacements retain their displayed revision
+/** Inspection uses an available original managed fold, otherwise the coordinator's
+ * committed snapshot. Human replacements retain their displayed revision
  * through admission so they cannot erase a newer accepted snapshot. Read-only
  * inspection never enters the writable loader or constructs an assembly. */
 export function createDesktopWorkState(coordinator: SessionCoordinator, _service: SessionService, options: { sessionFor?: (sessionId: string) => Promise<Session>;managed?:{
+  /** Read-only lookup of an already-held original attachment; no new-work admission. */
   current(sessionId:string):ManagedExecutionAttachment|undefined
   retain(sessionId:string,execution:ManagedExecutionAttachment,cleanup:()=>Promise<void>):void
 } } = {}) {
@@ -65,6 +66,8 @@ export function createDesktopWorkState(coordinator: SessionCoordinator, _service
   }
   return {
     async read(sessionId: string): Promise<DesktopWorkStateView> {
+      const managed = await managedFor(sessionId)
+      if (managed) return managed.read()
       await coordinator.profile(sessionId)
       if (!coordinator.snapshot) throw new Error("Read-only work-state snapshots unavailable")
       return view((await coordinator.snapshot(sessionId)).session)
