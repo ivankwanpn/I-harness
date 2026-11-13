@@ -11,6 +11,29 @@ export const desktopInputReceiptDocumentKey = (sessionId: string) => `desktop-in
 type ManagedInputOwner=NonNullable<Awaited<ReturnType<NonNullable<SessionService['managedInputFor']>>>>
 type ManagedInputObservation=ReturnType<ManagedInputOwner['observe']>
 
+type AdmittedInput = Extract<SessionEventView, { type: "agent/input/admitted" }>
+type InputPayload = { text: string; delivery: "queue" | "steer"; context?: string; images?: readonly ImageInput[] }
+
+/** Compare the fields actually persisted at admission, without copying image bytes. */
+function sameInputPayload(existing: AdmittedInput, requested: InputPayload): boolean {
+  if (existing.text !== requested.text || existing.delivery !== requested.delivery
+    || (existing.supplementalContext || undefined) !== (requested.context || undefined)) return false
+  const saved = existing.images ?? [], incoming = requested.images ?? []
+  return saved.length === incoming.length && saved.every((image, index) => {
+    const other = incoming[index]!
+    return image.mediaType === other.mediaType && image.dataBase64 === other.dataBase64
+      && image.attachmentId === other.attachmentId && image.name === other.name
+      && image.width === other.width && image.height === other.height
+  })
+}
+
+/** A retry acknowledges the delivery chosen by the original admission. */
+function retryPayload(existing: AdmittedInput, requested: InputPayload): InputPayload {
+  return existing.delivery === 'queue' && requested.delivery === 'steer'
+    ? { text: requested.text, delivery: 'queue', context: requested.context, images: requested.images }
+    : requested
+}
+
 /** Durable admission owns acceptance; each execution is scheduled separately. */
 export function createDesktopInput(coordinator: SessionCoordinator, service: SessionService, options: {
   prepare?: (sessionId: string, text: string) => Promise<string>
@@ -74,7 +97,9 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     // An unrelated in-flight reservation need not recreate an admission or
     // block acknowledgement of this already-committed input.
     const persisted = document.view.events.find((event) => event.type === "agent/input/admitted" && event.inputId === existing.inputId)
-    if (persisted?.type !== "agent/input/admitted" || persisted.text !== existing.text || persisted.delivery !== existing.delivery) throw new Error("Input admission is not durable")
+    if (persisted?.type !== "agent/input/admitted" || !sameInputPayload(persisted, {
+      text: existing.text, delivery: existing.delivery, context: existing.supplementalContext, images: existing.images,
+    })) throw new Error("Input admission is not durable")
     if (closed) throw new Error("Input service closed")
     // A failed earlier barrier never reached scheduling. Pending inputs may
     // now start; promoted/completed/cancelled inputs are absent from pending.
@@ -105,7 +130,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
           const existing = observation?await observation.inbox.admitted(tokenInputId):(await ownSession(id)).events.find((event) => event.type === "agent/input/admitted" && event.inputId === tokenInputId)
           observation?.assertCurrent()
           if (existing?.type === "agent/input/admitted") {
-            if (existing.text !== raw.text || existing.delivery !== raw.delivery) throw new Error("Input token payload does not match its durable admission")
+            if (!sameInputPayload(existing, retryPayload(existing, raw))) throw new Error("Input token payload does not match its durable admission")
             return acknowledgeExisting(id, existing, raw.start !== false,managed,observation)
           }
         }
@@ -126,7 +151,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
           const cancelledSeq=observation?observation.inbox.lastCancellationSeq(inputId):session!.events.findLast((event) => event.type === "agent/input/cancelled" && event.inputId === inputId)?.seq
           observation?.assertCurrent()
           if (cancelledSeq!==undefined) { inputId = `${raw.inputId}:retry:${cancelledSeq}`; continue }
-          if (duplicate.text !== raw.text || duplicate.delivery !== raw.delivery) throw new Error("Recovered input does not match its durable admission")
+          if (!sameInputPayload(duplicate, retryPayload(duplicate, raw))) throw new Error("Recovered input does not match its durable admission")
           return acknowledgeExisting(id, duplicate, raw.start !== false,managed,observation)
         }
         const delivery = raw.delivery === "steer" && !service.queueState(id).running ? "queue" : raw.delivery

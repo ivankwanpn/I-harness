@@ -13,6 +13,19 @@ import { describeHttpError, type ModelFailureFacts } from "@i-harness/llm-seam"
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
 import {composeJsonlTaskTransitionCoordinator} from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import {taskDocumentStorageContract} from '../../subagent/src/task/storage-contract.ts'
+import type { SessionEventView } from '@i-harness/core-session'
+
+function inlineCodeObservation(event: SessionEventView | undefined) {
+  if (event?.type !== 'tool/result' || event.envelope?.retention.kind !== 'inline') {
+    throw Error('Expected original inline Code tool result')
+  }
+  const value = event.envelope.retention.value
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || !('cell_id' in value) || typeof value.cell_id !== 'string') {
+    throw Error('Expected original Code cell observation')
+  }
+  return { value, cellId: value.cell_id }
+}
 
 it('actual Gateway input reports bounded local final-schema refusal without transport, effect or context recovery', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gateway-final-validation-'))
@@ -56,8 +69,8 @@ it("repeated model 400 failures preserve facts, the same service and parked work
     const assembly = await service.assemblyFor("s")
     await input.admit("s", { text: "start", delivery: "queue" }); await input.drain()
     expect(assembly.session.events.find(event => event.type === "agent/input/admitted")).toMatchObject({ provenance: { kind: "human", authority: "request", scope: "turn", producer: "desktop.input" } })
-    const parked = assembly.session.events.find(event => event.type === "tool/result" && event.name === "code_exec") as { output: { cell_id: string; status: string } }
-    expect(parked.output.status).toBe("running"); cellId = parked.output.cell_id
+    const parked = inlineCodeObservation(assembly.session.events.find(event => event.type === "tool/result" && event.name === "code_exec"))
+    expect(parked.value).toMatchObject({ status: 'running' }); cellId = parked.cellId
     await vi.waitFor(() => expect(effects).toBe(1), { timeout: 5000 })
     for (const text of ["ordinary again", "context"]) { await input.admit("s", { text, delivery: "queue" }); await input.drain() }
     await input.admit("ordinary", { text: "unknown", delivery: "queue" }); await input.drain()
@@ -106,12 +119,12 @@ it("Desktop input wakes only its exact live Session's human observer and a later
     // Cancellation is tested before observation: an admission already cancelled
     // cannot remain a pending source. Cancellation after a delivered wake does
     // not retroactively undo that wake.
-    a.inbox.admit({ inputId: "cancelled-human", text: "cancelled direction", delivery: "steer", intent: "user" })
-    a.inbox.cancel("cancelled-human")
+    await a.inbox.admit({ inputId: "cancelled-human", text: "cancelled direction", delivery: "steer", intent: "user" })
+    expect(await a.inbox.cancel("cancelled-human")).toBe(true)
     await input.admit("a", { text: "start a", delivery: "queue" }); await input.admit("b", { text: "start b", delivery: "queue" })
     await vi.waitFor(() => { expect(calls.get("a")).toBe(1); expect(calls.get("b")).toBe(1) }, { timeout: 5000 })
     const queued = await input.admit("a", { text: "queued direction", delivery: "queue", start: false })
-    a.inbox.admit({ inputId: "system-steer", text: "system direction", delivery: "steer", intent: "system", synthetic: { description: "fixture", scope: "turn" } })
+    await a.inbox.admit({ inputId: "system-steer", text: "system direction", delivery: "steer", intent: "system", synthetic: { description: "fixture", scope: "turn" } })
     await new Promise(resolve => setTimeout(resolve, 30))
     expect(requests.get("a")).toHaveLength(1); expect(requests.get("b")).toHaveLength(1)
     await input.cancel("a", queued.inputId)
@@ -125,8 +138,8 @@ it("Desktop input wakes only its exact live Session's human observer and a later
       expect(service.queueState(id).running).toBe(false)
       const observation = assembly.session.events.find(event => event.type === "tool/result" && event.name === "code_exec")
       expect(observation?.type).toBe("tool/result")
-      const output = (observation as { output: { cell_id: string; status: string; yield_reason: string } }).output
-      expect(output).toMatchObject({ status: "running", yield_reason: "user-steer" }); cells.set(id, output.cell_id)
+      const output = inlineCodeObservation(observation)
+      expect(output.value).toMatchObject({ status: "running", yield_reason: "user-steer" }); cells.set(id, output.cellId)
       expect(assembly.session.events.filter(event => event.type === "agent/input/promoted" && event.inputId === steer.inputId)).toHaveLength(1)
       expect(requests.get(id)![1]!.messages.filter(message => message.role === "user" && message.content === `human ${id} direction`)).toHaveLength(1)
       expect(assembly.session.events.filter(event => event.type === "user/message" && event.text === `human ${id} direction`)).toHaveLength(1)
@@ -136,9 +149,9 @@ it("Desktop input wakes only its exact live Session's human observer and a later
     for (const id of ["a", "b"]) await input.admit(id, { text: "retrieve", delivery: "queue" })
     await input.drain()
     for (const [id, assembly] of [["a", a], ["b", b]] as const) {
-      const observation = assembly.session.events.find(event => event.type === "tool/result" && event.name === "code_wait") as { output: unknown }
-      expect(observation.output).toMatchObject({ cell_id: cells.get(id), status: "completed" })
-      expect(JSON.stringify(observation.output)).toContain(`original ${id}`)
+      const observation = inlineCodeObservation(assembly.session.events.find(event => event.type === "tool/result" && event.name === "code_wait"))
+      expect(observation.value).toMatchObject({ cell_id: cells.get(id), status: "completed" })
+      expect(JSON.stringify(observation.value)).toContain(`original ${id}`)
       expect(assembly.session.events.filter(event => event.type === "code/cell" && event.state === "started")).toHaveLength(1)
       expect(assembly.session.events.filter(event => event.type === "code/result")).toHaveLength(1)
       expect(calls.get(id)).toBe(1)
