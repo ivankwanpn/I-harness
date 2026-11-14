@@ -30,18 +30,27 @@ function causes(error: unknown): Set<unknown> {
 }
 
 it('settles an uncertain original title drain, preserves the completed main/tool work, and recovers only its original frame', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-fix1-title-drain-')), backend = createJsonlBackend(root)
+  const root = await mkdtemp(join(tmpdir(), 'ih-fix1-title-drain-'))
   let network = 0, effects = 0, titleWrites = 0, held = true, callbackError: unknown, key: BatchKey | undefined, title = true
+  const titleIssued = Promise.withResolvers<void>()
   vi.stubGlobal('fetch', async () => { network++; throw new Error('Unexpected network destination') })
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => {
-    const events = decodeFactBatch(args[3].bytes).events, outcome = await append(...args)
-    if (events.some(event => event.type === 'context/action' && event.op === 'open' && event.purpose === 'title')) {
-      titleWrites++; key = args[3].key; return { kind: 'unknown', key }
-    }
-    return outcome
-  }
-  backend.reconcileOwnedBatch = async (...args) => held && key?.batchId === args[3].key.batchId ? { kind: 'unknown', key } : reconcile(...args)
+  const backend = createJsonlBackend(root, {
+    wrapOwnedBatch: append => async (...args) => {
+      const events = decodeFactBatch(args[3].bytes).events
+      const outcome = await append(...args)
+      if (events.some(event => event.type === 'context/action' && event.op === 'open' && event.purpose === 'title')) {
+        expect(outcome.kind).toBe('committed')
+        titleWrites++
+        key = args[3].key
+        titleIssued.resolve()
+        return { kind: 'unknown', key }
+      }
+      return outcome
+    },
+    wrapOwnedReconcile: reconcile => async (...args) => held && key?.batchId === args[3].key.batchId
+      ? { kind: 'unknown', key }
+      : reconcile(...args),
+  })
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
   const service = createSessionService({ workspace: root, coordinator, modelPolicy: 'test-mock', codeMode: { mode: 'off' }, approveAll: true,
     mockScript: [{ role: 'assistant', toolCalls: [{ name: 'fixture_effect', args: {} }] }, { role: 'assistant', text: 'main completed once' }, { role: 'assistant', text: 'later explicit input completed' }],
@@ -59,6 +68,7 @@ it('settles an uncertain original title drain, preserves the completed main/tool
   const running = service.submit(id, 'perform exactly one main effect', new AbortController().signal)
   void running.then(() => { settled = true }, () => { settled = true })
   try {
+    await Promise.race([titleIssued.promise, running.then(() => { throw new Error('Original title drain was not reached') })])
     const outcome = await bounded(running)
     expect(outcome.kind).toBe('rejected')
     await tick()
@@ -94,26 +104,31 @@ it('settles an uncertain original title drain, preserves the completed main/tool
     if (key) await document.reconcile(key).catch(() => {})
     // RED deliberately leaves the reproduced unresolved caller for worker exit;
     // it must not make the original hang a fixture teardown timeout.
-    if (settled) { await service.close().catch(() => {}); await coordinator.close().catch(() => {}) }
+    if (settled) { await expect.soft(service.close()).resolves.toBeUndefined(); await expect.soft(coordinator.close()).resolves.toBeUndefined() }
   }
 })
 
 it.each([false, true])('closes original prepared ingress after Stop during held extension refresh, cancellation unknown=%s', async uncertain => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-fix1-refresh-stop-')), backend = createJsonlBackend(root)
+  const root = await mkdtemp(join(tmpdir(), 'ih-fix1-refresh-stop-'))
   let network = 0, refresh = false, hold = true, key: BatchKey | undefined, cancellations = 0, closes = 0, actions = 0, finishes = 0
   vi.stubGlobal('fetch', async () => { network++; throw new Error('Unexpected network destination') })
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), prepared = Promise.withResolvers<void>()
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => {
-    const events = decodeFactBatch(args[3].bytes).events, outcome = await append(...args)
-    closes += events.filter(event => event.type === 'context/action' && event.op === 'close').length
-    if (events.some(event => event.type === 'agent/input/cancelled')) {
-      cancellations++
-      if (uncertain) { key = args[3].key; return { kind: 'unknown', key } }
-    }
-    return outcome
-  }
-  backend.reconcileOwnedBatch = async (...args) => hold && key?.batchId === args[3].key.batchId ? { kind: 'unknown', key } : reconcile(...args)
+  const backend = createJsonlBackend(root, {
+    wrapOwnedBatch: append => async (...args) => {
+      const events = decodeFactBatch(args[3].bytes).events
+      const outcome = await append(...args)
+      closes += events.filter(event => event.type === 'context/action' && event.op === 'close').length
+      if (events.some(event => event.type === 'agent/input/cancelled')) {
+        expect(outcome.kind).toBe('committed')
+        cancellations++
+        if (uncertain) { key = args[3].key; return { kind: 'unknown', key } }
+      }
+      return outcome
+    },
+    wrapOwnedReconcile: reconcile => async (...args) => hold && key?.batchId === args[3].key.batchId
+      ? { kind: 'unknown', key }
+      : reconcile(...args),
+  })
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
   const service = createSessionService({ workspace: root, coordinator, modelPolicy: 'test-mock', mockScript: [{ role: 'assistant', text: 'later input completed' }], codeMode: { mode: 'off' },
     extensionsFor: async () => { if (refresh) { entered.resolve(); await release.promise }; return { options: {} } },
@@ -153,7 +168,7 @@ it.each([false, true])('closes original prepared ingress after Stop during held 
     expect(events.filter(event => event.type === 'context/action' && event.op === 'local-invocation')).toHaveLength(1)
     expect(events.filter(event => event.type === 'agent/input/cancelled')).toHaveLength(1)
     expect(network).toBe(0)
-  } finally { release.resolve(); hold = false; off(); if (key) await document.reconcile(key).catch(() => {}); await service.close().catch(() => {}); await coordinator.close().catch(() => {}) }
+  } finally { release.resolve(); hold = false; off(); if (key) await document.reconcile(key).catch(() => {}); await expect.soft(service.close()).resolves.toBeUndefined(); await expect.soft(coordinator.close()).resolves.toBeUndefined() }
 })
 
 it('reads the live host completion callback with its original options receiver after the actual binding await', async () => {

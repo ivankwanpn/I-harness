@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { decodeFactBatch } from '@i-harness/core-session'
 import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
@@ -46,7 +47,7 @@ it('two human steers before the first response prepare once each and share its o
     expect(opened).toHaveLength(1)
     expect(events.flatMap(event => event.type === 'agent/input/preparation' && event.op === 'started' && event.claim === 'steer' ? [event.actionId] : [])).toEqual([opened[0]!.actionId, opened[0]!.actionId])
     expect(events.filter(event => event.type === 'agent/input/promoted')).toHaveLength(3)
-  } finally { released.resolve(); await run.catch(() => {}); await service.close().catch(() => {}); await coordinator.close().catch(() => {}) }
+  } finally { released.resolve(); await run.catch(() => {}); await expect.soft(service.close()).resolves.toBeUndefined(); await expect.soft(coordinator.close()).resolves.toBeUndefined() }
 })
 
 it.each(['started', 'completed'] as const)('cold %s preparation never replays the command and retains raw/context/image content', async disposition => {
@@ -85,7 +86,7 @@ it.each(['started', 'completed'] as const)('cold %s preparation never replays th
     expect(raw).toMatchObject({ text: '/original', supplementalContext: 'saved supplemental bytes', images: [{ dataBase64: PNG }] })
     await service.submit(id, 'new explicit input', new AbortController().signal)
     expect(wire).toHaveLength(disposition === 'started' ? 1 : 2)
-  } finally { await service.close().catch(() => {}); await coordinator.close().catch(() => {}) }
+  } finally { await expect.soft(service.close()).resolves.toBeUndefined(); await expect.soft(coordinator.close()).resolves.toBeUndefined() }
 })
 
 it('a known command failure cancels only its unpromoted input and permits a later explicit input', async () => {
@@ -101,16 +102,21 @@ it('a known command failure cancels only its unpromoted input and permits a late
     expect((await service.receivedInputFor(id)).pending()).toHaveLength(0)
     await service.submit(id, 'new human input', new AbortController().signal)
     expect(sends).toBe(1); expect(transforms).toBe(2)
-  } finally { await service.close().catch(() => {}); await coordinator.close().catch(() => {}) }
+  } finally { await expect.soft(service.close()).resolves.toBeUndefined(); await expect.soft(coordinator.close()).resolves.toBeUndefined() }
 })
 it.each(['service', 'run', 'runAdmitted'] as const)('%s expiry during the actual input-promotion backend await installs no claim and sends no model request', async entry => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-promotion-generation-')), backend = createJsonlBackend(root)
-  const append = backend.appendOwnedBatch!.bind(backend), entered = Promise.withResolvers<void>(), released = Promise.withResolvers<void>()
-  backend.appendOwnedBatch = async (id, owner, prefix, batch) => {
-    const frame = JSON.parse(Buffer.from(batch.bytes).toString('utf8'))
-    if (frame.events.some((event: { type: string; internal?: boolean }) => event.type === 'user/message' && !event.internal)) { entered.resolve(); await released.promise }
-    return append(id, owner, prefix, batch)
-  }
+  const root = await mkdtemp(join(tmpdir(), 'ih-promotion-generation-'))
+  const entered = Promise.withResolvers<void>(), released = Promise.withResolvers<void>()
+  const backend = createJsonlBackend(root, {
+    wrapOwnedBatch: append => async (...args) => {
+      const frame = decodeFactBatch(args[3].bytes)
+      if (frame.events.some(event => event.type === 'user/message' && !event.internal)) {
+        entered.resolve()
+        await released.promise
+      }
+      return append(...args)
+    },
+  })
   let sends = 0
   vi.stubGlobal('fetch', async () => { sends++; throw new Error('Unexpected network send') })
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
@@ -133,19 +139,26 @@ it.each(['service', 'run', 'runAdmitted'] as const)('%s expiry during the actual
     expect(events.filter(event => event.type === 'agent/input/promoted')).toHaveLength(0)
     expect(events.filter(event => event.type === 'user/message')).toHaveLength(0)
     expect(sends).toBe(0)
-  } finally { released.resolve(); await run.catch(() => {}); await service.close().catch(() => {}); await coordinator.close().catch(() => {}) }
+  } finally { released.resolve(); await run.catch(() => {}); await expect.soft(service.close()).resolves.toBeUndefined(); await expect.soft(coordinator.close()).resolves.toBeUndefined() }
 })
 
 it('an already issued promotion settles truthfully after Stop without replay, then a new explicit input remains usable', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-promotion-issued-')), backend = createJsonlBackend(root)
-  const append = backend.appendOwnedBatch!.bind(backend), entered = Promise.withResolvers<void>(), released = Promise.withResolvers<void>()
+  const root = await mkdtemp(join(tmpdir(), 'ih-promotion-issued-'))
+  const entered = Promise.withResolvers<void>(), released = Promise.withResolvers<void>()
   let held = false, transforms = 0, sends = 0
-  backend.appendOwnedBatch = async (id, owner, prefix, batch) => {
-    const outcome = await append(id, owner, prefix, batch)
-    const frame = JSON.parse(Buffer.from(batch.bytes).toString('utf8'))
-    if (!held && frame.events.some((event: { type: string; internal?: boolean }) => event.type === 'user/message' && !event.internal)) { held = true; entered.resolve(); await released.promise }
-    return outcome
-  }
+  const backend = createJsonlBackend(root, {
+    wrapOwnedBatch: append => async (...args) => {
+      const outcome = await append(...args)
+      const frame = decodeFactBatch(args[3].bytes)
+      if (!held && frame.events.some(event => event.type === 'user/message' && !event.internal)) {
+        expect(outcome.kind).toBe('committed')
+        held = true
+        entered.resolve()
+        await released.promise
+      }
+      return outcome
+    },
+  })
   vi.stubGlobal('fetch', async (url: string) => { if (url !== 'https://issued-promotion.fixture.invalid/v1/chat/completions') throw new Error('Unexpected network destination'); sends++; return success() })
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
   const model = createOpenAICompatibleClient({ apiKey: 'fixture-only', model: 'main', baseUrl: 'https://issued-promotion.fixture.invalid' })
@@ -164,15 +177,16 @@ it('an already issued promotion settles truthfully after Stop without replay, th
     expect(transforms).toBe(1); expect(sends).toBe(0)
     await service.submit(id, 'new explicit input', new AbortController().signal)
     expect(sends).toBe(1); expect(transforms).toBe(2)
-  } finally { released.resolve(); await run.catch(() => {}); await service.close().catch(() => {}); await coordinator.close().catch(() => {}) }
+  } finally { released.resolve(); await run.catch(() => {}); await expect.soft(service.close()).resolves.toBeUndefined(); await expect.soft(coordinator.close()).resolves.toBeUndefined() }
 })
 
 
 it('the actual guarded input-promotion capture rejects other families and accessors before dispatch or storage', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-promotion-family-')), backend = createJsonlBackend(root)
-  const append = backend.appendOwnedBatch!.bind(backend)
+  const root = await mkdtemp(join(tmpdir(), 'ih-promotion-family-'))
   let writes = 0, reads = 0, guards = 0
-  backend.appendOwnedBatch = async (...args) => { writes++; return append(...args) }
+  const backend = createJsonlBackend(root, {
+    wrapOwnedBatch: append => async (...args) => { writes++; return append(...args) },
+  })
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const action = document.beginAction(), before = writes
   const accessor = { kind: 'input-start', get message() { reads++; return { type: 'user/message', text: 'must never read' } } }
@@ -186,25 +200,30 @@ it('the actual guarded input-promotion capture rejects other families and access
     }
     expect([reads, guards, writes - before]).toEqual([0, 0, 0])
     expect(document.view.events).toHaveLength(0)
-  } finally { action.finish(); await coordinator.close().catch(() => {}) }
+  } finally { action.finish(); await expect.soft(coordinator.close()).resolves.toBeUndefined() }
 })
 
 it.each(['immediate', 'late'] as const)('an uncertain issued promotion reconciles its original frame without a second transform or claim (%s)', async recovery => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-promotion-unknown-')), backend = createJsonlBackend(root)
-  const append = backend.appendOwnedBatch!.bind(backend), reconcile = backend.reconcileOwnedBatch!.bind(backend)
+  const root = await mkdtemp(join(tmpdir(), 'ih-promotion-unknown-'))
   let transforms = 0, sends = 0, promotions = 0
   const issuedKeys: unknown[] = [], reconciledKeys: unknown[] = []
   let allowReconcile = recovery === 'immediate'
-  backend.appendOwnedBatch = async (...args) => {
-    const frame = JSON.parse(Buffer.from(args[3].bytes).toString('utf8'))
-    const result = await append(...args)
-    if (frame.events.some((event: { type: string; internal?: boolean }) => event.type === 'user/message' && !event.internal)) {
-      promotions++
-      if (promotions === 1) { issuedKeys.push(args[3].key); return { kind: 'unknown', key: args[3].key } }
-    }
-    return result
-  }
-  backend.reconcileOwnedBatch = async (...args) => { reconciledKeys.push(args[3].key); return allowReconcile ? reconcile(...args) : { kind: 'unknown', key: args[3].key } }
+  const backend = createJsonlBackend(root, {
+    wrapOwnedBatch: append => async (...args) => {
+      const frame = decodeFactBatch(args[3].bytes)
+      const result = await append(...args)
+      if (frame.events.some(event => event.type === 'user/message' && !event.internal)) {
+        expect(result.kind).toBe('committed')
+        promotions++
+        if (promotions === 1) { issuedKeys.push(args[3].key); return { kind: 'unknown', key: args[3].key } }
+      }
+      return result
+    },
+    wrapOwnedReconcile: reconcile => async (...args) => {
+      reconciledKeys.push(args[3].key)
+      return allowReconcile ? reconcile(...args) : { kind: 'unknown', key: args[3].key }
+    },
+  })
   vi.stubGlobal('fetch', async (url: string) => { if (url !== 'https://unknown-promotion.fixture.invalid/v1/chat/completions') throw new Error('Unexpected network destination'); sends++; return success() })
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
   const model = createOpenAICompatibleClient({ apiKey: 'fixture-only', model: 'main', baseUrl: 'https://unknown-promotion.fixture.invalid' })
@@ -228,17 +247,22 @@ it.each(['immediate', 'late'] as const)('an uncertain issued promotion reconcile
     expect(events.filter(event => event.type === 'agent/input/preparation' && event.op === 'promoted')).toHaveLength(1)
     await service.submit(id, 'new explicit input', new AbortController().signal)
     expect([transforms, sends, promotions]).toEqual([2, 1, 2])
-  } finally { await service.close().catch(() => {}); await coordinator.close().catch(() => {}) }
+  } finally { await expect.soft(service.close()).resolves.toBeUndefined(); await expect.soft(coordinator.close()).resolves.toBeUndefined() }
 })
 
 it('a completed steer whose guarded promotion expires cannot poison the next explicit input or transform twice', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-steer-promotion-expiry-')), backend = createJsonlBackend(root)
-  const append = backend.appendOwnedBatch!.bind(backend), resolverEntered = Promise.withResolvers<void>(), resolverRelease = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  backend.appendOwnedBatch = async (...args) => {
-    const frame = JSON.parse(Buffer.from(args[3].bytes).toString('utf8'))
-    if (frame.events.some((event: { type: string; inputId?: string }) => event.type === 'agent/input/promoted' && event.inputId === 'old-steer')) { entered.resolve(); await release.promise }
-    return append(...args)
-  }
+  const root = await mkdtemp(join(tmpdir(), 'ih-steer-promotion-expiry-'))
+  const resolverEntered = Promise.withResolvers<void>(), resolverRelease = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const backend = createJsonlBackend(root, {
+    wrapOwnedBatch: append => async (...args) => {
+      const frame = decodeFactBatch(args[3].bytes)
+      if (frame.events.some(event => event.type === 'agent/input/promoted' && event.inputId === 'old-steer')) {
+        entered.resolve()
+        await release.promise
+      }
+      return append(...args)
+    },
+  })
   let sends = 0, transformations = 0
   vi.stubGlobal('fetch', async (url: string) => { if (url !== 'https://steer-promotion-expiry.fixture.invalid/v1/chat/completions') throw new Error('Unexpected network destination'); sends++; return success() })
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
@@ -261,27 +285,30 @@ it('a completed steer whose guarded promotion expires cannot poison the next exp
     const final = (await backend.read(id)).events
     expect(final.filter(event => event.type === 'agent/input/promoted' && event.inputId === 'old-steer')).toHaveLength(0)
     expect(final.filter(event => event.type === 'agent/input/cancelled' && event.inputId === 'old-steer')).toHaveLength(1)
-  } finally { resolverRelease.resolve(); release.resolve(); await run.catch(() => {}); await service.close().catch(() => {}); await coordinator.close().catch(() => {}) }
+  } finally { resolverRelease.resolve(); release.resolve(); await run.catch(() => {}); await expect.soft(service.close()).resolves.toBeUndefined(); await expect.soft(coordinator.close()).resolves.toBeUndefined() }
 })
 
 it.each(['committed', 'absent', 'absent-cancel-unknown'] as const)('uncertain steer promotion settles its exact original %s disposition before cleanup', async disposition => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-steer-promotion-unknown-')), backend = createJsonlBackend(root)
-  const append = backend.appendOwnedBatch!.bind(backend), resolverEntered = Promise.withResolvers<void>(), resolverRelease = Promise.withResolvers<void>()
+  const root = await mkdtemp(join(tmpdir(), 'ih-steer-promotion-unknown-'))
+  const resolverEntered = Promise.withResolvers<void>(), resolverRelease = Promise.withResolvers<void>()
   let writes = 0, cancellations = 0, cancellationKey: import('@i-harness/core-session').BatchKey | undefined, transformations = 0, sends = 0
-  backend.appendOwnedBatch = async (...args) => {
-    const events = JSON.parse(Buffer.from(args[3].bytes).toString('utf8')).events as { type: string; inputId?: string }[]
-    if (events.some(event => event.type === 'agent/input/promoted' && event.inputId === 'uncertain-steer')) {
-      writes++
-      if (disposition === 'committed') await append(...args)
-      return { kind: 'unknown', key: args[3].key }
-    }
-    const outcome = await append(...args)
-    if (events.some(event => event.type === 'agent/input/cancelled' && event.inputId === 'uncertain-steer')) {
-      cancellations++
-      if (disposition === 'absent-cancel-unknown') { cancellationKey = args[3].key; return { kind: 'unknown', key: args[3].key } }
-    }
-    return outcome
-  }
+  const backend = createJsonlBackend(root, {
+    wrapOwnedBatch: append => async (...args) => {
+      const events = decodeFactBatch(args[3].bytes).events
+      if (events.some(event => event.type === 'agent/input/promoted' && event.inputId === 'uncertain-steer')) {
+        writes++
+        if (disposition === 'committed') expect((await append(...args)).kind).toBe('committed')
+        return { kind: 'unknown', key: args[3].key }
+      }
+      const outcome = await append(...args)
+      if (events.some(event => event.type === 'agent/input/cancelled' && event.inputId === 'uncertain-steer')) {
+        expect(outcome.kind).toBe('committed')
+        cancellations++
+        if (disposition === 'absent-cancel-unknown') { cancellationKey = args[3].key; return { kind: 'unknown', key: args[3].key } }
+      }
+      return outcome
+    },
+  })
   vi.stubGlobal('fetch', async (url: string) => { if (url !== 'https://steer-promotion-unknown.fixture.invalid/v1/chat/completions') throw new Error('Unexpected network destination'); sends++; return success() })
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
   const document = await coordinator.openManagedDocument(id), beginAction = document.beginAction.bind(document)
@@ -311,5 +338,5 @@ it.each(['committed', 'absent', 'absent-cancel-unknown'] as const)('uncertain st
     await service.submit(id, 'new explicit input after settled promotion', new AbortController().signal)
     expect(sends).toBe(1); expect(transformations).toBe(1); expect(writes).toBe(1)
     expect(cancellations).toBe(disposition === 'committed' ? 0 : 1)
-  } finally { resolverRelease.resolve(); await run.catch(() => {}); await service.close().catch(() => {}); await coordinator.close().catch(() => {}) }
+  } finally { resolverRelease.resolve(); await run.catch(() => {}); await expect.soft(service.close()).resolves.toBeUndefined(); await expect.soft(coordinator.close()).resolves.toBeUndefined() }
 })
