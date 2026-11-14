@@ -18,6 +18,8 @@
 
 第七批修正四個測試檔案的工具入口，沿用原始 Session 經 registry prepare／dispatch，完整 13 項涵蓋路徑映射、撤銷、外部內容、外來 Session、並行順序、Chat／Responses 原始 payload 及冷讀取。相鄰 publication 測試改用真正 constructor 故障注入後，暴露第 120 項恢復順序問題。四個原生案例在舊 production 版本全部失敗，修正後在原五秒期限內全部通過。擴大驗證得到 Executor 92 項、Persistence 14 項及 Runtime Context 22 項，合計 128 項通過，零失敗、零略過，Executor 型別通過。六個變更檔案的雜湊前後相同。[原生舊版本結果](C:/Users/IvanKwan/AppData/Local/Temp/ih-runtime-publication-native-baseline.json) [128 項完整紀錄](C:/Users/IvanKwan/AppData/Local/Temp/ih-runtime-publication-final/receipt.json)
 
+第八批 Gateway 用量測試修正 model 設定欄位 `maxTokens`，並將單次 prompt 的內層期限由五秒調為 20 秒，原案例 30 秒期限保留。舊版第一個案例在零供應商請求下用完五秒，修正後完整十二項通過，Gateway 型別通過。逐案保存實測 prompt 時間，範圍為 5.866 至 14.152 秒。Chat、Anthropic、Responses 用量修正與價格，title、summary、guardian 及 media 共十九次本機 HTTP 請求的原始斷言全部通過，清理錯誤為零。[十二項原始紀錄與時序](C:/Users/IvanKwan/AppData/Local/Temp/ih-usage-host-receipt.json)
+
 固定 `b58d7b5b` 的 ContextOutput 部分回歸曾得到 628 項通過、55 項失敗、十項略過及零未處理錯誤，範圍排除了 101／1,001 distinct-reference 的大型檔案。這輪結果與後續定向修正各自保留，尚未取得最新全庫驗收結果。[部分回歸紀錄](C:/Users/IvanKwan/AppData/Local/Temp/ih-context-post-idle-b58d7b5b/context.log)
 
 固定 `21f8d861` 的七階段全庫驗證於 2026-11-14 完成，耗時 3 小時 57 分 14 秒。82 個測試 package 全部回報，16,001 項通過、434 項失敗、86 項略過，另有九個未處理錯誤。全庫型別、十個 E2E 檔案、374 項 reachability、package boundaries 及 compiled Gateway／Windows ACL 通過。5,834 個來源檔案的清單、雜湊及 HEAD 在前後核對相同。執行期間 dev 已關閉，沒有其它測試或編譯工作重疊，17 項真實 predecessor fixture 已啟用。完整驗收仍未通過。[本輪完整清單](C:/Users/IvanKwan/AppData/Local/Temp/ih-verify-all-21f8d861/inventory.json) [來源及執行核對](C:/Users/IvanKwan/AppData/Local/Temp/ih-verify-all-21f8d861/metadata.json)

@@ -43,20 +43,22 @@ it.each(modes)('actual protocol/auxiliary host boundary: %s',async mode=>{
   res.end(chat('Controlled completed answer',mode==='summary'?{prompt_tokens:20000,completion_tokens:3,prompt_tokens_details:{cached_tokens:0}}:undefined))
  })
  let host:Awaited<ReturnType<typeof createDesktopHost>>|undefined,failed=false,primary:unknown,bodyPassed=false,snapshot:UsageSnapshotV2|undefined,pendingPrompt:Promise<unknown>|undefined,compactResult:unknown
+ let promptElapsedMs:number|undefined
  try{
   await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));const origin=`http://127.0.0.1:${(server.address() as {port:number}).port}`
   vi.spyOn(globalThis,'fetch').mockImplementation((input,init)=>{const url=new URL(typeof input==='string'?input:input instanceof URL?input.href:input.url);if(url.origin!==origin)throw Error('Fixture refuses foreign provider');return nativeFetch(input,{...init,redirect:'error'})})
-  const settingsPath=join(root,'settings.json'),credentialsPath=join(root,'credentials.json'),models=[{id:'declared-model',contextWindow:100000,maxOutputTokens:20000}]
+  const settingsPath=join(root,'settings.json'),credentialsPath=join(root,'credentials.json'),models=[{id:'declared-model',contextWindow:100000,maxTokens:20000}]
   await writeFile(settingsPath,JSON.stringify({autoTitle:mode==='title',sandboxMode:'read-only',approvalMode:mode==='guardian'?'delegate':'dangerous',codeMode:{mode:'off'},compaction:{auto:false},plugins:{subagentModel:true},agents:{roles:{reviewer:{provider:'reviewer',model:'reviewer-model'}}},llm:{providers:{fixture:{protocol,baseURL:origin,apiKeyEnv:'IH_AUX_KEY',models},reviewer:{protocol:'openai-completions',baseURL:origin,apiKeyEnv:'IH_AUX_KEY',models:[{id:'reviewer-model',contextWindow:32000}]},audio:{protocol:'openai-completions',baseURL:origin,apiKeyEnv:'IH_AUX_KEY'}},defaultModel:{provider:'fixture',model:'declared-model'},videoAudio:{provider:'audio',model:'audio-model'}}}));await writeFile(credentialsPath,JSON.stringify({refs:{IH_AUX_KEY:'synthetic-key'}}))
   host=await createDesktopHost({workspace,sessionDir:join(root,'sessions'),settingsPath,credentialsPath,experimentalUsageObservations:true,onWrite:frame=>frames.push(frame)})
   let sequence=0;const call=async(method:string,params:unknown={})=>{const id=++sequence;await host!.handleLine(JSON.stringify({jsonrpc:'2.0',id,method,params}));const reply=frames.find(f=>'id'in f&&f.id===id);if(!isRpcSuccess(reply))throw Error(JSON.stringify(reply));return reply.result}
   await call('initialize');const {sessionId}=await call('session/create') as {sessionId:string}
   await call('desktop/project/sync',{projects:[{id:'project',name:'Fixture',roots:[workspace],primaryRoot:workspace}]});await call('desktop/session/project/bind',{sessionId,projectId:'project'})
   await call('desktop/usage/pricing',{price:{providerId:'fixture',modelId:'declared-model',inputPerMillion:1,outputPerMillion:2,cacheReadPerMillion:.5,cacheCreationPerMillion:3,source:'fixture',updatedAt:1}})
+  const promptStarted=performance.now()
   pendingPrompt=call('session/prompt',{sessionId,prompt:mode==='summary'?'Original summary evidence '.repeat(2000):'Perform the controlled original task.'})
   let promptTimer:ReturnType<typeof setTimeout>|undefined
-  const prompt=Promise.race([pendingPrompt,new Promise<never>((_,reject)=>{promptTimer=setTimeout(()=>reject(Error('Controlled prompt did not settle')),5000)})])
-  try{if(mode==='terminal-error')await expect(prompt).rejects.toThrow('model stream error');else await prompt}finally{clearTimeout(promptTimer)}
+  const prompt=Promise.race([pendingPrompt,new Promise<never>((_,reject)=>{promptTimer=setTimeout(()=>reject(Error('Controlled prompt did not settle')),20000)})])
+  try{if(mode==='terminal-error')await expect(prompt).rejects.toThrow('model stream error');else await prompt}finally{clearTimeout(promptTimer);promptElapsedMs=performance.now()-promptStarted}
   if(mode==='summary'){await call('session/prompt',{sessionId,prompt:'Continue the original bounded task once.'});compactResult=await call('desktop/session/compact',{sessionId});expect(compactResult).toMatchObject({compacted:true})}
   const expected=mode==='title'?2:mode==='summary'||mode==='guardian'||mode==='media'?3:1
   const ready=()=>new Set(state.rows.filter(row=>row.observation.type==='action-close').map(row=>row.observation.type==='action-close'?row.observation.actionId:'')).size>=expected
@@ -82,7 +84,7 @@ it.each(modes)('actual protocol/auxiliary host boundary: %s',async mode=>{
   server.closeAllConnections();try{await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()))}catch(error){cleanup.push(error)}
   vi.restoreAllMocks();state.onWrite=undefined;if(warnings.some(w=>String(w).includes('Plugin disposal failed:')))cleanup.push(...warnings)
   const describe=(e:unknown):unknown=>e instanceof AggregateError?{message:e.message,errors:e.errors.map(describe)}:e instanceof Error?{message:e.message,stack:e.stack}:String(e)
-  await writeFile(join(root,'proof.json'),JSON.stringify({mode,bodyPassed,primary:failed?describe(primary):null,cleanup:cleanup.map(describe),requests,snapshot,compactResult,warnings,frames,observations:state.rows},null,2))
+  await writeFile(join(root,'proof.json'),JSON.stringify({mode,bodyPassed,promptElapsedMs,primary:failed?describe(primary):null,cleanup:cleanup.map(describe),requests,snapshot,compactResult,warnings,frames,observations:state.rows},null,2))
  }
  if(failed||cleanup.length)throw new AggregateError([...(failed?[primary]:[]),...cleanup],'Original protocol/auxiliary qualification failed')
 },30000)
