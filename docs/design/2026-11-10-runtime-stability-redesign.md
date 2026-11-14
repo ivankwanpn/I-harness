@@ -10,6 +10,10 @@
 
 測試修訂第五批已提交為 `9ce120ac`。九個發布故障點分開執行並斷言實際注入次數，索引案例核對原生 SQLite 修復及 canonical 內容，三檔合計 76 項通過。只調整實測超過原有預設的個別案例期限。後續 legacy 功能檔案的 19 個原五秒案例依量測給予 20 秒，10,001 筆案例獨立成檔並保留原五分鐘期限，完整案例內容及原生退休計數斷言保持原樣。[76 項驗證](C:/Users/IvanKwan/AppData/Local/Temp/ih-bootstrap-index-receipt.json)
 
+測試修訂第六批完成三個完整檔案，部分回應重試 23 項、審批關閉 11 項及原生 Task 崩潰／冷恢復 15 項，分批合計 49 項通過，零略過，Executor 型別通過。沿用真正 constructor 的注入入口、Task transition coordinator 及 CLI／SDK 原始 child host。崩潰 cut 依原生 committed ACK 與原始 Task 文件取證，核對 producer PID、實體 journal 與保留內容。Task v3 保存的完成結果可冷讀，缺少 parent terminal 的情況仍斷言沒有 receipt、admission 或重跑 child。審批政策失效的首次 close 核對原始 CONTEXT_INPUT_STALE，後續 close 與實際釋放次數均驗證。部分保存斷言核對實際持久化 prefix，保留至多一次工具結果及零 effect。原有案例與 IPC 期限維持原值。[49 項逐檔驗證](C:/Users/IvanKwan/AppData/Local/Temp/ih-executor-constructor-receipt.json)
+
+第六批第一次診斷啟動時與尚未退出的型別檢查短暫重疊，後續正式數字取自獨立重跑。審批測試曾加入所有 close 都必須成功的過強假設，核對原始 host 的失效回報契約後，改為驗證一次明確診斷及後續原始清理完成。[正式完整 Task 檔案](C:/Users/IvanKwan/AppData/Local/Temp/ih-delivery-cold-final.json)
+
 第 119 項撤銷槽部分寫入的恢復修正，完整功能檔案 47 項通過，一項 Windows 原生 file symlink 權限略過。相關八檔另有 181 項通過、兩項相同環境條件略過及兩項 funding 失敗，Context 型別通過。失敗的 d31 案例超過 120 秒後仍繼續執行，隨後 d1 的共享 I/O 觀察被污染，這兩項繼續列為待處理。[修正與完整驗證紀錄](C:/Users/IvanKwan/AppData/Local/Temp/ih-torn-revocation-receipt.json)
 
 固定 `b58d7b5b` 的 ContextOutput 部分回歸曾得到 628 項通過、55 項失敗、十項略過及零未處理錯誤，範圍排除了 101／1,001 distinct-reference 的大型檔案。這輪結果與後續定向修正各自保留，尚未取得最新全庫驗收結果。[部分回歸紀錄](C:/Users/IvanKwan/AppData/Local/Temp/ih-context-post-idle-b58d7b5b/context.log)
@@ -41,6 +45,8 @@ Git 實際取得的 HTTPS 認證經 GitHub `/user` 核對為 `ivankwanpn`，帳�
 2026-11-14 再次逐筆核對截至 `21f8d861` 的全部 95 筆本輪提交，author 與 committer 的錯誤身份數均為零。當時 GitHub CLI 的登入帳號、repo 的名稱與 noreply 信箱設定亦全部符合上述身份。[95 筆最新核對](C:/Users/IvanKwan/AppData/Local/Temp/ih-github-identity-audit/local-commits-current.json)
 
 2026-11-14 已將分支推送至 `beeebe08`。推送前重新以 Git 實際解析的 HTTPS 憑證查詢 GitHub `/user`，確認帳號為 `ivankwanpn`。本輪 97 筆本地 commit 及 GitHub 上的 author／committer 歸屬全部相符，這次 push 的 actor 與 triggering_actor 也同為 `ivankwanpn`。CI 已完成全庫型別、test wrapper、套件邊界及 compiled Gateway／Windows ACL 檢查，全部通過。Workflow 的完整套件步驟由手動或排程觸發。[97 筆本地核對](C:/Users/IvanKwan/AppData/Local/Temp/ih-github-identity-audit/local-commits-beeebe08.json) [GitHub 歸屬](C:/Users/IvanKwan/AppData/Local/Temp/ih-github-identity-audit/github-attribution-beeebe08.json) [推送帳號與 CI](C:/Users/IvanKwan/AppData/Local/Temp/ih-github-identity-audit/push-beeebe08.json) [GitHub CI](https://github.com/ivankwanpn/I-harness/actions/runs/43566233422)
+
+2026-11-14 分支已推送至 `c3b42bac`，105 筆本地與遠端 commit 的 author／committer 全部核對為 ivankwanpn，實際 Git HTTPS 認證亦經 GitHub /user 驗證。該次 push 的 actor 與 triggering_actor 相同，CI 全部指定步驟通過。完整套件驗收另依上列結果追蹤。[105 筆 GitHub 歸屬](C:/Users/IvanKwan/AppData/Local/Temp/ih-github-identity-audit/github-attribution-c3b42bac.json) [推送帳號與 CI](C:/Users/IvanKwan/AppData/Local/Temp/ih-github-identity-audit/push-c3b42bac.json) [CI 執行](https://github.com/ivankwanpn/I-harness/actions/runs/43599746778)
 
 參考源碼位於 `D:/ih-reference-project`，版本為 Codex 0.167.0、DSH 0.2.2-rc.1、OpenCode 2.2.6、Pi 1.5.1、ZCode 3.17.2。
 

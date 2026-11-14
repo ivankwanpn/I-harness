@@ -22,7 +22,7 @@ const failure = { error: { message: 'Fixture temporary server error private-fixt
 const partial = frame({ choices: [{ delta: { content: 'unaccepted partial', tool_calls: [{ index: 0, id: 'failed-call', function: { name: 'effect', arguments: '{}' } }] } }] })
 const success = frame({ choices: [{ delta: { content: 'follow-up succeeded' }, finish_reason: 'stop' }], usage: { prompt_tokens: 30, completion_tokens: 4 } }) + 'data: [DONE]\n\n'
 
-async function fixture(answer: (response: ServerResponse, ordinal: number) => void, options: { retries?: number; cap?: number; timeout?: number } = {}) {
+async function fixture(answer: (response: ServerResponse, ordinal: number) => void, options: { retries?: number; cap?: number; timeout?: number; backend?: Parameters<typeof createJsonlBackend>[1] } = {}) {
   // A short controlled path also keeps Windows named-pipe/SQLite paths bounded.
   const base = process.env.IH_CONFIG_DIR
   if (!base) throw new Error('Connected fixture requires a controlled IH_CONFIG_DIR')
@@ -55,7 +55,7 @@ async function fixture(answer: (response: ServerResponse, ordinal: number) => vo
   const resolved = await runtime.resolveModel({ sessionSelection: { provider: 'fixture', model: 'fixture' } })
   if (resolved.status !== 'ready') throw new Error(`Fixture binding failed: ${resolved.status}`)
   const model = resolved.binding.client
-  const backend = createJsonlBackend(join(root, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(join(root, 'sessions'), options.backend), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create()
   let effects = 0
   const service = createSessionService({ workspace: root, coordinator, model, telemetry: createTelemetry([{ onEvent(event) {
@@ -192,18 +192,28 @@ it('Stop interrupts actual ten-second capacity backoff without a second reservat
 it.each(['tool/result', 'assistant/message', 'step/end', 'reasoning'].flatMap(type => ['committed', 'unknown', 'absent'].map(disposition => ({ type, disposition }))))('$disposition $type save joins the original managed operation without reopening', async ({ type, disposition }) => {
   const committed = disposition === 'committed'
   const output = type === 'reasoning' ? frame({ choices: [{ delta: { reasoning_content: 'pending original reasoning' } }] }) : partial
-  const f = await fixture((response, ordinal) => response.end(ordinal === 1 ? output + frame({ ...failure, usage: { prompt_tokens: 12, completion_tokens: 3 } }) : success), { retries: 1 })
-  const original = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
+  let blocked = true, key: BatchKey | undefined, issued = 0, captured = false
+  const committedFacts: ReturnType<typeof decodeFactBatch>['events'][number][] = []
+  const f = await fixture((response, ordinal) => response.end(ordinal === 1 ? output + frame({ ...failure, usage: { prompt_tokens: 12, completion_tokens: 3 } }) : success), {
+    retries: 1,
+    backend: {
+      wrapOwnedBatch: append => async (...args) => {
+        const events = decodeFactBatch(args[3].bytes).events
+        if (blocked && events.some(event => event.type === type)) {
+          captured = true; key = args[3].key; issued++
+          if (committed) { expect((await append(...args)).kind).toBe('committed'); committedFacts.push(...events) }
+          return { kind: disposition === 'absent' ? 'absent' : 'unknown', key }
+        }
+        const outcome = await append(...args)
+        if (outcome.kind === 'committed') committedFacts.push(...events)
+        return outcome
+      },
+      wrapOwnedReconcile: reconcile => async (...args) => blocked ? { kind: 'unknown', key: args[3].key } : reconcile(...args),
+    },
+  })
   const consume = seam.consumeRetryFailure
   let originalFailure: unknown
   const observing = vi.spyOn(seam, 'consumeRetryFailure').mockImplementation(event => { const record = consume(event); originalFailure = record?.failure; return record })
-  let blocked = true, key: BatchKey | undefined, issued = 0
-  let captured: Parameters<typeof original> | undefined
-  f.backend.appendOwnedBatch = async (...args) => {
-    if (decodeFactBatch(args[3].bytes).events.some(e => e.type === type)) { captured = args; key = args[3].key; issued++; if (committed) await original(...args); return { kind: disposition === 'absent' ? 'absent' : 'unknown', key } }
-    return original(...args)
-  }
-  f.backend.reconcileOwnedBatch = async (...args) => blocked ? { kind: 'unknown', key: args[3].key } : reconcile(...args)
   try {
     const error = await f.service.submit(f.id, 'save refusal', new AbortController().signal).catch(e => e)
     const primary = (e: unknown): unknown => e instanceof AggregateError ? primary(e.cause) : e
@@ -215,14 +225,18 @@ it.each(['tool/result', 'assistant/message', 'step/end', 'reasoning'].flatMap(ty
     expect(f.bodies).toHaveLength(1); expect(issued).toBe(1)
     const facts = await f.facts()
     expect(facts.filter(e => e.type === 'model/exchange-accepted' || e.type === 'tool/dispatch' || e.type === 'context/usage')).toEqual([])
-    expect(facts.filter(e => e.type === 'tool/result')).toHaveLength(type === 'step/end' || type === 'tool/result' && committed || type === 'assistant/message' && disposition === 'absent' ? 1 : 0)
+    expect(facts).toEqual(committedFacts)
+    const results = facts.filter(event => event.type === 'tool/result')
+    expect(results.length).toBeLessThanOrEqual(1)
+    if (type === 'tool/result') expect(results).toHaveLength(committed ? 1 : 0)
+    if (type === 'step/end') expect(results).toHaveLength(1)
     for (const result of facts.filter(e => e.type === 'tool/result')) expect(result).toMatchObject({ callId: 'failed-call', name: 'effect', isError: true, output: { code: 'TOOL_ABORTED_BEFORE_DISPATCH' } })
     expect(facts.filter(e => e.type === 'context/action' && e.op === 'open')).toHaveLength(1)
     const projection = projectConversation({ formatVersion: 12, events: facts })
     if (type !== 'reasoning' && (type !== 'step/end' || !committed)) expect(projection.items.some(i => i.unit?.state === 'unresolved' || i.unit?.state === 'open')).toBe(true)
   } finally {
     observing.mockRestore()
-    blocked = false; f.backend.appendOwnedBatch = original; f.backend.reconcileOwnedBatch = reconcile
+    blocked = false
     if (captured && committed) {
       await (await f.coordinator.openManagedDocument(f.id)).reconcile(key!)
       await f.service.closeSession(f.id)

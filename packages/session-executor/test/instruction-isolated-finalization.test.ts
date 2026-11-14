@@ -16,11 +16,27 @@ import { rmWorkspaceSync } from './helpers.ts'
 it.each(['stable', 'rules', 'policy', 'revoke', 'Stop', 'timeout', 'source-stable', 'source-policy', 'source-revoke', 'source-Stop', 'source-timeout'] as const)('arbitrates %s after physical end while original approval close is held', async mode => {
   const root = await mkdtemp(join(tmpdir(), 'ih-isolated-final-')), rules = join(root, 'AGENTS.md')
   await writeFile(rules, 'before')
-  const backend = createJsonlBackend(join(root, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
   const environment = createProjectInstructionEnvironment(), current = environment.policy.current.bind(environment.policy)
   let epoch = '', revoked = false, commits = 0, closeAppends = 0
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), reviewed = Promise.withResolvers<GuardianReviewRecord>(), stop = new AbortController()
   const holdSource = mode.startsWith('source-'), callerStop = mode === 'Stop' || mode === 'source-Stop', timeout = mode === 'timeout' || mode === 'source-timeout'
+  let approvalActionId: string | undefined
+  const backend = createJsonlBackend(join(root, 'sessions'), {
+    wrapOwnedBatch: append => async (...args) => {
+      const facts = decodeFactBatch(args[3].bytes).events
+      const opening = facts.find(event => event.type === 'context/action' && event.op === 'open' && event.purpose === 'approval')
+      const closing = facts.some(event => event.type === 'context/action' && event.op === 'close' && event.actionId === approvalActionId)
+      if (closing) { closeAppends++; if (!holdSource) { entered.resolve(); await release.promise } }
+      const outcome = await append(...args)
+      if (opening?.type === 'context/action' && opening.op === 'open') {
+        expect(outcome.kind).toBe('committed')
+        approvalActionId = opening.actionId
+      }
+      if (closing) expect(outcome.kind).toBe('committed')
+      return outcome
+    },
+  })
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
   environment.policy.current = () => { const value = current(); return { ...value, generation: value.generation + epoch, ...(revoked ? { kind: 'unavailable' as const } : {}) } as ReturnType<typeof current> }
   const sources: Array<{ service: import('@i-harness/instructions').InstructionService; closes: number }> = [], create = environment.host.create.bind(environment.host)
   environment.host.create = scope => { const source = create(scope), close = source.close.bind(source), observed = { service: source, closes: 0 }; sources.push(observed); return { ...source, async close() { const originalClose = close(); if (holdSource) { entered.resolve(); await release.promise }; await originalClose; observed.closes++ } } }
@@ -33,12 +49,7 @@ it.each(['stable', 'rules', 'policy', 'revoke', 'Stop', 'timeout', 'source-stabl
   const service = createSessionService({ workspace: root, coordinator, model: model(mainServer.baseUrl), instructionEnvironment: environment, approvalMode: 'ask-all', codeMode: { mode: 'off' }, guardian: { execution: 'isolated', model: model(reviewerServer.baseUrl), timeoutMs: timeout ? 500 : 5000, isolated: { pool, identity: () => ({ provider: 'fixture', model: 'fixture', protocol: 'http', configurationKey: 'fixture' }), permissionContext: () => 'fixture', onReview: record => { reviewed.resolve(record) } } } })
   let running: Promise<unknown> | undefined
   try {
-    const assembly = await service.assemblyFor(id), append = backend.appendOwnedBatch!
-    backend.appendOwnedBatch = async (...args) => {
-      const facts = decodeFactBatch(args[3].bytes).events
-      if (facts.some(event => event.type === 'context/action' && event.op === 'close' && assembly.session.events.some(open => open.type === 'context/action' && open.op === 'open' && open.purpose === 'approval' && open.actionId === event.actionId))) { closeAppends++; if (!holdSource) { entered.resolve(); await release.promise } }
-      return append(...args)
-    }
+    await service.assemblyFor(id)
     running = service.submit(id, 'review a write', stop.signal); void running.catch(() => {})
     await entered.promise; const source = sources.at(-1)!
     expect(reviewerServer.requests).toHaveLength(1); expect(source.closes).toBe(0)
@@ -55,7 +66,16 @@ it.each(['stable', 'rules', 'policy', 'revoke', 'Stop', 'timeout', 'source-stabl
     } else { release.resolve(); record = await reviewed.promise }
     if (mode === 'stable' || mode === 'source-stable') { expect(record.reviewerOutcome).toBe('approve'); expect(commits).toBe(1) }
     else { expect(record.reviewerOutcome).not.toBe('approve'); expect(commits).toBe(0) }
-    await running.catch(() => {}); await service.close().catch(() => {}); await service.close().catch(() => {})
+    await running.catch(() => {})
+    const firstClose = await service.close().then(() => undefined, error => error)
+    if (mode === 'stable' || mode === 'source-stable') expect(firstClose).toBeUndefined()
+    else {
+      const isStaleInstructionFailure = (error: unknown): boolean => error instanceof AggregateError
+        ? error.errors.length > 0 && error.errors.every(isStaleInstructionFailure)
+        : error instanceof Error && (error as Error & { code?: string }).code === 'CONTEXT_INPUT_STALE'
+      expect(isStaleInstructionFailure(firstClose)).toBe(true)
+    }
+    await expect(service.close()).resolves.toBeUndefined()
     expect(source.closes).toBe(1); expect(closeAppends).toBe(1); expect(reviewerServer.requests).toHaveLength(1)
-  } finally { release.resolve(); await running?.catch(() => {}); await service.close().catch(() => {}); await coordinator.close().catch(() => {}); await reviewerServer.close(); await mainServer.close(); await environment.close(); rmWorkspaceSync(root) }
+  } finally { release.resolve(); await running?.catch(() => {}); await expect.soft(service.close()).resolves.toBeUndefined(); await expect.soft(coordinator.close()).resolves.toBeUndefined(); await reviewerServer.close(); await mainServer.close(); await environment.close(); rmWorkspaceSync(root) }
 }, 15000)

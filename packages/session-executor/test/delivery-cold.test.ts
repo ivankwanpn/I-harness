@@ -7,12 +7,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
-import { readDeliveries } from '@i-harness/core-session'
+import { CURRENT_FORMAT_VERSION, readDeliveries } from '@i-harness/core-session'
 import { createSessionCoordinator } from '@i-harness/session-persistence'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createContextOutputService } from '@i-harness/context-output'
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
-import { createSessionService, createDurableSessionLoader } from '../src/index.ts'
+import { createSessionService, createDurableSessionLoader, createUnmanagedTaskChildHost } from '../src/index.ts'
 import { produceFormat12RetainedResult } from './helpers/format12-retained-runtime.ts'
 import { controlledModel } from './controlled-model.ts'
 import { RecipientDeliveryRecoveryError } from '../src/lifecycle/recipient-delivery.ts'
@@ -48,13 +50,14 @@ it.each(cuts)('cold original source qualifies from actual physical proof at %s',
   child.stdout!.on('data', value => { stdout += String(value) }); child.stderr!.on('data', value => { stderr += String(value) })
   child.on('message', value => { cut = value })
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => { released = true; resolve({ code, signal }) }) })
-  const backend = createJsonlBackend(join(root, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(join(root, 'sessions')), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const output = createContextOutputService({ root: join(root, 'results'), workspaceId: 'd1a-crash', config: { enabled: false } })
   let service: ReturnType<typeof createSessionService> | undefined, timer: ReturnType<typeof setTimeout> | undefined
   try {
     const exit = await Promise.race([exited, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Original cut not reached\n' + stderr)), 15000) })]); clearTimeout(timer)
     expect(exit).toEqual({ code: 0, signal: null })
-    expect(cut).toMatchObject({ nonce, kind: cutMode })
+    expect(cut).toMatchObject({ nonce, producerPid: child.pid, kind: cutMode })
+    expect(cut.taskDocument.formatVersion).toBe(3)
     if (mode === 'scheduled-before-claim') {
       expect(cut.taskDocument.notifications).toEqual([expect.objectContaining({ status: 'delivered', timeDelivered: expect.any(Number) })])
       expect(cut.taskDocument.notifications[0]).not.toHaveProperty('timeWoken')
@@ -81,7 +84,7 @@ it.each(cuts)('cold original source qualifies from actual physical proof at %s',
       }
     }
     const model = createOpenAICompatibleClient({ apiKey: 'fixture-only', model: 'parent', baseUrl: endpoint })
-    service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), contextOutput: output,
+    service = createSessionService({ workspace: root, coordinator, prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: 'unmanaged' }), sessionFor: createDurableSessionLoader(coordinator), contextOutput: output,
       model, modelPolicy: 'test-mock', codeMode: { mode: 'off' }, sandbox: 'danger-full-access', contextWindow: 100000, approveAll: true })
     const published = await service.assemblyFor('parent').catch(error => { recoveryError = String(error); return undefined })
     if (mode === 'end-conflicted') {
@@ -117,36 +120,27 @@ it.each(cuts)('cold original source qualifies from actual physical proof at %s',
     }
     const original = cut.taskDocument.tasks.find((task: any) => task.id === 'task-1')
     const restored = (await coordinator.getDocument('task-parent') as import('@i-harness/subagent').TaskProtocolDocument).tasks.find(task => task.id === 'task-1')!
+    expect(restored.status).toBe(original.status)
+    expect(restored.outcome).toBe(original.outcome)
     expect(restored.result?.revision).toBe(original.result.revision)
     expect(restored.result?.kind).toBe('retained')
     if (restored.result?.kind === 'retained') expect(restored.result.envelope.retention).toEqual(original.result.envelope.retention)
     if (missing) {
-      // Qualification is derived live state; the saved completed observation
-      // remains intact instead of gaining a new TaskDoc trust certificate.
-      expect(published!.tasks()).toContainEqual(expect.objectContaining({ id: 'task-1', status: 'failed', summary: 'recovery required' }))
+      // The original Task v3 result is durable. The parent journal assertions
+      // above separately verify that delivery authority has not been created.
+      expect(published!.tasks()).toContainEqual(expect.objectContaining({ id: original.agentPath, group: 'subagent', status: 'completed', summary: 'original child result', canCancel: false }))
     }
     // Read the actual retained body, using the unchanged original revision/ref.
     // Default get_task_output presentation is not byte-read evidence.
     const ref = original.result.envelope.retention.ref
-    let response: Awaited<ReturnType<NonNullable<typeof published>['tools']['execute']>> | undefined, readError: unknown
-    try { response = await published!.tools.execute({ name: 'get_task_output', args: { task_ids: ['task-1'], body: true, result_revision: original.result.revision, ref_id: ref.id, ref_revision: ref.revision, offset_bytes: 0, max_output_bytes: 4096 } }) }
-    catch (error) { readError = error; retainedRead = { error: String(error) } }
-    if (readError) {
-      expect(missing).toBe(true)
-      expect(String(readError)).toMatch(/recovery.required|unavailable/i)
-    } else {
-      retainedRead = response!.output
-      const page = response!.output as { data?: { kind: string; text: string }; resultRevision: string; ref: unknown; eof: boolean }
-      if (page.data?.kind === 'text') {
-        expect(page.resultRevision).toBe(original.result.revision); expect(page.ref).toEqual(ref); expect(page.eof).toBe(true)
-        const bytes = Buffer.from(page.data.text)
-        expect(bytes).toEqual(Buffer.from(JSON.stringify({ resultText: 'original child result' })))
-        await writeFile(join(root, 'retained-readback.json'), bytes)
-      } else {
-        expect(missing).toBe(true)
-        expect(JSON.stringify(response!.output)).toMatch(/recovery.required|unavailable/i)
-      }
-    }
+    const response = await published!.tools.execute({ name: 'get_task_output', args: { task_ids: ['task-1'], body: true, result_revision: original.result.revision, ref_id: ref.id, ref_revision: ref.revision, offset_bytes: 0, max_output_bytes: 4096 } })
+      .catch(error => { retainedRead = { error: String(error) }; throw error })
+    retainedRead = response.output
+    const page = response.output as { data: { kind: string; text: string }; resultRevision: string; ref: unknown; eof: boolean }
+    expect(page).toMatchObject({ data: { kind: 'text' }, resultRevision: original.result.revision, ref, eof: true })
+    const bytes = Buffer.from(page.data.text)
+    expect(bytes).toEqual(Buffer.from(JSON.stringify({ resultText: 'original child result' })))
+    await writeFile(join(root, 'retained-readback.json'), bytes)
     const afterRead = (await backend.read('parent')).events
     expect(afterRead.filter(e => e.type === 'subagent/end')).toHaveLength(missing ? 0 : 1)
     expect(afterRead.filter(e => e.type === 'agent/delivery-received')).toHaveLength(missing ? 0 : 1)
@@ -209,7 +203,7 @@ it('genuine original format12 retained task remains fully readable in its same r
     expect(assembly.session.events.filter(e => e.type === 'subagent/end')).toHaveLength(1)
     expect(assembly.session.events.filter(e => e.type === 'agent/delivery-received' || e.type === 'agent/input/admitted' && e.intent === 'system')).toHaveLength(0)
     const after = await readFile(join(root, 'sessions', id + '.jsonl')), afterNewline = after.indexOf(10)
-    expect(JSON.parse(after.subarray(0, afterNewline).toString()).formatVersion).toBe(13)
+    expect(JSON.parse(after.subarray(0, afterNewline).toString()).formatVersion).toBe(CURRENT_FORMAT_VERSION)
     expect(after.subarray(afterNewline + 1, afterNewline + 1 + before.length - newline - 1)).toEqual(before.subarray(newline + 1))
   } catch (error) { failure = error; throw error }
   finally {
