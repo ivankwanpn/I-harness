@@ -6,7 +6,7 @@
 
 ### 目前整體進度
 
-截至 `614680d2`，本報告記錄 117 項具體問題與 S1 至 S7 的結構調整。Team 執行功能已移除，Code Mode 保留獨立 package 與 QuickJS／Worker 架構。第 102 至 114 項的已確認根因均已提交對應修正並完成定向驗證，實機使用 DeepSeek Flash 的 Code 執行、背景等待、草稿清除及冷重啟亦已通過。第 115 至 117 項為後續測試品質核對，第一批六個測試／helper 檔案已提交，30 項定向控制及兩個 package 型別通過。整體工程完成度估計約 80%，剩餘工作包含完整回歸失敗、效能問題、最終問題狀態及交付核對。此估計包含修正與交付工作，完整穩定性驗收仍未完成。
+截至 `2054f4a4`，本報告記錄 117 項具體問題與 S1 至 S7 的結構調整。Team 執行功能已移除，Code Mode 保留獨立 package 與 QuickJS／Worker 架構。第 102 至 114 項的已確認根因均已提交對應修正並完成定向驗證，實機使用 DeepSeek Flash 的 Code 執行、背景等待、草稿清除及冷重啟亦已通過，後續真實父子任務及其關閉、冷讀取也已驗證。第 115 至 117 項為測試品質核對，三批共十一個測試／helper 檔案已提交，65 項定向控制及對應 package 型別通過。整體工程完成度估計約 80%，剩餘工作包含完整回歸失敗、效能問題、最終問題狀態及交付核對。此估計包含修正與交付工作，完整穩定性驗收仍未完成。
 
 固定 `21f8d861` 的七階段全庫驗證於 2026-11-14 完成，耗時 3 小時 57 分 14 秒。82 個測試 package 全部回報，16,001 項通過、434 項失敗、86 項略過，另有九個未處理錯誤。全庫型別、十個 E2E 檔案、374 項 reachability、package boundaries 及 compiled Gateway／Windows ACL 通過。5,834 個來源檔案的清單、雜湊及 HEAD 在前後核對相同。執行期間 dev 已關閉，沒有其它測試或編譯工作重疊，17 項真實 predecessor fixture 已啟用。完整驗收仍未通過。[本輪完整清單](C:/Users/IvanKwan/AppData/Local/Temp/ih-verify-all-21f8d861/inventory.json) [來源及執行核對](C:/Users/IvanKwan/AppData/Local/Temp/ih-verify-all-21f8d861/metadata.json)
 
@@ -28,11 +28,13 @@
 
 GitHub 操作使用已登入的 `ivankwanpn`。提交作者及提交者使用 `ivankwanpn <213307026+ivankwanpn@users.noreply.github.com>`。每次 commit 與 push 前核對登入帳號與有效 Git 身份。
 
-2026-11-13 依使用者要求重新核對本輪 Git 身份。從 `f885bec8` 至 `42dfc339` 的 79 筆 commit，其 author 與 committer 全部使用上述名稱及信箱。GitHub 上已推送的 24 筆 commit 全部關聯到 `ivankwanpn`，五次既有 push 對應的 Actions actor 及 triggering_actor 亦全部為同一帳號，與 remote-tracking reflog 逐筆相符。其後至 `614680d2` 的提交亦逐筆完成相同提交前後核對，該版本的本地提交總數為 96，較遠端領先 72 筆。[本地逐筆紀錄](C:/Users/IvanKwan/AppData/Local/Temp/ih-github-identity-audit/local-commits.json) [GitHub 歸屬與推送 actor](C:/Users/IvanKwan/AppData/Local/Temp/ih-github-identity-audit/github-attribution.json)
+2026-11-13 依使用者要求重新核對本輪 Git 身份。從 `f885bec8` 至 `42dfc339` 的 79 筆 commit，其 author 與 committer 全部使用上述名稱及信箱。GitHub 上最初推送的 24 筆 commit 全部關聯到 `ivankwanpn`，五次既有 push 對應的 Actions actor 及 triggering_actor 亦全部為同一帳號，與 remote-tracking reflog 逐筆相符。其後至 `614680d2` 的提交亦逐筆完成相同提交前後核對，該版本共有 96 筆本輪提交，推送前較遠端領先 72 筆。[本地逐筆紀錄](C:/Users/IvanKwan/AppData/Local/Temp/ih-github-identity-audit/local-commits.json) [GitHub 歸屬與推送 actor](C:/Users/IvanKwan/AppData/Local/Temp/ih-github-identity-audit/github-attribution.json)
 
 Git 實際取得的 HTTPS 認證經 GitHub `/user` 核對為 `ivankwanpn`，帳號 ID 為 `213307026`。GitHub 專屬 credential helper 先重設其它 helper，再使用已登入的 GitHub CLI 認證。此 repo 的 Git 名稱、noreply 信箱及 `user.useConfigOnly=true` 均已設定。這輪核對結果符合使用者的身份要求。[實際 Git 認證核對](C:/Users/IvanKwan/AppData/Local/Temp/ih-github-identity-audit/effective-git-auth.json) [最近一次既有推送紀錄](https://github.com/ivankwanpn/I-harness/actions/runs/42879776750)
 
 2026-11-14 再次逐筆核對截至 `21f8d861` 的全部 95 筆本輪提交，author 與 committer 的錯誤身份數均為零。當時 GitHub CLI 的登入帳號、repo 的名稱與 noreply 信箱設定亦全部符合上述身份。[95 筆最新核對](C:/Users/IvanKwan/AppData/Local/Temp/ih-github-identity-audit/local-commits-current.json)
+
+2026-11-14 已將分支推送至 `beeebe08`。推送前重新以 Git 實際解析的 HTTPS 憑證查詢 GitHub `/user`，確認帳號為 `ivankwanpn`。本輪 97 筆本地 commit 及 GitHub 上的 author／committer 歸屬全部相符，這次 push 的 actor 與 triggering_actor 也同為 `ivankwanpn`。CI 已完成全庫型別、test wrapper、套件邊界及 compiled Gateway／Windows ACL 檢查，全部通過。Workflow 的完整套件步驟由手動或排程觸發。[97 筆本地核對](C:/Users/IvanKwan/AppData/Local/Temp/ih-github-identity-audit/local-commits-beeebe08.json) [GitHub 歸屬](C:/Users/IvanKwan/AppData/Local/Temp/ih-github-identity-audit/github-attribution-beeebe08.json) [推送帳號與 CI](C:/Users/IvanKwan/AppData/Local/Temp/ih-github-identity-audit/push-beeebe08.json) [GitHub CI](https://github.com/ivankwanpn/I-harness/actions/runs/43566233422)
 
 參考源碼位於 `D:/ih-reference-project`，版本為 Codex 0.167.0、DSH 0.2.2-rc.1、OpenCode 2.2.6、Pi 1.5.1、ZCode 3.17.2。
 
@@ -306,6 +308,8 @@ Code Mode 第一輪實機失敗後完成第 104、105 項修正。重新啟動�
 
 第一個 dev 在全庫驗證的 Gateway 後段啟動，另一次輔助程序盤點因 PowerShell 空集合處理而未結束，已中止並修正。ContextOutput actual101 逾時後仍繼續，也影響後續共用計數器。這些負載及計數限制均保留，純耗時案例需獨立複驗。[Dev 啟動重疊](C:/Users/IvanKwan/AppData/Local/Temp/ih-verify-all-73082c41/dev-startup-overlap.json) [輔助盤點負載](C:/Users/IvanKwan/AppData/Local/Temp/ih-verify-all-73082c41/diagnostic-process-overlap.json)
 
+在 `beeebe08` 的獨立 IH dev 中，另完成真實同步子任務。父模型為 `deepseek-flash`，採用 built-in explore 繼承父 ModelClient 的設定，fork_turns 為 none。實際 spawn_agent 回傳 completed，父子各一個回合、零 step/failed，分別保存 IH_TASK_OK 5050 及 IH_CHILD_OK 5050。Task 文件為 format 3、通知佇列為空，33 bytes 的結果 artifact 內容及摘要符合保存的 reference。正常關閉前後 Task 文件雜湊相同，另一個程序完成冷讀取。新草稿為空且保存模型選擇，dev 程序與三個監聽端點均已退出。保存的主程序日誌沒有出現先前的 RPC、FACT_RECOVERY_REQUIRED 或 Task 查詢逾時訊息。[實機與冷讀取摘要](C:/Users/IvanKwan/AppData/Local/Temp/ih-dev-task-beeebe08-summary.json) [原始父子事件](C:/Users/IvanKwan/AppData/Local/Temp/ih-dev-task-beeebe08.json) [Task 文件](C:/Users/IvanKwan/AppData/Local/Temp/ih-dev-task-document-beeebe08.json) [正常關閉及草稿](C:/Users/IvanKwan/AppData/Local/Temp/ih-dev-task-beeebe08-closed.json)
+
 ### Code Mode 參考對照與調整
 
 使用者要求一併比較 Code Mode 的設計，並授權有需要時重新設計。IH 的 `@i-harness/code-mode` 是獨立 workspace package，程式目前在 QuickJS／WASM context 執行，外層 Node Worker 負責訊息、限制與回收。DSH 0.2.2-rc.1 的相應功能已命名為 PTC，主要入口為 `tool-executor-ptc` 與 `ptc-runtime-node`。OpenCode 2.2.6 也有獨立的 `@opencode/codemode`，預設為受限制的 JavaScript AST interpreter，另有實驗性的 bytecode VM。這次調整集中在結果及完成責任的歸屬。
@@ -455,6 +459,12 @@ request timeout、傳輸關閉及協定失敗保留不同錯誤種類。stderr �
 最終以完整回歸相同的兩個 worker 配置依序重跑。Gateway 兩項通過，耗時 48.22 秒。Executor 三個完整檔案共 28 項通過，耗時 352.60 秒，未處理錯誤與略過均為零。六個候選檔案與 HEAD 在前後核對一致，Gateway／Executor 型別檢查通過。較早的一次定向命令漏用 scripts/test-env.mjs，因證據目錄未設定而在 setup 失敗，該紀錄獨立保留，最終驗證使用正式環境包裝器。[最終收據及檔案雜湊](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-21f8d861/receipt.json) [Gateway 完整結果](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-21f8d861/gateway-inventory.json) [Executor 完整結果](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-21f8d861/executor-inventory.json)
 
 ### 最新定向修正
+
+`2054f4a4` 完成第三批程序中斷與冷讀取測試。程序由 node --import tsx 直接啟動，核對真正 producer 的 PID 及 cut，標記寫入完成後才退出，父程序等待 stdio close。已提交邊界先驗證 committed，工具結果亦核對 succeeded。副作用改為追加記錄，重播會留下額外內容，mutable 工具在 fixture 中明確批准執行。五個中斷位置在原 30 秒期限內通過，完整命令耗時 46.68 秒。
+
+另十個 publication／pin 中斷案例保留原生檔案、pin、內容、原始 Task 文件及無 writer ownership 的斷言。原 producer 已終止，冷讀取將已保存的 running 留在 savedObservation，公開狀態為 recovery-required，且沒有 Task result、通知或新的完成事實。這符合案例對 artifact 已提交仍須有原 Task 完成證明的要求。十項全部通過，耗時 57.69 秒，原期限保持，三個檔案雜湊一致且 Executor 型別通過。[完整收據](C:/Users/IvanKwan/AppData/Local/Temp/ih-crash-publication-receipt.json) [程序中斷測試](D:/codex-ih-development/packages/session-executor/test/physical-crash.test.ts) [冷讀取與 publication 控制](D:/codex-ih-development/packages/session-executor/test/publication-pins-physical.test.ts)
+
+`993d5999` 完成輸入提升與提交完成流程的第二批測試修訂。原始 append／reconcile 在 backend 建構時包裝，刻意遺失 ACK 前先核對真正 committed 結果。標題收尾的有界等待從已確認的原始 title 寫入開始，清楚定位回覆是否完成。原有 service 及 coordinator 的清理結果加入 soft async 斷言，使清理錯誤進入測試結果。兩個完整檔案共 20 項通過，耗時 57.10 秒，兩個 worker、原有期限及正常 test-env 啟動方式下沒有略過或未處理錯誤。Executor 型別通過，兩個檔案雜湊在前後一致。[驗證收據](C:/Users/IvanKwan/AppData/Local/Temp/ih-input-completion-receipt.json) [完整測試清單](C:/Users/IvanKwan/AppData/Local/Temp/ih-input-completion-inventory.json)
 
 `e613aee0` 的 history materialization 修正完成八項原生控制，包含讀取與寫入相遇、準備寫入先等待原讀取、自我重入拒絕、原始讀取／關閉錯誤及關閉責任。Gateway 正常 Desktop 的背景 Code 加 history 案例以 14.367 秒通過，Persistence 與 JSONL 型別通過。另一次 `Owned dependency archive changed` 發生於 history 之前，該原始失敗記錄繼續保留，尚待完整回歸定位。[驗證收據](C:/Users/IvanKwan/AppData/Local/Temp/ih-108-final/receipt.json) [另一次原始失敗](C:/Users/IvanKwan/AppData/Local/Temp/ih-108-desktop-lane-first.log)
 
