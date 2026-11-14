@@ -224,9 +224,21 @@ export async function createManagedExecutionRuntimeWithRegistry(options:Omit<Man
   const methods=names.map(name=>Object.getOwnPropertyDescriptor(originalSurface,name)),prepareSurface=Object.getOwnPropertyDescriptor(originalSurface,'prepareModelSurface')
   if(prepareSurface&&(!('value'in prepareSurface)||typeof prepareSurface.value!=='function'||types.isProxy(prepareSurface.value)))throw TypeError('Original model surface preparation required')
   if(methods.some(field=>!field||!('value' in field)||typeof field.value!=='function'||types.isProxy(field.value)))throw TypeError('Original default surface methods required')
-  const check=()=>{assertCurrent();for(let i=0;i<names.length;i++)if(Object.getOwnPropertyDescriptor(originalSurface,names[i]!)?.value!==methods[i]!.value)throw Error('Original default surface changed');const now=Object.getOwnPropertyDescriptor(originalSurface,'prepareModelSurface');if(Boolean(now)!==Boolean(prepareSurface)||now&&(!('value'in now)||now.value!==prepareSurface?.value))throw Error('Original model surface preparation changed')}
-  const call=(index:number,...args:unknown[])=>{check();return Reflect.apply(methods[index]!.value,originalSurface,args)}
-  defaultSurface=Object.freeze({systemPrompt:()=>call(0) as string,modelToolSchemas:()=>call(1) as import('@i-harness/llm-seam').ToolSchema[],modelOverheadTokens:()=>call(2) as number,async prepareInput(text:string){const value=await call(3,text);check();return value as string},async reconcileAuthority(){await call(4);check()},...prepareSurface?{async prepareModelSurface(signal:AbortSignal){check();await Reflect.apply(prepareSurface.value,originalSurface,[signal]);check()}}:{}})
+  const checkMethods=()=>{for(let i=0;i<names.length;i++)if(Object.getOwnPropertyDescriptor(originalSurface,names[i]!)?.value!==methods[i]!.value)throw Error('Original default surface changed');const now=Object.getOwnPropertyDescriptor(originalSurface,'prepareModelSurface');if(Boolean(now)!==Boolean(prepareSurface)||now&&(!('value'in now)||now.value!==prepareSurface?.value))throw Error('Original model surface preparation changed')}
+  const check=()=>{assertCurrent();checkMethods()}
+ const readProjection=(index:number)=>{
+  assertLifetimeCurrent()
+  const observation=prepared.execution.observe()
+  observation.assertCurrent()
+  checkMethods()
+  const value=Reflect.apply(methods[index]!.value,originalSurface,[])
+  checkMethods()
+  observation.assertCurrent()
+  assertLifetimeCurrent()
+  return value
+ }
+ const call=(index:number,...args:unknown[])=>{check();return Reflect.apply(methods[index]!.value,originalSurface,args)}
+  defaultSurface=Object.freeze({systemPrompt:()=>readProjection(0) as string,modelToolSchemas:()=>readProjection(1) as import('@i-harness/llm-seam').ToolSchema[],modelOverheadTokens:()=>readProjection(2) as number,async prepareInput(text:string){const value=await call(3,text);check();return value as string},async reconcileAuthority(){await call(4);check()},...prepareSurface?{async prepareModelSurface(signal:AbortSignal){check();await Reflect.apply(prepareSurface.value,originalSurface,[signal]);check()}}:{}})
  }
  assertCurrent();captureExecutionHookChannel(prepared.ctx).capture()
  const resolved=await options.resolveModel()

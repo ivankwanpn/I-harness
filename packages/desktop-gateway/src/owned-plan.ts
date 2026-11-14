@@ -10,7 +10,15 @@ export async function mountOwnedPlan(original: ManagedRegistryConstruction, init
  const lifetime = Object.getOwnPropertyDescriptor(original,'assertLifetimeCurrent')?.value
  if (typeof lifetime !== 'function') throw TypeError('Original construction lifetime required')
  let closing = false
- const capture = () => { original.assertCurrent(); const observation = original.execution.observe(); const plan = observation.plan(); observation.assertCurrent(); original.assertCurrent(); return {observation,plan} }
+ const projection = () => {
+  original.assertLifetimeCurrent()
+  const observation = original.execution.observe()
+  const plan = observation.plan()
+  observation.assertCurrent()
+  original.assertLifetimeCurrent()
+  return {observation,plan}
+ }
+ const capture = () => { original.assertCurrent(); const selected=projection(); original.assertCurrent(); return selected }
  const read = () => capture().plan
  const close = async () => { closing = true; for (const finish of [...pending]) await finish() }
  original.retain(close)
@@ -48,5 +56,5 @@ export async function mountOwnedPlan(original: ManagedRegistryConstruction, init
  original.tools.register({name:'exit_plan_mode', description:'Signal that the plan is complete and plan mode should end. No arguments.', inputSchema:{type:'object',properties:undefined,required:undefined},isReadOnly:true,
   async execute(_args, exec) { const selected=capture(); if (!selected.plan.active) return {active:false}; await change(selected,'off',exec.abortSignal); return {active:true} }})
  onExecutionEvent(original.ctx,'tools/pre-execute',call => {const name=(call as {name?:string})?.name; if(read().active && (!name || original.tools.get(name)?.isReadOnly!==true)) throw Object.assign(new Error('Plan Mode permits only read-only tools'),{policyRefusal:true}); return call})
- return Object.freeze({read, prompt:()=>read().active ? PLAN_MODE_SYSTEM_PROMPT : ''})
+ return Object.freeze({read, prompt:()=>projection().plan.active ? PLAN_MODE_SYSTEM_PROMPT : ''})
 }

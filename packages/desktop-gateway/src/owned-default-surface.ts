@@ -34,8 +34,17 @@ export async function createOwnedDefaultSurface(original:ManagedRegistryConstruc
  const plan=await mountOwnedPlan(original,options.initialPlanMode)
  original.assertCurrent()
  const base=options.preset===undefined?DEFAULT_AGENT_PRESET.systemPrompt:parsePreset(options.preset).systemPrompt
- const systemPrompt=()=>{original.assertCurrent();const parts=[base,options.policyPrompt(),plan.prompt(),options.shellPrompt()];let text=parts.filter(Boolean).join('\n\n');text=metadata.prompt(text);const rest=[options.projectPrompt(),options.hookPrompt(),options.recoveryPrompt()].filter(Boolean);if(rest.length)text+='\n\n'+rest.join('\n\n');original.assertCurrent();return text}
- const modelToolSchemas=()=>{original.assertCurrent();return options.schemas()}
+ const readProjection=<T>(read:()=>T):T=>{
+  original.assertLifetimeCurrent()
+  const observation=original.execution.observe()
+  observation.assertCurrent()
+  const value=read()
+  observation.assertCurrent()
+  original.assertLifetimeCurrent()
+  return value
+ }
+ const systemPrompt=()=>readProjection(()=>{const parts=[base,options.policyPrompt(),plan.prompt(),options.shellPrompt()];let text=parts.filter(Boolean).join('\n\n');text=metadata.prompt(text);const rest=[options.projectPrompt(),options.hookPrompt(),options.recoveryPrompt()].filter(Boolean);if(rest.length)text+='\n\n'+rest.join('\n\n');return text})
+ const modelToolSchemas=()=>readProjection(()=>options.schemas())
  const prepareSurface=options.prepareModelSurface
  return Object.freeze({systemPrompt,modelToolSchemas,modelOverheadTokens:()=>options.overheadTokens??approxTokens(systemPrompt())+approxTokens(JSON.stringify(modelToolSchemas())),async prepareInput(text:string){original.assertCurrent();const result=await options.prepareInput(text);original.assertCurrent();return result},async reconcileAuthority(){original.assertCurrent();await options.reconcileAuthority();original.assertCurrent()},...prepareSurface?{async prepareModelSurface(signal:AbortSignal){original.assertCurrent();if(options.prepareModelSurface!==prepareSurface)throw Error('Original model surface preparation changed');await prepareSurface(signal);original.assertCurrent();if(options.prepareModelSurface!==prepareSurface)throw Error('Original model surface preparation changed')}}:{}})
 }

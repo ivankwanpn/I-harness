@@ -31,9 +31,9 @@ export function createManagedReduction(host: ManagedAgentHost, context: ReturnTy
             assertManagedActionCurrent(host.domain, action);
             let initial = await context.capture(action);
             retain(initial.instructions);
-            const resolved = resolveCompactSpec(config, initial.metadata?.providerId, initial.metadata?.modelId), policy = reductionPolicyFacts(resolved, initial.snapshot.surface, initial.model, context.budgetConfig?.reserveRatio);
+            const resolved = resolveCompactSpec(config, initial.metadata?.providerId, initial.metadata?.modelId), policy = reductionPolicyFacts(resolved, initial.snapshot.surface, initial.model, context.budgetReserveRatio);
             let sequence: Awaited<ReturnType<typeof beginSoftSequence>> | undefined, published = false;
-            const selectedPolicy = (snapshot: ContextSnapshot) => { const selected = resolveCompactSpec(config, snapshot.surface.binding?.providerId, snapshot.surface.binding?.modelId), facts = reductionPolicyFacts(selected, snapshot.surface, context.retainedCandidate().model, context.budgetConfig?.reserveRatio); return { model: selected.summarizationModel, key: projectionFingerprint(facts), facts }; };
+            const selectedPolicy = (snapshot: ContextSnapshot) => { const selected = resolveCompactSpec(config, snapshot.surface.binding?.providerId, snapshot.surface.binding?.modelId), facts = reductionPolicyFacts(selected, snapshot.surface, context.retainedCandidate().model, context.budgetReserveRatio); return { model: selected.summarizationModel, key: projectionFingerprint(facts), facts }; };
             const actual = () => { const value = context.retainedCandidate(); retain(value.instructions); return value; };
             const assertCurrent = () => context.capturedCurrent(actual());
             const originalCapture = action.captureContextReduction?.bind(action);

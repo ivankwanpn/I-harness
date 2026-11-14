@@ -20,6 +20,16 @@ it('private request leases refresh original bookkeeping and refuse changed input
     const action = execution.owner.beginAction(), source = action.registerSettlementSource(async () => { }), context = createManagedAgentContext(host);
     context.bindAction(action.facts, source);
     try {
+        let overheadReads = 0;
+        host.modelOverheadTokens = () => { overheadReads++; throw Error('Unrelated live projection is unavailable'); };
+        context.update({ budget: { contextWindow: 4096, reserveRatio: .8 } });
+        expect(context.budgetReserveRatio).toBe(.8);
+        context.update({ budget: { contextWindow: 4096, reserveRatio: .7 } });
+        expect(context.budgetReserveRatio).toBe(.7);
+        expect(overheadReads).toBe(0);
+        expect(() => context.budgetConfig).toThrow('Unrelated live projection is unavailable');
+        expect(overheadReads).toBe(1);
+        host.modelOverheadTokens = undefined;
         committedFactSeqs(await action.captureLifecycle!({ type: 'conversation/semantics', version: 1, mode: 'accepted-exchange-v1' }).admit());
         committedFactSeqs(await action.captureInputPromotion({ kind: 'input-start', turn: { type: 'turn/start' }, message: { type: 'user/message', text: 'actual input' } }, () => true).admit());
         const first = await context.capture(action);
@@ -32,10 +42,13 @@ it('private request leases refresh original bookkeeping and refuse changed input
         expect(context.current(refreshed!)).toBe(true);
         host.systemPrompt = 'changed';
         expect(context.current(refreshed!)).toBe(false);
+        expect(context.capturedCurrent(refreshed!)).toBe(false);
         host.systemPrompt = 'original';
         expect(context.current(refreshed!)).toBe(true);
+        expect(context.capturedCurrent(refreshed!)).toBe(true);
         onExecutionEvent(ctx, 'agent/pre-step', () => { });
         expect(context.current(refreshed!)).toBe(false);
+        expect(context.capturedCurrent(refreshed!)).toBe(false);
         const next = await context.capture(action);
         expect(context.current(next)).toBe(true);
         committedFactSeqs(await action.facts.agent.feedback({ type: 'user/message', text: 'new context', source: { kind: 'plugin', plugin: 'test' } }));
