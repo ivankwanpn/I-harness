@@ -6,7 +6,7 @@
 
 ### 目前整體進度
 
-截至 `2054f4a4`，本報告記錄 117 項具體問題與 S1 至 S7 的結構調整。Team 執行功能已移除，Code Mode 保留獨立 package 與 QuickJS／Worker 架構。第 102 至 114 項的已確認根因均已提交對應修正並完成定向驗證，實機使用 DeepSeek Flash 的 Code 執行、背景等待、草稿清除及冷重啟亦已通過，後續真實父子任務及其關閉、冷讀取也已驗證。第 115 至 117 項為測試品質核對，三批共十一個測試／helper 檔案已提交，65 項定向控制及對應 package 型別通過。整體工程完成度估計約 80%，剩餘工作包含完整回歸失敗、效能問題、最終問題狀態及交付核對。此估計包含修正與交付工作，完整穩定性驗收仍未完成。
+截至 `675282ad`，本報告記錄 118 項具體問題與 S1 至 S7 的結構調整。Team 執行功能已移除，Code Mode 保留獨立 package 與 QuickJS／Worker 架構。第 102 至 114 項的已確認根因均已提交對應修正並完成定向驗證，實機使用 DeepSeek Flash 的 Code 執行、背景等待、草稿清除及冷重啟亦已通過，後續真實父子任務及其關閉、冷讀取也已驗證。測試品質修訂前三批完成 65 項控制，第四批冷讀取 fixture 及其依賴回歸完成 119 項。後續確認第 118 項閒置清理恢復缺口，修正後 251 項相關控制及五個 package 型別通過。整體工程完成度估計約 80%，剩餘工作包含完整回歸失敗、效能問題、最終問題狀態及交付核對。各輪控制的範圍有重疊，完整穩定性驗收仍未完成。
 
 固定 `21f8d861` 的七階段全庫驗證於 2026-11-14 完成，耗時 3 小時 57 分 14 秒。82 個測試 package 全部回報，16,001 項通過、434 項失敗、86 項略過，另有九個未處理錯誤。全庫型別、十個 E2E 檔案、374 項 reachability、package boundaries 及 compiled Gateway／Windows ACL 通過。5,834 個來源檔案的清單、雜湊及 HEAD 在前後核對相同。執行期間 dev 已關閉，沒有其它測試或編譯工作重疊，17 項真實 predecessor fixture 已啟用。完整驗收仍未通過。[本輪完整清單](C:/Users/IvanKwan/AppData/Local/Temp/ih-verify-all-21f8d861/inventory.json) [來源及執行核對](C:/Users/IvanKwan/AppData/Local/Temp/ih-verify-all-21f8d861/metadata.json)
 
@@ -176,6 +176,7 @@ Git 實際取得的 HTTPS 認證經 GitHub `/user` 核對為 `ivankwanpn`，帳�
 | 115 | 部分測試在原始 I/O 前便失敗，預定故障及恢復流程未被執行 | 測試替身漏掉實際 export、建構後替換受身分保護的 backend 方法，或建立缺少 seedLength 的 child／只有 header 的繼承歷史。`614680d2` 沿用真正 constructor 的 wrapOwnedBatch／wrapOwnedReconcile，補齊實際模組 export，排程控制使用完整合法歷史經正常讀取／升級。第一批 30 項及兩個 package 型別通過，其餘同類失敗繼續逐案處理 |
 | 116 | Code 崩潰控制仍假設只有工具結果及文字輸出兩份 artifact | 正式流程另外保存 code-output-manifest，舊斷言在正確完成的結果上失敗。`614680d2` 核對三份實際保存，並驗證 manifest 的 owner、位元組數、摘要、原 cell、輸出 reference 及 completed seal。完整 12 項原生崩潰／恢復控制通過 |
 | 117 | 跨程序測試的期限及 fixture 資源責任與實際工作量不一致 | 已走通的 Code 崩潰／冷讀案例實測 30.035 及 34.326 秒，原 30 秒期限提前結束案例。`614680d2` 將此檔案調為 60 秒、子程序 receipt 期限由 20 秒調為 30 秒，記錄原始程序時序。排程 fixture 明確等待 assembly 與 coordinator 清理，setup 失敗亦嘗試原始資源清理。第一個普通 setup 曾在零 provider request 下用完 20 秒，其延遲成因仍未定位，後續完整控制通過 |
+| 118 | 閒置清理失敗後，查詢與清理重試無法恢復原有服務 | acquireLifetime 正確拒絕尚未完成的 retirement，但服務的新使用入口沒有先重試原始清理。`675282ad` 在既有 exclusive gate 內先等待相同 quiesce，再取得使用權，涵蓋查詢、變更、設定、passive continuation 及撤銷／刪除入口。兩項原生控制在舊版本失敗，修正後通過，確認舊 lease 已釋放才取得下一個 lease。已消耗但 ACK 未知的 close 仍回傳原始 falsey cause，close／acquire 次數各維持一次。251 項回歸及五個 package 型別通過 |
 
 ### 程式定位
 
@@ -459,6 +460,12 @@ request timeout、傳輸關閉及協定失敗保留不同錯誤種類。stderr �
 最終以完整回歸相同的兩個 worker 配置依序重跑。Gateway 兩項通過，耗時 48.22 秒。Executor 三個完整檔案共 28 項通過，耗時 352.60 秒，未處理錯誤與略過均為零。六個候選檔案與 HEAD 在前後核對一致，Gateway／Executor 型別檢查通過。較早的一次定向命令漏用 scripts/test-env.mjs，因證據目錄未設定而在 setup 失敗，該紀錄獨立保留，最終驗證使用正式環境包裝器。[最終收據及檔案雜湊](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-21f8d861/receipt.json) [Gateway 完整結果](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-21f8d861/gateway-inventory.json) [Executor 完整結果](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-21f8d861/executor-inventory.json)
 
 ### 最新定向修正
+
+`675282ad` 修正新使用入口遺漏原始閒置清理重試的問題。沿用 ContextStore 既有的 quiescing 狀態及 quiesce 完成順序，在八個服務入口的 exclusive gate 內先完成原清理。兩項新增原生控制在舊來源均失敗，修正後確認可恢復的 native close 被同一原始實例重試，舊 workspace lease 已釋放才允許新的 acquisition。已消耗但回覆未知的控制維持同一 undefined cause，沒有新的 acquisition 或第二次 native close。該負向控制最後釋放原始 OS lease 的步驟屬測試程序資源收尾，邏輯清理仍未獲確認。[原生失敗與修正收據](C:/Users/IvanKwan/AppData/Local/Temp/ih-idle-retry-final-receipt.json)
+
+ContextOutput 九個完整檔案共 149 項通過，另有 Persistence 五個檔案共 102 項通過，涵蓋刪除準備、清理責任、原生 ownership、撤銷及順序控制。五個 package 型別通過，四個候選檔案的雜湊保持一致。三個原先使用預設五秒期限的原生多階段案例，在定向量測中分別為 5.140、5.403、8.581 秒，現各有 15 秒期限。DescribeFunding 的原計數失敗在隔離執行中未重現，該斷言保持，完整 44 項 index lifecycle 控制亦已通過。[完整 ownership 控制](C:/Users/IvanKwan/AppData/Local/Temp/ih-idle-retry-ownership-qualified.log) [原生撤銷與順序](C:/Users/IvanKwan/AppData/Local/Temp/ih-idle-retry-native-ordering.log) [期限量測](C:/Users/IvanKwan/AppData/Local/Temp/ih-index-three-timing.log)
+
+`a7663918` 修正 coldLegacyFixture 的生命週期。原 fixture 在建立 capture／grant 後沿用暖服務，隨後手動加入 V2 plan，正常 resume 因發現 namespace drift 而撤銷 historical reader。現在先關閉 producer，再安排完整持久檔案並建立冷服務。另一項真正測試暖快取 drift 的案例，明確以原生讀取建立初始 witness，再透過獨立服務改變 membership。原有撤銷判斷保持通過。ContextOutput 26 項、Gateway 七項、JSONL 五項及 Persistence 81 項合計 119 項通過，四個 package 型別通過。暫時診斷程式已逐位元組恢復。[完整收據](C:/Users/IvanKwan/AppData/Local/Temp/ih-cold-fixture-final-receipt.json) [原始 revocation 追蹤](C:/Users/IvanKwan/AppData/Local/Temp/ih-cold-revocation-trace.log)
 
 `2054f4a4` 完成第三批程序中斷與冷讀取測試。程序由 node --import tsx 直接啟動，核對真正 producer 的 PID 及 cut，標記寫入完成後才退出，父程序等待 stdio close。已提交邊界先驗證 committed，工具結果亦核對 succeeded。副作用改為追加記錄，重播會留下額外內容，mutable 工具在 fixture 中明確批准執行。五個中斷位置在原 30 秒期限內通過，完整命令耗時 46.68 秒。
 
