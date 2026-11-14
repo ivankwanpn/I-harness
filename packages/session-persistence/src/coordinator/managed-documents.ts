@@ -148,28 +148,33 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
   }
   const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations,processLatches,transitions,(id,entry)=>{if(documents.get(id)!==entry||!entry.ready||!entry.document)throw new FactRecoveryRequiredError();resolved.set(id,entry.document)},(id,entry)=>{if(documents.get(id)!==entry||entry.ready||!entry.document||entry.revoked)throw new FactRecoveryRequiredError();const document=entry.document;return ()=>{resolved.set(id,document)}})
   function materializeExecution(id:string,existing:ManagedEntry):Promise<ReturnType<typeof createManagedDocument>>{
+    if (!existing.document || !Object.hasOwn(existing.document, 'view')) ownership.assertOutsideSessionOperation(id)
     const prior = existing.flight
     const operation = (async () => {
       await prior
       if (documents.get(id) !== existing || existing.revoked || !existing.document) throw new FactRecoveryRequiredError()
       const document = existing.document
       if (Object.hasOwn(document, 'view')) return document
-      document.assertReady()
-      document.assertObservable()
       const original = originalManagedExecution(document, ownership)
-      const expected = original.core.prefix
-      const archive = await backend.read(id)
-      original.assertCurrent()
-      original.held.assertHeld()
-      retainManagedJournalCleanup(existing.journalCleanup ??= new Map(), backend, id, original.held)
-      const actual = await backend.readJournalPrefix!(id, original.held)
-      original.assertCurrent()
-      document.assertObservable()
-      if (documents.get(id) !== existing || existing.revoked || original.core.prefix !== expected
-        || archive.version !== original.core.formatVersion || archive.events.length !== expected.eventCount
-        || actual.eventCount !== expected.eventCount || actual.bodyBytes !== expected.bodyBytes
-        || actual.prefixDigest !== expected.prefixDigest) throw new FactRecoveryRequiredError()
-      return original.materialize(archive.events)
+      const read = async () => {
+        if (documents.get(id) !== existing || existing.revoked || existing.document !== document) throw new FactRecoveryRequiredError()
+        document.assertReady()
+        document.assertObservable()
+        const expected = original.core.prefix
+        const archive = await backend.read(id)
+        original.assertCurrent()
+        original.held.assertHeld()
+        retainManagedJournalCleanup(existing.journalCleanup ??= new Map(), backend, id, original.held)
+        const actual = await backend.readJournalPrefix!(id, original.held)
+        original.assertCurrent()
+        document.assertObservable()
+        if (documents.get(id) !== existing || existing.revoked || original.core.prefix !== expected
+          || archive.version !== original.core.formatVersion || archive.events.length !== expected.eventCount
+          || actual.eventCount !== expected.eventCount || actual.bodyBytes !== expected.bodyBytes
+          || actual.prefixDigest !== expected.prefixDigest) throw new FactRecoveryRequiredError()
+        return original.materialize(archive.events)
+      }
+      return original.materializeDuringPreparation(read) ?? ownership.withSessionOperation(id, read)
     })()
     const flight = operation.then(() => {})
     existing.flight = flight
@@ -280,7 +285,13 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     },
     revoke(id:string){assertTaskOutside(id);bootstrap.assertOutsideCapture(id);const entry=documents.get(id);if(entry)revokeManagedEntry(entry)},
     async assertObservable(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;entry?.document?.assertObservable()},
-    async snapshot(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;if(entry&&executions.has(entry)&&entry.document&&!Object.hasOwn(entry.document,'view'))await materializeExecution(id,entry);entry?.document?.assertObservable();return entry?.document?.view},
+    async snapshot(id:string){
+      const entry=documents.get(id);assertEntry(entry)
+      if(entry&&executions.has(entry)&&(!entry.document||!Object.hasOwn(entry.document,'view')))ownership.assertOutsideSessionOperation(id)
+      await entry?.flight
+      if(entry&&executions.has(entry)&&entry.document&&!Object.hasOwn(entry.document,'view'))await materializeExecution(id,entry)
+      entry?.document?.assertObservable();return entry?.document?.view
+    },
     closeOne,
     borrowJournalRetirement(id: string) {
       assertTaskOutside(id)

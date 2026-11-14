@@ -72,6 +72,7 @@ type Pending = {
     installationFailure?: { error: unknown };
 };
 type PreparingWrite = {
+    materializationRead?: Promise<void>;
     entries: Entry[];
     ready: ReturnType<typeof Promise.withResolvers<void>>;
     settlement: Pending['settlement'];
@@ -93,7 +94,7 @@ type ProcessUpdate = { kind: 'unchanged'; highWater: number } | { kind: 'suffix'
 type ManagedProcessCapture = { readonly initial: SessionView; take(): ProcessUpdate; assertHealthy(): void; assertDrained(): void; markVerified(): void; close(): void };
 const executionStatuses = new WeakMap<ManagedDocument, () => 'available' | 'unavailable' | 'retired'>();
 type ExecutionState=Awaited<ReturnType<typeof restoreManagedExecutionState>>;
-const privateExecutionOwners=new WeakMap<object,{core:ExecutionState;held:HeldFactOwner;ownership:Ownership;assertCurrent():void;retainTask(domain:ManagedExecutionDomain,history:object,onRevoke:()=>void):ManagedTaskSourceRead;materialize(events:readonly import('@i-harness/core-session').SessionEventView[]):ManagedDocument&{assertObservable():void};invalidateMetadata(revision:object):void;beginTaskMetadata():TaskMetadataUpdate;captureTaskParent():Omit<TaskParentReadiness,'view'>;captureRequiredParent(source:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>):RequiredTaskParentReadiness;parent():{assertOriginal():void;assertCurrent():void;assertTask14Ready():void}}>();
+const privateExecutionOwners=new WeakMap<object,{core:ExecutionState;held:HeldFactOwner;ownership:Ownership;assertCurrent():void;retainTask(domain:ManagedExecutionDomain,history:object,onRevoke:()=>void):ManagedTaskSourceRead;materialize(events:readonly import('@i-harness/core-session').SessionEventView[]):ManagedDocument&{assertObservable():void};materializeDuringPreparation(read:()=>Promise<ManagedDocument & {assertObservable():void}>):Promise<ManagedDocument & {assertObservable():void}>|undefined;invalidateMetadata(revision:object):void;beginTaskMetadata():TaskMetadataUpdate;captureTaskParent():Omit<TaskParentReadiness,'view'>;captureRequiredParent(source:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>):RequiredTaskParentReadiness;parent():{assertOriginal():void;assertCurrent():void;assertTask14Ready():void}}>();
 export function originalManagedExecution(document:ManagedDocument,ownership:Ownership){const original=privateExecutionOwners.get(document);if(!original||original.ownership!==ownership)throw TypeError('Original private execution owner required');return original}
 export function managedExecutionStatus(document: ManagedDocument): 'available' | 'unavailable' | 'retired' {
     return executionStatuses.get(document)?.() ?? 'unavailable';
@@ -379,6 +380,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                     let executionStage:Pending['staged'];
                     try {
                         executionStage=core?await core.prepareWrite(entries.map(entry=>entry.group!),true):undefined;
+                        if (preparing.materializationRead) await preparing.materializationRead;
                         if(executionStage)for(const rejection of executionStage.rejected){for(let index=entries.length-1;index>=0;index--)if(entries[index]!.group===rejection.group){const entry=entries.splice(index,1)[0]!;entry.ticket.release();entry.resolve({kind:'not-issued',code:'FACT_INVALID_GROUP'})}}
                         if(!entries.length){executionStage?.discardUnissued();return}
                         for(const entry of entries)assertAuthorized(entry.authorization);
@@ -417,6 +419,14 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                         completed = finish(current, outcome);
                     }
                     catch (error) {
+                        if (!preparing.pending && preparing.materializationRead) {
+                            try { await preparing.materializationRead; }
+                            catch (readFailure) {
+                                if (error !== readFailure) error = Object.assign(new FactRecoveryRequiredError(), {
+                                    cause: new AggregateError([error, readFailure], 'Writer preparation and original history read failed'),
+                                });
+                            }
+                        }
                         if (!preparing.notified) preparing.failure = { cause: error };
                         if (current?.issued) {
                             // The append may have committed before the failure. Ask the
@@ -1027,6 +1037,22 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
         current();selectedListeners.add(listener)
         const witness:ManagedTaskSourceRead=Object.freeze({kind:'managed-task-source',sessionId:id,document,held,header,artifacts,prefix:Object.freeze({...capturedPrefix}),assertCurrent(){if(this!==witness)throw new TypeError('Original Task source receiver required');current()},unsubscribe(){if(this!==witness)throw new TypeError('Original Task source receiver required');revoked=true;selectedListeners.delete(listener)}})
         managedTaskSourceReads.add(witness);return witness
+      },materializeDuringPreparation(read){
+        const preparing = preparingWrite
+        if (!preparing || preparing.pending || preparing.materializationRead) return undefined
+        const settled = Promise.withResolvers<void>()
+        void settled.promise.catch(() => {})
+        preparing.materializationRead = settled.promise
+        return (async () => {
+          try {
+            const result = await read()
+            settled.resolve()
+            return result
+          } catch (cause) {
+            settled.reject(Object.assign(new FactRecoveryRequiredError(), { cause }))
+            throw cause
+          }
+        })()
       },materialize(events){
         if(!Object.hasOwn(document,'view')){const compatibility=core.materialize(events,document);originalDelivery!.bindView(compatibility.view);bindPublicState(compatibility);publicObservation=compatibility}return document;
       },beginTaskMetadata:beginTaskMetadataUpdate,captureTaskParent:()=>privateTaskParent(),captureRequiredParent:source=>privateTaskParent(source),invalidateMetadata(revision){metadataRevision=revision;metadataStale=true;invalidateSelected();try{execution!.assertCurrent()}catch(error){core.readinessUnavailable(error,true)}},parent(){

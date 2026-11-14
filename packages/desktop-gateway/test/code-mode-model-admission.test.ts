@@ -6,7 +6,7 @@ import { encodeFrame, isRpcSuccess, makeRequest, type RpcMessage } from '@i-harn
 import { createLoopbackProvider } from '../../core-agent/test/helpers/provider-loopback.ts';
 import { createDesktopHost } from '../src/host.ts';
 import { createHostFixtureModel } from './host-fixture-model.ts';
-it.each(['wait', 'close'] as const)('admits the original model Code call through the Desktop project and instruction assembly: %s', async (mode) => {
+it.each(['wait', 'close', 'history'] as const)('admits the original model Code call through the Desktop project and instruction assembly: %s', async (mode) => {
     const wire = (delta: unknown, finishReason: string) => `data: ${JSON.stringify({ choices: [{ delta, finish_reason: finishReason }], usage: { prompt_tokens: 20, completion_tokens: 10 } })}\n\ndata: [DONE]\n\n`;
     const server = await createLoopbackProvider('/v1/chat/completions', [
         async (response) => {
@@ -19,7 +19,7 @@ it.each(['wait', 'close'] as const)('admits the original model Code call through
                         } }] }, 'tool_calls'));
         },
         async (response, request) => {
-            if (mode === 'close') {
+            if (mode !== 'wait') {
                 response.end(wire({ content: 'done' }, 'stop'));
                 return;
             }
@@ -111,7 +111,7 @@ it.each(['wait', 'close'] as const)('admits the original model Code call through
         expect(events.filter(event => event.type === 'code/cell' && ['interrupted', 'failed'].includes(event.state ?? ''))).toEqual([]);
         expect(server.errors).toEqual([]);
         expect(server.requests).toHaveLength(mode === 'wait' ? 3 : 2);
-        if (mode === 'close')
+        if (mode !== 'wait')
             return;
         expect(events.filter(event => event.type === 'code/output')).toHaveLength(1);
         expect(events.filter(event => event.type === 'turn/end')).toHaveLength(1);

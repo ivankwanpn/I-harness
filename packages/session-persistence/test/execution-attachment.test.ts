@@ -1,11 +1,11 @@
 import {afterEach,expect,it,vi} from 'vitest'
-const probe=vi.hoisted(()=>({denyView:true,views:0,unknown:false,failInstall:false,appends:0,reconciles:0,path:'',readFailure:false,closeFailure:false,closes:0,reads:0,closeGate:undefined as undefined|{entered():void;wait:Promise<void>}}))
+const probe=vi.hoisted(()=>({denyView:true,views:0,unknown:false,failInstall:false,appends:0,reconciles:0,path:'',readFailure:false,closeFailure:false,closes:0,reads:0,closeGate:undefined as undefined|{entered():void;wait:Promise<void>},failedHandles:new Set<import('node:fs/promises').FileHandle>()}))
 vi.mock('@i-harness/core-session',async load=>{const original=await load<typeof import('@i-harness/core-session')>();return {...original,createManagedSessionState(...args:Parameters<typeof original.createManagedSessionState>){probe.views++;if(probe.denyView)throw Error('Hidden complete managed view');return original.createManagedSessionState(...args)}}})
 vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async load=>{const original=await load<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>();return {...original,createFactJournalBackend(...args:Parameters<typeof original.createFactJournalBackend>){const backend=original.createFactJournalBackend(...args);return {...backend,async appendOwnedBatch(...args:Parameters<typeof backend.appendOwnedBatch>){probe.appends++;const outcome=await backend.appendOwnedBatch(...args);return probe.unknown&&outcome.kind==='committed'?{kind:'unknown' as const,key:args[3].key}:outcome},async reconcileOwnedBatch(...args:Parameters<typeof backend.reconcileOwnedBatch>){probe.reconciles++;return backend.reconcileOwnedBatch(...args)}}}}})
 vi.mock('../../core-session/src/conversation/state.ts',async load=>{const original=await load<typeof import('../../core-session/src/conversation/state.ts')>();return {...original,createConversationStateIndex(){const index=original.createConversationStateIndex();return {...index,stage(...args:Parameters<typeof index.stage>){const staged=index.stage(...args);return {...staged,commit(){if(probe.failInstall){probe.failInstall=false;throw null}staged.commit()}}}}}}})
-vi.mock('node:fs/promises',async load=>{const original=await load<typeof import('node:fs/promises')>();return {...original,async open(...args:Parameters<typeof original.open>){const handle=await original.open(...args);if(String(args[0])===probe.path){const read=handle.read.bind(handle),close=handle.close.bind(handle);handle.read=(async(...args:any[])=>{probe.reads++;if(probe.readFailure)throw undefined;return (read as any)(...args)}) as typeof handle.read;handle.close=async()=>{probe.closes++;if(probe.closeFailure)throw false;await close()}}return handle}}})
+vi.mock('node:fs/promises',async load=>{const original=await load<typeof import('node:fs/promises')>();return {...original,async open(...args:Parameters<typeof original.open>){const selected=String(args[0])===probe.path;const handle=await original.open(...args);if(selected){const read=handle.read.bind(handle),close=handle.close.bind(handle);handle.read=(async(...args:any[])=>{probe.reads++;if(probe.readFailure)throw undefined;return (read as any)(...args)}) as typeof handle.read;handle.close=async()=>{probe.closes++;if(probe.closeFailure){probe.failedHandles.add(handle);throw false}await close()}}return handle}}})
 vi.mock('../src/execution-internal.ts',async load=>{const original=await load<typeof import('../src/execution-internal.ts')>();return {...original,associateExecutionDependencies(backend:object,open:Parameters<typeof original.associateExecutionDependencies>[1]){original.associateExecutionDependencies(backend,(...args)=>{const scope=open(...args);return Object.freeze({assertCurrent:scope.assertCurrent.bind(scope),readEvent:scope.readEvent.bind(scope),async close(){const gate=probe.closeGate;if(gate){probe.closeGate=undefined;gate.entered();await gate.wait}await scope.close()}})})}}})
-import {mkdtemp} from 'node:fs/promises'
+import {mkdtemp,readFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {createJsonlBackend} from '@i-harness/session-persistence-jsonl'
 import {composeJsonlTaskTransitionCoordinator} from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
@@ -17,6 +17,7 @@ import {readAcknowledgedExecutionMembers,isManagedExecutionOwner,retainAcknowled
 import {captureContextSnapshot} from '../../context-engine/src/index.ts'
 import {captureRestoredContextSnapshot} from '../../context-engine/src/snapshot/build.ts'
 import {taskDocumentOperationsFor} from '../src/task-document-internal.ts'
+import {attachArchiveReadResources} from '../src/archive-read-internal.ts'
 const coordinators:ReturnType<typeof composeJsonlTaskTransitionCoordinator>[]=[]
 afterEach(async()=>{probe.denyView=false;probe.closeGate=undefined;probe.unknown=false;probe.failInstall=false;probe.readFailure=false;probe.closeFailure=false;probe.path='';for(const coordinator of coordinators.splice(0))await coordinator.close();probe.denyView=true;probe.views=0;probe.appends=0;probe.reconciles=0;probe.closes=0})
 async function fixture(){
@@ -63,6 +64,55 @@ it('reads the committed prefix during a known writer dependency cleanup',async()
  }finally{release.resolve();await work;await source.close();action.finish()}
  expect(execution.observe().eventCount).toBeGreaterThan(committedCount)
 },20000)
+for (const primary of [false, true]) it(`retains original materialization cleanup and discards the unissued writer stage (primary=${primary})`, async () => {
+  const { root, backend, execution, coordinator } = await fixture()
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const action = execution.owner.beginAction()
+  const count = execution.observe().eventCount
+  const path = join(root, 'owner.jsonl'), original = await readFile(path)
+  probe.denyView = false
+  probe.failedHandles.clear()
+  probe.closeGate = { entered: entered.resolve, wait: release.promise }
+  const capture = action.captureMetadata!({ type: 'plan/mode', mode: 'on' })
+  const writing = capture.admit()
+  const cleanup = attachArchiveReadResources(backend)!
+  try {
+    await entered.promise
+    probe.path = path
+    probe.readFailure = primary
+    probe.closeFailure = true
+    const failed = await coordinator.snapshot!('owner').then(() => { throw Error('Original cleanup failure was lost') }, error => error)
+    expect(failed).toBeInstanceOf(AggregateError)
+    expect(failed.errors).toEqual(primary ? [undefined, false] : [false])
+    expect(probe.failedHandles.size).toBeGreaterThan(0)
+    expect([...probe.failedHandles].every(handle => handle.fd >= 0)).toBe(true)
+    release.resolve()
+    expect(await writing).toMatchObject({ kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' })
+    expect(probe.appends).toBe(0)
+    expect(Object.hasOwn(execution.owner, 'view')).toBe(false)
+    expect(execution.observe().eventCount).toBe(count)
+    expect(await readFile(path)).toEqual(original)
+    probe.readFailure = false
+    probe.closeFailure = false
+    probe.path = ''
+    await cleanup.settle()
+    expect([...probe.failedHandles].every(handle => handle.fd === -1)).toBe(true)
+    expect(await readFile(path)).toEqual(original)
+    expect(await capture.admit()).toMatchObject({ kind: 'committed' })
+    expect(probe.appends).toBe(1)
+    expect(execution.observe().eventCount).toBe(count + 1)
+  } finally {
+    release.resolve()
+    probe.readFailure = false
+    probe.closeFailure = false
+    probe.path = ''
+    await writing
+    await cleanup.settle()
+    action.finish()
+    await coordinator.close()
+  }
+  expect([...probe.failedHandles].every(handle => handle.fd === -1)).toBe(true)
+}, 20_000)
 it('keeps original unknown work fenced and reconciles its original batch without another append',async()=>{
  const {execution}=await fixture(),action=execution.owner.beginAction(),source=action.registerSettlementSource(async()=>{}),captured=source.tools.captureResult({type:'tool/result',callId:'original-call',name:'read',output:'unknown response'})
  probe.unknown=true;expect((await captured.admit()).kind).toBe('unknown');await expect(execution.prepare()).rejects.toThrow();expect(()=>execution.owner.beginAction()).toThrow();expect(probe.appends).toBe(1)
