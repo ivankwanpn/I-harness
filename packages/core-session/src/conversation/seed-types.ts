@@ -30,10 +30,14 @@ export interface SeedArtifact {
   origins: readonly SeedOriginAddress[];
   uses:readonly ({kind:'result'}|{kind:'dependency-catalog';count:number})[];
 }
-export interface BootstrapDependencyRequest {
+interface BootstrapDependencyRequestBase {
   operationId: string; targetSessionId: string; manifestDigest: Digest;
   sourceSessionId: string; artifacts: readonly SeedArtifact[];
 }
+export type BootstrapDependencyRequest = BootstrapDependencyRequestBase & (
+  { version?: never; resultsDigest?: never }
+  | { version: 2; resultsDigest: Digest }
+)
 export type BootstrapDependencyOutcome = {kind:'confirmed';closureDigest:Digest}
   | {kind:'blocked';reason:'unknown'|'unavailable'|'conflict'|'policy'};
 export type SeedSourceRetention =

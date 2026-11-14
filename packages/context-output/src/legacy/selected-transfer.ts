@@ -13,10 +13,10 @@ import { buildPages, walkPages } from './fork-pages.ts'
 import { expiryBase, expiredTuple, readSlots, revokedTuple } from './fork-disposition.ts'
 import { captureObservation, loadPlan, observedAllowed, prepareObservedIndex, rowCommitment, transferDirectory, verifiedRows } from './observed-read.ts'
 import { captureSelectedPlanView } from './selected-plan-view.ts'
-import type { SelectedLegacyCapture, LegacyForkTransferScope, LegacyRow, LegacyRowV2, LegacyTransferOutcome } from './fork-types.ts'
+import type { SelectedLegacyCapture, LegacyForkTransferScope, LegacyRow, LegacyRowV2, LegacyTransferOutcome, LegacyReadObservation } from './fork-types.ts'
 import type { ContextStore } from '../store.ts'
 
-type Ports={strict:boolean;workspaceId:string;quota():number;runPassive<T>(store:ContextStore,work:(signal:AbortSignal,store:ContextStore)=>Promise<T>):Promise<T>;mutate<T>(context:IndexedLegacyContext,work:(turn:WorkspaceMutationTurn)=>Promise<T>):Promise<T>;run<T>(signal:AbortSignal|undefined,work:(signal:AbortSignal,context:IndexedLegacyContext)=>Promise<T>):Promise<T>}
+type Ports={strict:boolean;workspaceId:string;quota():number;captureRead(input:LegacyReadObservation):LegacyReadObservation;runPassive<T>(store:ContextStore,work:(signal:AbortSignal,store:ContextStore)=>Promise<T>):Promise<T>;mutate<T>(context:IndexedLegacyContext,work:(turn:WorkspaceMutationTurn)=>Promise<T>):Promise<T>;run<T>(signal:AbortSignal|undefined,work:(signal:AbortSignal,context:IndexedLegacyContext)=>Promise<T>):Promise<T>}
 type Scope={capture:SelectedLegacyCapture;invalid:boolean;sourceRevoked:boolean;complete:boolean;fundingConfirmed:boolean;owners:Map<string,ReturnType<ContextStore['createLegacyOwnerTransfer']>>;publications:Map<string,{value:unknown;original:ReturnType<typeof createAtomicJsonPublication>}>;minimumExpiry?:number;attempts:Set<Promise<LegacyTransferOutcome>>;store?:ContextStore;currency?:object}
 const blocked=(reason:'unknown'|'unavailable'|'conflict'|'policy'):LegacyTransferOutcome=>({kind:'blocked',reason})
 /** The original legacy owner owns this V2 branch and its existing store/ledger. */
@@ -85,7 +85,7 @@ export function createSelectedLegacyTransfer(ports:Ports) {
    const {store,lease,index}=context;let issued=false,read:ReturnType<typeof captureObservation>|undefined
    const check=()=>{index.assertCurrent();if(closed||scope.invalid||signal.aborted||c.target.available()!==true)throw Error('Selected legacy unavailable');c.target.assertCurrent();if(!passive){if(scope.sourceRevoked)throw Error('Selected source revoked');c.source.assertCurrent();read!.assertCurrent()}}
    try {
-    if(!passive){c.source.assertCurrent();read=captureObservation(c.source.read());if(read.sessionId!==c.sourceSessionId)throw Error('Selected source identity conflict')}
+    if(!passive){c.source.assertCurrent();read=ports.captureRead(c.source.read());if(read.sessionId!==c.sourceSessionId)throw Error('Selected source identity conflict')}
     check();scope.store=store;scope.currency=store.captureIndexCurrency(lease,index);const directory=transferDirectory(store,c.invocation),targetSourceDigest=sourceHash(c.target.sourceId());check()
     const binding=checkBinding({workspaceId:ports.workspaceId,invocation:c.invocation,manifestDigest:facts.manifestDigest,sourceSessionId:c.sourceSessionId,targetSessionId:c.invocation.targetSessionId,targetDocumentId:c.invocation.targetSessionId,semanticSeedDigest:facts.seedDigest,sourceObservationDigest:facts.sourceObservation.digest,selection:semantic.selection,targetSourceDigest,turnDomainDigest:streamHash('ih.legacy-fork.turn-domain.v1',facts.semantic.turns).digest,totalTurns:facts.semantic.turns.total,unframedPrefix:facts.semantic.turns.unframedPrefix,selectedResults:facts.semantic.results},2)
     const bindingDigest=recordHash('binding',binding,2),seedHeader=c.targetView.header!.semanticSeed!,seed=semanticSeedFromRecords(seedHeader,c.targetView.events)

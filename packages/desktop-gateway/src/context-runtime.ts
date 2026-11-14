@@ -3,7 +3,7 @@ import {join} from 'node:path'
 import {AsyncLocalStorage} from 'node:async_hooks'
 import {types} from 'node:util'
 import {contextWorkspaceIdentity,contextOutputServiceRoot,contextSourceIdentity,contextPathKey as pathKey,type ContextOutputConfig,type ContextResultRef,type ContextAccess,type SeedDependencyTransferScope,type SeedDependencyHostAccess,type LegacyReadObservationRunner} from '@i-harness/context-output'
-import {canonicalJsonData,isStrictFactData,freezeJsonData,EMPTY_SEMANTIC_DEPENDENCY_DIGEST,sameManagedArtifactRef,semanticSeedResultRefs,managedResultRefs,rewindCuts,type ManagedArtifactRef,type BootstrapDependencyRequest,type BootstrapDependencyOutcome} from '@i-harness/core-session'
+import {canonicalJsonData,isStrictFactData,freezeJsonData,sameManagedArtifactRef,semanticSeedResultRefs,managedResultRefs,rewindCuts,type ManagedArtifactRef,type SeedArtifact,type BootstrapInvocation,type SessionEventView,type BootstrapDependencyRequest,type BootstrapDependencyOutcome} from '@i-harness/core-session'
 import {createCodeRetrievalService,type CodeRetrievalConfig,type CodeRetrievalOptions} from '@i-harness/code-retrieval'
 import type {SessionCoordinator,BootstrapDependencyPort,BootstrapTargetPreparationPort,ExistingSessionBindingObservation} from '@i-harness/session-persistence'
 import {createResultObservationScope,createLegacyReadObservationRunner,type ResultObservationCapture,type SessionProjectContext,type ResultReadScopeResolver} from '@i-harness/session-executor'
@@ -14,7 +14,7 @@ import {originalDeletionPreparationAvailable} from '@i-harness/session-persisten
 import {createNativeCodeSourceReader,type NativeReferenceSource} from './context-source-reader.ts'
 import {captureBootstrapProject,type BootstrapProjectCapture,type BootstrapProjectPreparation} from './bootstrap-project.ts'
 import {captureTaskChildProject,type TaskChildProjectCapture} from './bootstrap-project.ts'
-import {hasSelectedSource,selectedSourceFor,createSelectedRuntimeCapture,inspectSelectedTarget} from '@i-harness/session-persistence/internal/selected-source-owner'
+import {hasSelectedSource,selectedSourceFor,createSelectedRuntimeCapture,installColdSelectedQualifiers,inspectSelectedTarget,type OriginalColdQualifiers} from '@i-harness/session-persistence/internal/selected-source-owner'
 import {discoverResultLineage,assertResultLineage,legacyObservationFor} from '../../session-executor/src/lifecycle/result-observation.ts'
 import type {createProjectScopeBroker} from './project-scope.ts'
 import {readSelectedResultsOperation} from '../../session-persistence/src/selected-results-fork-contract.ts'
@@ -22,6 +22,43 @@ import {assertSelectedResultsNodeAdmission} from '../../session-persistence/src/
 import {createCompletedPassiveContext} from '@i-harness/core-session/internal/bootstrap'
 import {exportSelectedResultsConversationSeed} from '../../core-session/src/conversation/seed-export.ts'
 import {compileSelectedResultsSemanticSeed} from '../../session-persistence/src/semantic-seed.ts'
+function selectedDependencyRequest(
+  invocation: BootstrapInvocation, sourceSessionId: string, manifestDigest: string, records: readonly SessionEventView[],
+): Extract<BootstrapDependencyRequest, { version: 2 }> {
+  const manifest = records[0]
+  if (!manifest || manifest.type !== 'conversation/seed-manifest' || manifest.version !== 3)
+    throw Error('Selected seed unavailable')
+  const roots = new Map<string, {
+    ref: ManagedArtifactRef
+    origins: SeedArtifact['origins'][number][]
+    uses: SeedArtifact['uses'][number][]
+  }>()
+  for (const artifact of manifest.artifacts)
+    roots.set(`${artifact.ref.id}:${artifact.ref.revision}`, {
+      ref: artifact.ref, origins: [...artifact.origins], uses: [...artifact.uses],
+    })
+  for (const record of records) {
+    if (record.type !== 'conversation/seed-results') continue
+    for (const row of record.page.rows) {
+      if (row.protocol !== 'managed') continue
+      const key = `${row.ref.id}:${row.ref.revision}`
+      let root = roots.get(key)
+      if (root && canonicalJsonData(root.ref) !== canonicalJsonData(row.ref))
+        throw Error('Conflicting selected artifact declaration')
+      if (!root) {
+        root = { ref: row.ref, origins: [], uses: [] }
+        roots.set(key, root)
+      }
+      if (!root.uses.some(use => canonicalJsonData(use) === canonicalJsonData(row.use)))
+        root.uses.push(row.use)
+    }
+  }
+  return freezeJsonData({
+    version: 2 as const, resultsDigest: manifest.results.digest,
+    operationId: invocation.operationId, targetSessionId: invocation.targetSessionId,
+    manifestDigest, sourceSessionId, artifacts: [...roots.values()],
+  })
+}
 const selectedSignalAborted=Object.getOwnPropertyDescriptor(AbortSignal.prototype,'aborted')!.get!
 const selectedAborted=(signal?:AbortSignal)=>signal===undefined?false:types.isProxy(signal)?(()=>{throw TypeError('Invalid selected signal')})():Reflect.apply(selectedSignalAborted,signal,[]) as boolean
 
@@ -40,6 +77,7 @@ interface NativeContextOptions {
   registerJob?:CodeRetrievalOptions['registerJob']
   prepareSelectedInheritance?:ReturnType<typeof createProjectScopeBroker>['prepareSelectedInheritance']
   retainSelectedProjectRead?:ReturnType<typeof createProjectScopeBroker>['retainSelectedBindingRead']
+  acquireColdTargetPolicy?:ReturnType<typeof createProjectScopeBroker>['acquireColdTargetPolicy']
 }
 type ObservedBindings = {
   coordinator:Pick<SessionCoordinator,'profile'|'onDocumentDeleted'|'openManagedDocument'|'withExistingSessionBindingObservation'>
@@ -60,19 +98,27 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     if(selected.projectId&&selected.scope?.id!==selected.projectId)throw new Error('Native context project scope is not confirmed')
     return{sourceId:contextSourceIdentity(workspaceKey,canonical,selected.scope),readonly:true}
   }
-  async function withResultObservation<T>(capture:Omit<ResultObservationCapture,'currentSource'>,use:()=>Promise<T>):Promise<T>{
+  async function withResultObservation<T>(capture:Omit<ResultObservationCapture,'currentSource'>,use:(createLegacyRead:()=>import('@i-harness/context-output').LegacyReadObservation)=>Promise<T>):Promise<T>{
     assertAvailable()
     if(!options.withBindingObservation)throw new Error('Native context binding observation unavailable')
     return options.withBindingObservation(capture.sessionIds,capture.observation,async()=>{
       const getter=await options.resultReadScopeFor(capture.sessionId)
       if(!getter)throw new Error('Observed native result scope unavailable')
-      return observations.run({...capture,currentSource:()=>canonicalSource(getter),assertHostCurrent(){assertAvailable();capture.assertHostCurrent()}},use)
+      return observations.run({...capture,currentSource:()=>canonicalSource(getter),assertHostCurrent(){assertAvailable();capture.assertHostCurrent()}},()=>use(()=>{
+        const source=observations.current(capture.sessionId)
+        if(source?.kind!=='public'||capture.document.view!==source.view)throw Error('Original legacy read document unavailable')
+        source.assertCurrent()
+        const read=legacyObservationFor(source)
+        originalLegacyReads.set(read,{document:capture.document,view:source.view})
+        return read
+      }))
     })
   }
   const withLegacyReadObservation:LegacyReadObservationRunner=async(access,use)=>{
     assertAvailable()
     if(!options.withBindingObservation)throw new Error('Native context binding observation unavailable')
     const captured=options
+    const document=await captured.coordinator.openManagedDocument(access.sessionId)
     let getter:(()=>import('@i-harness/session-executor').ResultReadScope)|undefined
     return createLegacyReadObservationRunner({coordinator:captured.coordinator,observations,assertHostCurrent:assertAvailable,
       resolveSource:async()=>()=>{if(!getter)throw new Error('Observed native result scope unavailable');return canonicalSource(getter)},
@@ -81,7 +127,15 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
         if(!getter)throw new Error('Observed native result scope unavailable')
         return run()
       }),
-    })(access,use)
+    })(access,read=>{
+      const source=observations.current(access.sessionId)
+      if(source?.kind==='public'){
+        source.assertCurrent()
+        if(document.view!==source.view)throw Error('Original legacy read document changed')
+        originalLegacyReads.set(read,{document,view:source.view})
+      }
+      return use(read)
+    })
   }
   async function projectScope(sessionId:string){
     if(sessionId===humanSessionId)return undefined
@@ -205,13 +259,12 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       async confirmManagedDependencies(){
         const slot=captureSlot;if(!slot||!projectPreparation)throw Error('Selected target preparation unavailable');slot.assertCurrent()
         const inspection=inspectSelectedTarget(options.coordinator as SessionCoordinator,target),manifest=inspection.seed.records[0]
-        if(!manifest||manifest.type!=='conversation/seed-manifest')throw Error('Selected seed unavailable')
+        if(!manifest||manifest.type!=='conversation/seed-manifest'||manifest.version!==3)throw Error('Selected seed unavailable')
         projectPreparation.assertTargetCurrent()
-        if(!manifest.artifacts.length)return {kind:'confirmed' as const,closureDigest:EMPTY_SEMANTIC_DEPENDENCY_DIGEST}
-        const request={operationId:operation.invocation.operationId,targetSessionId:operation.invocation.targetSessionId,manifestDigest:inspection.manifestDigest,sourceSessionId:operation.prepared.core.sourceSessionId,artifacts:manifest.artifacts}
+        const request=selectedDependencyRequest(operation.invocation,operation.prepared.core.sourceSessionId,inspection.manifestDigest,inspection.seed.records)
         const assertSourceCurrent=()=>{if(!captureSlot)throw Error('Selected source handoff unavailable');captureSlot.assertCurrent()}
         const assertTargetCurrent=()=>{available();inspectSelectedTarget(options.coordinator as SessionCoordinator,target);projectPreparation!.assertTargetCurrent()}
-        managedScope??=contextOutput.registerSeedDependencyTransfer({binding:{operationId:request.operationId,manifestDigest:request.manifestDigest,sourceSessionId:request.sourceSessionId,targetSessionId:request.targetSessionId,targetDocumentId:request.targetSessionId},sourceAccess:{sessionId:request.sourceSessionId},sourceAvailable:()=>{try{assertSourceCurrent();return true}catch{return false}},assertSourceCurrent,targetAvailable:()=>{try{assertTargetCurrent();return true}catch{return false}},assertTargetCurrent,targetScope(){assertTargetCurrent();const selected=projectPreparation!.targetScope();return{source:{sourceId:contextSourceIdentity(workspaceKey,canonical,selected.scope),readonly:true},revision:selected.revision}}},'original-publication')
+        managedScope??=contextOutput.registerSeedDependencyTransfer({binding:{version:2,resultsDigest:request.resultsDigest,operationId:request.operationId,manifestDigest:request.manifestDigest,sourceSessionId:request.sourceSessionId,targetSessionId:request.targetSessionId,targetDocumentId:request.targetSessionId},sourceAccess:{sessionId:request.sourceSessionId},sourceAvailable:()=>{try{assertSourceCurrent();return true}catch{return false}},assertSourceCurrent,targetAvailable:()=>{try{assertTargetCurrent();return true}catch{return false}},assertTargetCurrent,targetScope(){assertTargetCurrent();const selected=projectPreparation!.targetScope();return{source:{sourceId:contextSourceIdentity(workspaceKey,canonical,selected.scope),readonly:true},revision:selected.revision}}},'original-publication',request)
         const result=await contextOutput.confirmSeedDependencies(managedScope,request,()=>{try{assertSourceCurrent();return true}catch{return false}})
         slot.assertCurrent();assertTargetCurrent();return result
       },
@@ -225,7 +278,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
           const targetView=freezeJsonData({formatVersion:inspection.stage.headerBase.formatVersion,header:JSON.parse(inspection.stage.headerBytes),events:inspection.seed.records}) as import('@i-harness/core-session').SessionView
           legacyTransfer=bridge.acquireSelectedLegacyTransfer(options.coordinator as SessionCoordinator,target,{invocation:operation.invocation,sourceSessionId:operation.prepared.core.sourceSessionId,facts:inspection.facts,targetView,
             target:{available:()=>{try{assertTargetCurrent();return true}catch{return false}},assertCurrent:assertTargetCurrent,sourceId:()=>{assertTargetCurrent();return contextSourceIdentity(workspaceKey,canonical,projectPreparation!.targetScope().scope)}},
-            source:{view:slot.source.view,assertCurrent:assertSourceCurrent,read(){assertSourceCurrent();const observation=observations.current(operation.prepared.core.sourceSessionId);if(!observation||observation.kind!=='public'||observation.view!==slot.source.view)throw Error('Original result observation unavailable');return legacyObservationFor(observation)}}})
+            source:{view:slot.source.view,assertCurrent:assertSourceCurrent,read(){assertSourceCurrent();const observation=observations.current(operation.prepared.core.sourceSessionId);if(!observation||observation.kind!=='public'||observation.view!==slot.source.view)throw Error('Original result observation unavailable');const read=legacyObservationFor(observation);originalLegacyReads.set(read,{document:slot.source.document,view:observation.view});return read}}})
         }
         const result=await legacyTransfer.confirm();slot.assertCurrent();assertTargetCurrent();return result
       },
@@ -240,6 +293,95 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
   }
   let selectedComposer:ReturnType<typeof createSelectedRuntimeCapture>|undefined
   try{selectedSourceFor(options.coordinator as SessionCoordinator);selectedComposer=createSelectedRuntimeCapture(options.coordinator as SessionCoordinator,makeSelectedSourceOperation)}catch{}
+  const acquireColdPolicy=options.acquireColdTargetPolicy
+  if (selectedComposer && acquireColdPolicy)
+    installColdSelectedQualifiers(options.coordinator as SessionCoordinator, {
+      begin(cold, binding) {
+        assertAvailable()
+        const policy = acquireColdPolicy(cold, binding)
+        type Part = ReturnType<OriginalColdQualifiers['begin']>
+        const parts: Part[] = [policy]
+        let revoked = false, qualification: Promise<void> | undefined
+        const check = () => {
+          assertAvailable()
+          if (revoked) throw Error('Cold selected qualification revoked')
+        }
+        const revoke = () => {
+          revoked = true
+          for (const part of parts) part.revoke()
+        }
+        return Object.freeze({
+          qualify() {
+            return qualification ??= (async () => {
+              check()
+              await policy.qualify()
+              check()
+              const request = selectedDependencyRequest(
+                cold.facts.invocation, cold.birth.stage.captureReservation.request.core.sourceSessionId,
+                cold.facts.manifestDigest, cold.view.events.slice(0, cold.facts.seedLength),
+              )
+              const targetScope = () => {
+                check()
+                const scope = policy.targetScope()
+                return {
+                  source: { sourceId: contextSourceIdentity(workspaceKey, canonical, scope.scope), readonly: true },
+                  revision: scope.revision,
+                }
+              }
+              const assertTargetCurrent = () => {
+                check()
+                cold.assertCurrent()
+                policy.targetScope()
+              }
+              const managed = bridge.acquireColdManagedQualification({
+                binding: {
+                  version: 2, resultsDigest: request.resultsDigest,
+                  operationId: request.operationId, manifestDigest: request.manifestDigest,
+                  sourceSessionId: request.sourceSessionId,
+                  targetSessionId: request.targetSessionId, targetDocumentId: request.targetSessionId,
+                },
+                sourceAccess: { sessionId: request.sourceSessionId },
+                sourceAvailable: () => false,
+                assertSourceCurrent() { throw Error('Cold selected source access unavailable') },
+                targetAvailable: () => {
+                  try { assertTargetCurrent(); return true } catch { return false }
+                },
+                assertTargetCurrent, targetScope,
+              }, request, cold.receipt.dependencyClosureDigest)
+              parts.push(managed)
+              const legacy = bridge.acquireColdSelectedQualification(options.coordinator as SessionCoordinator, cold, targetScope().source.sourceId)
+              parts.push(legacy)
+              await managed.qualify()
+              check()
+              await legacy.qualify()
+              check()
+            })()
+          },
+          sealWhileActive() {
+            check()
+            for (const part of parts) part.sealWhileActive()
+          },
+          async settle() {
+            if (!qualification) throw Error('Cold selected qualification unused')
+            await qualification
+            for (const part of [...parts].reverse()) await part.settle()
+          },
+          assertSettledCurrent() {
+            check()
+            for (const part of parts) part.assertSettledCurrent()
+          },
+          revoke,
+          async close() {
+            const errors: unknown[] = []
+            try { revoke() } catch (error) { errors.push(error) }
+            await qualification?.catch(() => {})
+            const closed = await Promise.allSettled([...parts].reverse().map(part => part.close()))
+            errors.push(...closed.flatMap(result => result.status === 'rejected' ? [result.reason] : []))
+            if (errors.length) throw new AggregateError(errors, 'Cold selected qualification cleanup failed')
+          },
+        })
+      },
+    })
   const createSelectedSourceHolder=(input:unknown)=>{assertSelectedResultsNodeAdmission(input);if(!selectedComposer)throw Error('Selected source unavailable');return selectedComposer.create(input)}
   // The supplied service is Gateway's fast path. Capture broker currentness
   // around its real readers as source identity alone cannot detect ABA.

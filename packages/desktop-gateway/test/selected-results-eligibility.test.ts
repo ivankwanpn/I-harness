@@ -7,7 +7,8 @@ import {join} from 'node:path'
 import {committedFactSeqs,deriveMessages,managedResultRefs,type SessionView as Session} from '@i-harness/core-session'
 import {recordFixture} from './managed-fixture.ts'
 import {createMetadataRecorder} from './helpers/selected-results-metadata.ts'
-import {createSessionCoordinator} from '@i-harness/session-persistence'
+import {composeJsonlTaskTransitionCoordinator} from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import {taskDocumentStorageContract} from '../../subagent/src/task/storage-contract.ts'
 import {createJsonlBackend} from '@i-harness/session-persistence-jsonl'
 import {createSessionAssembly,createDurableSessionLoader} from '@i-harness/session-executor'
 import {createNativeConsumerOwners,dispatchOwned} from './helpers/native-consumer-fixture.ts'
@@ -21,8 +22,10 @@ it.each(['off','only'] as const)('metadata-only child %s traces declared resourc
   const recorder=await createMetadataRecorder(mode)
   const root=await mkdtemp(join(tmpdir(),'sr0-child-'))
   const storage=join(root,'sessions')
-  let coordinator=createSessionCoordinator(createJsonlBackend(storage),{lock:{enabled:true}});await coordinator.create({sessionId:'parent'})
-  let owners=await createNativeConsumerOwners(coordinator,root),runtime=owners.runtime;await runtime.contextOutput.configure({enabled:true})
+  const project={id:'native-consumer',name:'Native consumer',roots:[root],primaryRoot:root}
+  let coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(storage),{lock:{enabled:true}},taskDocumentStorageContract);await coordinator.create({sessionId:'parent'})
+  let owners=await createNativeConsumerOwners(coordinator,root,project),runtime=owners.runtime;await runtime.contextOutput.configure({enabled:true})
+  await owners.projects.bind('parent',project.id)
   const direct='a'.repeat(40000)+'DIRECT_MARKER'+'b'.repeat(40000),emitted='c'.repeat(40000)+'EMITTED_MARKER'+'d'.repeat(40000)
   const legacy:ContextResultRef[]=[]
   const requests:LLMRequest[]=[];let first=true,childSession:Session|undefined,waits=0,effects=0,parentEffects=0
@@ -50,7 +53,7 @@ it.each(['off','only'] as const)('metadata-only child %s traces declared resourc
     if(!ref)throw new Error('Explicit legacy direct capture refused')
     legacy.push(ref);await recordFixture(await coordinator.openManagedDocument(exec.sessionId),{type:'context/result-ref',ref});return direct
   }}],pluginAgents:[{name:'native-child',description:'native child',systemPrompt:'NATIVE_CHILD',tools:['fixture_long','context_output_read','context_output_search']}]}
-  let assembly=await createSessionAssembly({...options,coordinator,contextOutput:runtime.contextOutput,contextOutputSourceFor:runtime.sourceFor,contextOutputLegacyReadObservation:runtime.withLegacyReadObservation})
+  let assembly=await createSessionAssembly({...options,prepareTaskChild:runtime.prepareTaskChild,coordinator,contextOutput:runtime.contextOutput,contextOutputSourceFor:runtime.sourceFor,contextOutputLegacyReadObservation:runtime.withLegacyReadObservation})
   const observe=()=>assembly.ctx.on('agent/post-tool',async payload=>{
     const event=payload as {name:string;session:Session;output?:{status?:string}}
     if(event.name==='fixture_long'||event.name==='code_exec'||event.name==='code_wait')childSession=event.session
@@ -117,7 +120,7 @@ it.each(['off','only'] as const)('metadata-only child %s traces declared resourc
     const assertLegacy=async(id:string,phase:string)=>{
       const actualOwner=await coordinator.openManagedDocument(id)
       await runtime.withLegacyReadObservation({sessionId:id},async read=>{
-        const selectedRows=await recorder.record(runtime.observations.current(id),phase,actualOwner)
+        const selectedRows=await recorder.record(runtime.observations.current(id),phase,actualOwner,runtime.contextOutput,read)
         expect(selectedRows.filter(row=>row.protocol==='managed').map(row=>row.ref)).toEqual(bodies.map(body=>body.ref))
         expect(selectedRows.filter(row=>row.protocol==='legacy').map(row=>row.ref)).toEqual(refs)
         for(const [index,ref] of refs.entries()){
@@ -190,8 +193,8 @@ it.each(['off','only'] as const)('metadata-only child %s traces declared resourc
     await followup('continue after reset');await assertBodies(childId,'reset');expect(requests.at(-1)!.systemPrompt).not.toContain(hidden.id);compactionAction.finish()
     const restoredState=assembly.subagentState!()
     await assembly.dispose();await owners.close();await coordinator.close()
-    coordinator=createSessionCoordinator(createJsonlBackend(storage),{lock:{enabled:true}});owners=await createNativeConsumerOwners(coordinator,root);runtime=owners.runtime;await runtime.contextOutput.configure({enabled:true})
-    assembly=await createSessionAssembly({...options,coordinator,session:await createDurableSessionLoader(coordinator)('parent'),restoredState,contextOutput:runtime.contextOutput,contextOutputSourceFor:runtime.sourceFor,contextOutputLegacyReadObservation:runtime.withLegacyReadObservation});observe()
+    coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(storage),{lock:{enabled:true}},taskDocumentStorageContract);owners=await createNativeConsumerOwners(coordinator,root,project);runtime=owners.runtime;await runtime.contextOutput.configure({enabled:true})
+    assembly=await createSessionAssembly({...options,prepareTaskChild:runtime.prepareTaskChild,coordinator,session:await createDurableSessionLoader(coordinator)('parent'),restoredState,contextOutput:runtime.contextOutput,contextOutputSourceFor:runtime.sourceFor,contextOutputLegacyReadObservation:runtime.withLegacyReadObservation});observe()
     await followup('continue after cold resume');await assertBodies(childId,'cold');await assertTaskBody('cold');expect(requests.at(-1)!.systemPrompt).not.toContain(hidden.id)
     await coordinator.flush(childId)
     // The original consumer remains unchanged and RED at this original fork.
@@ -200,4 +203,4 @@ it.each(['off','only'] as const)('metadata-only child %s traces declared resourc
     await expect(owners.fork(childId)).rejects.toThrow('Shipping fork did not reach READY')
     expect(effects).toBe(1)
   }finally{await assembly.dispose();await owners.close();await coordinator.close();await rm(root,{recursive:true,force:true});console.info(JSON.stringify({diagnostic:'selected-results-cleanup',mode,root,assemblyDisposeReturned:true,ownersCloseReturned:true,coordinatorCloseReturned:true,removeReturned:true}))}
-},15000)
+},120000)

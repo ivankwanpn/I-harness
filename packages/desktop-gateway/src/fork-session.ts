@@ -5,7 +5,7 @@ import { ForkAdmissionError, ForkTargetPolicyDeniedError, type ForkHost, type Fo
 import { createForkSourceWitness } from '../../session-persistence/src/fork-inline-host.ts'
 import { associateForkHostCleanupOwner } from '../../session-persistence/src/fork-controller.ts'
 import { observationCleanupFor, type ObservationCleanupHandle } from '../../session-persistence/src/coordinator/binding-observation.ts'
-import { assertResultLineage, captureResultLineageGuard, discoverResultLineage, legacyObservationFor } from '../../session-executor/src/lifecycle/result-observation.ts'
+import { assertResultLineage, captureResultLineageGuard, discoverResultLineage } from '../../session-executor/src/lifecycle/result-observation.ts'
 import type { createProjectScopeBroker } from './project-scope.ts'
 import type { createNativeContextRuntime } from './context-runtime.ts'
 
@@ -90,6 +90,7 @@ export function createGatewayForkHost(options: {
       let failed = false, failure: unknown, result: Awaited<ReturnType<typeof use>> | undefined
       const run = async (observation?: import('@i-harness/session-persistence').ExistingSessionBindingObservation) => {
         let getter: Awaited<ReturnType<typeof projects.resultReadScopeFor>>
+        let read: import('@i-harness/context-output').LegacyReadObservation | undefined
         let confirmed = false, manifestDigest: string | undefined
         const assertTargetCurrent = () => { admission(); if (!active) throw new Error('Gateway fork scope retired'); if (confirmed) transfer.targetPreparation.assertTargetCurrent() }
         const lineageGuard = observation && captureResultLineageGuard(observation)
@@ -134,7 +135,6 @@ export function createGatewayForkHost(options: {
           if (project.kind !== 'confirmed') return project
           confirmed = true; manifestDigest = facts.manifestDigest; assertTargetCurrent()
           if (!legacy) {
-            const read = source && !passive ? legacyObservationFor(nativeContext.observations.current(sourceId)!) : undefined
             legacy = nativeContext.contextOutput.registerLegacyForkTransfer({ invocation: operation.invocation, sourceSessionId: sourceId,
               semanticSeedDigest: facts.seedDigest, sourceObservationDigest: facts.sourceObservation.digest, selection: operation.prepared.core.selection,
               target: { available: () => active, assertCurrent: assertTargetCurrent, sourceId() { assertTargetCurrent(); return contextSourceIdentity(location.workspaceKey, location.canonical, transfer.targetScope().scope) } },
@@ -144,8 +144,8 @@ export function createGatewayForkHost(options: {
           const outcome = current ? await nativeContext.contextOutput.confirmLegacyForkTransfer(legacy, request, current, facts) : await nativeContext.contextOutput.reconcileLegacyForkTransfer(legacy, request, facts)
           assertTargetCurrent(); return outcome
         }
-        const body = async () => {
-          if (!passive) { getter = await projects.resultReadScopeFor(sourceId); if (!getter) throw new ForkAdmissionError('policy'); assertSourceCurrent() }
+        const body = async (createLegacyRead?:()=>import('@i-harness/context-output').LegacyReadObservation) => {
+          if (!passive) { getter = await projects.resultReadScopeFor(sourceId); if (!getter) throw new ForkAdmissionError('policy'); assertSourceCurrent(); read=createLegacyRead!() }
           let bodyFailed = false, bodyFailure: unknown, value: Awaited<ReturnType<typeof use>> | undefined
           try { value = await use({ ...(source ? { source } : {}), guards: { assertCurrent: passive ? assertTargetCurrent : assertSourceCurrent,
             ...(!passive && control.signal ? { signal: control.signal } : {}), dependencies: transfer.dependencies,

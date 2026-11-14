@@ -6,7 +6,7 @@
 
 ### 目前整體進度
 
-目前本報告記錄 120 項具體問題與 S1 至 S7 的結構調整。Team 執行功能已移除，Code Mode 保留獨立 package 與 QuickJS／Worker 架構。第 102 至 114 項的已確認根因均已提交對應修正並完成定向驗證，實機使用 DeepSeek Flash 的 Code 執行、背景等待、草稿清除及冷重啟亦已通過，後續真實父子任務及其關閉、冷讀取也已驗證。測試品質修訂前三批完成 65 項控制，第四批冷讀取 fixture 及其依賴回歸完成 119 項。後續確認第 118 項閒置清理恢復缺口，修正後 251 項相關控制及五個 package 型別通過。整體工程完成度估計約 80%，剩餘工作包含完整回歸失敗、效能問題、最終問題狀態及交付核對。各輪控制的範圍有重疊，完整穩定性驗收仍未完成。
+目前本報告記錄 125 項具體問題與 S1 至 S7 的結構調整。Team 執行功能已移除，Code Mode 保留獨立 package 與 QuickJS／Worker 架構。第 102 至 114 項的已確認根因均已提交對應修正並完成定向驗證，實機使用 DeepSeek Flash 的 Code 執行、背景等待、草稿清除及冷重啟亦已通過，後續真實父子任務及其關閉、冷讀取也已驗證。測試品質修訂前三批完成 65 項控制，第四批冷讀取 fixture 及其依賴回歸完成 119 項。後續確認第 118 項閒置清理恢復缺口，修正後 251 項相關控制及五個 package 型別通過。整體工程完成度估計約 80%，剩餘工作包含完整回歸失敗、效能問題、最終問題狀態及交付核對。各輪控制的範圍有重疊，完整穩定性驗收仍未完成。
 
 測試修訂第五批已提交為 `9ce120ac`。九個發布故障點分開執行並斷言實際注入次數，索引案例核對原生 SQLite 修復及 canonical 內容，三檔合計 76 項通過。只調整實測超過原有預設的個別案例期限。後續 legacy 功能檔案的 19 處原五秒測試宣告依量測給予 20 秒，10,001 筆案例獨立成檔並保留原五分鐘期限，完整案例內容及原生退休計數斷言保持原樣。[76 項驗證](C:/Users/IvanKwan/AppData/Local/Temp/ih-bootstrap-index-receipt.json)
 
@@ -33,6 +33,18 @@
 `784726fa` 修正第 99 項引入的 late-Pending 等待回歸，原 30 秒期限案例先重現失敗，修正後約 615ms 通過，31 項原生矩陣、18 項 Task 整合控制及四個套件型別檢查通過。`d7e534be` 修正工作狀態查詢的 managed adapter 選擇，三個完整檔案共 23 項通過，包含真正 writer 持有期間的已提交讀取與冷讀取對照。[Pending 修正記錄](C:/Users/IvanKwan/AppData/Local/Temp/ih-issue99-late-pending-log-hashes.json) [工作狀態驗證](C:/Users/IvanKwan/AppData/Local/Temp/ih-workstate-qualified-784726fa/receipt.json)
 
 實機 dev 已使用 DeepSeek Flash 完成檔案寫入／讀取、Code Mode 的 5050 計算及同 cell 背景等待取得 500500。兩個 Code 回合、完整終端事件與冷重啟畫面均已核對。初輪發現的草稿復活及 Code admission 故障已有修正，實機另暴露出背景 Task 查詢錯誤，相關證據持續列入本報告。[實機基本流程](C:/Users/IvanKwan/AppData/Local/Temp/ih-dev-live-smoke.json) [草稿原始證據](C:/Users/IvanKwan/AppData/Local/Temp/ih-dev-draft-resurrection/RCA.md) [Code Mode 原始事件](C:/Users/IvanKwan/AppData/Local/Temp/ih-dev-code-mode-result.json)
+
+### Selected-results 原始驗收與測試修訂
+
+第九批回到原始 C67 驗收順序，真正 child 產生結果後依次執行 compaction、reset、cold resume、V2 selected fork、來源 clear 及 target cold qualification。普通工具與 Code Mode 均核對四份實際內容，大小分別為 80,013、80,014、80,015、80,016 bytes，保留 rewind、hidden／future ref 排除及 metadata-only 控制。新增的不可變 facts 控制使用真正 holder 與來源變更，只有純資料派生函式用於計數。[原始 native 結果](C:/Users/IvanKwan/AppData/Local/Temp/ih-selected-results-integration/gateway-native.json) [關閉重用的失敗對照](C:/Users/IvanKwan/AppData/Local/Temp/ih-selected-facts-no-cache-baseline.json)
+
+本輪曾因 V1 selector 回報 legacy-anchor-unsupported 而把 fork 移到 reset 之前。核對原始設計後確認這會縮減正向驗收，已恢復原順序，沿用原始 V2 kernel 修復真正的 managed membership 與 cold qualification 缺口。目前 public JSONL 入口仍待第 125 項整合。[原始驗收要求](D:/codex-ih-development/docs/superpowers/specs/2026-10-28-selected-result-resources.md)
+
+完整檔案分批驗證為 ContextOutput 181 項、Persistence 40 項、Gateway 相鄰 58 項及 native 7 項，合計 286 項通過。三項既有 Windows file-symlink 案例因原生 EPERM 略過，未處理錯誤為零。Gateway header 案例修正現行 format 常數、原始 project 綁定及保護欄位寫入拒絕後，核對原始檔案 bytes 完全相同。測試總數保留各批的驗證範圍，最新全庫失敗數仍以上述固定版本結果為準。[Context 完整檔案](C:/Users/IvanKwan/AppData/Local/Temp/ih-selected-results-integration/context.json) [Persistence 完整檔案](C:/Users/IvanKwan/AppData/Local/Temp/ih-selected-results-integration/persistence.json) [Gateway 相鄰記錄](C:/Users/IvanKwan/AppData/Local/Temp/ih-selected-results-integration/gateway-related.json) [Header 修正後](C:/Users/IvanKwan/AppData/Local/Temp/ih-selected-results-integration/header-qualified.json)
+
+本輪按實際 native 工作量調整三處案例期限。Metadata cases 由 15 秒調為 120 秒，實測 29.222 及 43.226 秒。完整 child cases 由 15 秒調為 180 秒，實測普通模式 85.383 秒、Code Mode 142.697 秒，其中中間的 120 秒候選曾在冷恢復末段逾時。Header case 由五秒調為 15 秒，最後完整 body 為 5.295 秒。這些耗時仍列入產品與整合成本，效能改善尚有待完成。[Native 時序](C:/Users/IvanKwan/AppData/Local/Temp/ih-selected-results-integration/gateway-native.log) [Header 時序](C:/Users/IvanKwan/AppData/Local/Temp/ih-selected-results-integration/header-qualified.log)
+
+移除一個未使用變數並整理新加入的兩段程式後，Core Session、ContextOutput、Persistence、Executor 及 Gateway 五個 package 型別全部通過。最後固定 22 個 source／test 檔案，再完整執行 coherent transfer 十二項及 native 六檔八項，全部通過。Native 命令耗時 261.88 秒，執行前後逐檔雜湊相同，package boundaries 為 128／128，diff check 通過。[本輪完整收據](C:/Users/IvanKwan/AppData/Local/Temp/ih-selected-results-integration/receipt.json)
 
 ### 審查與提交基準
 
@@ -195,6 +207,11 @@ Git 實際取得的 HTTPS 認證經 GitHub `/user` 核對為 `ivankwanpn`，帳�
 | 118 | 閒置清理失敗後，查詢與清理重試無法恢復原有服務 | acquireLifetime 正確拒絕尚未完成的 retirement，但服務的新使用入口沒有先重試原始清理。`675282ad` 在既有 exclusive gate 內先等待相同 quiesce，再取得使用權，涵蓋查詢、變更、設定、passive continuation 及撤銷／刪除入口。兩項原生控制在舊版本失敗，修正後通過，確認舊 lease 已釋放才取得下一個 lease。已消耗但 ACK 未知的 close 仍回傳原始 falsey cause，close／acquire 次數各維持一次。251 項回歸及五個 package 型別通過 |
 | 119 | 撤銷槽部分寫入後，正常 clear 在恢復入口被擋住 | 原始 terminalSlots 支援在明確清理授權下完成未寫完的 inactive 槽，但 inventory 先要求完整 live／terminal，導致正常 clear 無法到達恢復步驟。共用原始槽驗證，核對 active 完整 tuple、精確容量及 inactive 原生檔案條件後才允許清理盤點。被動讀取仍要求有效的完整狀態，原始檔案清理債務必須先結清。四項新增控制核對 active 內容／大小、inactive 大小及外部 hardlink 均拒絕，canonical bytes 保持原狀。功能檔案 47 項通過，相關八檔 181 項通過、兩項既有 funding 失敗待處理，Context 型別通過 |
 | 120 | runtime context 的保存結果未知時，後續正常提交被恢復順序永久擋住 | 原始 publication 要等同一 capture 完成確認才結束 action，startTurn 卻先要求 finished action 才允許確認 pending frame。調整既有三個恢復入口的順序，先確認原始 runtime publication，再收尾 finished actions 及 Stop。四個正常 SessionService 案例以已提交後隱藏 ACK，或真正原生零位元組寫入得到 absent 後隱藏 ACK，驗證持續未知、後續提交及恢復中 Stop。舊版本四項失敗，修正後四項通過，原五秒期限保留。128 項相關控制及 Executor 型別通過 |
+| 121 | 沒有繼承歷史的真正 Task child 無法讀取自己的 legacy 結果 | 正常 observed read／search 嘗試讀取不存在的 legacy fork plan。Gateway 現於原始 observation lifetime 登記真正 document／view，ContextOutput 使用既有 service-bound zero-source proof 驗證零 seed 的原始出生資料，支援其實際 local-only 讀取及轉移。原生身分替換拒絕、來源失效及內容可見性控制均保留 |
+| 122 | selected target 的反覆 currentness 檢查重建整份不可變 seed，放大 fork 成本 | CPU profile 定位到重複 selected preparation、stage 解碼與 canonical JSON。原始 capture attempt 完成驗證並深度凍結後，只派生一次 preparation facts，後續每次仍核對原始 owner、route、native held lease 與 live source。關閉重用的對照案例中，反覆確認讓派生次數由 28 增至 94，候選控制驗證重複確認不再增加派生，真正來源變更仍拒絕 |
+| 123 | selected-results 的 managed rows 未納入實際依賴轉移，READY target 缺少結果內容 | 原確認只讀 manifest.artifacts，壓縮／reset 後僅保留在結果投影的 managed roots 因而遺漏。共用請求建構器合併兩份已驗證宣告並核對完整 ref，V2 原始請求在首次發布前固定，binding 與 closure 加入 results digest。額外未選取 ref、替換 digest、政策失效及 cross-version 控制通過，空 V2 亦使用自己的 closure |
+| 124 | JSONL selected target 冷恢復缺少真正 project／managed／legacy qualification 組合 | 在既有 coordinator factory 安裝一次原始 qualifiers，由 broker、managed results 與 legacy plan 各自持有資格及清理責任，再經原始 cold finalization 完成 READY。Metadata-only qualification 可在停用新 capture 時執行，body read／search 仍核對功能狀態。完整 C67 的 compaction、reset、來源 clear 及 cold target 精確內容控制通過 |
+| 125 | JSONL selected-results kernel 與公開 Gateway／SDK 入口尚未接通 | Host 目前只為 commit-log 安裝 V2 controller，JSONL 的原始 capture／publish／cold finalization 仍只由內部原生整合案例驅動。需要使用實際 host 入口完成 operation identity、重試、冷恢復及關閉整合，公開 JSONL 功能尚待交付 |
 
 ### 程式定位
 

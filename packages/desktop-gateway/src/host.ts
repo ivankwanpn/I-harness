@@ -252,6 +252,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     prepareBootstrapInheritance:projects.prepareBootstrapInheritance,
     prepareTaskChildInheritance:projects.prepareTaskChildInheritance,
     prepareSelectedInheritance:projects.prepareSelectedInheritance.bind(projects),
+    acquireColdTargetPolicy:projects.acquireColdTargetPolicy.bind(projects),
     references:key=>settings.get().contextSubsystems.workspaceOverrides[key]?.references ?? settings.get().contextSubsystems.references,
     hasVisibleResultRef:async(id,ref)=>{const execution=originalManagedExecutionFor(service,id);if(!execution)return undefined;const observation=execution.observe(),visible=observation.hasVisibleResultRef('version' in ref?{kind:'managed',ref}:{kind:'legacy',id:ref.id});observation.assertCurrent();return visible},
     visibleRefsFor:async id=>{

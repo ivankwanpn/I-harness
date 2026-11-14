@@ -4,6 +4,7 @@ import { captureSelectedResultsRoute, type SelectedResultsRoute } from './select
 import { encodeSelectedResultsReservation } from './selected-results-intent.ts'
 import { buildSelectedResultsHeader, reconstituteSelectedResultsStage } from './selected-results-header.ts'
 import { canonicalJsonData, isStrictFactData } from '@i-harness/core-session'
+import { selectedResultsPreparationFacts, type SelectedResultsPreparationFacts } from './selected-results-preparation.ts'
 
 type ReserveBackend={reserveSelectedCapture(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,bytes:Uint8Array):Promise<{kind:string}>}
 type Captured={kind:'captured';stage:ReturnType<typeof buildSelectedResultsHeader>['stage'];seed:ReturnType<typeof reconstituteSelectedResultsStage>['seed'];stageBytes:string;headerBytes:string}
@@ -17,6 +18,7 @@ export function createSelectedCaptureAttempt(backend:ReserveBackend,issuer:Issui
  const reserve=backend.reserveSelectedCapture
  if(typeof reserve!=='function')throw TypeError('Capture reservation unavailable')
  let state:State=Object.freeze({kind:'initial'}),flight:Promise<State>|undefined,entered=false,originalCapture:typeof capture|undefined=capture
+ let preparation:SelectedResultsPreparationFacts|undefined
  return Object.freeze({
   capture():Promise<State>{
    if(flight)return flight
@@ -40,5 +42,9 @@ export function createSelectedCaptureAttempt(backend:ReserveBackend,issuer:Issui
    return flight
   },
   inspect():State{return state},
+  preparationFacts():SelectedResultsPreparationFacts{
+   if(state.kind!=='captured')throw Error('Original selected capture unavailable')
+   return preparation??=(selectedResultsPreparationFacts(state.stage,state.seed.records))
+  },
  })
 }

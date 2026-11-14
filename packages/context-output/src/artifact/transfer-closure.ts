@@ -3,12 +3,13 @@ import { sha } from './manifest.ts'
 import type { ArtifactOwner } from './types.ts'
 import type { SeedDependencyTransferBinding } from './transfer-codec.ts'
 
-const hash = (part: string, value: unknown) => sha(`ih.bootstrap.dependencies.closure.${part}.v1\0` + canonicalJsonData(value))
 export const canonicalCompare = (a: unknown, b: unknown) => Buffer.compare(Buffer.from(canonicalJsonData(a)), Buffer.from(canonicalJsonData(b)))
 /** An ordered fold of immutable observations only; counts retain alias and
  * unavailable occurrences, independently of physical publication deduplication. */
 export function createTransferClosure(workspaceId: string, binding: SeedDependencyTransferBinding) {
-  let previous = hash('start', { version: 1, workspaceId, ...binding }), rootCount = 0, catalogCount = 0, entryCount = 0, retainedMembershipCount = 0
+  const version = binding.version ?? 1
+  const hash = (part: string, value: unknown) => sha(`ih.bootstrap.dependencies.closure.${part}.v${version}\0` + canonicalJsonData(value))
+  let previous = hash('start', { version, workspaceId, ...binding }), rootCount = 0, catalogCount = 0, entryCount = 0, retainedMembershipCount = 0
   return {
     root(artifact: SeedArtifact, owner: ArtifactOwner) {
       previous = hash('root', { previous, ref: artifact.ref, owner, uses: [...artifact.uses].sort(canonicalCompare) }); rootCount++

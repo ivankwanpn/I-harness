@@ -36,12 +36,14 @@ export function createSeedDependencyTransfer(deps: {
   // The WeakMap scope retains identity. Only active/debt IO needs strong cleanup ownership.
   function retireEmptyQualification(io:ArtifactQualificationIO){try{io.assertSettled();qualificationIO.delete(io)}catch{/* original active cleanup debt stays reachable */}}
   async function settleQualification(io:ArtifactQualificationIO){qualificationIO.add(io);try{await io.settle()}finally{retireEmptyQualification(io)}}
-  function registerSeedDependencyTransfer(access: SeedDependencyHostAccess, originalPublication?: 'original-publication'): SeedDependencyTransferScope {
+  function registerSeedDependencyTransfer(access: SeedDependencyHostAccess, originalPublication?: 'original-publication', originalRequest?: BootstrapDependencyRequest, passiveOnly = false): SeedDependencyTransferScope {
     const captured = captureHost(access)
+    if (captured.binding.version === 2 && (!originalRequest || !passiveOnly && originalPublication !== 'original-publication')) throw new TransferBlocked('conflict')
+    const request = originalRequest === undefined ? undefined : canonicalJsonData(captureRequest(originalRequest, captured.binding, true))
     if (!deps.available(captured.binding.targetDocumentId)) throw new TransferBlocked('unavailable')
     const scope = Object.freeze({ kind: 'seed-dependency-transfer' as const })
     const io=createArtifactQualificationIO()
-    scopes.set(scope, { io, access: captured, revoked: false, ...(originalPublication === 'original-publication' ? { publications: new Map() } : {}) }); return scope
+    scopes.set(scope, { io, access: captured, revoked: false, ...(passiveOnly ? { passiveOnly: true } : {}), ...(request === undefined ? {} : { request }), ...(originalPublication === 'original-publication' ? { publications: new Map() } : {}) }); return scope
   }
   function metadataOutcome(result: ImmutableMetadataOutcome): void {
     if (result.kind !== 'confirmed') throw new TransferBlocked(result.kind === 'conflict' ? 'conflict' : result.kind === 'absent' || result.kind === 'not-issued' ? 'unavailable' : 'unknown')
@@ -238,7 +240,7 @@ export function createSeedDependencyTransfer(deps: {
         // No source callbacks in PASSIVE. NEW must renew all direct and via
         // relations after the last publication/integrity await before success.
         await renew(sourceRelations.values())
-        registration.io.assertSettled();check(); return { kind: 'confirmed', closureDigest: request.artifacts.length ? closure.finish() : EMPTY_SEMANTIC_DEPENDENCY_DIGEST }
+        registration.io.assertSettled();check(); return { kind: 'confirmed', closureDigest: request.version === 2 || request.artifacts.length ? closure.finish() : EMPTY_SEMANTIC_DEPENDENCY_DIGEST }
       } catch (cause) {
         return { kind: 'blocked', reason: cause instanceof TransferBlocked ? cause.reason : (cause as NodeJS.ErrnoException | null | undefined)?.code === 'ENOENT' ? 'unavailable' : 'unknown' }
       } finally {retireEmptyQualification(registration.io)}
@@ -251,7 +253,7 @@ export function createSeedDependencyTransfer(deps: {
   }
   function acquireColdManagedQualification(access: SeedDependencyHostAccess, input: BootstrapDependencyRequest, expectedClosure: string): ColdManagedQualification {
     if (qualificationClosing || !/^[a-f0-9]{64}$/.test(expectedClosure)) throw Error('Cold managed qualification unavailable')
-    const scope = registerSeedDependencyTransfer(access), registration = scopes.get(scope)!
+    const scope = registerSeedDependencyTransfer(access, undefined, input, true), registration = scopes.get(scope)!
     registration.passiveOnly = true
     const request = captureRequest(input, registration.access.binding, true), encoded = canonicalJsonData(request)
     let qualified = false, sealed = false, settled = false, closed = false, target: string | undefined

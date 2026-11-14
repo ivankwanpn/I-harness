@@ -12,14 +12,15 @@ import { requireSpace } from '../artifact/quota.ts'
 import { appliedFor, canonicalRecord, checkBinding, checkRoot, commitment, count, fields, hash, recordHash, same, sourceHash, streamHash } from './fork-codec.ts'
 import { buildPages, walkPages } from './fork-pages.ts'
 import { expiryBase, expiredTuple, readSlots, revokedTuple } from './fork-disposition.ts'
-import { captureObservation, loadPlan, observedAllowed, prepareObservedIndex, rowCommitment, transferDirectory, verifiedRows } from './observed-read.ts'
+import { loadPlan, observedAllowed, prepareObservedIndex, rowCommitment, transferDirectory, verifiedRows } from './observed-read.ts'
 import { createSelectedLegacyTransfer } from './selected-transfer.ts'
 import { prepareLegacyIndex } from './fork-index.ts'
-import type { LegacyForkCapture, LegacyForkTransferScope, LegacyPreparationRequest, LegacyTransferOutcome, LegacyFacts, LegacyRow, LegacyRowV1, LegacyPage } from './fork-types.ts'
+import type { LegacyForkCapture, LegacyForkTransferScope, LegacyPreparationRequest, LegacyTransferOutcome, LegacyFacts, LegacyRow, LegacyRowV1, LegacyPage, LegacyReadObservation } from './fork-types.ts'
 
 type Scope = { capture?: LegacyForkCapture; invalid: boolean; attempts: Set<Promise<LegacyTransferOutcome>>; count?: number; store?: ContextStore; dispose(): void }
 interface Ports {
   strict: boolean; workspaceId: string; quota(): number;
+  captureRead(input: LegacyReadObservation): LegacyReadObservation;
   runPassive<T>(store:ContextStore,work:(signal:AbortSignal,store:ContextStore)=>Promise<T>):Promise<T>;
   mutate<T>(context: IndexedLegacyContext, work: (turn: WorkspaceMutationTurn) => Promise<T>): Promise<T>;
   run<T>(signal: AbortSignal | undefined, work: (signal: AbortSignal, context: IndexedLegacyContext) => Promise<T>): Promise<T>;
@@ -45,7 +46,7 @@ export function createLegacyForkOwner(ports: Ports) {
     if (input.source !== undefined) {
       fields(input.source, ['view', 'read', 'assertCurrent'])
       if (typeof input.source.assertCurrent !== 'function' || types.isProxy(input.source.assertCurrent) || !input.source.view || !Array.isArray(input.source.view.events)) throw Error('Invalid legacy source capability')
-      source = { view: input.source.view, read: captureObservation(input.source.read), assertCurrent: input.source.assertCurrent.bind(input.source) }
+      source = { view: input.source.view, read: ports.captureRead(input.source.read), assertCurrent: input.source.assertCurrent.bind(input.source) }
       if (source.read.sessionId !== input.sourceSessionId) throw Error('Legacy source document mismatch')
     }
     const capture: LegacyForkCapture = { invocation, target, sourceSessionId: input.sourceSessionId, semanticSeedDigest: input.semanticSeedDigest, sourceObservationDigest: input.sourceObservationDigest,

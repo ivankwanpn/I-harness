@@ -840,7 +840,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       if(!sameBootstrapData(prefix,expected))return {kind:'blocked' as const}
       const doc=entry.document??attach(id,entry,buildSession(JSON.parse(state.headerBytes),[...(JSON.parse(canonicalJsonData(state.seed.records)) as SessionEvent[]),complete]),prefix)
       if(!entry.control?.bindSelected)return {kind:'blocked' as const}
-      await entry.control.bindSelected();check();const facts=selectedResultsPreparationFacts(state.stage,state.seed.records)
+      await entry.control.bindSelected();check();const facts=selected.attempt!.preparationFacts()
       selected.resultReceipt=Object.freeze({version:2,invocation:route.request.invocation,manifestDigest:facts.manifestDigest,seedLength:facts.seedLength,dependencyClosureDigest:closure,seedDigest:facts.seedDigest,sourceObservation:facts.sourceObservation,results:facts.semantic.results})
       io.claim.retainLive();entry.control.ready();entry.ready=true;activateSelected?.(id,entry);selected.processToken?.end('settled');selected.processToken=undefined
       return {kind:'ready' as const,document:doc,receipt:selected.resultReceipt}
@@ -944,7 +944,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId,entry=documents.get(id),selected=entry?.selected,io=entry?.captureIO
     if(!entry||entry.revoked||!selected||selected.identity!==identity||!sameBootstrapData(selected.route,route)||!io||io.released||!selected.lane||!selected.headerIssued||selected.header?.kind!=='committed')throw Error('Original selected target unavailable')
     const state=selected.attempt?.inspect();if(!state||state.kind!=='captured')throw Error('Original selected capture unavailable')
-    io.held.assertHeld();return Object.freeze({invocation:route.request.invocation,manifestDigest:JSON.parse(state.headerBytes).semanticSeed.manifestDigest as string,facts:selectedResultsPreparationFacts(state.stage,state.seed.records),seed:state.seed,stage:state.stage})
+    io.held.assertHeld();const facts=selected.attempt!.preparationFacts();return Object.freeze({invocation:route.request.invocation,manifestDigest:facts.manifestDigest,facts,seed:state.seed,stage:state.stage})
   }
   async function releaseSelected(input:SelectedResultsRoute,identity:object) {
     const route=captureSelectedResultsRoute(input),entry=documents.get(route.request.invocation.targetSessionId)

@@ -3,9 +3,57 @@ import {mkdtemp,rm} from 'node:fs/promises'
 import {join} from 'node:path'
 import {createContextOutputService} from '../src/service.ts'
 import {captureHost} from '../src/artifact/transfer-codec.ts'
+import {createTransferClosure} from '../src/artifact/transfer-closure.ts'
+import {EMPTY_SEMANTIC_DEPENDENCY_DIGEST} from '@i-harness/core-session'
 
 const binding={operationId:'coherent-operation',manifestDigest:'a'.repeat(64),sourceSessionId:'source',targetSessionId:'target',targetDocumentId:'target'}
 const target={source:{sourceId:'workspace',readonly:true},revision:'revision-1'}
+
+it('binds selected-result roots and their digest before the first native publication',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'selected-transfer-contract-')),owner=createContextOutputService({root,workspaceId:'workspace'})
+ try{
+  const refs=[]
+  for(const name of ['selected','unselected']){
+   const source=owner.registerResultScope({operationId:'source-'+name,sessionId:'source',callId:name},()=>true),sink=await owner.beginResult(source,'text-utf8-v1')
+   await sink.write(Buffer.from(name));const saved=await sink.finish('complete');if(saved.kind!=='committed')throw Error('Original source publication unavailable');refs.push(saved.ref)
+  }
+  const selectedBinding={...binding,version:2 as const,resultsDigest:'b'.repeat(64)}
+  const host={kind:'coherent-observation-v1' as const,binding:selectedBinding,sourceAccess:{sessionId:'source'},observeCurrent:()=>target}
+  const request={version:2 as const,resultsDigest:selectedBinding.resultsDigest,operationId:binding.operationId,targetSessionId:binding.targetSessionId,manifestDigest:binding.manifestDigest,sourceSessionId:binding.sourceSessionId,artifacts:[{ref:refs[0]!,origins:[],uses:[{kind:'result' as const}]}]}
+  expect(()=>owner.registerSeedDependencyTransfer(host,'original-publication')).toThrow()
+  const scope=owner.registerSeedDependencyTransfer(host,'original-publication',request)
+  expect(await owner.confirmSeedDependencies(scope,{...request,resultsDigest:'c'.repeat(64)},()=>true)).toEqual({kind:'blocked',reason:'conflict'})
+  expect(await owner.confirmSeedDependencies(scope,{...request,artifacts:[...request.artifacts,{ref:refs[1]!,origins:[],uses:[{kind:'result'}]}]},()=>true)).toEqual({kind:'blocked',reason:'conflict'})
+  for(const ref of refs)await expect(owner.readResult({sessionId:'target'},{ref,maxBytes:1024})).rejects.toThrow()
+  const result=await owner.confirmSeedDependencies(scope,request,()=>true)
+  expect(result.kind).toBe('confirmed')
+  expect((await owner.readResult({sessionId:'target'},{ref:refs[0]!,maxBytes:1024})).data).toEqual({kind:'text',text:'selected'})
+  await expect(owner.readResult({sessionId:'target'},{ref:refs[1]!,maxBytes:1024})).rejects.toThrow()
+  expect(createTransferClosure('workspace',binding).finish()).not.toBe(createTransferClosure('workspace',selectedBinding).finish())
+ }finally{await owner.close();await rm(root,{recursive:true,force:true})}
+},60000)
+
+it('checks original admission and target policy for an empty V2 managed closure',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'selected-empty-closure-')),owner=createContextOutputService({root,workspaceId:'workspace'})
+ try{
+  let available=false,checks=0
+  const selectedBinding={...binding,version:2 as const,resultsDigest:'d'.repeat(64)}
+  const host={kind:'coherent-observation-v1' as const,binding:selectedBinding,sourceAccess:{sessionId:'source'},observeCurrent(){checks++;return target}}
+  const request={version:2 as const,resultsDigest:selectedBinding.resultsDigest,operationId:binding.operationId,targetSessionId:binding.targetSessionId,manifestDigest:binding.manifestDigest,sourceSessionId:binding.sourceSessionId,artifacts:[]}
+  const scope=owner.registerSeedDependencyTransfer(host,'original-publication',request)
+  expect((await owner.confirmSeedDependencies(scope,request,()=>available)).kind).toBe('blocked');expect(checks).toBe(0)
+  available=true
+  const result=await owner.confirmSeedDependencies(scope,request,()=>true)
+  expect(result.kind).toBe('confirmed')
+  expect(checks).toBeGreaterThan(0)
+  if(result.kind==='confirmed'){expect(result.closureDigest).toBe(createTransferClosure('workspace',selectedBinding).finish());expect(result.closureDigest).not.toBe(EMPTY_SEMANTIC_DEPENDENCY_DIGEST)}
+  let targetAvailable=false
+  const denied=owner.registerSeedDependencyTransfer({...host,observeCurrent(){if(!targetAvailable)throw Error('Original target unavailable');return target}},'original-publication',request)
+  expect((await owner.confirmSeedDependencies(denied,request,()=>true)).kind).toBe('blocked')
+  targetAvailable=true
+  expect((await owner.confirmSeedDependencies(denied,request,()=>true)).kind).toBe('blocked')
+ }finally{await owner.close();await rm(root,{recursive:true,force:true})}
+},60000)
 
 it('captures the disjoint coherent observer without accepting mixed or asynchronous shapes',()=>{
  const host={kind:'coherent-observation-v1' as const,binding,sourceAccess:{sessionId:'source'},observeCurrent(_mode:'active'|'passive'){return target}}

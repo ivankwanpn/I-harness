@@ -1,4 +1,4 @@
-import {qualifyOriginalZeroSource,registerOriginalZeroSourceService} from './legacy/observed-read.ts'
+import {qualifyOriginalZeroSource,registerOriginalZeroSourceService,hasOriginalZeroSource} from './legacy/observed-read.ts'
 import { associateManagedResultRefusal } from './artifact/result-capabilities.ts'
 import { captureResultTargetIds } from '../../session-persistence/src/coordinator/result-revocation-data.ts'
 import { fields, captureTarget } from './artifact/transfer-codec.ts'
@@ -339,6 +339,16 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   let closedSelectedStore:ContextStore|undefined
   const acknowledgeSelectedAcquisitions=(original:ContextStore)=>{for(const debt of selectedAcquisitionDebts)if(debt.store===original){debt.settled=true;selectedAcquisitionDebts.delete(debt)}}
   const legacy = createLegacyForkOwner({ strict: options.requireObservedLegacyRecipients === true, workspaceId,
+    captureRead(input) {
+      qualifyOriginalZeroSource(service,input)
+      const read=captureObservation(input,service)
+      if(!hasOriginalZeroSource(read,service))return read
+      // This original native bootstrap has no inherited legacy plan. Keep its
+      // qualified lifetime check while presenting its actual local-only scope.
+      return Object.freeze({sessionId:read.sessionId,sourceId:read.sourceId,
+        assertCurrent(){if(!hasOriginalZeroSource(read,service))throw Error('Original zero-source proof unavailable')},
+        localVisible:read.localVisible,anchorVisible:read.anchorVisible})
+    },
     quota: () => config.maxDiskBytes, run: (signal, work) => run(signal, owned => withLegacyIndexWrite(owned, context => work(owned, context)), false, true),
     mutate: mutateIndex, runPassive: (original, work) => run(undefined, owned => gate.exclusive(owned, async lease => {
       gate.assertLease(lease); if (!store || store !== original) throw Error('Original legacy store unavailable')
@@ -564,12 +574,14 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   }
   async function readObserved(access: ContextAccess, query: LegacyReadQuery, input: LegacyReadObservation) {
     identity(access.sessionId, 'sessionId')
-    const snapshot = captureObservation(input), caller = { sessionId: access.sessionId }
+    qualifyOriginalZeroSource(service,input)
+    const snapshot = captureObservation(input,service), caller = { sessionId: access.sessionId }
     const id = query.refId, offset = integer(query.offset ?? 0, 'offset'), budget = Math.min(config.maxReadBytes, integer(query.maxBytes ?? config.maxReadBytes, 'read budget', 1))
     return run(access.signal, signal => withLegacyIndexWrite(signal, async context => {
       const scope = observed(context, caller, snapshot, signal)
       const current = context.store; scope.guard()
-      await prepareObservedIndex(context, snapshot, scope.guard, mutateIndex, config.maxDiskBytes); scope.guard()
+      if(!hasOriginalZeroSource(snapshot,service))await prepareObservedIndex(context, snapshot, scope.guard, mutateIndex, config.maxDiskBytes)
+      scope.guard()
       const result = await readLegacy(id, offset, budget, signal, async () => {
         scope.guard(); context.index.assertCurrent(); const ref = current.get(id)
         if (!ref || !await scope.allowed(ref)) throw Error('Context reference unavailable or unauthorized')
@@ -582,7 +594,8 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   }
   async function searchObserved(access: ContextAccess, query: LegacySearchQuery, input: LegacyReadObservation) {
     identity(access.sessionId, 'sessionId')
-    const snapshot = captureObservation(input), caller = { sessionId: access.sessionId }
+    qualifyOriginalZeroSource(service,input)
+    const snapshot = captureObservation(input,service), caller = { sessionId: access.sessionId }
     if (typeof query.query !== 'string' || !query.query.trim() || Buffer.byteLength(query.query) > 1024) throw Error('query must contain 1..1024 UTF-8 bytes')
     const terms = [...new Set(query.query.trim().split(/\s+/u))], limit = Math.min(100, integer(query.limit ?? 10, 'limit', 1)), maxBytes = Math.min(config.maxSearchBytes, integer(query.maxBytes ?? config.maxSearchBytes, 'search budget', 1))
     const filter = query.refIds === undefined ? undefined : new Set(query.refIds)
@@ -591,7 +604,8 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     return run(access.signal, signal => withLegacyIndexWrite(signal, async context => {
       const scope = observed(context, caller, snapshot, signal)
       scope.guard()
-      await prepareObservedIndex(context, snapshot, scope.guard, mutateIndex, config.maxDiskBytes); scope.guard()
+      if(!hasOriginalZeroSource(snapshot,service))await prepareObservedIndex(context, snapshot, scope.guard, mutateIndex, config.maxDiskBytes)
+      scope.guard()
       scope.guard(); const result = await searchLegacy({ terms, limit, maxBytes, filter }, context, ref => scope.allowed(ref), signal); scope.guard()
       const confirmed = [] as typeof result.hits
       for (const hit of result.hits) { if (await scope.allowed(hit.ref)) confirmed.push(hit); scope.guard() }
@@ -606,7 +620,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     registerLegacyForkTransfer(capture) { assertOpen(); return legacy.register(capture) },
     confirmLegacyForkTransfer: legacy.confirm, reconcileLegacyForkTransfer: legacy.reconcile, closeLegacyForkTransfer: legacy.closeScope,
     readLegacyObserved: readObserved, searchLegacyObserved: searchObserved,
-    registerSeedDependencyTransfer(access, originalPublication) { assertOpen(); return artifacts.registerSeedDependencyTransfer(access, originalPublication) },
+    registerSeedDependencyTransfer(access, originalPublication, originalRequest) { assertOpen(); return artifacts.registerSeedDependencyTransfer(access, originalPublication, originalRequest) },
     async confirmSeedDependencies(scope, request, current) {
       if (closed || closing) return { kind: 'blocked', reason: 'unavailable' }
       return artifacts.confirmSeedDependencies(scope, request, current)
@@ -1074,7 +1088,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       gate.assertLease(lease); assertOpen(); checkAbort(signal)
       if ((store ?? candidate) !== current) throw Error('Original cold metadata store changed')
       return value
-    }))
+    }),false,true)
     const settle = () => gate.exclusive(undefined, async lease => {
       gate.assertLease(lease, 'exclusive'); const original = acquisitionStore
       if (!original) return
@@ -1107,7 +1121,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       gate.assertLease(lease); assertOpen(); checkAbort(signal)
       if ((store ?? candidate) !== current) throw Error('Original metadata store changed')
       return value
-    }))
+    }),false,true)
     let selected!:SelectedMetadataRecord
     const settle=(original:ContextStore,stillOwed:()=>boolean=()=>true)=>gate.exclusive(undefined,async lease=>{gate.assertLease(lease,'exclusive');if(!stillOwed())return;if(closedSelectedStore===original){acknowledgeSelectedAcquisitions(original);return}if((store??candidate)!==original)throw Error('Original metadata store changed');await original.joinLegacyFiles();acknowledgeSelectedAcquisitions(original)})
     let originalReader:SelectedMetadataOwner

@@ -6,9 +6,12 @@ import { isMetadataData } from './metadata-data.ts'
 import type { ArtifactOwner } from './types.ts'
 
 export interface SeedDependencyTransferScope { readonly kind: 'seed-dependency-transfer' }
-export interface SeedDependencyTransferBinding {
+interface SeedDependencyTransferBindingBase {
   operationId: string; manifestDigest: string; sourceSessionId: string; targetSessionId: string; targetDocumentId: string
 }
+export type SeedDependencyTransferBinding = SeedDependencyTransferBindingBase & (
+  { version?: never; resultsDigest?: never } | { version: 2; resultsDigest: string }
+)
 export type SeedDependencyTargetScope = {source:NonNullable<ContextCapture['source']>;revision:string}
 export interface ExistingSeedDependencyHostAccess {
   binding: SeedDependencyTransferBinding; sourceAccess: ContextAccess;
@@ -32,7 +35,9 @@ export function fields(value: unknown, required: readonly string[], optional: re
 }
 export function validTransferBinding(value: unknown): value is SeedDependencyTransferBinding {
   try {
-    fields(value, ['operationId', 'manifestDigest', 'sourceSessionId', 'targetSessionId', 'targetDocumentId'])
+    fields(value, ['operationId', 'manifestDigest', 'sourceSessionId', 'targetSessionId', 'targetDocumentId'], ['version', 'resultsDigest'])
+    fields(value, ['operationId', 'manifestDigest', 'sourceSessionId', 'targetSessionId', 'targetDocumentId', ...(value.version === 2 ? ['version', 'resultsDigest'] : [])])
+    if (value.version === 2 && (typeof value.resultsDigest !== 'string' || !/^[a-f0-9]{64}$/.test(value.resultsDigest))) return false
     if (!isMetadataData(value) || typeof value.manifestDigest !== 'string' || !/^[a-f0-9]{64}$/.test(value.manifestDigest)) return false
     for (const key of ['operationId', 'sourceSessionId', 'targetSessionId', 'targetDocumentId']) {
       identity(value[key] as string, key)
@@ -52,15 +57,15 @@ export function captureHost(value: SeedDependencyHostAccess): SeedDependencyHost
     const descriptor=Object.getOwnPropertyDescriptor(value,'observeCurrent')!,observer=descriptor.value as CoherentSeedDependencyHostAccess['observeCurrent']
     if(typeof observer!=='function'||types.isProxy(observer))throw new TransferBlocked('conflict')
     const originalBinding=value.binding,originalAccess=value.sourceAccess,hostDescriptors=Object.getOwnPropertyDescriptors(value),bindingDescriptors=Object.getOwnPropertyDescriptors(originalBinding),accessDescriptors=Object.getOwnPropertyDescriptors(originalAccess)
-    const {operationId,manifestDigest,sourceSessionId,targetSessionId,targetDocumentId}=originalBinding
+    const capturedBinding=Object.freeze(structuredClone(originalBinding))
     const checkDescriptors=(object:object,original:PropertyDescriptorMap,keys:readonly string[])=>{
       if(Reflect.ownKeys(object).length!==keys.length)throw new TransferBlocked('policy')
       for(const key of keys){const before=original[key],after=Object.getOwnPropertyDescriptor(object,key);if(!before||!after||!('value'in before)||!('value'in after)||after.value!==before.value||after.enumerable!==before.enumerable||after.configurable!==before.configurable||after.writable!==before.writable)throw new TransferBlocked('policy')}
     }
-    const hostKeys=['kind','binding','sourceAccess','observeCurrent'],bindingKeys=['operationId','manifestDigest','sourceSessionId','targetSessionId','targetDocumentId'],accessKeys=Object.hasOwn(accessDescriptors,'signal')?['sessionId','signal']:['sessionId']
+    const hostKeys=['kind','binding','sourceAccess','observeCurrent'],bindingKeys=['operationId','manifestDigest','sourceSessionId','targetSessionId','targetDocumentId',...(originalBinding.version===2?['version','resultsDigest']:[])],accessKeys=Object.hasOwn(accessDescriptors,'signal')?['sessionId','signal']:['sessionId']
     const checkOriginal=()=>{fields(value,hostKeys);fields(originalBinding,bindingKeys);fields(originalAccess,['sessionId'],['signal']);checkDescriptors(value,hostDescriptors,hostKeys);checkDescriptors(originalBinding,bindingDescriptors,bindingKeys);checkDescriptors(originalAccess,accessDescriptors,accessKeys)}
     let entered=false,violated=false
-    return Object.freeze({kind:'coherent-observation-v1' as const,binding:Object.freeze({operationId,manifestDigest,sourceSessionId,targetSessionId,targetDocumentId}),sourceAccess:Object.freeze({...originalAccess}),observeCurrent(mode:'active'|'passive'){
+    return Object.freeze({kind:'coherent-observation-v1' as const,binding:capturedBinding,sourceAccess:Object.freeze({...originalAccess}),observeCurrent(mode:'active'|'passive'){
       if(entered){violated=true;throw new TransferBlocked('policy')}
       if(violated)throw new TransferBlocked('policy')
       checkOriginal();entered=true
@@ -75,7 +80,10 @@ export function captureHost(value: SeedDependencyHostAccess): SeedDependencyHost
   for (const key of ['sourceAvailable', 'assertSourceCurrent', 'targetAvailable', 'targetScope', 'assertTargetCurrent'] as const) if (typeof value[key] !== 'function' || types.isProxy(value[key])) throw new TransferBlocked('conflict')
   const legacy=value as ExistingSeedDependencyHostAccess
   const { operationId, manifestDigest, sourceSessionId, targetSessionId, targetDocumentId } = legacy.binding
-  return Object.freeze({ binding: Object.freeze({ operationId, manifestDigest, sourceSessionId, targetSessionId, targetDocumentId }), sourceAccess: Object.freeze({ ...legacy.sourceAccess }), sourceAvailable: legacy.sourceAvailable,
+  const base = { operationId, manifestDigest, sourceSessionId, targetSessionId, targetDocumentId }
+  const binding: SeedDependencyTransferBinding = legacy.binding.version === 2
+    ? Object.freeze({ ...base, version: 2, resultsDigest: legacy.binding.resultsDigest }) : Object.freeze(base)
+  return Object.freeze({ binding, sourceAccess: Object.freeze({ ...legacy.sourceAccess }), sourceAvailable: legacy.sourceAvailable,
     assertSourceCurrent: legacy.assertSourceCurrent, targetAvailable: legacy.targetAvailable, targetScope: legacy.targetScope, assertTargetCurrent: legacy.assertTargetCurrent })
 }
 export function captureTarget(value: SeedDependencyTargetScope): string {
@@ -98,10 +106,11 @@ export function validOwner(value: unknown): value is ArtifactOwner {
 /** Same closed artifact/use/address rules as the seed codec. The request has
  * no origin table or groups, so it cannot claim to validate the whole seed. */
 export function captureRequest(value: BootstrapDependencyRequest, binding: SeedDependencyTransferBinding, allowEmpty = false): BootstrapDependencyRequest {
-  fields(value, ['operationId', 'targetSessionId', 'manifestDigest', 'sourceSessionId', 'artifacts'])
+  fields(value, ['operationId', 'targetSessionId', 'manifestDigest', 'sourceSessionId', 'artifacts', ...(binding.version === 2 ? ['version', 'resultsDigest'] : [])])
+  if (binding.version === 2 && (value.version !== 2 || value.resultsDigest !== binding.resultsDigest)) throw new TransferBlocked('conflict')
   if (!isMetadataData(value)) throw new TransferBlocked('conflict')
   for (const key of ['operationId', 'targetSessionId', 'manifestDigest', 'sourceSessionId'] as const) if (value[key] !== binding[key]) throw new TransferBlocked('conflict')
-  if (!Array.isArray(value.artifacts) || !allowEmpty && !value.artifacts.length) throw new TransferBlocked('unavailable')
+  if (!Array.isArray(value.artifacts) || !allowEmpty && binding.version !== 2 && !value.artifacts.length) throw new TransferBlocked('unavailable')
   const identities = new Set<string>(), count = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0
   for (const artifact of value.artifacts) {
     fields(artifact, ['ref', 'origins', 'uses'])

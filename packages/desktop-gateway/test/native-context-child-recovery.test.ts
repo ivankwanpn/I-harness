@@ -6,7 +6,8 @@ import {createHash} from 'node:crypto'
 import {join} from 'node:path'
 import {committedFactSeqs,deriveMessages,managedResultRefs,semanticSeedResultRefs,createLegacyRetentionSelection,type SessionView as Session} from '@i-harness/core-session'
 import {recordFixture} from './managed-fixture.ts'
-import {createSessionCoordinator} from '@i-harness/session-persistence'
+import {composeJsonlTaskTransitionCoordinator} from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import {taskDocumentStorageContract} from '../../subagent/src/task/storage-contract.ts'
 import {createJsonlBackend} from '@i-harness/session-persistence-jsonl'
 import {createSessionAssembly,createDurableSessionLoader} from '@i-harness/session-executor'
 import {createNativeConsumerOwners,dispatchOwned} from './helpers/native-consumer-fixture.ts'
@@ -20,8 +21,10 @@ import type {LLMRequest,ModelClient} from '../../llm-seam/src/index.ts'
 it.each(['off','only'] as const)('child %s captures own refs and recovers after compaction/reset/cold resume and fork',async mode=>{
   const root=await mkdtemp(join(tmpdir(),'c67-child-'))
   const storage=join(root,'sessions')
-  let coordinator=createSessionCoordinator(createJsonlBackend(storage),{lock:{enabled:true}});await coordinator.create({sessionId:'parent'})
-  let owners=await createNativeConsumerOwners(coordinator,root),runtime=owners.runtime;await runtime.contextOutput.configure({enabled:true})
+  const project={id:'native-consumer',name:'Native consumer',roots:[root],primaryRoot:root}
+  let coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(storage),{lock:{enabled:true}},taskDocumentStorageContract);await coordinator.create({sessionId:'parent'})
+  let owners=await createNativeConsumerOwners(coordinator,root,project),runtime=owners.runtime;await runtime.contextOutput.configure({enabled:true})
+  await owners.projects.bind('parent',project.id)
   const direct='a'.repeat(40000)+'DIRECT_MARKER'+'b'.repeat(40000),emitted='c'.repeat(40000)+'EMITTED_MARKER'+'d'.repeat(40000)
   const legacy:ContextResultRef[]=[]
   const requests:LLMRequest[]=[];let first=true,childSession:Session|undefined,waits=0,effects=0,parentEffects=0
@@ -49,7 +52,7 @@ it.each(['off','only'] as const)('child %s captures own refs and recovers after 
     if(!ref)throw new Error('Explicit legacy direct capture refused')
     legacy.push(ref);await recordFixture(await coordinator.openManagedDocument(exec.sessionId),{type:'context/result-ref',ref});return direct
   }}],pluginAgents:[{name:'native-child',description:'native child',systemPrompt:'NATIVE_CHILD',tools:['fixture_long','context_output_read','context_output_search']}]}
-  let assembly=await createSessionAssembly({...options,coordinator,contextOutput:runtime.contextOutput,contextOutputSourceFor:runtime.sourceFor,contextOutputLegacyReadObservation:runtime.withLegacyReadObservation})
+  let assembly=await createSessionAssembly({...options,prepareTaskChild:runtime.prepareTaskChild,coordinator,contextOutput:runtime.contextOutput,contextOutputSourceFor:runtime.sourceFor,contextOutputLegacyReadObservation:runtime.withLegacyReadObservation})
   const observe=()=>assembly.ctx.on('agent/post-tool',async payload=>{
     const event=payload as {name:string;session:Session;output?:{status?:string}}
     if(event.name==='fixture_long'||event.name==='code_exec'||event.name==='code_wait')childSession=event.session
@@ -125,6 +128,8 @@ it.each(['off','only'] as const)('child %s captures own refs and recovers after 
             expect(page.nextOffset).toBeGreaterThan(offset);offset=page.nextOffset!
           }
           expect(text).toBe(index===0?direct:emitted)
+          const hits=await runtime.contextOutput.searchLegacyObserved({sessionId:id},{query:index===0?'DIRECT_MARKER':'EMITTED_MARKER',refIds:[ref.id]},read)
+          expect(hits.hits.map(hit=>hit.ref.id)).toEqual([ref.id])
           console.info(JSON.stringify({fixture:'c67-legacy-bytes',mode,phase,id,refId:ref.id,bytes:Buffer.byteLength(text),sha256:createHash('sha256').update(text).digest('hex')}))
         }
       })
@@ -186,17 +191,18 @@ it.each(['off','only'] as const)('child %s captures own refs and recovers after 
     await followup('continue after reset');await assertBodies(childId,'reset');expect(requests.at(-1)!.systemPrompt).not.toContain(hidden.id);compactionAction.finish()
     const restoredState=assembly.subagentState!()
     await assembly.dispose();await owners.close();await coordinator.close()
-    coordinator=createSessionCoordinator(createJsonlBackend(storage),{lock:{enabled:true}});owners=await createNativeConsumerOwners(coordinator,root);runtime=owners.runtime;await runtime.contextOutput.configure({enabled:true})
-    assembly=await createSessionAssembly({...options,coordinator,session:await createDurableSessionLoader(coordinator)('parent'),restoredState,contextOutput:runtime.contextOutput,contextOutputSourceFor:runtime.sourceFor,contextOutputLegacyReadObservation:runtime.withLegacyReadObservation});observe()
+    coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(storage),{lock:{enabled:true}},taskDocumentStorageContract);owners=await createNativeConsumerOwners(coordinator,root,project);runtime=owners.runtime;await runtime.contextOutput.configure({enabled:true})
+    assembly=await createSessionAssembly({...options,prepareTaskChild:runtime.prepareTaskChild,coordinator,session:await createDurableSessionLoader(coordinator)('parent'),restoredState,contextOutput:runtime.contextOutput,contextOutputSourceFor:runtime.sourceFor,contextOutputLegacyReadObservation:runtime.withLegacyReadObservation});observe()
     await followup('continue after cold resume');await assertBodies(childId,'cold');await assertTaskBody('cold');expect(requests.at(-1)!.systemPrompt).not.toContain(hidden.id)
     await coordinator.flush(childId)
     const selectedView=(await coordinator.openManagedDocument(childId)).view,selectedHistory=selectSeedHistory(selectedView,{kind:'completed'})
     console.info(JSON.stringify({fixture:'c67-selected-history',mode,history:selectedHistory.kind==='selected'?{kind:selectedHistory.kind,turns:selectedHistory.turns,groups:selectedHistory.groups.map(group=>({extent:group.extent,calls:group.items.flatMap(item=>item.calls.map(call=>call.callId))}))}:selectedHistory,refs:refs.map(ref=>({id:ref.id,callId:ref.callId})),lifecycle:selectedView.events.flatMap(event=>['turn/start','turn/end','compaction/summary','compaction/reset','rewind/point'].includes(event.type)?[event]:[])}))
     const selection=createLegacyRetentionSelection((await coordinator.openManagedDocument(childId)).view,{kind:'completed'})
     console.info(JSON.stringify({fixture:'c67-legacy-selection',mode,selection:selection.kind==='selected'?{kind:selection.kind,totalTurns:selection.totalTurns,local:[...selection.local()]}:selection}))
-    const fork=await owners.fork(childId)
+    expect(selection).toMatchObject({kind:'refused',reason:'legacy-anchor-unsupported'})
+    const fork=await owners.forkSelected(childId)
     const target=(await coordinator.snapshot!(fork.sessionId)).session
-    expect(target.events[0]).toMatchObject({type:'conversation/seed-manifest'})
+    expect(target.events[0]).toMatchObject({type:'conversation/seed-manifest',version:3})
     expect(semanticSeedResultRefs(target).map(ref=>ref.id).sort()).toEqual(bodies.map(body=>body.ref.id).sort())
     const assertInherited=async(phase:string)=>{
       await assertBodies(fork.sessionId,phase)
@@ -220,11 +226,16 @@ it.each(['off','only'] as const)('child %s captures own refs and recovers after 
     })
     await runtime.contextOutput.configure({enabled:false})
     await runtime.contextOutput.clear('parent');await runtime.contextOutput.clear(childId)
+    await runtime.withLegacyReadObservation({sessionId:fork.sessionId},read=>expect(runtime.contextOutput.readLegacyObserved({sessionId:fork.sessionId},{refId:refs[0]!.id},read)).rejects.toThrow(/disabled/))
+    await runtime.contextOutput.configure({enabled:true})
     await assertInherited('source-clear')
     await assembly.dispose();await owners.close();await coordinator.close()
-    coordinator=createSessionCoordinator(createJsonlBackend(storage),{lock:{enabled:true}});owners=await createNativeConsumerOwners(coordinator,root);runtime=owners.runtime
+    coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(storage),{lock:{enabled:true}},taskDocumentStorageContract);owners=await createNativeConsumerOwners(coordinator,root,project);runtime=owners.runtime
+    await owners.restoreSelected(fork.operation)
     await runtime.contextOutput.configure({enabled:false})
+    await runtime.withLegacyReadObservation({sessionId:fork.sessionId},read=>expect(runtime.contextOutput.readLegacyObserved({sessionId:fork.sessionId},{refId:refs[0]!.id},read)).rejects.toThrow(/disabled/))
+    await runtime.contextOutput.configure({enabled:true})
     await assertInherited('target-cold')
     expect(effects).toBe(1)
   }finally{await assembly.dispose();await owners.close();await coordinator.close();await rm(root,{recursive:true,force:true})}
-},15000)
+},180000)
