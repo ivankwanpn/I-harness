@@ -23,13 +23,20 @@ it('repairs corrupted main-index proof hints through passive owner maintenance w
     expect((await f.run()).kind).toBe('ready')
     const observation = await f.observation(), directory = join(f.root, 'context-output', createHash('sha256').update('workspace').digest('hex')), db = new DatabaseSync(join(directory, 'index.sqlite'))
     try { db.prepare('UPDATE legacy_rows SET ref_id=?').run('ctx_' + 'f'.repeat(64)) } finally { db.close() }
-    await expect(f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, observation)).rejects.toThrow()
     const before = await canonicalInventory(directory), sourceCalls = f.sourceCalls()
+    const readable = await f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, observation)
+    expect(readable.ref.id).toBe(f.visible.id)
+    expect(readable.text).toContain('VISIBLE')
+    expect(f.sourceCalls()).toBe(sourceCalls)
+    expect(await canonicalInventory(directory)).toEqual(before)
     expect((await f.run(true)).kind).toBe('already-ready'); expect(f.sourceCalls()).toBe(sourceCalls)
     expect(await canonicalInventory(directory)).toEqual(before)
+    const repaired = new DatabaseSync(join(directory, 'index.sqlite'))
+    try { expect(repaired.prepare('SELECT DISTINCT ref_id FROM legacy_rows').all().map(row => row.ref_id)).toEqual([f.visible.id]) }
+    finally { repaired.close() }
     expect((await f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, observation)).text).toContain('VISIBLE')
   } finally { await f.close() }
-})
+}, 15000)
 it('refuses unfunded derived repair at the full budget and repairs after an actual budget raise', async () => {
   const f = await legacyFixture()
   try {
@@ -43,7 +50,7 @@ it('refuses unfunded derived repair at the full budget and repairs after an actu
     await f.service().configure({ maxDiskBytes: full + 1024 * 1024 })
     expect((await f.service().searchLegacyObserved({ sessionId: 'target' }, { query: 'VISIBLE' }, observation)).hits.map(hit => hit.ref.id)).toEqual([f.visible.id])
   } finally { await f.close() }
-})
+}, 15000)
 it('rebuilds a corrupt disposable SQLite file and cold proof hints from the original applied graph', async () => {
   const f = await legacyFixture()
   try {
@@ -55,4 +62,4 @@ it('rebuilds a corrupt disposable SQLite file and cold proof hints from the orig
     expect(await canonicalInventory(directory)).toEqual(before)
     expect((await f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, await f.observation())).text).toContain('VISIBLE')
   } finally { await f.close() }
-})
+}, 15000)

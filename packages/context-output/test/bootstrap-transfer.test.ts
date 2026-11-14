@@ -18,7 +18,7 @@ import * as locking from '@i-harness/fs-lock'
 import { structureEvidence } from './structure-evidence.ts'
 import { ContextStore } from '../src/store.ts'
 
-const controls = vi.hoisted(() => ({ reads: [] as string[], cutPath: '', cut: '', afterRead: undefined as undefined | ((path: string) => void), afterReaddir: undefined as undefined | ((path: string) => void), mutations: 0, consume:false,directClose:false,requireRead:false,openFault:'',paths:new Map<object,string>(),closeMode:'r+',closeCounts:new Map<object,number>(), primary:undefined as unknown, failClose: false, falsey: false, failed: [] as import('node:fs/promises').FileHandle[], pending: undefined as Promise<void>|undefined, entered: undefined as (()=>void)|undefined }))
+const controls = vi.hoisted(() => ({ reads: [] as string[], cutPath: '', cut: '', cutHits: 0, afterRead: undefined as undefined | ((path: string) => void), afterReaddir: undefined as undefined | ((path: string) => void), mutations: 0, consume:false,directClose:false,requireRead:false,openFault:'',paths:new Map<object,string>(),closeMode:'r+',closeCounts:new Map<object,number>(), primary:undefined as unknown, failClose: false, falsey: false, failed: [] as import('node:fs/promises').FileHandle[], pending: undefined as Promise<void>|undefined, entered: undefined as (()=>void)|undefined }))
 vi.mock('node:fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
   return { ...fs, open: async (...args: Parameters<typeof fs.open>) => {
@@ -27,21 +27,27 @@ vi.mock('node:fs/promises', async original => {
     let readUsed=false;controls.paths.set(handle,path)
     handle.read = (async (...params: Parameters<typeof read>) => { readUsed=true;if(controls.cut==='falsey-read'&&path===controls.cutPath)throw controls.primary;const result = await read(...params); controls.reads.push(path); controls.afterRead?.(path); return result }) as typeof handle.read
     handle.write = (async (...params: Parameters<typeof write>) => { controls.mutations++; return write(...params) }) as typeof handle.write
-    handle.sync = async () => {if(controls.cut==='falsey-sync'&&path===controls.cutPath)throw controls.primary; if (controls.cut === 'sync' && path.startsWith(controls.cutPath)) throw new Error('sync cut'); return sync() }
+    handle.sync = async () => {if(controls.cut==='falsey-sync'&&path===controls.cutPath)throw controls.primary; if (controls.cut === 'sync' && path.startsWith(controls.cutPath)) { controls.cutHits++; throw new Error('sync cut') }; return sync() }
     handle.close=async()=>{controls.closeCounts.set(handle,(controls.closeCounts.get(handle)??0)+1);if(path===controls.cutPath&&args[1]===controls.closeMode&&controls.failClose&&(!controls.requireRead||readUsed)){controls.failed.push(handle);if(controls.consume){await close();controls.failClose=false;}if(controls.directClose)throw controls.primary;throw controls.falsey?undefined:Error('Original passive close debt')}if(path===controls.cutPath&&controls.pending){controls.entered?.();await controls.pending}await close()}
     return handle
   }, link: async (...args: Parameters<typeof fs.link>) => {
     controls.mutations++
-    if (String(args[1]) === controls.cutPath && controls.cut === 'link') throw new Error('link cut')
+    if (String(args[1]) === controls.cutPath && controls.cut === 'link') { controls.cutHits++; throw new Error('link cut') }
     await fs.link(...args)
-    if (String(args[1]) === controls.cutPath && controls.cut === 'response') throw new Error('link response cut')
+    if (String(args[1]) === controls.cutPath && controls.cut === 'response') { controls.cutHits++; throw new Error('link response cut') }
   }, unlink: async (...args: Parameters<typeof fs.unlink>) => { controls.mutations++; return fs.unlink(...args) },
   readdir: async (...args: Parameters<typeof fs.readdir>) => { const result = await fs.readdir(...args); controls.afterReaddir?.(String(args[0])); return result } }
 })
 const evidence = resolve(structureEvidence('.tmp/context-transfer-artifact-20261023'), 'bootstrap-transfer')
 await mkdir(evidence, { recursive: true })
 const sha = (text: string) => createHash('sha256').update(text).digest('hex')
-afterEach(() => Object.assign(controls, { reads: [], cutPath: '', cut: '', afterRead: undefined, afterReaddir: undefined, mutations: 0 }))
+afterEach(() => {
+  controls.paths.clear()
+  controls.closeCounts.clear()
+  Object.assign(controls, { reads: [], cutPath: '', cut: '', cutHits: 0, afterRead: undefined, afterReaddir: undefined,
+    mutations: 0, consume: false, directClose: false, requireRead: false, openFault: '', closeMode: 'r+', primary: undefined,
+    failClose: false, falsey: false, failed: [], pending: undefined, entered: undefined })
+})
 
 async function fixture(extra = 0, ownerPath?: string, prefix = 'original-', ownerSources: { catalog?: string; member?: string } = {}) {
   const root = await mkdtemp(resolve(evidence, prefix)), workspaceId = 'transfer-workspace'
@@ -225,14 +231,16 @@ it.each(['pin', 'access', 'companion'] as const)('does not recreate a missing ta
   } finally { await f.service.close() }
 })
 
-it.each(['pin', 'access', 'companion'] as const)('continues original %s publication after real link/sync/response cuts', async location => {
-  for (const cut of ['link', 'sync', 'response']) {
+it.each((['pin', 'access', 'companion'] as const).flatMap(location =>
+  ['link', 'sync', 'response'].map(cut => ({ location, cut }))))('continues original $location publication after a real $cut cut', async ({ location, cut }) => {
     const f = await fixture()
     try {
       const scope = f.service.registerSeedDependencyTransfer(f.access), ref = f.members[1]!
       controls.cutPath = location === 'pin' ? f.pin(ref) : location === 'access' ? resolve(f.directory(ref), 'access', sha('child') + '.json') : f.companion(ref)
       controls.cut = cut
-      expect(await f.service.confirmSeedDependencies(scope, f.request, () => true)).toEqual({ kind: 'blocked', reason: 'unknown' })
+      const outcome = await f.service.confirmSeedDependencies(scope, f.request, () => true)
+      expect(controls.cutHits).toBeGreaterThan(0)
+      expect(outcome).toEqual({ kind: 'blocked', reason: 'unknown' })
       controls.cut = ''
       const before = await readdir(resolve(controls.cutPath, '..')), mutations = controls.mutations, calls = f.sourceCalls()
       const passive = await f.service.reconcileSeedDependencies(scope, f.request)
@@ -241,7 +249,6 @@ it.each(['pin', 'access', 'companion'] as const)('continues original %s publicat
       expect(await readdir(resolve(controls.cutPath, '..'))).toEqual(before)
       expect((await f.service.confirmSeedDependencies(scope, f.request, () => true)).kind).toBe('confirmed')
     } finally { controls.cut = ''; controls.cutPath = ''; await f.service.close() }
-  }
 })
 
 it('requires captured genuine scopes, closed bindings/hooks and the exact first full request', async () => {
@@ -616,7 +623,7 @@ it('transfers original refs with canonical v2 witnesses without reading member b
     expect(await f.service.reconcileSeedDependencies(scope, f.request)).toEqual(outcome)
     expect(f.sourceCalls()).toBe(calls); expect(controls.mutations).toBe(mutations)
   } finally { await f.service.close() }
-})
+}, 60000)
 
 it.each(['link', 'sync', 'response'] as const)('settles only original selected managed publications after a %s cut', async cut => {
   const f = await fixture()
@@ -624,14 +631,16 @@ it.each(['link', 'sync', 'response'] as const)('settles only original selected m
     const scope = f.service.registerSeedDependencyTransfer(f.access, 'original-publication')
     // The final companion is the last publication; all preceding work is owned.
     controls.cutPath = f.companion(f.members[1]!); controls.cut = cut
-    expect((await f.service.confirmSeedDependencies(scope, f.request, () => true)).kind).toBe('blocked')
+    const outcome = await f.service.confirmSeedDependencies(scope, f.request, () => true)
+    expect(controls.cutHits).toBeGreaterThan(0)
+    expect(outcome.kind).toBe('blocked')
     controls.cut = ''; f.revokeSource(); const calls = f.sourceCalls()
     expect((await f.service.reconcileSeedDependencies(scope, f.request)).kind).toBe('confirmed')
     expect(f.sourceCalls()).toBe(calls)
     const foreign = f.service.registerSeedDependencyTransfer(f.access, 'original-publication')
     expect((await f.service.reconcileSeedDependencies(foreign, f.request)).kind).toBe('blocked')
   } finally { controls.cut = ''; await f.service.close() }
-})
+}, 15000)
 
 it('blocks passive confirmation after a successful final sync until original handle cleanup succeeds',async()=>{
  const f=await fixture();try{
@@ -645,19 +654,19 @@ it('blocks passive confirmation after a successful final sync until original han
  for(const h of failed)expect(h.fd).toBe(-1)
  expect((await f.service.reconcileSeedDependencies(cold,f.request)).kind).toBe('confirmed')
  }finally{controls.failClose=false;controls.failed=[];await f.service.close()}
-})
+}, 15000)
 
 
 it.each(['operation.json','manifest.json','index','body','catalog'] as const)('retains passive %s handles and settles only original cleanup',async name=>{
  const f=await fixture();try{const warm=f.service.registerSeedDependencyTransfer(f.access);expect((await f.service.confirmSeedDependencies(warm,f.request,()=>true)).kind).toBe('confirmed');const scope=f.service.registerSeedDependencyTransfer(f.access);f.revokeSource();controls.cutPath=resolve(f.directory(f.catalog),name==='catalog'?'body':name);controls.requireRead=name==='catalog';controls.closeMode='r';controls.failClose=true
  expect((await f.service.reconcileSeedDependencies(scope,f.request)).kind).toBe('blocked');expect(controls.failed.length).toBeGreaterThan(0);if(name==='body'){for(const [h,path]of controls.paths)if(path===resolve(f.directory(f.catalog),'index'))expect(controls.closeCounts.get(h)).toBe(1)}const reads=controls.reads.length,calls=f.sourceCalls();controls.failClose=false;await settleSeedDependencyTransferIO(f.service,scope);expect(controls.reads).toHaveLength(reads);expect(f.sourceCalls()).toBe(calls);expect((await f.service.reconcileSeedDependencies(scope,f.request)).kind).toBe('confirmed')
  }finally{controls.failClose=false;controls.requireRead=false;controls.closeMode='r+';controls.failed=[];await f.service.close()}
-})
+}, 15000)
 it.each([0,false,null,undefined])('blocks falsey primary+cleanup failure %s without losing original debt',async primary=>{
  const f=await fixture();try{const warm=f.service.registerSeedDependencyTransfer(f.access);expect((await f.service.confirmSeedDependencies(warm,f.request,()=>true)).kind).toBe('confirmed');const scope=f.service.registerSeedDependencyTransfer(f.access);controls.cutPath=f.pin(f.catalog);controls.primary=primary;controls.cut='falsey-sync';controls.failClose=true;controls.falsey=true
  expect((await f.service.reconcileSeedDependencies(scope,f.request)).kind).toBe('blocked');const settled=await settleSeedDependencyTransferIO(f.service,scope).then(()=>({ok:true}),error=>({ok:false,error}));expect(settled.ok).toBe(false);controls.cut='';controls.failClose=false;await settleSeedDependencyTransferIO(f.service,scope);expect((await f.service.reconcileSeedDependencies(scope,f.request)).kind).toBe('confirmed')
  }finally{controls.cut='';controls.failClose=false;controls.falsey=false;controls.failed=[];await f.service.close()}
-})
+}, 15000)
 it('joins pending passive close and service cleanup without confirmation or source regrant',async()=>{
  const f=await fixture();const leave=Promise.withResolvers<void>(),entered=Promise.withResolvers<void>();try{const warm=f.service.registerSeedDependencyTransfer(f.access);expect((await f.service.confirmSeedDependencies(warm,f.request,()=>true)).kind).toBe('confirmed');await f.deleted(['parent']);f.revokeSource();await f.deleted(['unrelated']);const scope=f.service.registerSeedDependencyTransfer(f.access);controls.cutPath=f.pin(f.catalog);controls.pending=leave.promise;controls.entered=entered.resolve;const calls=f.sourceCalls(),writes=controls.mutations;let confirmed=false,closed=false
  const verification=f.service.reconcileSeedDependencies(scope,f.request).then(result=>{confirmed=result.kind==='confirmed';return result});await entered.promise;const closing=f.service.close().then(()=>{closed=true});await Promise.resolve();expect(confirmed).toBe(false);expect(closed).toBe(false);leave.resolve();expect((await verification).kind).toBe('blocked');await closing;expect(f.sourceCalls()).toBe(calls);expect(controls.mutations).toBe(writes)

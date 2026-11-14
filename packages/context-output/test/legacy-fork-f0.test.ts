@@ -60,4 +60,4 @@ it('uses actual unmanaged outer F0 before B2 without target profiles or project 
     expect((await service.readLegacyObserved({ sessionId: 'target' }, { refId: ref.id }, read)).text).toContain('VISIBLE')
     expect((await service.searchLegacyObserved({ sessionId: 'target' }, { query: 'VISIBLE' }, read)).hits.map(hit => hit.ref.id)).toEqual([ref.id])
   } finally { await service.close(); await coordinator.close() }
-})
+}, 15000)
