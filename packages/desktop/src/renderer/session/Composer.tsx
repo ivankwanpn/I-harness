@@ -36,12 +36,27 @@ const allApprovalChoices = [dangerousApproval, ...approvalChoices]
 const memoryDrafts = new Map<string, string>()
 const rawListeners = new Set<(key: string) => void>()
 const durableClients = new Map<string, DurableDraftClient>()
-const restoringDrafts = new Set<string>()
+const applyingDrafts = new Set<string>()
 const retiredRawKeys = new Set<string>()
+type SubmissionMetadata = {
+  selection?: SessionModelSelection; createdId?: string; creationToken?: string
+  token?: string; payload?: string; appliedModel?: string
+}
+type CapturedSubmission = Readonly<SubmissionMetadata & {
+  selection: Readonly<SessionModelSelection>; creationToken: string; token: string; fingerprint: string
+}>
 const documentLabels: Record<string, string> = { "video/mp4": "MP4", "video/quicktime": "MOV", "video/webm": "WebM", "application/pdf": "PDF", "application/zip": "ZIP", "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "DOCX", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "XLSX", "application/vnd.openxmlformats-officedocument.presentationml.presentation": "PPTX" }
 subscribeDraftChanges((workspace, session, source) => {
   const key = draftKey(workspace, session)
-  if (restoringDrafts.has(key)) return
+  if (applyingDrafts.has(key) || retiredRawKeys.has(key) || isDraftRetired(workspace, session)) return
+  if (source === 'edit' && session.startsWith('new-task:')) {
+    const metadataKey = `${key}:submission`, metadata = readSubmissionMetadata(metadataKey)
+    if (metadata.token !== undefined || metadata.payload !== undefined) {
+      delete metadata.token
+      delete metadata.payload
+      rawWrite(metadataKey, JSON.stringify(metadata))
+    }
+  }
   const current = sends.get(key)
   if (source === 'edit' && current?.draftIdentity) publishSend(key, { ...current, draftIdentity: {} })
   durableClients.get(key)?.changed(source)
@@ -87,6 +102,10 @@ function rawRead(key: string): string | undefined {
   } catch {
     return memoryDrafts.get(key)
   }
+}
+
+function readSubmissionMetadata(key: string): SubmissionMetadata {
+  try { return JSON.parse(rawRead(key) ?? '{}') } catch { return {} }
 }
 
 function rawWrite(key: string, value: string): void {
@@ -161,7 +180,7 @@ function readUnsentDraft(workspace: string, session: string): UnsentDraft {
 }
 function restoreUnsentDraft(workspace: string, session: string, draft: UnsentDraft) {
   if (isDraftRetired(workspace, session)) return
-  const key = draftKey(workspace, session); restoringDrafts.add(key)
+  const key = draftKey(workspace, session); applyingDrafts.add(key)
   try {
     // Validate text/reference groups before publishing any restored data.
     prepareTextAttachmentDrafts("__restore-validation__", "__restore-validation__", draft.texts)
@@ -172,7 +191,7 @@ function restoreUnsentDraft(workspace: string, session: string, draft: UnsentDra
     writeDraft(workspace, session, draft.prompt)
     if (draft.contextRefs.length) rawWrite(`${key}:context-references`, JSON.stringify(draft.contextRefs)); else rawRemove(`${key}:context-references`)
     if (draft.metadata) rawWrite(`${key}:submission`, draft.metadata); else rawRemove(`${key}:submission`)
-  } finally { restoringDrafts.delete(key) }
+  } finally { applyingDrafts.delete(key) }
 }
 
 export interface ComposerProps {
@@ -200,9 +219,10 @@ export interface ComposerProps {
   contextRefreshKey?: string
   canCompact?: boolean
   onCompact?(instructions?: string): Promise<void>
-  onPrompt(text: string, context?: string, images?: ImageInput[], onAdmitted?: (consumeSubmission?: () => void) => void | Promise<void>): Promise<void>
+  captureSubmission?(text: string, images?: ImageInput[]): CapturedSubmission
+  onPrompt(text: string, context?: string, images?: ImageInput[], onAdmitted?: (consumeSubmission?: () => void) => void | Promise<void>, submission?: CapturedSubmission): Promise<void>
   steeringEnabled?: boolean
-  onSteer?(text: string, context?: string, images?: ImageInput[], onAdmitted?: (consumeSubmission?: () => void) => void | Promise<void>): Promise<void>
+  onSteer?(text: string, context?: string, images?: ImageInput[], onAdmitted?: (consumeSubmission?: () => void) => void | Promise<void>, submission?: CapturedSubmission): Promise<void>
   onCancel(): void
 }
 
@@ -212,13 +232,7 @@ export function NewTaskComposer({ bridge, draftRequest, onOpenHistory, onOpenPro
   const t = useText()
   const sessionId = `new-task:${projectId ?? "unassigned"}`
   const metadataKey = `${draftKey(workspaceId, sessionId)}:submission`
-  type SubmissionMetadata = {
-    selection?: SessionModelSelection; createdId?: string; creationToken?: string
-    token?: string; payload?: string; appliedModel?: string
-  }
-  const readMetadata = (): SubmissionMetadata => {
-    try { return JSON.parse(rawRead(metadataKey) ?? "{}") } catch { return {} }
-  }
+  const readMetadata = () => readSubmissionMetadata(metadataKey)
   const [metadata, setMetadata] = useState<SubmissionMetadata>(readMetadata)
   useEffect(() => {
     // Until admission succeeds, the new-task draft owns the created session.
@@ -241,6 +255,12 @@ export function NewTaskComposer({ bridge, draftRequest, onOpenHistory, onOpenPro
     publishDraftChange(workspaceId, sessionId, source)
   }
   const saveSubmission = (next: typeof metadata) => save(next, 'submission')
+  const updateSubmission = (owner: CapturedSubmission, patch: Partial<Pick<SubmissionMetadata, 'createdId' | 'appliedModel' | 'payload'>>) => {
+    const current = readMetadata()
+    if (current.creationToken !== owner.creationToken || current.token !== owner.token) return
+    if (current.createdId !== undefined && owner.createdId !== undefined && current.createdId !== owner.createdId) return
+    saveSubmission({ ...current, ...patch })
+  }
   useEffect(() => {
     const changed = (key: string) => { if (key === metadataKey) setMetadata(readMetadata()) }
     rawListeners.add(changed); return () => { rawListeners.delete(changed) }
@@ -254,31 +274,47 @@ export function NewTaskComposer({ bridge, draftRequest, onOpenHistory, onOpenPro
     fileReferencesEnabled={capabilities["prompt-context"]?.includes("1") === true} imageAttachmentsEnabled={capabilities["prompt-images"]?.includes("1") === true && model?.status === "ready" && model.imageInput === true}
     permissionsEnabled={capabilities["desktop-agent-settings"]?.includes("1")} onWorkflow={onWorkflow} workflowEnabled={capabilities["desktop-workflow"]?.includes("1")} onPermissionsChanged={onPermissionsChanged}
     modelControl={<SessionModelPicker bridge={bridge} workspaceId={workspaceId} current={model} disabled={false} onSelect={async (selection) => save({ ...readMetadata(), selection })} />}
-    onPrompt={async (text, context, images, onAdmitted) => {
-      let state = readMetadata()
-      if (!state.selection) throw new ComposerPreparationError(t("選擇模型"))
+    captureSubmission={(text, images) => {
+      if (isDraftRetired(workspaceId, sessionId)) throw new ComposerPreparationError(t("無法準備新會話；草稿仍保留。"))
+      const current = readMetadata()
+      if (!current.selection) throw new ComposerPreparationError(t("選擇模型"))
+      const state = { ...current, creationToken: current.creationToken ?? crypto.randomUUID(), token: current.token ?? crypto.randomUUID() }
+      saveSubmission(state)
+      const selection = Object.freeze({ ...current.selection })
+      const fingerprint = JSON.stringify({ text, selection, files: readFileReferences(workspaceId, sessionId), references: rawRead(`${draftKey(workspaceId, sessionId)}:context-references`), texts: readTextAttachmentDrafts(workspaceId, sessionId), images })
+      return Object.freeze({
+        selection, creationToken: state.creationToken, token: state.token,
+        createdId: state.createdId, appliedModel: state.appliedModel, payload: state.payload, fingerprint,
+      })
+    }}
+    onPrompt={async (text, context, images, onAdmitted, captured) => {
+      if (!captured) throw new ComposerPreparationError(t("無法準備新會話；草稿仍保留。"))
+      let state = captured
+      if (!state.payload) {
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(state.fingerprint))
+        const payload = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")
+        state = { ...state, payload }
+        updateSubmission(state, { payload })
+      }
       if (!state.createdId) {
-        if (!state.creationToken) { state = { ...state, creationToken: crypto.randomUUID() }; saveSubmission({ ...readMetadata(), creationToken: state.creationToken }) }
         const created = await bridge.request({ kind: "session/create", workspaceId, ...(projectId ? { projectId } : {}), clientToken: state.creationToken }).catch(() => { throw new ComposerPreparationError(t("無法準備新會話；草稿仍保留。")) }) as { sessionId: string }
         if (!created?.sessionId) throw new ComposerPreparationError(t("無法準備新會話；草稿仍保留。"))
         state = { ...state, createdId: created.sessionId }
-        saveSubmission({ ...readMetadata(), createdId: created.sessionId })
+        updateSubmission(state, { createdId: created.sessionId })
         onDraftCreated?.(created.sessionId)
       }
       const modelKey = JSON.stringify(state.selection)
       if (state.appliedModel !== modelKey) {
         await bridge.request({ kind: "session/model/set", workspaceId, sessionId: state.createdId!, selection: state.selection! }).catch(() => { throw new ComposerPreparationError(t("無法套用所選模型；草稿仍保留。")) })
         state = { ...state, appliedModel: modelKey }
-        saveSubmission({ ...readMetadata(), appliedModel: modelKey })
+        updateSubmission(state, { appliedModel: modelKey })
       }
-      const draftIdentity = JSON.stringify({ text, selection: state.selection, files: readFileReferences(workspaceId, sessionId), references: rawRead(`${draftKey(workspaceId, sessionId)}:context-references`), texts: readTextAttachmentDrafts(workspaceId, sessionId), images })
-      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(draftIdentity))
-      const payload = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")
-      if (state.payload !== payload || !state.token) { state = { ...state, payload, token: crypto.randomUUID() }; saveSubmission({ ...readMetadata(), payload: state.payload, token: state.token }) }
       await bridge.request({ kind: "desktop/session/input/submit", workspaceId, sessionId: state.createdId!, text, delivery: "queue", clientToken: state.token!, ...(context ? { context } : {}), ...(images?.length ? { images } : {}) })
       const consumeSubmission = () => {
         const current = readMetadata()
-        if (current.createdId === state.createdId && current.token === state.token && current.payload === state.payload) {
+        const sameSession = current.creationToken === state.creationToken && (current.createdId === undefined || current.createdId === state.createdId)
+        const sameInput = current.token === state.token && current.payload === state.payload
+        if (sameSession && (sameInput || current.token === undefined)) {
           saveSubmission({ selection: current.selection })
         }
       }
@@ -317,6 +353,7 @@ function SessionComposer({
   onOpenProjectFile,
   canCompact = false,
   onCompact,
+  captureSubmission,
   onPrompt,
   onCancel,
 }: ComposerProps) {
@@ -507,6 +544,9 @@ function SessionComposer({
     let remoteRequest = false
     let admitted = false
     try {
+      const prompt = text.trim() ? text : references.length || contextRefs.length ? t("請查看引用的工作區檔案。") : texts.length ? t("請查看附加的檔案。") : t("請查看附加的圖片。")
+      const wireImages = images.length ? images.map(({ id: _id, ...image }) => image) : undefined
+      const submission = captureSubmission?.(prompt, wireImages)
       // A failed disk save is shown, while the in-memory input remains sendable.
       if (client) await client.flush().catch(() => {})
       const compact = /^\/compact(?:\s+([\s\S]*))?$/.exec(text.trim())
@@ -521,7 +561,6 @@ function SessionComposer({
         publishSend(key, idleSend)
         return
       }
-      const prompt = text.trim() ? text : references.length || contextRefs.length ? t("請查看引用的工作區檔案。") : texts.length ? t("請查看附加的檔案。") : t("請查看附加的圖片。")
       const contextParts = [references.length ? `${t("引用的工作區檔案（請按需讀取）：")}\n${JSON.stringify(references.map((path) => ({ workspaceId, path })), null, 2)}` : "", textAttachmentContext(texts)].filter(Boolean)
       for (const item of contextRefs) {
         if (!bridge) throw new Error("Context bridge unavailable")
@@ -535,14 +574,20 @@ function SessionComposer({
       let cleanupAccepted: Promise<void> | undefined
       const clearMemory = () => {
         if (sends.get(key)?.draftIdentity !== sentIdentity) return
-        if (rawRead(refsKey) === JSON.stringify(contextRefs)) saveContextRefs([])
-        setDeliveryOverride(null)
-        if (readDraft(workspaceId, sessionId) === text) { clearDraft(workspaceId, sessionId); setValue("") }
-        if (JSON.stringify(readFileReferences(workspaceId, sessionId)) === JSON.stringify(references)) writeFileReferences(workspaceId, sessionId, [])
-        const sentIds = images.map((image) => image.id).join(",")
-        if (readImageDrafts(workspaceId, sessionId).map((image) => image.id).join(",") === sentIds) writeImageDrafts(workspaceId, sessionId, [])
-        const sentTextIds = new Set(texts.map((attachment) => attachment.id))
-        if (sentTextIds.size) writeTextAttachmentDrafts(workspaceId, sessionId, readTextAttachmentDrafts(workspaceId, sessionId).filter((attachment) => !sentTextIds.has(attachment.id)))
+        applyingDrafts.add(key)
+        try {
+          if (rawRead(refsKey) === JSON.stringify(contextRefs)) saveContextRefs([])
+          setDeliveryOverride(null)
+          if (readDraft(workspaceId, sessionId) === text) { clearDraft(workspaceId, sessionId); setValue("") }
+          if (JSON.stringify(readFileReferences(workspaceId, sessionId)) === JSON.stringify(references)) writeFileReferences(workspaceId, sessionId, [])
+          const sentIds = images.map((image) => image.id).join(",")
+          if (readImageDrafts(workspaceId, sessionId).map((image) => image.id).join(",") === sentIds) writeImageDrafts(workspaceId, sessionId, [])
+          const sentTextIds = new Set(texts.map((attachment) => attachment.id))
+          if (sentTextIds.size) writeTextAttachmentDrafts(workspaceId, sessionId, readTextAttachmentDrafts(workspaceId, sessionId).filter((attachment) => !sentTextIds.has(attachment.id)))
+        } finally {
+          applyingDrafts.delete(key)
+          publishDraftChange(workspaceId, sessionId, 'submission')
+        }
       }
       const clearAccepted = (consumeSubmission?: () => void) => {
         if (admitted) return cleanupAccepted
@@ -574,7 +619,8 @@ function SessionComposer({
       setDispatching(true)
       publishSend(key, idleSend)
       remoteRequest = true
-      await dispatch(prompt, context, images.length ? images.map(({ id: _id, ...image }) => image) : undefined, clearAccepted)
+      if (submission) await dispatch(prompt, context, wireImages, clearAccepted, submission)
+      else await dispatch(prompt, context, wireImages, clearAccepted)
       remoteRequest = false
       // A successful request is accepted even if its notification was missed.
       clearAccepted()
