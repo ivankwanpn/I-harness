@@ -31,13 +31,22 @@ it.each(['before-reservation', 'reservation-before-handoff', 'handoff-before-res
   const endpoint = 'http://127.0.0.1:' + address.port
   const nativeFetch = globalThis.fetch
   vi.stubGlobal('fetch', (async (url: string, init?: RequestInit) => { if (url !== endpoint + '/v1/chat/completions') throw new Error('Unexpected network destination'); return nativeFetch(url, init) }) as typeof globalThis.fetch)
-  child = spawn(process.execPath, [fileURLToPath(new URL('../../../node_modules/tsx/dist/cli.mjs', import.meta.url)), fileURLToPath(new URL('./helpers/crash-generation.mts', import.meta.url)), root, id, endpoint, cut], { cwd: fileURLToPath(new URL('../../../', import.meta.url)), stdio: ['ignore', 'pipe', 'pipe'] })
-  child.stdout!.on('data', chunk => { output += String(chunk); if (output.includes('AT_CUT')) reached = true })
+  child = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./helpers/crash-generation.mts', import.meta.url)), root, id, endpoint, cut], {
+    cwd: fileURLToPath(new URL('../../../', import.meta.url)), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  child.stdout!.on('data', chunk => {
+    output += String(chunk)
+    if (output.split(/\r?\n/).includes(`AT_CUT ${child!.pid} ${cut}`)) reached = true
+  })
   child.stderr!.on('data', chunk => { errors += String(chunk) })
-  const exited = new Promise<void>((resolve, reject) => { child!.once('error', reject); child!.once('exit', () => resolve()) })
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+    child!.once('error', reject)
+    child!.once('close', (code, signal) => resolve({ code, signal }))
+  })
   let coordinator: ReturnType<typeof createSessionCoordinator> | undefined, service: ReturnType<typeof createSessionService> | undefined
   try {
-    await exited
+    const exit = await exited
+    expect(exit, output + errors).toEqual(cut === 'handoff-before-response' ? { code: null, signal: 'SIGKILL' } : { code: 0, signal: null })
     expect(reached, output + errors).toBe(true); crashed = true
     const initialCalls = cut === 'before-reservation' || cut === 'reservation-before-handoff' ? 0 : 1
     expect(calls).toBe(initialCalls)
@@ -57,6 +66,13 @@ it.each(['before-reservation', 'reservation-before-handoff', 'handoff-before-res
     expect(calls).toBe(initialCalls + 1)
     const after = (await backend.read(id)).events
     expect(after.filter(event => event.type === 'tool/dispatch')).toHaveLength(cut === 'settled-tool' ? 1 : 0)
-    if (cut === 'settled-tool') expect(await readFile(join(root, 'effect.txt'), 'utf8')).toBe('exactly once')
-  } finally { child.kill('SIGKILL'); await exited.catch(() => {}); await service?.close().catch(() => {}); await coordinator?.close().catch(() => {}); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) }
+    if (cut === 'settled-tool') expect(await readFile(join(root, 'effect.txt'), 'utf8')).toBe('exactly once\n')
+  } finally {
+    child.kill('SIGKILL')
+    await exited.catch(() => {})
+    if (service) await expect.soft(service.close()).resolves.toBeUndefined()
+    if (coordinator) await expect.soft(coordinator.close()).resolves.toBeUndefined()
+    server.closeAllConnections()
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
 }, 30_000)

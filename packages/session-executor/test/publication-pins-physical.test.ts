@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { it } from 'vitest'
+import { expect, it } from 'vitest'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ManagedArtifactRef } from '@i-harness/core-session'
@@ -56,10 +56,21 @@ it.each(cuts)('hard-kills the original owner after native %s and classifies thro
     }
     const tasks = createTaskRegistry({ coordinator, stateId: parent, reportPolicy: SHIPPING_REPORT_POLICY, results: createTaskResultRetention(lease.service, lease.sourceFor, parent) })
     tasks.restore(structuredClone(baseline)); await tasks.qualifyRestoredResults()
-    assert.deepEqual(tasks.list(), baseline.tasks); assert.deepEqual(tasks.notifications(), baseline.notifications)
-    assert.equal(tasks.get(baseline.tasks[0]!.id)!.status, 'running')
-    assert.equal(tasks.get(baseline.tasks[0]!.id)!.outcome, undefined)
-    assert.equal(tasks.get(baseline.tasks[0]!.id)!.result, undefined)
+    // The producer has exited. Its durable running observation is preserved,
+    // and the fresh reader requires original completion evidence for publication.
+    expect(tasks.list()).toMatchObject(baseline.tasks.map(task => ({
+      ...task,
+      status: 'recovery-required',
+      outcome: 'recovery-required',
+      publication: 'unqualified',
+      savedObservation: { status: task.status },
+    })))
+    assert.deepEqual(tasks.notifications(), baseline.notifications)
+    const observed = tasks.get(baseline.tasks[0]!.id)!
+    assert.equal(observed.status, 'recovery-required')
+    assert.equal(observed.outcome, 'recovery-required')
+    assert.deepEqual(observed.savedObservation, { status: 'running' })
+    assert.equal(observed.result, undefined)
     assert.deepEqual((await coordinator.snapshot!(parent)).session.events, [])
     assert.equal(coordinator.ownerOf(parent), false)
     assert.deepEqual(await inventory(location.serviceRoot), files)
