@@ -17,6 +17,7 @@
  * @module @i-harness/fs-lock/win32
  */
 import { createRequire } from "node:module"
+import { toNamespacedPath } from "node:path"
 
 import { SessionLockConflictError, SessionLockUnsupportedError } from "./errors.ts"
 import { associateOriginalHeldState } from './original-held-state.ts'
@@ -193,7 +194,7 @@ export async function acquireWin32(opts: AcquireOptions, mode: 'shared' | 'exclu
     for (;;) {
       if (handle === null) {
         const opened = api.createFileW(
-          opts.lockPath,
+          toNamespacedPath(opts.lockPath),
           GENERIC_READ | GENERIC_WRITE,
           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
           null, OPEN_ALWAYS, 0, null,

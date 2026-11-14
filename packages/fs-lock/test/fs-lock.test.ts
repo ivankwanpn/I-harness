@@ -1,8 +1,8 @@
 import { describe, expect, it, beforeAll, afterAll } from "vitest"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { acquireSessionLock, lockPathFor, SessionLockConflictError, SessionLockUnsupportedError } from "../src/index.ts"
+import { join, toNamespacedPath } from "node:path"
+import { acquireSessionLock, lockPathFor, SessionLockConflictError, SessionLockUnsupportedError, type SessionLock } from "../src/index.ts"
 
 describe.skipIf(process.platform !== "win32")("acquireSessionLock (win32)", () => {
   let root: string
@@ -32,6 +32,40 @@ describe.skipIf(process.platform !== "win32")("acquireSessionLock (win32)", () =
     const a = await acquireSessionLock({ lockPath: path })
     await a.release()
     await a.release() // no throw
+  })
+  it("keeps the same native exclusion through a long logical path and its namespace form", async () => {
+    const longRoot = join(root, ...Array.from({ length: 3 }, () => "nested-owned-path-".repeat(5)))
+    mkdirSync(longRoot, { recursive: true })
+    const path = lockPathFor(longRoot, "long-path-session")
+    expect(path.length).toBeGreaterThan(300)
+    let first: SessionLock | undefined, second: SessionLock | undefined
+    const unexpected: SessionLock[] = []
+    let primary: { cause: unknown } | undefined
+    try {
+      first = await acquireSessionLock({ lockPath: path })
+      expect(first.held).toBe(true)
+      const conflict = await acquireSessionLock({ lockPath: path, retryMs: 5, retryMaxMs: 5, deadlineMs: 50 })
+        .then(lease => { unexpected.push(lease); return undefined }, cause => cause)
+      expect(conflict).toBeInstanceOf(SessionLockConflictError)
+      expect(conflict.message).toContain(path)
+      const aliasConflict = await acquireSessionLock({ lockPath: toNamespacedPath(path), retryMs: 5, deadlineMs: 50 })
+        .then(lease => { unexpected.push(lease); return undefined }, cause => cause)
+      expect(aliasConflict).toBeInstanceOf(SessionLockConflictError)
+      await first.release()
+      expect(first.held).toBe(false)
+      second = await acquireSessionLock({ lockPath: path })
+      expect(second.held).toBe(true)
+      await second.release()
+      expect(second.held).toBe(false)
+    } catch (cause) { primary = { cause } }
+    finally {
+      const failures: unknown[] = []
+      for (const lease of [...unexpected, second, first]) {
+        try { await lease?.release() } catch (cause) { if (!primary || cause !== primary.cause) failures.push(cause) }
+      }
+      if (primary && !failures.length) throw primary.cause
+      if (failures.length) throw new AggregateError([...(primary ? [primary.cause] : []), ...failures], "Original long-path lease cleanup failed", { cause: primary?.cause })
+    }
   })
   it("lockPathFor puts lock under store root .i-harness-locks", () => {
     expect(lockPathFor(root, "sess-x").startsWith(join(root, ".i-harness-locks"))).toBe(true)
