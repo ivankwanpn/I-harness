@@ -9,7 +9,7 @@ const [root, id, endpoint, cutArg, modeArg, nonce] = process.argv.slice(2)
 if (!root || !id || !endpoint || !cutArg || !modeArg || !nonce || !process.env.IH_CONFIG_DIR) throw new Error('Missing isolated crash fixture arguments')
 const cut = cutArg as Cut, mode = modeArg as 'normal' | 'code'
 process.on('message', () => {}) // IPC owns liveness while the original operation parks.
-const send = (value: object) => new Promise<void>((resolve, reject) => process.send!({ nonce, id, mode, cut, ...value }, error => error ? reject(error) : resolve()))
+const send = (value: object) => new Promise<void>((resolve, reject) => process.send!({ nonce, id, mode, cut, elapsedMs: performance.now(), ...value }, error => error ? reject(error) : resolve()))
 const park = () => new Promise<never>(() => {})
 const fault: FaultState = { armed: false, factories: 0, stages: 0, installs: 0, selectedInstalls: 0, selectedObservations: 0, installOutcomes: [], installThrows: [] }
 const core = await installStageProbe(fault)
@@ -28,7 +28,6 @@ globalThis.fetch = (async (url, init) => {
   if (String(url) !== endpoint + '/v1/chat/completions') throw new Error('Unexpected network destination')
   return nativeFetch(url, init)
 }) as typeof fetch
-const backend = createJsonlBackend(store), append = backend.appendOwnedBatch!.bind(backend), reconcile = backend.reconcileOwnedBatch!.bind(backend)
 let nested: { cellId: string; callId: string; parentCallId?: string } | undefined
 let selected: { batch: EncodedFactBatch; result: SessionEvent; outcome?: BackendFactOutcome } | undefined
 let issues = 0, receipts = 0, reconciles = 0, observed = 0
@@ -43,33 +42,39 @@ const announce = async (kind: string, extra: object = {}) => {
   await send({ kind, counters: count, fault, physical: physical.measured, issues, receipts, reconciles, observed, nested,
     key: selected.batch.key, frame: Buffer.from(selected.batch.bytes).toString('base64'), frameDigest: digest(selected.batch.bytes), result: selected.result, ref, operation, inventory, outcome: selected.outcome, moduleMappings, ...extra })
 }
-backend.reconcileOwnedBatch = async (...args) => {
-  if (selected?.batch.key.batchId === args[3].key.batchId) reconciles++
-  return reconcile(...args)
-}
-backend.appendOwnedBatch = async (...args) => {
-  const decoded = core.decodeFactBatch(args[3].bytes)
-  for (const event of decoded.events) if (event.type === 'code/call' && event.name === 'fixture_result') {
-    assert.equal(nested, undefined); nested = { cellId: event.cellId, callId: event.callId, parentCallId: event.parentCallId }
-  }
-  const result = selectedResult(decoded.events, mode, nested)
-  if (!result) return append(...args)
-  assert.equal(selected, undefined, 'exactly one original selected batch')
-  selected = { batch: args[3], result }
-  if (cut === 'before-issue') { await announce('cut'); return park() }
-  // Forward the original owner and prefix without reconstructing capabilities.
-  physical.arm(args[3], cut)
-  const outcome = await append(...args)
-  issues = physical.measured.writes; selected.outcome = outcome
-  if (outcome.kind === 'committed') receipts++
-  if (cut === 'partial-unknown' || cut === 'complete-unknown') {
-    assert.equal(outcome.kind, 'unknown'); assert.deepEqual('key' in outcome && outcome.key, args[3].key)
-    await announce('cut'); return park() // DO NOT forward unknown into passive source drain.
-  }
-  assert.equal(outcome.kind, 'committed')
-  if (cut === 'receipt-withheld') { await announce('cut'); return park() }
-  return outcome
-}
+const backend = createJsonlBackend(store, {
+  wrapOwnedReconcile: reconcile => async (...args) => {
+    if (selected?.batch.key.batchId === args[3].key.batchId) reconciles++
+    return reconcile(...args)
+  },
+  wrapOwnedBatch: append => async (...args) => {
+    const decoded = core.decodeFactBatch(args[3].bytes)
+    for (const event of decoded.events) if (event.type === 'code/call' && event.name === 'fixture_result') {
+      assert.equal(nested, undefined)
+      nested = { cellId: event.cellId, callId: event.callId, parentCallId: event.parentCallId }
+    }
+    const result = selectedResult(decoded.events, mode, nested)
+    if (!result) return append(...args)
+    assert.equal(selected, undefined, 'exactly one original selected batch')
+    selected = { batch: args[3], result }
+    if (cut === 'before-issue') { await announce('cut'); return park() }
+    // The native fault observes the original owner, prefix and batch.
+    physical.arm(args[3], cut)
+    const outcome = await append(...args)
+    issues = physical.measured.writes
+    selected.outcome = outcome
+    if (outcome.kind === 'committed') receipts++
+    if (cut === 'partial-unknown' || cut === 'complete-unknown') {
+      assert.equal(outcome.kind, 'unknown')
+      assert.deepEqual('key' in outcome && outcome.key, args[3].key)
+      await announce('cut')
+      return park()
+    }
+    assert.equal(outcome.kind, 'committed')
+    if (cut === 'receipt-withheld') { await announce('cut'); return park() }
+    return outcome
+  },
+})
 const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
 await coordinator.create({ sessionId: id })
 const document = await coordinator.openManagedDocument(id)

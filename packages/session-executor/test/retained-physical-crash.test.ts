@@ -22,6 +22,7 @@ const repository = fileURLToPath(new URL('../../../', import.meta.url))
 const evidence = resolve(repository, '.tmp/context-r4a-physical-crash-20261021-implementation')
 interface Receipt {
   nonce: string; id: string; mode: Mode; cut: Cut; kind: string
+  elapsedMs: number
   counters: ReturnType<typeof counters>; fault: { factories: number; stages: number; installs: number; selectedInstalls: number; selectedObservations: number; installThrows: { sameOutcome: boolean; code?: string }[] }
   physical: { writes: number; writtenBytes: number; nativeSyncs: number; refusedRollbacks: number }
   issues: number; receipts: number; reconciles: number; observed: number; frame: string; frameDigest: string; key: BatchKey
@@ -71,7 +72,7 @@ async function launch(mode: Mode, cut: Cut) {
     child!.once('error', reject); child!.once('close', (code, signal) => { closed = true; resolve({ code, signal }); for (const notify of waiters) notify() })
   })
   async function message(kind: string) {
-    const deadline = Date.now() + 20000
+    const deadline = Date.now() + 30000
     while (true) {
       const found = messages.find(message => message.kind === kind)
       if (found) return found
@@ -99,18 +100,36 @@ it.each(['normal', 'code'] as const)('qualifies direct native mock+tsx and actua
     const receipt = await fixture.message('setup')
     expect(receipt.counters).toMatchObject({ bodies: 1, getters: 1, hooks: 1, assemblies: 1, guestFulfilled: mode === 'code' ? 1 : 0 })
     expect(receipt).toMatchObject({ receipts: 1, reconciles: 0, observed: 1 })
-    expect(receipt.operation.operations).toBe(mode === 'code' ? 2 : 1)
+    expect(receipt.operation.operations).toBe(mode === 'code' ? 3 : 1)
     if (mode === 'code') {
-      const emitted = Object.entries(receipt.inventory.files).filter(([path]) => path.endsWith('/operation.json') && !path.includes('/' + receipt.ref.id + '/'))
+      const outputs = Object.entries(receipt.inventory.files)
+        .filter(([path]) => path.endsWith('/operation.json') && !path.includes('/' + receipt.ref.id + '/'))
+        .map(([path, file]) => ({ path, operation: JSON.parse(file.text!) as Receipt['operation']['selected']['operation'] }))
+      const emitted = outputs.filter(output => output.operation.ref.codec === 'json-utf8-v1')
+      const manifests = outputs.filter(output => output.operation.ref.codec === 'code-output-manifest-v1')
       expect(emitted).toHaveLength(1)
-      expect(JSON.parse(emitted[0]![1].text!)).toMatchObject({ phase: 'committed', owner: { sessionId: fixture.id, callId: receipt.nested!.cellId },
+      expect(manifests).toHaveLength(1)
+      expect(emitted[0]!.operation).toMatchObject({ phase: 'committed', owner: { sessionId: fixture.id, callId: receipt.nested!.cellId },
         ref: { encodedBytes: 17, contentDigest: digest(Buffer.from('"guest-fulfilled"')), codec: 'json-utf8-v1', completeness: 'complete' } })
+      const manifest = manifests[0]!
+      expect(manifest.operation).toMatchObject({ phase: 'committed', owner: { sessionId: fixture.id, callId: receipt.nested!.cellId },
+        ref: { codec: 'code-output-manifest-v1', completeness: 'complete' } })
+      const body = await readFile(join(receipt.inventory.location.serviceRoot, manifest.path.replace(/operation\.json$/, 'body')))
+      expect(body.length).toBe(manifest.operation.ref.encodedBytes)
+      expect(digest(body)).toBe(manifest.operation.ref.contentDigest)
+      const records = body.toString('utf8').trimEnd().split('\n').map(line => JSON.parse(line))
+      expect(records).toHaveLength(3)
+      expect(records[0]).toEqual({ version: 1, kind: 'code-output', sessionId: fixture.id,
+        cellId: receipt.nested!.cellId, sourceId: manifest.operation.owner.operationId })
+      expect(records[1]).toMatchObject({ kind: 'output', ordinal: 0,
+        item: { kind: 'text', retention: { kind: 'artifact', ref: emitted[0]!.operation.ref } } })
+      expect(records[2]).toMatchObject({ kind: 'seal', status: 'completed', count: 1, accepted: 1, omitted: 0, truncated: false })
     }
     await fixture.message('closed'); expect(await fixture.close).toEqual({ code: 0, signal: null })
     expect(fixture.requests).toBe(2); expect(fixture.unexpected).toEqual([])
     expect((await readFile(join(fixture.root, 'effects.jsonl'), 'utf8')).trim().split('\n')).toHaveLength(1)
   } finally { await fixture.cleanup() }
-}, 30000)
+}, 60000)
 
 function journal(bytes: Buffer) {
   const headerBytes = bytes.indexOf(10) + 1
@@ -276,4 +295,4 @@ it.each(cases)('hard-kills actual $mode producer at $cut and recovers only origi
     spy?.mockRestore(); syncBuiltinESMExports(); globalThis.fetch = nativeFetch
     try { await service?.close(); await coordinator?.close() } finally { await fixture.cleanup() }
   }
-}, 30000)
+}, 60000)

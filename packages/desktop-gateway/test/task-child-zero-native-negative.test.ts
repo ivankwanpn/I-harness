@@ -1,9 +1,29 @@
 import {acquireSelectedMetadata} from '../../context-output/src/service.ts'
 const nativeCount=vi.hoisted(()=>({active:false,opens:0,changed:false}))
-vi.mock('../../fs-lock/src/artifact-path.ts',async()=>{
- const {createWin32ArtifactPathOwnerWithApi}=await import('../../fs-lock/src/win32-artifact-path.ts')
- const {win32ArtifactApi}=await import('../../fs-lock/src/win32-artifact-api.ts')
- return {createArtifactPathOwner(root:string){const actual=win32ArtifactApi();return createWin32ArtifactPathOwnerWithApi(root,{...actual,createFileW(...args){if(nativeCount.active)nativeCount.opens++;return Reflect.apply(actual.createFileW,actual,args)},getFileInformationByHandleEx(...args){const result=Reflect.apply(actual.getFileInformationByHandleEx,actual,args);if(nativeCount.changed&&result&&args[1]===18)args[2].writeBigUInt64LE(args[2].readBigUInt64LE(0)^1n,0);return result}})}}
+vi.mock('../../fs-lock/src/artifact-path.ts', async importOriginal => {
+  const original = await importOriginal<typeof import('../../fs-lock/src/artifact-path.ts')>()
+  const { createWin32ArtifactPathOwnerWithApi } = await import('../../fs-lock/src/win32-artifact-path.ts')
+  const { win32ArtifactApi } = await import('../../fs-lock/src/win32-artifact-api.ts')
+  return {
+    ...original,
+    createArtifactPathOwner(root: string) {
+      const actual = win32ArtifactApi()
+      return createWin32ArtifactPathOwnerWithApi(root, {
+        ...actual,
+        createFileW(...args) {
+          if (nativeCount.active) nativeCount.opens++
+          return Reflect.apply(actual.createFileW, actual, args)
+        },
+        getFileInformationByHandleEx(...args) {
+          const result = Reflect.apply(actual.getFileInformationByHandleEx, actual, args)
+          if (nativeCount.changed && result && args[1] === 18) {
+            args[2].writeBigUInt64LE(args[2].readBigUInt64LE(0) ^ 1n, 0)
+          }
+          return result
+        },
+      })
+    },
+  }
 })
 import * as executorApi from '@i-harness/session-executor'
 import {createContextOutputService} from '@i-harness/context-output'
@@ -30,7 +50,7 @@ import {createTaskResultRetention} from '../../session-executor/src/lifecycle/ta
 import {createLoopbackProvider} from '../../core-agent/test/helpers/provider-loopback.ts'
 import {createOpenAICompatibleClient} from '../../llm-openai-compatible/src/index.ts'
 
-describe.each(['all'] as const)('original zero-source controlled native identity mismatch %s',selection=>{
+describe.skipIf(process.platform !== 'win32').each(['all'] as const)('original zero-source controlled native identity mismatch %s',selection=>{
  let rCount=0,measured=-1,measuredAfter=-1,firstOpens=0,secondOpens=0,nativeDenied=false,cleanupFailure:unknown,runFailure:{cause:unknown}|undefined;const stop=Object.freeze({kind:'count-stop'})
  let root:string,coordinator:ReturnType<typeof createJsonlTaskTransitionCoordinator>,broker:ReturnType<typeof createProjectScopeBroker>,server:Awaited<ReturnType<typeof createLoopbackProvider>>,runtime:Awaited<ReturnType<typeof createNativeContextRuntime>>,mounted:ReturnType<typeof registerSubagent>|undefined,model:ReturnType<typeof createOpenAICompatibleClient>,first:string,spawnOverride:{mockRestore():void}
  async function spawn(parentId:string,forkTurns:'none'|'all'|number){

@@ -46,9 +46,10 @@ import { createMockClient, type MockStep } from "@i-harness/llm-mock"
 import { observeModelClient, type LLMRequest, type ModelClient } from "@i-harness/llm-seam"
 import { createSessionCoordinator, type SessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { serializeHeader } from '../../session-persistence-jsonl/src/format.ts'
 import {
   createAfterScheduleRecord,
   createEveryScheduleRecord,
@@ -68,26 +69,31 @@ interface BatchCoordinator extends SessionCoordinator {
   unknownKey?:BatchKey
 }
 
-/** The coordinator double from assembly.test.ts's `memoryCoordinator`, extended
- * to record the WRITE-BEHIND boundary the §3.4 atomicity claim is about:
- * `enqueue` parks events, `flush` commits them as one batch (what the jsonl
- * backend writes in one write+sync), `append` commits directly.
- * `failFirstFlush` adds the real write-behind's FAILURE RETENTION: the first
- * flush rejects but KEEPS its queue (`pending = batch.concat(pending)`,
- * write-behind.ts:127-131), so the NEXT flush retries that same batch. */
+/** Record committed native batches. The fault withholds the original ACK
+ * after the first schedule dispatch has actually reached durable storage. */
 async function batchCoordinator(failFirstFlush = false): Promise<BatchCoordinator> {
   const written: SessionEventView[] = []
   const batches: SessionEventView[][] = []
-  const root=await mkdtemp(join(tmpdir(),'ih-f1-schedule-')),backend=createJsonlBackend(root)
-  const coordinator=Object.assign(createSessionCoordinator(backend,{lock:{enabled:true}}),{written,batches}) as BatchCoordinator
-  const actual=backend.appendOwnedBatch!
-  let failed=false
-  backend.appendOwnedBatch=async(...args)=>{
-    const events=decodeFactBatch(args[3].bytes).events,outcome=await actual(...args)
-    if(outcome.kind==='committed'){written.push(...events);batches.push([...events])}
-    if(failFirstFlush&&!failed&&events.some(event=>event.type==='schedule/change'&&event.operation==='dispatch')){failed=true;coordinator.unknownKey=args[3].key;return{kind:'unknown',key:args[3].key}}
-    return outcome
-  }
+  const root = await mkdtemp(join(tmpdir(), 'ih-f1-schedule-'))
+  let failed = false
+  const backend = createJsonlBackend(root, {
+    wrapOwnedBatch: append => async (...args) => {
+      const events = decodeFactBatch(args[3].bytes).events
+      const outcome = await append(...args)
+      if (outcome.kind === 'committed') {
+        written.push(...events)
+        batches.push([...events])
+      }
+      if (failFirstFlush && !failed && events.some(event => event.type === 'schedule/change' && event.operation === 'dispatch')) {
+        expect(outcome.kind).toBe('committed')
+        failed = true
+        coordinator.unknownKey = args[3].key
+        return { kind: 'unknown', key: args[3].key }
+      }
+      return outcome
+    },
+  })
+  const coordinator = Object.assign(createSessionCoordinator(backend, { lock: { enabled: true } }), { written, batches }) as BatchCoordinator
   return coordinator
 }
 
@@ -140,6 +146,15 @@ interface HostFixture {
   runTurn(text?: string): Promise<void>
 }
 
+async function closeHost(host: { assembly?: SessionAssembly; coordinator: SessionCoordinator }): Promise<void> {
+  const failures: unknown[] = []
+  for (const close of [() => host.assembly?.dispose(), () => host.coordinator.close()]) {
+    try { await close() }
+    catch (cause) { failures.push(cause) }
+  }
+  if (failures.length) throw new AggregateError(failures, 'Schedule fixture cleanup failed')
+}
+
 /** One mounted host: session (mirrored into the coordinator double the way the
  * real host mirrors — `createSession(ev => coordinator.enqueue(...))` PLUS the
  * mirror's own `turn/end` flush, which is the shape `createSessionAssembly`
@@ -151,28 +166,53 @@ async function mountHost(opts: {
   failFirstFlush?: boolean
 } = {}): Promise<HostFixture> {
   const coordinator = await batchCoordinator(opts.failFirstFlush ?? false)
-  const seed=createSession();opts.seed?.(seed)
-  await coordinator.create({sessionId:SESSION_ID,...seed.header})
-  if(seed.events.length){await coordinator.append(SESSION_ID,seed.events);const events=(await coordinator.snapshot!(SESSION_ID)).session.events;coordinator.written.push(...events);coordinator.batches.push([...events])}
-  const session=(await coordinator.openManagedDocument(SESSION_ID)).view
-  const model = scriptedModel(opts.script ?? twoStepScript())
-  const assembly = await createSessionAssembly({ modelPolicy: "test-mock",
-    workspace: process.cwd(),
-    sessionId: SESSION_ID,
-    session,
-    coordinator,
-    model,
-  })
-  const executor = createSessionExecutor({ session, agent: assembly.agent, inbox: assembly.inbox })
-  return {
-    assembly,
-    session,
-    coordinator,
-    model,
-    runTurn: async (text = "hello") => {
-      executor.submit({ tier: "send", text })
-      await executor.drain()
-    },
+  let assembly: SessionAssembly | undefined
+  try {
+    const seed=createSession();opts.seed?.(seed)
+    const inheritedCount = seed.header?.seedLength
+    if (inheritedCount !== undefined) {
+      // Historical forks contain their complete raw prefix before a current
+      // coordinator opens and upgrades the journal.
+      const header = serializeHeader({ ...seed.header, sessionId: SESSION_ID, formatVersion: 5, createdAt: new Date().toISOString() })
+      const rows = [header, ...seed.events.map(event => JSON.stringify(event))]
+      await writeFile(join(coordinator.storageRoot!, SESSION_ID + '.jsonl'), rows.join('\n') + '\n')
+    } else {
+      await coordinator.create({ sessionId: SESSION_ID, ...seed.header })
+      if (seed.events.length) await coordinator.append(SESSION_ID, seed.events)
+    }
+    if (seed.events.length) {
+      const events = (await coordinator.snapshot!(SESSION_ID)).session.events
+      coordinator.written.push(...events)
+      coordinator.batches.push([...events])
+    }
+    const session=(await coordinator.openManagedDocument(SESSION_ID)).view
+    if (inheritedCount !== undefined) {
+      expect(session.header?.seedLength).toBe(inheritedCount)
+      expect(session.events.slice(0, inheritedCount)).toEqual(seed.events.slice(0, inheritedCount))
+    }
+    const model = scriptedModel(opts.script ?? twoStepScript())
+    assembly = await createSessionAssembly({ modelPolicy: "test-mock",
+      workspace: process.cwd(),
+      sessionId: SESSION_ID,
+      session,
+      coordinator,
+      model,
+    })
+    const executor = createSessionExecutor({ session, agent: assembly.agent, inbox: assembly.inbox })
+    return {
+      assembly,
+      session,
+      coordinator,
+      model,
+      runTurn: async (text = "hello") => {
+        executor.submit({ tier: "send", text })
+        await executor.drain()
+      },
+    }
+  } catch (cause) {
+    try { await closeHost({ assembly, coordinator }) }
+    catch (cleanup) { throw new AggregateError([cause, cleanup], 'Schedule fixture setup and cleanup failed') }
+    throw cause
   }
 }
 
@@ -219,7 +259,7 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
     const record = overdueOneShot()
     const host = await mountHost({ seed: (session) => seedCreate(session, record) })
     const childCtx = host.assembly.ctx.scope.mount()
-    await host.coordinator.create({ sessionId: "sched-child", parentSession: SESSION_ID, origin: "subagent" })
+    await host.coordinator.create({ sessionId: "sched-child", parentSession: SESSION_ID, origin: "subagent", seedLength: 0 })
     const child = (await host.coordinator.openManagedDocument("sched-child")).view
     let signalReads = 0
     const payload = {
@@ -271,8 +311,7 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
     } finally {
       actionProbe.mockRestore()
       childCtx.scope.unmount()
-      await host.assembly.dispose()
-      await host.coordinator.close()
+      await closeHost(host)
     }
   }, 30_000)
 
@@ -342,7 +381,7 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
         synthetic: { description: "Scheduled reminder", scope: "turn" },
       })
     } finally {
-      await host.assembly.dispose()
+      await closeHost(host)
     }
   }, 30_000)
 
@@ -372,7 +411,7 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
       expect(host.coordinator.written.filter(isScheduleAdmission)).toHaveLength(1)
     } finally {
       warn.mockRestore()
-      await host.assembly.dispose()
+      await closeHost(host)
     }
   }, 30_000)
 
@@ -402,11 +441,11 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
       expect(claimed[0]).toMatchObject({ input: { synthetic: { display: { kind: "schedule", title: "Scheduled reminder: schedule-1", body: "check the build" } } } })
       expect(requestMessagesCarrying(host.model.requests[1]!, REMINDER)).toHaveLength(1)
     } finally {
-      await host.assembly.dispose()
+      await closeHost(host)
     }
   }, 30_000)
 
-  it("a forked session does not dispatch its inherited prefix (§5): events() slices at header.seedLength", async () => {
+  it("a legacy fork does not dispatch its inherited prefix (§5): events() slices at header.seedLength", async () => {
     const inherited = overdueOneShot()
     const host = await mountHost({
       seed: (session) => {
@@ -424,7 +463,7 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
       expect(host.coordinator.batches.some((b) => b.some(isScheduleDispatch))).toBe(false)
       expect(reminderMessages(host.session)).toHaveLength(0)
     } finally {
-      await host.assembly.dispose()
+      await closeHost(host)
     }
   }, 30_000)
 
@@ -442,8 +481,7 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
       expect(host.session.events.filter(isScheduleAdmission)).toMatchObject([{ inputId: `schedule-owned@${owned.scheduledAt}` }])
       expect(foldScheduleEvents(host.session.events).active.map(record => record.id)).toEqual(["schedule-inherited"])
     } finally {
-      await host.assembly.dispose()
-      await host.coordinator.close()
+      await closeHost(host)
     }
   }, 30_000)
 
@@ -461,8 +499,7 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
       expect(host.session.events.filter(isScheduleDispatch)).toMatchObject([{ id: "schedule-accepted" }])
       expect(foldScheduleEvents(host.session.events).active.map(record => record.id)).toEqual(["schedule-remainder"])
     } finally {
-      await host.assembly.dispose()
-      await host.coordinator.close()
+      await closeHost(host)
     }
 
     const coordinator = createSessionCoordinator(createJsonlBackend(host.coordinator.storageRoot!), { lock: { enabled: true } })
@@ -485,8 +522,7 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
       expect(requestMessagesCarrying(model.requests[0]!, REMINDER)).toHaveLength(1)
       expect(requestMessagesCarrying(model.requests[1]!, REMINDER)).toHaveLength(2)
     } finally {
-      await assembly.dispose()
-      await coordinator.close()
+      await closeHost({ assembly, coordinator })
     }
   }, 30_000)
 
@@ -544,42 +580,33 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
         expect(Date.parse(foldedRecord.scheduledAt)).toBeGreaterThan(before)
       }
     } finally {
-      await host.assembly.dispose()
+      await closeHost(host)
     }
   }, 30_000)
 
   it("restart re-drive is free: a fresh assembly over the same written log does not deliver again (the fold consumed the dispatch)", async () => {
-    // Phase 1 — a delivered log, case 1's shape.
     const record = overdueOneShot()
     const delivered = await mountHost({ seed: (session) => seedCreate(session, record) })
-    let written: SessionEventView[]
+    let resumedAssembly: SessionAssembly | undefined
     try {
       await delivered.runTurn("hello")
-      written = [...delivered.coordinator.written]
-    } finally {
+      const written = [...delivered.coordinator.written]
+      expect(written.filter(isScheduleDispatch)).toHaveLength(1)
+      expect(written.filter(isScheduleAdmission)).toHaveLength(1)
       await delivered.assembly.dispose()
-    }
-    expect(written.filter(isScheduleDispatch)).toHaveLength(1)
-    expect(written.filter(isScheduleAdmission)).toHaveLength(1)
-
-    // Reopen the same actual journal after the first writer has closed.
-    // Operational pairs remain atomic and retain their original spent history.
-    const resumedModel = scriptedModel([{ role: 'assistant', text: 'ok' }])
-    const resumedAssembly = await createSessionAssembly({ workspace: process.cwd(), coordinator: delivered.coordinator, sessionId: SESSION_ID, model: resumedModel, modelPolicy: 'test-mock' })
-    const resumedExecutor = createSessionExecutor({ session: resumedAssembly.session, agent: resumedAssembly.agent, inbox: resumedAssembly.inbox })
-    const host: HostFixture = { assembly: resumedAssembly, session: resumedAssembly.session, coordinator: delivered.coordinator, model: resumedModel, async runTurn(text = 'hello') { resumedExecutor.submit({ tier: 'send', text }); await resumedExecutor.drain() } }
-    try {
-      await host.runTurn("continue")
-      // The tick found nothing due: dispatch, admission and reminder counts are
-      // exactly the seeded ones. A driver that re-fired would append a second
-      // dispatch for an inactive id — and the fold would then throw on the NEXT
-      // tick (the daily double-delivery bug the in-flight guard exists for).
-      expect(host.session.events.filter(isScheduleDispatch)).toHaveLength(1)
-      expect(host.session.events.filter(isScheduleAdmission)).toHaveLength(1)
-      expect(host.coordinator.batches.flat().filter(isScheduleDispatch)).toHaveLength(1)
-      expect(reminderMessages(host.session)).toHaveLength(1) // only the seeded one
+      // Reattach through the same coordinator after the first assembly settles.
+      const resumedModel = scriptedModel([{ role: 'assistant', text: 'ok' }])
+      resumedAssembly = await createSessionAssembly({ workspace: process.cwd(), coordinator: delivered.coordinator,
+        sessionId: SESSION_ID, model: resumedModel, modelPolicy: 'test-mock' })
+      const resumedExecutor = createSessionExecutor({ session: resumedAssembly.session, agent: resumedAssembly.agent, inbox: resumedAssembly.inbox })
+      resumedExecutor.submit({ tier: 'send', text: 'continue' })
+      await resumedExecutor.drain()
+      expect(resumedAssembly.session.events.filter(isScheduleDispatch)).toHaveLength(1)
+      expect(resumedAssembly.session.events.filter(isScheduleAdmission)).toHaveLength(1)
+      expect(delivered.coordinator.batches.flat().filter(isScheduleDispatch)).toHaveLength(1)
+      expect(reminderMessages(resumedAssembly.session)).toHaveLength(1)
     } finally {
-      await host.assembly.dispose()
+      await closeHost({ assembly: resumedAssembly ?? delivered.assembly, coordinator: delivered.coordinator })
     }
   }, 30_000)
 })

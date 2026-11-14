@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
-import { subscribe, type FactOutcome } from '@i-harness/core-session'
+import { decodeFactBatch, subscribe, type FactOutcome } from '@i-harness/core-session'
 import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
@@ -15,25 +15,36 @@ it.each([
   { cold: true, before: true, controller: false }, { cold: true, before: false, controller: false },
   { cold: false, before: true, controller: true }, { cold: true, before: true, controller: true },
 ])('settles cancellation losing to an issued promotion (cold=$cold, close-before-install=$before, caller-stop=$controller)', async ({ cold, before, controller }) => {
-  const root = await mkdtemp(join(tmpdir(), 'received-close-')), backend = createJsonlBackend(join(root, 'sessions'))
+  const root = await mkdtemp(join(tmpdir(), 'received-close-'))
+  const input = { inputId: 'parent-notify-controlled', text: 'Trusted system observation', intent: 'system' as const, delivery: 'steer' as const, provenance: { kind: 'child-report' as const, authority: 'observation' as const, scope: 'turn' as const, producer: 'session.notification' } }
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const captured = Promise.withResolvers<void>()
+  const outcomes: FactOutcome[] = []
+  let promotions = 0, captures = 0
+  const backend = createJsonlBackend(join(root, 'sessions'), {
+    wrapOwnedBatch: append => async (...args) => {
+      const promotion = decodeFactBatch(args[3].bytes).events.some(event =>
+        event.type === 'agent/input/promoted' && event.inputId === input.inputId)
+      const outcome = await append(...args)
+      if (promotion) {
+        expect(outcome.kind).toBe('committed')
+        promotions++
+        entered.resolve()
+        await release.promise
+      }
+      return outcome
+    },
+  })
   let coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   await coordinator.create({ sessionId: 'parent' })
-  const input = { inputId: 'parent-notify-controlled', text: 'Trusted system observation', intent: 'system' as const, delivery: 'steer' as const, provenance: { kind: 'child-report' as const, authority: 'observation' as const, scope: 'turn' as const, producer: 'session.notification' } }
   if (cold) {
     const first = await coordinator.openManagedDocument('parent')
     await receivedInputsFor(first).inbox.admit(input)
     await coordinator.close()
     coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   }
-  const document = await coordinator.openManagedDocument('parent'), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), captured = Promise.withResolvers<void>()
-  const append = backend.appendOwnedBatch!.bind(backend), outcomes: FactOutcome[] = []
-  let promotions = 0, captures = 0
-  backend.appendOwnedBatch = async (...args) => {
-    const promotion = JSON.parse(Buffer.from(args[3].bytes).toString()).events.some((event: { type: string; inputId?: string }) => event.type === 'agent/input/promoted' && event.inputId === input.inputId)
-    const outcome = await append(...args)
-    if (promotion) { expect(outcome.kind).toBe('committed'); promotions++; entered.resolve(); await release.promise }
-    return outcome
-  }
+  const document = await coordinator.openManagedDocument('parent')
   const register = document.registerReceivedInputSource.bind(document)
   document.registerReceivedInputSource = drain => {
     const source = register(drain), capture = source.captureCancellation.bind(source)
