@@ -19,10 +19,15 @@ import type { BootstrapProjectIntent } from '../../../session-persistence/src/co
 
 export async function coldLegacyFixture(empty = false, project: BootstrapProjectIntent = { kind: 'unmanaged' }) {
   const root = await mkdtemp(join(process.env.IH_LEGACY_FORK_EVIDENCE_ROOT!, 'cold-legacy-')), sourceId = 'current-target-policy'
-  const service = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true } })
-  const ref = await service.capture({ sessionId: 'source', callId: 'legacy', label: 'legacy', text: 'original legacy bytes', complete: true, source: { sourceId } })
+  const producer = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true } })
+  let ref: Awaited<ReturnType<typeof producer.capture>>
+  try {
+    ref = await producer.capture({ sessionId: 'source', callId: 'legacy', label: 'legacy', text: 'original legacy bytes', complete: true, source: { sourceId } })
+    if (ref) await producer.grant({ sessionId: 'source' }, [ref.id], 'target')
+  } finally {
+    await producer.close()
+  }
   if (!ref) throw Error('Original capture unavailable')
-  await service.grant({ sessionId: 'source' }, [ref.id], 'target')
   const row = codecRow(); row.protocol = 'legacy'; delete row.use; row.ref = ref; row.original = { kind: 'local', sessionId: 'source', seq: 4, event: 'context/result-ref', slot: 'ref' }
   const exported = codecSeed('public-completed', empty ? [] : [codecPage([row])])
   exported.seed.groups = [{ extent: { kind: 'framed', first: 1, last: 1 }, items: [{ kind: 'summary', scope: 'turn', extent: { kind: 'framed', first: 1, last: 1 }, origins: [{ origin: 0, seq: 1, part: 'message' }], sourceProvenance: [{ origin: 0, kind: 'summary', authority: 'derived', scope: 'turn' }], messages: [{ role: 'user', content: 'summary' }] }] }]
@@ -46,5 +51,6 @@ export async function coldLegacyFixture(empty = false, project: BootstrapProject
   for (const [name, value] of Object.entries({ 'binding.json': { version: 2, kind: 'legacy-fork-binding', binding }, 'plan.json': plan, 'applied.json': appliedFor(plan) })) await writeFile(join(directory, name), JSON.stringify(canonicalRecord(value)))
   await fundSlots(store.directory, join(directory, 'revoke'), revokedTuple(plan), 10_000_000, () => {})
   await fundSlots(store.directory, expiryBase(store.directory, commitment(ref)), expiredTuple('w', commitment(ref)), 10_000_000, () => {})
+  const service = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true } })
   return { root, sourceId, service, coordinator, route, ref, directory, async close() { await coordinator.close(); await service.close() } }
 }

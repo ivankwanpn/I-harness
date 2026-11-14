@@ -71,6 +71,8 @@ it('keeps a genuine newly registered transfer scope through first resume drift w
 it('allows a fresh cold acquisition after resume drift but revokes historical proofs and pending owners on real clear', async () => {
   const f = await coldLegacyFixture()
   try {
+    // Establish this store's original idle witness before the remote mutation.
+    expect((await f.service.read({ sessionId: 'source' }, { refId: f.ref.id })).text).toBe('original legacy bytes')
     const target = await inspectColdSelectedTarget(f.coordinator, f.route)
     if (target.kind !== 'qualification-required') throw Error('Cold fixture unavailable')
     let first!: ReturnType<typeof acquireColdSelectedQualification>, second!: typeof first
