@@ -6,7 +6,13 @@
 
 ### 目前整體進度
 
-截至 `675282ad`，本報告記錄 118 項具體問題與 S1 至 S7 的結構調整。Team 執行功能已移除，Code Mode 保留獨立 package 與 QuickJS／Worker 架構。第 102 至 114 項的已確認根因均已提交對應修正並完成定向驗證，實機使用 DeepSeek Flash 的 Code 執行、背景等待、草稿清除及冷重啟亦已通過，後續真實父子任務及其關閉、冷讀取也已驗證。測試品質修訂前三批完成 65 項控制，第四批冷讀取 fixture 及其依賴回歸完成 119 項。後續確認第 118 項閒置清理恢復缺口，修正後 251 項相關控制及五個 package 型別通過。整體工程完成度估計約 80%，剩餘工作包含完整回歸失敗、效能問題、最終問題狀態及交付核對。各輪控制的範圍有重疊，完整穩定性驗收仍未完成。
+目前本報告記錄 119 項具體問題與 S1 至 S7 的結構調整。Team 執行功能已移除，Code Mode 保留獨立 package 與 QuickJS／Worker 架構。第 102 至 114 項的已確認根因均已提交對應修正並完成定向驗證，實機使用 DeepSeek Flash 的 Code 執行、背景等待、草稿清除及冷重啟亦已通過，後續真實父子任務及其關閉、冷讀取也已驗證。測試品質修訂前三批完成 65 項控制，第四批冷讀取 fixture 及其依賴回歸完成 119 項。後續確認第 118 項閒置清理恢復缺口，修正後 251 項相關控制及五個 package 型別通過。整體工程完成度估計約 80%，剩餘工作包含完整回歸失敗、效能問題、最終問題狀態及交付核對。各輪控制的範圍有重疊，完整穩定性驗收仍未完成。
+
+測試修訂第五批已提交為 `9ce120ac`。九個發布故障點分開執行並斷言實際注入次數，索引案例核對原生 SQLite 修復及 canonical 內容，三檔合計 76 項通過。只調整實測超過原有預設的個別案例期限。後續 legacy 功能檔案的 19 個原五秒案例依量測給予 20 秒，10,001 筆案例獨立成檔並保留原五分鐘期限，完整案例內容及原生退休計數斷言保持原樣。[76 項驗證](C:/Users/IvanKwan/AppData/Local/Temp/ih-bootstrap-index-receipt.json)
+
+第 119 項撤銷槽部分寫入的恢復修正，完整功能檔案 47 項通過，一項 Windows 原生 file symlink 權限略過。相關八檔另有 181 項通過、兩項相同環境條件略過及兩項 funding 失敗，Context 型別通過。失敗的 d31 案例超過 120 秒後仍繼續執行，隨後 d1 的共享 I/O 觀察被污染，這兩項繼續列為待處理。[修正與完整驗證紀錄](C:/Users/IvanKwan/AppData/Local/Temp/ih-torn-revocation-receipt.json)
+
+固定 `b58d7b5b` 的 ContextOutput 部分回歸曾得到 628 項通過、55 項失敗、十項略過及零未處理錯誤，範圍排除了 101／1,001 distinct-reference 的大型檔案。這輪結果與後續定向修正各自保留，尚未取得最新全庫驗收結果。[部分回歸紀錄](C:/Users/IvanKwan/AppData/Local/Temp/ih-context-post-idle-b58d7b5b/context.log)
 
 固定 `21f8d861` 的七階段全庫驗證於 2026-11-14 完成，耗時 3 小時 57 分 14 秒。82 個測試 package 全部回報，16,001 項通過、434 項失敗、86 項略過，另有九個未處理錯誤。全庫型別、十個 E2E 檔案、374 項 reachability、package boundaries 及 compiled Gateway／Windows ACL 通過。5,834 個來源檔案的清單、雜湊及 HEAD 在前後核對相同。執行期間 dev 已關閉，沒有其它測試或編譯工作重疊，17 項真實 predecessor fixture 已啟用。完整驗收仍未通過。[本輪完整清單](C:/Users/IvanKwan/AppData/Local/Temp/ih-verify-all-21f8d861/inventory.json) [來源及執行核對](C:/Users/IvanKwan/AppData/Local/Temp/ih-verify-all-21f8d861/metadata.json)
 
@@ -177,6 +183,7 @@ Git 實際取得的 HTTPS 認證經 GitHub `/user` 核對為 `ivankwanpn`，帳�
 | 116 | Code 崩潰控制仍假設只有工具結果及文字輸出兩份 artifact | 正式流程另外保存 code-output-manifest，舊斷言在正確完成的結果上失敗。`614680d2` 核對三份實際保存，並驗證 manifest 的 owner、位元組數、摘要、原 cell、輸出 reference 及 completed seal。完整 12 項原生崩潰／恢復控制通過 |
 | 117 | 跨程序測試的期限及 fixture 資源責任與實際工作量不一致 | 已走通的 Code 崩潰／冷讀案例實測 30.035 及 34.326 秒，原 30 秒期限提前結束案例。`614680d2` 將此檔案調為 60 秒、子程序 receipt 期限由 20 秒調為 30 秒，記錄原始程序時序。排程 fixture 明確等待 assembly 與 coordinator 清理，setup 失敗亦嘗試原始資源清理。第一個普通 setup 曾在零 provider request 下用完 20 秒，其延遲成因仍未定位，後續完整控制通過 |
 | 118 | 閒置清理失敗後，查詢與清理重試無法恢復原有服務 | acquireLifetime 正確拒絕尚未完成的 retirement，但服務的新使用入口沒有先重試原始清理。`675282ad` 在既有 exclusive gate 內先等待相同 quiesce，再取得使用權，涵蓋查詢、變更、設定、passive continuation 及撤銷／刪除入口。兩項原生控制在舊版本失敗，修正後通過，確認舊 lease 已釋放才取得下一個 lease。已消耗但 ACK 未知的 close 仍回傳原始 falsey cause，close／acquire 次數各維持一次。251 項回歸及五個 package 型別通過 |
+| 119 | 撤銷槽部分寫入後，正常 clear 在恢復入口被擋住 | 原始 terminalSlots 支援在明確清理授權下完成未寫完的 inactive 槽，但 inventory 先要求完整 live／terminal，導致正常 clear 無法到達恢復步驟。共用原始槽驗證，核對 active 完整 tuple、精確容量及 inactive 原生檔案條件後才允許清理盤點。被動讀取仍要求有效的完整狀態，原始檔案清理債務必須先結清。四項新增控制核對 active 內容／大小、inactive 大小及外部 hardlink 均拒絕，canonical bytes 保持原狀。功能檔案 47 項通過，相關八檔 181 項通過、兩項既有 funding 失敗待處理，Context 型別通過 |
 
 ### 程式定位
 
@@ -280,6 +287,8 @@ Task owner 替換先等待舊 owner 的原始來源與清理，再消費新的�
 原始 native owner 在同一同步區段重用已確認的祖先路徑檢查，完成所有 leaf 採樣後再重新確認祖先，外部 callback 及跨 await 的邊界仍重新驗證。capture quota 的資格綁定同一 turn、lease 與 index handle，發布前再核對實際 inventory，降低逐筆 capture 的重複盤點。[native capture](D:/codex-ih-development/packages/fs-lock/src/win32-artifact-path.ts) [quota inventory](D:/codex-ih-development/packages/context-output/src/artifact/quota.ts)
 
 完整量測已跑通 101 及 1,001 個實際 references，保留每個案例原有的 30 分鐘期限。101-ref 的 owner 時間由先前 223.2 秒降為 142.3 秒，約下降 36%。1,001-ref 的 setup 為 211.9 秒、owner 為 1,486.8 秒，整個案例為 1,699.3 秒，即 28 分 19 秒。參考數增加約 9.91 倍，owner 時間增加約 10.45 倍。fixture 的批次準備縮短另列於 setup，量測中的 owner 仍執行實際 native 寫入。外部程序路徑替換、權限撤銷及 crash recovery 控制持續保留。[scale test](D:/codex-ih-development/packages/context-output/test/legacy-fork-scale.test.ts) [完整量測](C:/Users/IvanKwan/AppData/Local/Temp/ih-legacy-scale-bounded-grants-final.log)
+
+2026-11-14 的獨立 10,001 筆 observation 案例仍超過原五分鐘期限。改用原始 currentness 組合的 fixture 實驗也超時，該實驗已還原。另用 60 秒診斷記錄 CPU profile，fixture 準備約 13 秒後進入 transfer，主要成本包含逐筆資格檢查及原生 Windows 路徑確認。診斷期限只用於取樣，原正式測試仍為 300 秒。此項及最新 funding 的跨案例污染仍未收尾。[五分鐘結果](C:/Users/IvanKwan/AppData/Local/Temp/ih-legacy-observation-scale-original-guards.log) [診斷時序](C:/Users/IvanKwan/AppData/Local/Temp/ih-scale-hotspots.log)
 
 #### S7 CLI 跨程序 settings section 更新
 

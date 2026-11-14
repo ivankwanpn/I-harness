@@ -135,15 +135,25 @@ export async function readSlots(directory: string, base: string, tuple: Terminal
     return terminal.every(byte => byte === 0) ? 'live' : 'unknown'
   } catch { return 'unknown' }
 }
+/** Inspect the original funded allocation before deterministic terminal recovery. */
+export async function assertTerminalSlotIdentity(directory: string, base: string, tuple: Terminal, guard: () => void, retire?: RetireFile): Promise<number> {
+  await originalSlot(directory, base + '.0'); await originalSlot(directory, base + '.1'); guard()
+  const capacity = slotCapacity(tuple), active = await open(base + '.0', 'r')
+  try {
+    await originalSlot(directory, base + '.0', active); guard()
+    if ((await active.stat()).size !== capacity || !(await readExact(active, capacity, 0)).equals(encoded(0, tuple, capacity))) throw Error('Foreign disposition identity')
+  } finally { await retireFile(active, retire) }
+  if ((await lstat(base + '.1')).size !== capacity) throw Error('Disposition funding changed')
+  guard()
+  return capacity
+}
 /** Explicit clear/delete/TTL authority can finish its deterministic inactive
  * tuple even after a torn write. Passive readers only inspect. */
 export async function terminalSlots(directory: string, base: string, tuple: Terminal, guard: () => void, retire?: RetireFile): Promise<void> {
   const state = await readSlots(directory, base, tuple, retire); guard()
   if (state === 'terminal') return
   if (state === 'missing') throw Error('Disposition funding missing')
-  await originalSlot(directory, base + '.0'); await originalSlot(directory, base + '.1'); guard()
-  const capacity = slotCapacity(tuple), active = await open(base + '.0', 'r')
-  try { await originalSlot(directory, base + '.0', active); guard(); if (!(await readExact(active, capacity, 0)).equals(encoded(0, tuple, capacity))) throw Error('Foreign disposition identity') } finally { await retireFile(active, retire) }
+  const capacity = await assertTerminalSlotIdentity(directory, base, tuple, guard, retire)
   guard(); const handle = await open(base + '.1', 'r+')
   try { await originalSlot(directory, base + '.1', handle); guard(); if ((await handle.stat()).size !== capacity) throw Error('Disposition funding changed'); guard(); await writeAll(handle, encoded(1, tuple, capacity), 0, () => { guard(); return true }); guard(); await handle.sync(); guard() } finally { await retireFile(handle, retire) }
   if (await readSlots(directory, base, tuple, retire) !== 'terminal') throw Error('Disposition terminal write unknown')

@@ -13,7 +13,7 @@ import { originalNamespaceWitness, originalFileWitness } from './legacy/original
 import { physicalBytes } from './artifact/quota.ts'
 import { OwnerLedger, readLedger, exists } from './legacy/owner-ledger.ts'
 import { commitment, same, checkRoot, checkPage, recordHash, appliedFor, canonicalRecord } from './legacy/fork-codec.ts'
-import { expiredTuple, expiryBase, terminalSlots, revokedTuple, readSlots, describeSlotFunding, fundSlotsInBatch } from './legacy/fork-disposition.ts'
+import { expiredTuple, expiryBase, terminalSlots, revokedTuple, readSlots, describeSlotFunding, fundSlotsInBatch, assertTerminalSlotIdentity } from './legacy/fork-disposition.ts'
 import { boundedJson, ownedPath, confirmAtomicJson, inspectImmutable, pendingPath } from './artifact/io.ts'
 import { walkPages } from './legacy/fork-pages.ts'
 import { rowCommitment, transferDirectory } from './legacy/observed-read.ts'
@@ -562,7 +562,10 @@ export class ContextStore {
         guard()
       }
       const revoked = await readSlots(this.directory, resolve(directory, 'revoke'), revokedTuple(root), this.retireLegacyFile); guard()
-      if (revoked !== 'live' && revoked !== 'terminal') throw Error('Original legacy revocation unknown')
+      if (revoked === 'unknown') {
+        this.assertLegacyFilesSettled()
+        await assertTerminalSlotIdentity(this.directory, resolve(directory, 'revoke'), revokedTuple(root), guard, this.retireLegacyFile)
+      } else if (revoked !== 'live' && revoked !== 'terminal') throw Error('Original legacy revocation unknown')
       for await (const row of passive ? this.passivePages(directory, root, guard) : walkPages(directory, root, guard, undefined, this.retireLegacyFile)) {
         const c: LegacyCommitment = { refId: row.refId, revision: row.revision, metadataDigest: row.metadataDigest, metadataEncodedBytes: row.metadataEncodedBytes, expiresAt: row.expiresAt }
         const expiry = await readSlots(this.directory, expiryBase(this.directory, c), expiredTuple(this.workspaceId, c), this.retireLegacyFile); guard()

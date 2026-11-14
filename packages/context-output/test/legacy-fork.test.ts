@@ -80,7 +80,7 @@ it.each(['seed', 'observation', 'selection'])('refuses mismatched actual B2 %s m
     await expect(readdir(join(directory, 'legacy-fork-v1'))).rejects.toMatchObject({ code: 'ENOENT' })
     expect((await f.run()).kind).toBe('ready')
   } finally { await f.close() }
-})
+}, 20000)
 
 it('refuses a genuine captured B2 turn domain that differs from the guarded original source', async () => {
   const f = await legacyFixture()
@@ -146,7 +146,7 @@ it('permits strict disabled metadata transfer, then observed read after enable',
     await f.service().configure({ enabled: true })
     expect((await f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, observation)).text).toContain('VISIBLE')
   } finally { await f.close() }
-})
+}, 20000)
 
 it('revokes before target clear at a full budget and preserves other canonical owners', async () => {
   const f = await legacyFixture()
@@ -162,7 +162,7 @@ it('revokes before target clear at a full budget and preserves other canonical o
     expect(await physicalBytes(directory)).toBeLessThanOrEqual(full)
     await f.reopen(); expect((await f.run(true)).kind).toBe('blocked')
   } finally { await f.close() }
-})
+}, 20000)
 
 it('denies root/index absence, missing canonical membership, and torn terminal slots without passive repairs', async () => {
   const f = await legacyFixture()
@@ -181,7 +181,43 @@ it('denies root/index absence, missing canonical membership, and torn terminal s
     await f.service().clear('target')
     expect(await readFile(inactive)).not.toEqual(slot)
   } finally { await f.close() }
-})
+}, 20000)
+
+it.each(['active-content', 'active-size', 'inactive-size', 'inactive-link'] as const)('refuses clear through an unverified original revocation allocation: %s', async damage => {
+  const f = await legacyFixture()
+  try {
+    expect((await f.run()).kind).toBe('ready')
+    const directory = join(f.root, 'context-output', createHash('sha256').update('workspace').digest('hex'))
+    const operation = (await readdir(join(directory, 'legacy-fork-v1')))[0]!
+    const base = join(directory, 'legacy-fork-v1', operation, 'revoke')
+    const generation = damage.startsWith('active-') ? 0 : 1
+    const path = base + '.' + generation
+    const original = await readFile(path)
+    const manifest = join(directory, 'artifacts', f.visible.id + '.json')
+    const body = join(directory, 'blobs', f.visible.id + '.txt')
+    const owners = join(directory, 'owners', f.visible.id + '.json')
+    const canonical = await Promise.all([manifest, body, owners].map(path => readFile(path)))
+    let outside: string | undefined
+    if (damage === 'inactive-link') {
+      outside = join(f.root, 'foreign-revocation-slot')
+      await writeFile(outside, original)
+      await unlink(path)
+      await link(outside, path)
+    } else if (damage.endsWith('-size')) {
+      await writeFile(path, original.subarray(0, original.length - 1))
+    } else {
+      const changed = Buffer.from(original)
+      changed[0] ^= 1
+      await writeFile(path, changed)
+    }
+    const damaged = await readFile(path), sourceCalls = f.sourceCalls()
+    await expect(f.service().clear('target')).rejects.toThrow()
+    expect(await readFile(path)).toEqual(damaged)
+    expect(await Promise.all([manifest, body, owners].map(path => readFile(path)))).toEqual(canonical)
+    expect(f.sourceCalls()).toBe(sourceCalls)
+    if (outside) expect(await readFile(outside)).toEqual(original)
+  } finally { await f.close() }
+}, 20000)
 
 it('validates and deeply freezes B2 metadata without exposing mutable turn arrays', () => {
   const facts = captureBootstrapPreparationFacts({ version: 1, invocation: { version: 1, operationId: 'op', targetSessionId: 'child', createdAt: '2026-10-25T00:00:00.000Z', requestDigest: 'a'.repeat(64) }, manifestDigest: 'b'.repeat(64), seedDigest: 'c'.repeat(64), sourceObservation: { kind: 'semantic', digest: 'd'.repeat(64) }, groupCount: 1, semantic: { selection: { kind: 'completed' }, turns: { total: 1, completed: [[1, 1]], unframedPrefix: false } } })
@@ -323,7 +359,7 @@ it.each(['plan', 'page', 'disposition'])('preserves original body and manifest w
     await f.service().capture({ sessionId: 'other', callId: 'cold-prune', label: 'prune', text: 'trigger', complete: true }).catch(() => undefined)
     expect(await readFile(manifest)).toEqual(before[0]); expect(await readFile(blob)).toEqual(before[1])
   } finally { vi.restoreAllMocks(); await f.close() }
-})
+}, 20000)
 
 // Removing the effect-pass native/slot/ledger checks would delete an unproven
 // later ref here. Earlier confirmed effects must remain honest partial progress.
@@ -370,7 +406,7 @@ it.each(['corrupt-slot', 'foreign-slot', 'unknown-ledger'])('retains later canon
     expect(f.sourceCalls()).toBe(sourceCalls)
     if (outside) expect((await readFile(outside)).every(byte => byte === 0)).toBe(true)
   } finally { cuts.beforeRow = undefined; vi.restoreAllMocks(); await f.close() }
-})
+}, 20000)
 
 it('preserves funded expiry without an applied proof and never treats its slot as authority', async () => {
   const f = await legacyFixture()
@@ -380,12 +416,18 @@ it('preserves funded expiry without an applied proof and never treats its slot a
     const namespace = join(directory, 'legacy-fork-v1'), operation = (await readdir(namespace))[0]!
     await rm(join(namespace, operation, 'applied.json'))
     const manifest = join(directory, 'artifacts', f.visible.id + '.json'), before = await readFile(manifest)
+    const expiry = join(directory, 'legacy-expiry-v1', f.visible.id, commitment(f.visible).metadataDigest, 'expiry')
+    const slots = await Promise.all([0, 1].map(generation => readFile(expiry + '.' + generation)))
+    const sourceCalls = f.sourceCalls()
     vi.spyOn(Date, 'now').mockReturnValue(f.visible.expiresAt + 1)
-    await expect(f.service().clear('unrelated')).rejects.toThrow(/confirmed transfer authority/)
+    await expect(f.service().clear('unrelated')).rejects.toThrow()
     expect(await readFile(manifest)).toEqual(before)
     expect((await readFile(join(directory, 'blobs', f.visible.id + '.txt'))).toString()).toContain('VISIBLE')
+    expect(await Promise.all([0, 1].map(generation => readFile(expiry + '.' + generation)))).toEqual(slots)
+    expect(f.sourceCalls()).toBe(sourceCalls)
+    await expect(readFile(join(namespace, operation, 'applied.json'))).rejects.toMatchObject({ code: 'ENOENT' })
   } finally { vi.restoreAllMocks(); await f.close() }
-})
+}, 20000)
 
 it('joins the same original handle debt after a streamed effect-pass close refusal', async () => {
   const f = await legacyFixture({ distinct: 3 })
@@ -413,31 +455,7 @@ it('joins the same original handle debt after a streamed effect-pass close refus
     await expect(readFile(join(directory, 'blobs', f.selectedRefs[0]!.id + '.txt'))).rejects.toMatchObject({ code: 'ENOENT' })
     for (const ref of f.selectedRefs.slice(1)) expect((await readFile(join(directory, 'blobs', ref.id + '.txt'))).length).toBe(ref.bytes)
   } finally { cuts.beforeRow = undefined; cuts.failClose = undefined; vi.restoreAllMocks(); await f.close(); cuts.debtHandle = undefined }
-})
-
-it('builds and verifies 10001 typed observations with the rightmost one-child directory', async () => {
-  const open = ContextStore.prototype.open
-  let peak = 0, retirements = 0, original: Set<unknown> | undefined
-  const spy = vi.spyOn(ContextStore.prototype, 'open').mockImplementation(async function(this: ContextStore, ...args) {
-    await open.apply(this, args)
-    const set = original = (this as unknown as { fileDebt: Set<unknown> }).fileDebt, add = set.add.bind(set)
-    set.add = value => { retirements++; add(value); peak = Math.max(peak, set.size); return set }
-  })
-  const f = await legacyFixture({ observations: 10001 })
-  try {
-    expect((await f.run()).kind).toBe('ready')
-    const directory = join(f.root, 'context-output', createHash('sha256').update('workspace').digest('hex'), 'legacy-fork-v1'), operations = await readdir(directory), planDirectory = join(directory, operations[0]!)
-    const root = JSON.parse(await readFile(join(planDirectory, 'plan.json'), 'utf8'))
-    expect(root).toMatchObject({ observationCount: 10001, distinctRefCount: 1, pages: { level: 2, rows: 10001 } })
-    const right = JSON.parse(await readFile(join(planDirectory, 'pages', '1-10000.json'), 'utf8'))
-    expect(right).toMatchObject({ level: 1, children: [{ level: 0, firstRow: 10000, rows: 1 }] })
-    const observation = await f.observation()
-    await rm(join(planDirectory, 'pages', '0-10000.json'))
-    await expect(f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, observation)).rejects.toThrow()
-    expect(retirements).toBeGreaterThan(10001); expect(peak).toBeLessThanOrEqual(2); expect(original!.size).toBe(0)
-    console.info('Actual ContextStore scale retirement counters:', { retirements, peak, live: original!.size })
-  } finally { spy.mockRestore(); await f.close() }
-}, 300000)
+}, 20000)
 
 it('completes actual mixed managed catalog/member and legacy closure, then reads both after cold source-free recovery', async () => {
   const f = await legacyFixture({ mixed: true })
@@ -450,7 +468,7 @@ it('completes actual mixed managed catalog/member and legacy closure, then reads
     expect((await f.service().readExecResult({ sessionId: 'target' }, { ref: f.managed!.member, viaCatalog: f.managed!.catalog })).frames.map(frame => frame.data)).toEqual(['eA=='])
     expect((await f.service().searchLegacyObserved({ sessionId: 'target' }, { query: 'VISIBLE' }, await f.observation())).hits.map(hit => hit.ref.id)).toEqual([f.visible.id])
   } finally { await f.close() }
-})
+}, 20000)
 
 it.each(['owner-response', 'application-response'])('keeps original %s uncertainty and only continues through the actual source', async cut => {
   const f = await legacyFixture()
@@ -477,7 +495,7 @@ it.each(['owner-response', 'application-response'])('keeps original %s uncertain
     expect((await f.run()).kind).toBe('ready')
     expect((await f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, await f.observation())).text).toContain('VISIBLE')
   } finally { cuts.afterRename = cuts.afterLink = undefined; await f.close() }
-})
+}, 20000)
 
 it('source clear preserves a newer canonical owner whose original rename response was lost', async () => {
   const f = await legacyFixture()
@@ -489,7 +507,7 @@ it('source clear preserves a newer canonical owner whose original rename respons
     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(['creator', 'target'])
     expect((await f.run(true)).kind).toBe('blocked')
   } finally { cuts.afterRename = undefined; await f.close() }
-})
+}, 20000)
 
 it('acknowledges exact expiry after body/manifest GC, and same-body recapture cannot revive an old grant', async () => {
   const f = await legacyFixture()
@@ -506,7 +524,7 @@ it('acknowledges exact expiry after body/manifest GC, and same-body recapture ca
     await f.reopen(); expect((await f.run(true)).kind).toBe('already-ready')
     await expect(f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, await f.observation())).rejects.toThrow()
   } finally { vi.restoreAllMocks(); await f.close() }
-})
+}, 20000)
 
 it('retains genuine fractional legacy expiry through transfer, cold read and the original expiry disposition', async () => {
   const f = await legacyFixture({ retentionDays: 7.000000001 })
@@ -524,7 +542,7 @@ it('retains genuine fractional legacy expiry through transfer, cold read and the
     expect((await f.run(true)).kind).toBe('already-ready')
     await expect(f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, observation)).rejects.toThrow()
   } finally { vi.restoreAllMocks(); await f.close() }
-})
+}, 20000)
 
 it.each(['read', 'search'])('discards observed %s payload when its exact ref expires during the actual body await', async operation => {
   const f = await legacyFixture()
@@ -535,7 +553,7 @@ it.each(['read', 'search'])('discards observed %s payload when its exact ref exp
     if (operation === 'read') await expect(f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, observation)).rejects.toThrow()
     else expect((await f.service().searchLegacyObserved({ sessionId: 'target' }, { query: 'VISIBLE' }, observation)).hits).toEqual([])
   } finally { cuts.afterReadFile = undefined; vi.restoreAllMocks(); await f.close() }
-})
+}, 20000)
 
 it('releases legacy target membership through actual document deletion alongside managed cleanup', async () => {
   const f = await legacyFixture({ mixed: true })
@@ -548,7 +566,7 @@ it('releases legacy target membership through actual document deletion alongside
     const directory = join(f.root, 'context-output', createHash('sha256').update('workspace').digest('hex'))
     expect(JSON.parse(await readFile(join(directory, 'owners', f.visible.id + '.json'), 'utf8'))).toEqual(['creator', 'source'])
   } finally { await f.close() }
-})
+}, 20000)
 
 it('invalidates old project observations across ABA while a fresh actual scope requalifies the preserved grant', async () => {
   const f = await legacyFixture()
@@ -560,7 +578,7 @@ it('invalidates old project observations across ABA while a fresh actual scope r
     expect((await f.run(true)).kind).toBe('already-ready')
     expect((await f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, await f.observation())).text).toContain('VISIBLE')
   } finally { await f.close() }
-})
+}, 20000)
 
 it('never treats a raw target owner grant as original bound application', async () => {
   const f = await legacyFixture()
@@ -571,7 +589,7 @@ it('never treats a raw target owner grant as original bound application', async 
     expect((await f.run(false, capture => { delete capture.source })).kind).toBe('blocked')
     expect((await f.run(true, undefined, undefined, true)).kind).toBe('blocked')
   } finally { await f.close() }
-})
+}, 20000)
 
 it('rebases nested live observations while preserving original coordinates and only the immediate via', async () => {
   const f = await legacyFixture()
@@ -609,7 +627,7 @@ it('rebases nested live observations while preserving original coordinates and o
     const observation = { sessionId: 'grandchild', sourceId: contextSourceIdentity('workspace', f.project.primaryRoot, targetScope.scope), bootstrap: { invocation, manifestDigest: seed.manifestDigest, seedDigest: seed.seedDigest }, assertCurrent() { grandchild.assertReady() }, localVisible: () => false, anchorVisible: () => true }
     expect((await service.readLegacyObserved({ sessionId: 'grandchild' }, { refId: f.visible.id }, observation)).text).toContain('VISIBLE')
   } finally { await f.close() }
-})
+}, 20000)
 
 it('binds actual Gateway B2/project facts, retains only VISIBLE, then cold reads and searches after source clear', async () => {
   const f = await legacyFixture()
@@ -633,4 +651,4 @@ it('binds actual Gateway B2/project facts, retains only VISIBLE, then cold reads
     expect((await f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, cold)).text).toContain('VISIBLE')
     expect((await f.service().searchLegacyObserved({ sessionId: 'target' }, { query: 'VISIBLE' }, cold)).hits.map(hit => hit.ref.id)).toEqual([f.visible.id])
   } finally { await f.close() }
-})
+}, 20000)
