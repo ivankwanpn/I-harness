@@ -1406,12 +1406,15 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         // leaves that required entry pending forever. Defer it for the turn
         // that adopts the admitted input; later submissions settle normally.
         try {
+          // A retained runtime publication keeps its action open until its
+          // original receipt settles. Release that owner before asking the
+          // document to close finished actions behind the same pending frame.
+          await priorAssembly?.settleRuntimeContextPublications()
           // A Stop capture may be waiting behind this exact finished owner's
           // uncertain write. Reconcile that original frame before asking the
           // close receipt to admit; the live Stop fence already blocks delivery.
           if (options?.admittedInputId === undefined) await priorDocument?.settleFinishedActions()
           await awaitDeliveryStop(sessionId)
-          await priorAssembly?.settleRuntimeContextPublications()
         }
         catch (failure) {
           if (priorAssembly && !options?.admittedInputId && !controller.signal.aborted && !closed && !closing.has(sessionId) && !failedClose.has(sessionId)) {

@@ -35,8 +35,12 @@ it.each(['external', 'canonical-escape', 'mapping-unavailable', 'revoked-during-
     return original(...args)
   })
   try {
-    const assembly = await service.assemblyFor('scope'), tool = assembly.tools.get('read')!
-    const result = await tool.execute({ path: target }, { session: mode === 'foreign-session' ? { ...assembly.session } : assembly.session, ctx: assembly.ctx, callId: 'actual-read' } as Parameters<typeof tool.execute>[1])
+    const assembly = await service.assemblyFor('scope')
+    const prepared = await assembly.tools.prepare({ name: 'read', args: { path: target } }, undefined, {
+      session: mode === 'foreign-session' ? { ...assembly.session } : assembly.session,
+      callId: 'actual-read',
+    })
+    const result = await assembly.tools.dispatch(prepared)
     expect(result).toMatchObject({ content: 'kept actual bytes' })
     const unavailable = mode === 'mapping-unavailable' || mode === 'revoked-during-mapping'
     expect(result).toMatchObject({ instruction_scope: unavailable ? { status: 'unavailable', reason: 'mapping-unavailable' } : { status: 'reference-only', reason: mode === 'canonical-escape' ? 'canonical-escape' : 'outside-root' } })

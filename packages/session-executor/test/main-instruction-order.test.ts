@@ -26,12 +26,16 @@ it('opposite real list completion order selects identical complete instruction t
   const mapping = vi.spyOn(fs, 'realpath').mockImplementation(async (...args) => { if (String(args[0]) === blocked) { entered.resolve(); await release.promise }; return original(...args) })
   try {
     for (const [index, delayed] of [a, b].entries()) {
-      const assembly = await service.assemblyFor(`order-${index}`), tool = assembly.tools.get('list_dir')!, exec = { session: assembly.session, ctx: assembly.ctx, callId: `read-${index}` } as Parameters<typeof tool.execute>[1]
+      const assembly = await service.assemblyFor(`order-${index}`)
+      const list = async (path: string) => {
+        const prepared = await assembly.tools.prepare({ name: 'list_dir', args: { path } }, undefined, { session: assembly.session, callId: `read-${index}` })
+        return assembly.tools.dispatch(prepared)
+      }
       blocked = delayed; entered = Promise.withResolvers<void>(); release = Promise.withResolvers<void>()
-      const order: string[] = [], first = tool.execute({ path: delayed }, exec).then(value => { order.push(delayed); return value })
+      const order: string[] = [], first = list(delayed).then(value => { order.push(delayed); return value })
       await entered.promise
       const other = delayed === a ? b : a
-      expect(await tool.execute({ path: other }, exec)).toMatchObject({ instruction_scope: { status: 'queued' } }); order.push(other)
+      expect(await list(other)).toMatchObject({ instruction_scope: { status: 'queued' } }); order.push(other)
       blocked = ''; release.resolve(); expect(await first).toMatchObject({ instruction_scope: { status: 'queued' } })
       expect(order).toEqual([other, delayed])
       await assembly.agent.followup('same parallel read task')

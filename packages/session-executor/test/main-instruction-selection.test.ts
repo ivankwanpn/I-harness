@@ -25,17 +25,21 @@ it.each(['newer-read', 'failed-issue'] as const)('physical %s consumes only its 
   const service = createSessionService({ workspace: root, model: createOpenAICompatibleClient({ model: 'fixture', apiKey: 'owned-loopback', baseUrl: `http://127.0.0.1:${address.port}` }), contextWindow: 100000, codeMode: { mode: 'off' } })
   let first: Promise<unknown> | undefined
   try {
-    const assembly = await service.assemblyFor('selection'), list = assembly.tools.get('list_dir')!, exec = { session: assembly.session, callId: 'real-list' }
-    expect(await list.execute({ path: paths[0] }, exec)).toMatchObject({ instruction_scope: { status: 'queued' } })
+    const assembly = await service.assemblyFor('selection')
+    const list = async (path: string) => {
+      const prepared = await assembly.tools.prepare({ name: 'list_dir', args: { path } }, undefined, { session: assembly.session, callId: 'real-list' })
+      return assembly.tools.dispatch(prepared)
+    }
+    expect(await list(paths[0]!)).toMatchObject({ instruction_scope: { status: 'queued' } })
     first = assembly.agent.followup('captured first read wave', AbortSignal.timeout(10000)); void first.catch(() => {})
     await entered.promise
-    if (mode === 'newer-read') expect(await list.execute({ path: paths[1] }, exec)).toMatchObject({ instruction_scope: { status: 'queued' } })
+    if (mode === 'newer-read') expect(await list(paths[1]!)).toMatchObject({ instruction_scope: { status: 'queued' } })
     release.resolve()
-    if (mode === 'failed-issue') { await expect(first).rejects.toThrow(); await list.execute({ path: paths[1] }, exec) }
+    if (mode === 'failed-issue') { await expect(first).rejects.toThrow(); await list(paths[1]!) }
     else await first
     await assembly.agent.followup('unknown continuation keeps pending wave')
     expect(bodies[1]).toContain('SELECTION_0_RULE'); expect(bodies[1]).toContain('SELECTION_1_RULE')
-    await list.execute({ path: paths[2] }, exec)
+    await list(paths[2]!)
     await assembly.agent.followup('a new wave retires prior incidental targets')
     expect(bodies).toHaveLength(3)
     expect(bodies[2]).toContain('SELECTION_2_RULE')

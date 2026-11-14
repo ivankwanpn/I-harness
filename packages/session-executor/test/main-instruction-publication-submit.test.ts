@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest'
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, open, type FileHandle } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
@@ -16,29 +16,41 @@ it.each((['committed', 'absent'] as const).flatMap(disposition => [false, true].
   await mkdir(workspace); await mkdir(profile); await writeFile(join(workspace, 'AGENTS.md'), 'FIRST_RUNTIME_SOURCE')
   const settingsPath = join(profile, 'settings.json'), saved = new SettingsStore({ path: settingsPath })
   await saved.load(); await saved.set({ instructions: { enabled: true, maxBytes: 24000, globalSources: [] } })
-  const backend = createJsonlBackend(join(root, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
-  let ready = false, key: BatchKey | undefined, originalIssues = 0, views = 0
+  let ready = false, key: BatchKey | undefined, originalIssues = 0, views = 0, absentWrites = 0
   const publications: { batchId: string; text: string }[] = []
   const managementEntered = Promise.withResolvers<void>(), managementRelease = Promise.withResolvers<void>()
   let holdManagement = false
-  backend.appendOwnedBatch = async (...args) => {
-    const records = decodeFactBatch(args[3].bytes).events.filter(event => event.type === 'runtime/context')
-    if (records.length) publications.push({ batchId: args[3].key.batchId, text: JSON.stringify(records) })
-    if (!key && records.length) {
-      key = args[3].key; originalIssues++
-      if (disposition === 'committed') await append(...args)
-      return { kind: 'unknown', key }
-    }
-    return append(...args)
-  }
-  backend.reconcileOwnedBatch = async (...args) => {
-    if (key?.batchId === args[3].key.batchId) {
-      if (!ready) return { kind: 'unknown', key: args[3].key }
-      if (holdManagement) { managementEntered.resolve(); await managementRelease.promise }
-    }
-    return reconcile(...args)
-  }
+  const backend = createJsonlBackend(join(root, 'sessions'), {
+    wrapOwnedBatch: append => async (...args) => {
+      const records = decodeFactBatch(args[3].bytes).events.filter(event => event.type === 'runtime/context')
+      if (records.length) publications.push({ batchId: args[3].key.batchId, text: JSON.stringify(records) })
+      if (!key && records.length) {
+        key = args[3].key; originalIssues++
+        if (disposition === 'committed') expect((await append(...args)).kind).toBe('committed')
+        else {
+          const probe = await open(join(root, 'sessions', args[0] + '.jsonl'), 'r+')
+          const prototype = Object.getPrototypeOf(probe), write = prototype.write
+          await probe.close()
+          prototype.write = function(this: FileHandle, bytes: Uint8Array, offset: number, length: number, position: number) {
+            if (bytes === args[3].bytes) { absentWrites++; return write.call(this, bytes, offset, 0, position) }
+            return write.call(this, bytes, offset, length, position)
+          }
+          try { expect((await append(...args)).kind).toBe('absent') }
+          finally { prototype.write = write }
+        }
+        return { kind: 'unknown', key }
+      }
+      return append(...args)
+    },
+    wrapOwnedReconcile: reconcile => async (...args) => {
+      if (key?.batchId === args[3].key.batchId) {
+        if (!ready) return { kind: 'unknown', key: args[3].key }
+        if (holdManagement) { managementEntered.resolve(); await managementRelease.promise }
+      }
+      return reconcile(...args)
+    },
+  })
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
   const environment = createInstructionEnvironment({ settingsPath }), create = environment.host.create.bind(environment.host)
   environment.host.create = scope => { views++; return create(scope) }
   const bodies: string[] = [], server = createServer(async (request, response) => {
@@ -53,6 +65,7 @@ it.each((['committed', 'absent'] as const).flatMap(disposition => [false, true].
   try {
     await expect(service.submit(id, 'original human request', new AbortController().signal)).rejects.toThrow()
     expect([originalIssues, bodies.length, views]).toEqual([1, 0, 1])
+    expect(absentWrites).toBe(disposition === 'absent' ? 1 : 0)
     for (let attempt = 0; attempt < 2; attempt++) {
       await saved.set({ instructions: { enabled: true, maxBytes: 24000 + attempt, globalSources: [] } })
       await expect(service.submit(id, `still unknown explicit request ${attempt}`, new AbortController().signal)).rejects.toThrow()

@@ -39,11 +39,15 @@ it.each((['chat', 'responses'] as const).flatMap(route => (['messages', 'non-mes
   const model: ModelClient = { ...adapter, async prepare(request) { const prepared = await adapter.prepare!(request); measurements.push([...prepared.measurement.input.overriddenInputFields]); return prepared } }
   const service = createSessionService({ workspace: root, model, contextWindow: 100000, codeMode: { mode: 'off' } })
   try {
-    const assembly = await service.assemblyFor('raw'), list = assembly.tools.get('list_dir')!, exec = { session: assembly.session, callId: 'raw-selection' }
-    await list.execute({ path: a }, exec)
+    const assembly = await service.assemblyFor('raw')
+    const list = async (path: string) => {
+      const prepared = await assembly.tools.prepare({ name: 'list_dir', args: { path } }, undefined, { session: assembly.session, callId: 'raw-selection' })
+      return assembly.tools.dispatch(prepared)
+    }
+    await list(a)
     const first = await assembly.agent.followup('first raw precedence request').then(() => ({ kind: 'completed' as const }), error => ({ kind: 'failed' as const, error }))
     const firstSends = bodies.length, firstHandoffs = observed.handoffs.length
-    await list.execute({ path: b }, exec)
+    await list(b)
     assembly.setModel(factory(config))
     await assembly.agent.followup('normal representable continuation')
     const firstWire = firstSends ? JSON.parse(bodies[0]!) : undefined, handoff = observed.handoffs[0]
