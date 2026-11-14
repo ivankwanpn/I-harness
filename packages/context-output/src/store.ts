@@ -129,6 +129,11 @@ export class ContextStore {
     if (!this.lifetime) return !this.acquiring
     try { this.lifetime.assertSettled(); return true } catch { return false }
   }
+  /** Settle an already-started retirement under the next exclusive use. */
+  settleIdleCleanup(lease: LegacyUseLease): Promise<void> | undefined {
+    this.assertLease(lease, 'exclusive')
+    if (this.quiescing) return this.quiesce(lease)
+  }
   /** Read-only original authority. No open/recovery/body/index/cache effects. */
   passiveInventory(turn: WorkspaceMutationTurn, sessionId?: string, cutoff = Date.now()): Promise<LegacyStoreInventory> { return this.inventoryFor(turn, sessionId, cutoff) }
   passiveDeletionInventory(turn: WorkspaceMutationTurn, selection: OriginalDeletionSelection, cutoff: number): Promise<LegacyStoreInventory> { return this.inventoryFor(turn, undefined, cutoff, originalDeletionSelectionIds(selection), originalDeletionSelectionSessions(selection)) }

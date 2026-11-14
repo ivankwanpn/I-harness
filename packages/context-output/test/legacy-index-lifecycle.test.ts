@@ -353,6 +353,7 @@ it('admits a queued writer before a later pure search after the original shared 
   } finally { resume.resolve(); vi.restoreAllMocks(); await service.close(); await rm(root, { recursive: true, force: true }) }
 })
 
+// These native fork, cancellation and cleanup controls measured 5.1–5.4s.
 it('holds actual hint proof and its native generation until cancellation and original callback cleanup settle', async () => {
   const f = await legacyFixture(), entered = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>()
   let reading: Promise<unknown> | undefined, clearing: Promise<unknown> | undefined
@@ -372,7 +373,7 @@ it('holds actual hint proof and its native generation until cancellation and ori
     proof.mockRestore(); close.mockRestore(); put.mockRestore()
     await expect(f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, observation)).rejects.toThrow()
   } finally { resume.resolve(); await Promise.allSettled([reading, clearing]); vi.restoreAllMocks(); await f.close() }
-})
+}, 15000)
 
 it('keeps one exclusive preparation generation across actual reset, stage and ready while clear waits', async () => {
   const f = await legacyFixture(), entered = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>()
@@ -394,7 +395,7 @@ it('keeps one exclusive preparation generation across actual reset, stage and re
     expect(f.sourceCalls()).toBe(sourceCalls)
     expect((await f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, await f.observation())).text).toContain('VISIBLE')
   } finally { resume.resolve(); await Promise.allSettled([preparing, clearing]); vi.restoreAllMocks(); await f.close() }
-})
+}, 15000)
 
 // Actual fork, expiry, quota reconfiguration and native recapture take ~6.5s
 // in isolation; this one multi-phase fixture needs more than the 5s default.
@@ -486,11 +487,15 @@ it('joins prior exact original file debt before clear and keeps an incomplete re
     expect(attempts).toBe(2); expect(await readFile(manifest)).toEqual(before)
     expect(service.status()).toMatchObject({ state: 'error', results: 1 })
     expect(service.status().error).toContain('original canonical file close refused')
-    expect((await service.search({ sessionId: 's' }, { query: 'needle' })).hits).toHaveLength(1)
+    await expect(service.search({ sessionId: 's' }, { query: 'needle' })).rejects.toBe(fault)
+    expect(original!.fd).toBeGreaterThanOrEqual(0)
     expect(service.status().error).toContain('cleanup remains incomplete')
+    const incompleteAttempts = attempts
     allow = true; io.opened = undefined
     await service.clear('unrelated')
-    expect(attempts).toBe(3); expect(original!.fd).toBe(-1)
+    expect(attempts).toBe(incompleteAttempts + 1); expect(original!.fd).toBe(-1)
+    expect((await service.search({ sessionId: 's' }, { query: 'needle' })).hits).toHaveLength(1)
+    expect(attempts).toBe(incompleteAttempts + 1)
     expect(service.status().error).toContain('cleanup remains incomplete')
     await service.clear('s')
     expect(service.status()).toMatchObject({ state: 'ready', results: 0 }); expect(service.status().error).toBeUndefined()
@@ -670,6 +675,7 @@ it.each(['sequential', 'queued'] as const)('retains independent real-ledger A an
   } finally { io.opened = undefined; await service.close(); await rm(root, { recursive: true, force: true }) }
 })
 
+// Two native forks and the subsequent quota/repair controls measured 8.6s.
 it('keeps an actual A hint refusal visible after quota raise and unrelated B confirmation until A is repaired', async () => {
   const f = await legacyFixture()
   let store: ContextStore | undefined
@@ -717,7 +723,7 @@ it('keeps an actual A hint refusal visible after quota raise and unrelated B con
       })
     })
   } finally { if (store) await gate.exclusive(undefined, lease => store!.close(lease)); await owner.close(); await f.close() }
-})
+}, 15000)
 
 
 it.each(['EIO', 'EACCES'] as const)('resets queued clear completion before its actual protected-result inventory rejects with %s', async code => {

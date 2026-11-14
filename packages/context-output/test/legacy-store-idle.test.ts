@@ -172,6 +172,50 @@ it.each([false, true])('retains exact falsey index retirement (consumed=%s) inst
   } finally { fault.mockRestore(); if (!consumed) await service.close(); await rm(root, { recursive: true, force: true }) }
 })
 
+it.each([false, true])('settles original idle retirement before a new query, consumed=%s', async consumed => {
+  const root = await mkdtemp(join(process.env.IH_LEGACY_FORK_EVIDENCE_ROOT!, 'idle-query-retry-'))
+  const path = locking.lockPathFor(root, 'context-output-legacy:w')
+  const acquire = locking.acquireSessionLock, close = DatabaseSync.prototype.close
+  let original: DatabaseSync | undefined, originalLease: locking.SessionLock | undefined
+  let originalCloses = 0, acquisitions = 0
+  const acquisition = vi.spyOn(locking, 'acquireSessionLock').mockImplementation(async options => {
+    if (options.lockPath === path && ++acquisitions > 1) {
+      expect(originalLease?.held).toBe(false)
+      expect(originalCloses).toBe(2)
+    }
+    const lease = await acquire(options)
+    if (options.lockPath === path) originalLease ??= lease
+    return lease
+  })
+  const fault = vi.spyOn(DatabaseSync.prototype, 'close').mockImplementation(function (this: DatabaseSync) {
+    original ??= this
+    if (this !== original) return close.call(this)
+    if (++originalCloses === 1) { if (consumed) close.call(this); throw undefined }
+    return close.call(this)
+  })
+  const service = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true } })
+  try {
+    await expect(service.capture(captured)).rejects.toBeUndefined()
+    if (consumed) {
+      await expect(service.search({ sessionId: captured.sessionId }, { query: 'needle' })).rejects.toBeUndefined()
+      await expect(service.close()).rejects.toBeUndefined()
+      expect(originalCloses).toBe(1)
+      expect(acquisitions).toBe(1)
+    } else {
+      const result = await service.search({ sessionId: captured.sessionId }, { query: 'needle' })
+      expect(result.hits).toHaveLength(1)
+      expect(result.hits[0]!.ref.sessionId).toBe(captured.sessionId)
+      expect(originalCloses).toBe(2)
+      expect(acquisitions).toBe(2)
+    }
+  } finally {
+    fault.mockRestore()
+    acquisition.mockRestore()
+    if (!consumed) await service.close()
+    if (originalLease?.held) await originalLease.release()
+  }
+})
+
 it.each([false, true])('retains exact falsey lifetime retirement (consumed=%s) and never reacquires it as cleanup', async consumed => {
   const root = await mkdtemp(join(process.env.IH_LEGACY_FORK_EVIDENCE_ROOT!, 'idle-life-debt-'))
   const path = locking.lockPathFor(root, 'context-output-legacy:w'), acquire = locking.acquireSessionLock

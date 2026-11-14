@@ -342,6 +342,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     quota: () => config.maxDiskBytes, run: (signal, work) => run(signal, owned => withLegacyIndexWrite(owned, context => work(owned, context)), false, true),
     mutate: mutateIndex, runPassive: (original, work) => run(undefined, owned => gate.exclusive(owned, async lease => {
       gate.assertLease(lease); if (!store || store !== original) throw Error('Original legacy store unavailable')
+      await original.settleIdleCleanup(lease)
       await original.resume(lease, config.maxDiskBytes, owned)
       return serial(() => owner.mutate(async turn => { turn.assertCurrent(); return work(owned, original) }))
     }), false, true) })
@@ -373,7 +374,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   async function getStore(lease: LegacyUseLease, mode: 'query'|'cleanup' = 'query', signal?: AbortSignal): Promise<ContextStore> {
     gate.assertLease(lease, 'exclusive')
     checkAbort(signal)
-    if (store) { await store.resume(lease, config.maxDiskBytes, signal); return store }
+    if (store) { await store.settleIdleCleanup(lease); await store.resume(lease, config.maxDiskBytes, signal); return store }
     if (failedOpeningCleanup) throw failedOpeningCleanup
     if (!opening) {
       // Reject impossible startup budgets without creating even a lock path.
@@ -381,6 +382,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       const next = candidate ?? (candidate = new ContextStore(options.root, workspaceId, owner, gate.assertLease, revokeSelectedAuthorities, revokeResumedAuthorities))
       opening = (async () => {
         try {
+          await next.settleIdleCleanup(lease)
           await next.acquireLifetime(signal)
           checkAbort(signal)
           await serial(() => owner.mutate(turn => next.open(turn, lease, config.maxDiskBytes, mode, signal)))
@@ -632,7 +634,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       configureContext(config, patch)
       await transition(async () => {
         const next = configureContext(config, patch)
-        if (store && next.maxDiskBytes !== config.maxDiskBytes) await gate.exclusive(undefined, async lease => { await store!.resume(lease, config.maxDiskBytes); await owner.mutate(turn => store!.configureDiskBudget(turn, lease, next.maxDiskBytes)) })
+        if (store && next.maxDiskBytes !== config.maxDiskBytes) await gate.exclusive(undefined, async lease => { await store!.settleIdleCleanup(lease); await store!.resume(lease, config.maxDiskBytes); await owner.mutate(turn => store!.configureDiskBudget(turn, lease, next.maxDiskBytes)) })
         config = next
       })
       return status()
@@ -835,6 +837,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       async snapshot(cutoff: number) {
         check(); await Promise.allSettled(predecessors.jobs); await predecessors.transitions; await predecessors.mutations; check()
         const flight = gate.exclusive(undefined, async lease => {
+          await original.settleIdleCleanup(lease)
           await original.acquireLifetime(); check()
           const inventory = await owner.mutate(async turn => {
             const managed = await artifacts.passiveReleaseInventory(turn, documents, io), legacy = await original.passiveDeletionInventory(turn, selection, cutoff)
@@ -852,6 +855,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
         check(); scope.assertDocumentsCovered(scope.manifest.documents)
         if (!matched || !coverage) throw Error('Original matched deletion inventory required')
         const flight = gate.exclusive(undefined, async lease => {
+          await original.settleIdleCleanup(lease)
           await original.acquireLifetime(); check(); assertOriginalRevocationCoverage(coverage!, matched!.targets)
           return owner.mutate(async turn => {
             check(); scope.assertDocumentsCovered(scope.manifest.documents)
@@ -927,6 +931,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
         await cleanupTransition([sessionId], async settled => {
           // Same original handle/receipt only. No caller-supplied effect callback.
           const flight = gate.exclusive(undefined, async lease => {
+            await record.original.settleIdleCleanup(lease)
             await record.original.acquireLifetime(); assertOriginalRevocationCoverage(record.coverage!, record.first!.targets)
             return owner.mutate(async turn => {
               const cutoff = Date.now(), managed = await artifacts.passiveReleaseInventory(turn, [], record.io)
@@ -1011,6 +1016,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     async function pass() {
       check(); for (const ticket of tickets) ticket.assertCurrent()
       return gate.exclusive(undefined, async lease => {
+        await original.settleIdleCleanup(lease)
         await original.acquireLifetime(); check()
         const inventory = await owner.mutate(async turn => {
           const cutoff = Date.now(), managed = await artifacts.passiveReleaseInventory(turn, documents, io); check()
