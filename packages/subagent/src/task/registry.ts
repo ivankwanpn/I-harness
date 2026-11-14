@@ -474,7 +474,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     get: (taskId) => { assertReady(); return currentState.records.get(taskId) },
     getByIdentity: identity => { assertReady(); return currentState.records.getByIdentity(identity) },
     getByChildSession: (childSessionId) => { assertReady(); return currentState.records.getByChildSession(childSessionId) },
-    list: () => { assertReady(); return [...currentState.records.values()] },
+    list: () => { assertReady(); persistence.assertReadable(); return [...currentState.records.values()] },
     notifications: () => { assertReady(); return currentState.notifications.list() },
     updateNotification(id, patch) {
       assertReady()

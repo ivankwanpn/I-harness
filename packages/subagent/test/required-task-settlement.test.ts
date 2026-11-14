@@ -181,7 +181,7 @@ it.each([false,true])('holds native Task IO and parks only its parent exclusion 
   const settling=required.settle();void settling.catch(()=>{});await entered.promise;const save=lastOriginalTaskSave(tasks),count=document.view.events.length
   let admitted=false;const parentFact=action.captureMetadata!({type:'plan/mode',mode:'on'}).admit().then(outcome=>{admitted=true;return outcome})
   await Promise.resolve();await Promise.resolve();expect(admitted).toBe(false);expect(document.view.events).toHaveLength(count)
-  release.resolve();if(unknown){await expect(settling).rejects.toThrow();expect(await parentFact).toMatchObject({kind:'committed'});expect(()=>required!.assertProjectionCurrent()).toThrow();expect(lastOriginalTaskSave(tasks)).toBe(save);queueGate.blocked=false;await required.reconcile()}else await settling
+  release.resolve();if(unknown){await expect(settling).rejects.toThrow();expect(await parentFact).toMatchObject({kind:'committed'});expect(()=>required!.assertProjectionCurrent()).toThrow();expect(() => tasks!.list()).toThrow();expect(lastOriginalTaskSave(tasks)).toBe(save);queueGate.blocked=false;await required.reconcile();expect(tasks.list().some(row => row.id === task.id)).toBe(true)}else await settling
   expect(await parentFact).toMatchObject({kind:'committed'});expect(queueGate.stages).toHaveLength(1);expect(lastOriginalTaskSave(tasks)).toBe(save)
   await required.release();await source.close();action.finish();await tasks.closeOwnedLoad()
  }finally{release.resolve();queueGate.blocked=false;queueGate.root='';queueGate.ackEntered=undefined;queueGate.ackGate=undefined;await tasks?.closeOwnedLoad();await c.close()}

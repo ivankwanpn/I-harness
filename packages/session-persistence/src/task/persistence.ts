@@ -3,6 +3,7 @@ import type { TaskProtocolDocument } from './types.ts'
 import { captureTaskSnapshot } from '../coordinator/task-document-snapshot.ts'
 import { taskDocumentOperationsFor } from '../coordinator/task-document-association.ts'
 import type { TaskWriteOutcome } from '@i-harness/session-persistence'
+import { FactRecoveryRequiredError } from '@i-harness/core-session'
 import { taskDocumentStorageContract } from './storage-contract.ts'
 import { isOwnedTaskContext, type captureOwnedTaskContext } from './owned-context.ts'
 
@@ -61,6 +62,16 @@ export class TaskPersistence {
   #coalesceRunning = false
   #coalesceFlight: Promise<void> | undefined
   constructor(readonly coordinator: SessionCoordinator | undefined, readonly stateId: string | undefined, readonly strict: boolean, readonly snapshot: () => TaskProtocolDocument, readonly owned?: OwnedTaskContext, requiredCapture?:(authority:object)=>RequiredSaveCapture, assertOrdinaryCurrent?:()=>void) {this.#requiredCapture=requiredCapture;this.#ordinaryCurrent=assertOrdinaryCurrent}
+  /** Project live Task state using the original save outcomes and cleanup state. */
+  assertReadable(): void {
+    if (this.#debt) throw Object.assign(new FactRecoveryRequiredError(), { cause: this.#debtCause })
+    for (const save of this.#pending) {
+      const outcome = save.outcome()
+      if (outcome && (outcome.kind !== 'committed' || outcome.cleanupPending)) {
+        throw Object.assign(new FactRecoveryRequiredError(), { cause: outcome })
+      }
+    }
+  }
   save(): Promise<void> {
     if (!this.coordinator || !this.stateId) return Promise.resolve()
     const captured = this.#bindingAdmitted || this.strict&&this.owned ? this.captureOwned(false,undefined,true) : this.captureSave()
