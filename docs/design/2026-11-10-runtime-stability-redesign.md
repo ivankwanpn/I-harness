@@ -76,6 +76,10 @@
 
 回歸：session-persistence 完整 139 檔 **1249／1249 通過、零失敗／略過／未處理錯誤**；Gateway 相關九檔 91 項中 90 項通過，唯一失敗仍是 `21f8d861` 基線已存在的 5 秒 navigation fork 逾時。Session Persistence、Session Executor、Desktop Gateway 三個 package 型別通過，package boundaries 128／128，diff check 通過。[prepared 最終](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/prepared-has4.json) [全域 refcount 撤回證據](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/prepared-refcount2.json) [persistence 完整回歸](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/round3-persistence.json) [Gateway 回歸](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/round3-gateway-regression.json)
 
+#### 第四批：session-management 兩個 fork 期限量測
+
+`session-management.test.ts` 的兩個真實 Gateway fork 案例在無其他工作競爭、單獨執行時仍超過預設 5 秒：managed replacement fork 實測 5.086 秒，navigation fork 實測 6.092 秒，逾時發生在原生 fork 中段，屬期限與工作量不匹配而非產品失敗。`554ad012` 依量測把這兩案調整為 30 秒並在檔案內記錄原值、實測與理由；同檔其餘 25 案維持預設期限。調整後完整檔案 27 項全部通過。[量測收據](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/sm-fork-managed-measure.json) [navigation 量測](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/sm-fork-nav-measure.json) [調整後完整檔案](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/session-management-deadlines.json)
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
