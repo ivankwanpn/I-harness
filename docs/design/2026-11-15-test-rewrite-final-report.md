@@ -61,6 +61,7 @@
 ### 第二輪全庫驗證後的接續修復（head 之後）
 
 - `chat-stream-terminal-error`：capacity retry waiting fact 需約 1.5 秒才可觀察，改以 5 秒上限等待；**11/11 通過**（`2b5cd052`）。此檔在第二次全庫驗證時列 1 失敗。
+- `observed-settings`：`loadObserved` 對同一檔案讀取兩次（存在性探測＋observed bytes），改為斷言所有讀取都指向同一 settings 路徑；**6/6 通過**（`8d3f9fdd`）。
 - 其餘 215 項失敗的逐檔清單見 `verify-final2-file-failures.json`；每個檔案的最後 triage 記錄於接續狀態與 `docs/design/2026-11-10-runtime-stability-redesign.md` 第二十四批。
 ### WIP 產品能力（測試先於實作）
 
