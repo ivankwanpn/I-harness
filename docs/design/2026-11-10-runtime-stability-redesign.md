@@ -110,6 +110,10 @@ executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-
 
 `result-store-close.test.ts` 的兩個 120 秒掛起與兩個 error-shape 失敗都源自注入位置：案例在 fixture 寫入 artifact 之後才 `vi.spyOn(f.original.body,'close')`，但 result writer 在建立時就 `handle.close.bind(handle)` 捕捉關閉方法，事後 patch 永遠到不了產品關閉路徑（先前量測已證明 release 正常完成且兩個 fd 皆為 -1，因此**不是** handle 洩漏）。`2f16faad` 以 hoisted `node:fs/promises` open seam 在開啟時注入 native close fault（與 `context-output/test/close-ownership.test.ts` 相同 seam），並把案例對齊現行關閉契約：被拒絕的最終 retirement 會把保留的原始失敗回報給之後每一次 admission／retry、呼叫者擁有 native handle 的清理權、只有成功 retirement 後才會換成新的 store 實例。五項全部通過，單案 0.3 至 0.8 秒，**沒有期限調整**；Executor 型別與 diff check 通過。[修正後完整檔案](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/result-store-close-final2.json)
 
+#### 第十批：delivery-receiver 最後一案的排程觀測點
+
+`delivery-receiver` 剩下最後一案的 oracle 依賴兩件現行路徑不會發生的事：等待 pre-claim 失敗產生 `session/error` telemetry，並假設 promotion 會再跑一次 settlement callback 以取得 queue order。逐幀觀測顯示實際行為是：receipt 照常排入 queue（order 0.5）、恰好 promotion 一次、queue 清空，**沒有** execution error、promotion 也不會重播 retained source close。`c5e35a76` 改為直接從 committed events 觀測 promotion、只輪詢 queue row 排空，並以「已確認的 close 不會無故重播」取代固定次數斷言，保留「pre-claim 失敗後 receipt 仍被排程、無重複投遞／模型工作」的驗收。整個檔案 **17/17 通過**，無期限調整；Executor 型別與 diff check 通過。[修正後完整檔案](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/delivery-receiver5.json)
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
