@@ -200,6 +200,12 @@ executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-
 - `settings-watch-close`：mock 以 spread 副本回傳 service，丟失產品路徑會核對的原始身分（`Original service required`）；改為包裝真實 instance。兩個案例由全失敗變為 1 通過、1 待產品路徑確認（初始 extension refresh 目前不再被觸發）。`7d4f2686`。
 - `observed-settings` 的 `readFile` 觀測次數議題續留；`instruction-views` 卡在 WIP child agentTable；`usage-protocol-aux-host`、`interaction-resume`、`current-unfinished-catalog` 單獨執行通過（全庫併發 flake）。
 
+#### 第二十四批：容量等待觀測視窗，及第二輪驗證後的 triage
+
+`chat-stream-terminal-error.test.ts` 的 capacity 案例在 failed response connection 關閉後才非同步提交 `model/retry` waiting fact；實測最長約 **1.5 秒**才可觀察，超過 `vi.waitFor` 的 1 秒預設，因此斷言在 retry 出現前就失敗。`2b5cd052` 改為對實際 waiting fact 等待上限 5 秒（檔內註明量測），**11/11 通過**。
+
+第二輪驗證後其餘單一失敗 triage：`managed-runtime`（`Observed instructions unavailable`）、`retained-code-output`（`Original prepared task caller unavailable`）、`mixed-retention-native`（`Original revocation inventory recovery required`）分別屬既有產品契約與 WIP owned/native 能力，未以放寬斷言處理。
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

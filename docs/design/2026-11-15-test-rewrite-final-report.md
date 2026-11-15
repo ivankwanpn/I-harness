@@ -29,7 +29,7 @@
 | observation seam | code-output-owner-lifetime、code-observation-owner-bridge | 3/3 | `2b431ab2` |
 | 其他 | managed-ticket-close（量測 3.3 秒）、default-parent-writer（保留 coordinator 身分）、main-instruction-construction（run-end seam，剩 1 案） | 1/1、1/1、9/10 | `ed5e5eac`、`cfa87827`、`73293e2b` |
 
-合計：**24 個檔案全綠、128 項通過**（另有 `main-instruction-construction` 9/10 與 `service-instruction-close` 1/2 的部分修復）。所有期限調整均在檔內記錄原量測與新值；未以期限掩蓋掛起。
+合計：**25 個檔案全綠、139 項通過**（另有 `main-instruction-construction` 9/10 與 `service-instruction-close` 1/2 的部分修復）。所有期限調整均在檔內記錄原量測與新值；未以期限掩蓋掛起。
 
 ## 三、共同缺陷類別（交接文件所列）
 
@@ -58,6 +58,10 @@
 - `instruction-isolated-review`：approval close append 早於測試取得 actionId，注入時序未解。
 - `main-instruction-construction`：`openCliInput` mock 在現行 headless mount-fault 路徑不再被呼叫。
 
+### 第二輪全庫驗證後的接續修復（head 之後）
+
+- `chat-stream-terminal-error`：capacity retry waiting fact 需約 1.5 秒才可觀察，改以 5 秒上限等待；**11/11 通過**（`2b5cd052`）。此檔在第二次全庫驗證時列 1 失敗。
+- 其餘 215 項失敗的逐檔清單見 `verify-final2-file-failures.json`；每個檔案的最後 triage 記錄於接續狀態與 `docs/design/2026-11-10-runtime-stability-redesign.md` 第二十四批。
 ### WIP 產品能力（測試先於實作）
 
 - owned/native Task host：`project-context`、`event-driven-steering`、`native-context-child`、`retained-child-scope`、`retained-batch-continuation`、`native-dependency-observer`、`guardian-generation`（部分）等卡在 `Original prepared task caller unavailable`、native execution 未接、child session identity 或 agentTable 空。
