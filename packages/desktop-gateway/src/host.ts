@@ -609,6 +609,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   // Selected-results (v2) forks are host-supported only on the commit log: the
   // controller captures the v3 seed from the store's own snapshot.
   const selectedFork = commitLogStore ? createSelectedForkController({ coordinator,
+    contextOutput: nativeContext.contextOutput,
     async projectOf(sourceSessionId) {
       const value = await coordinator.getDocument('desktop-session-project-' + createHash('sha256').update(sourceSessionId).digest('hex')) as { projectId?: string } | undefined
       return typeof value?.projectId === 'string' ? { kind: 'project', projectId: value.projectId } : { kind: 'unmanaged' }

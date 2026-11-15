@@ -47,12 +47,40 @@ export type SelectedForkController = {
   execute(command: ForkCommandV2): Promise<ForkOutcomeV2>
 }
 
+/** Managed rows the target must be able to read with its own durable pin. */
+function selectedManagedRefIds(compiled: CompiledSelectedResultsSemanticSeed): string[] {
+  const ids = new Set<string>()
+  for (const record of compiled.records) {
+    if (record.type !== 'conversation/seed-results') continue
+    for (const row of record.page.rows) if (row.protocol === 'managed') ids.add(row.ref.id)
+  }
+  return [...ids]
+}
+
+/** The commit-log store has no selected-results bootstrap kernel, so the seed
+ *  capture alone leaves the child with metadata only: every inherited page was
+ *  readable only while an ancestor still owned it. Publishing one durable pin
+ *  per inherited managed artifact is the target's retention contract here; the
+ *  service refuses the grant unless the source still owns the exact committed
+ *  ref, and the pin is what keeps the bytes alive when the source is retired. */
+async function retainSelectedManagedResults(
+  contextOutput: { grant(access: { sessionId: string }, refIds: string[], targetSessionId: string): Promise<void> } | undefined,
+  compiled: CompiledSelectedResultsSemanticSeed, sourceSessionId: string, targetSessionId: string,
+): Promise<void> {
+  const ids = selectedManagedRefIds(compiled)
+  if (!contextOutput || ids.length === 0) return
+  // The service bounds one grant at 100 references.
+  for (let index = 0; index < ids.length; index += 100) await contextOutput.grant({ sessionId: sourceSessionId }, ids.slice(index, index + 100), targetSessionId)
+}
+
 /** The commit-log implementation of the v2 (selected-results) fork seams. */
 export function createSelectedForkController(options: {
   coordinator: SessionCoordinator
   projectOf?: (sourceSessionId: string) => Promise<{ kind: 'project'; projectId: string } | { kind: 'unmanaged' } | { kind: 'unassigned' }>
   taskDocumentEmpty?: () => unknown
   assertAvailable?: () => void
+  /** Durable target retention for inherited managed result bytes. */
+  contextOutput?: { grant(access: { sessionId: string }, refIds: string[], targetSessionId: string): Promise<void> }
 }): SelectedForkController {
   const { coordinator } = options
   return {
@@ -79,6 +107,13 @@ export function createSelectedForkController(options: {
         invocation: operation.invocation, target: { kind: 'new' }, metadata: operation.prepared.core.metadata,
         lineage: { origin: 'fork', parentSession: operation.prepared.core.sourceSessionId }, seed: compiled,
       } as never, { closure: compiled.dependencyDigest })
+      // Retain after the child exists: a failed birth must not leave pins for a
+      // document that was never created. A failed grant keeps the child
+      // unfinished for this operation; the retry route re-runs the same capture
+      // and grant, and the idempotent birth returns the existing target.
+      options.assertAvailable?.()
+      await retainSelectedManagedResults(options.contextOutput, compiled, operation.prepared.core.sourceSessionId, created.id)
+      options.assertAvailable?.()
       if (options.taskDocumentEmpty && await coordinator.getDocument('task-' + created.id) === undefined) await coordinator.putDocument('task-' + created.id, options.taskDocumentEmpty())
       const project = operation.prepared.requestIntent.project
       if (project.kind === 'project') {
