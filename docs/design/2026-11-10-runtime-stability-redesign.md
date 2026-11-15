@@ -118,6 +118,14 @@ executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-
 
 `managed-input-readiness.test.ts` 的五個 30 秒掛起來自 oracle 依賴 `subscribeManagedExecutionReadiness` 被呼叫：案例假設 same-ID submit 會先因 `inbox.pending()` 拋錯而進入 readiness 等待。實際路徑是 request 直接停在 managed lane／queue（receipt 排入 queue、無模型請求），並不會訂閱 readiness，因此等待永不成立；另外三個 Stop／recovery 案例期待已不再輸出的 `FACT_CLOSED` console warning。`3df83fe9` 改以 **queue row 作為可觀測的等待邊緣**，直接驅動真的 dependency gate 釋放或失敗（含 falsey cleanup failure），Stop 則以呼叫端實際收到的 `FactRecoveryRequired`／readiness-owner 拒絕為驗收，保留「無模型請求、只執行一次、recovery 後可再提交」的斷言。八項全部通過，無期限調整；Executor 型別與 diff check 通過。[修正後完整檔案](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/mir-final2.json)
 
+#### 第十二批：result-ordering 非擁有者能力探測，及固定版本全庫驗證啟動
+
+`result-ordering.test.ts` 的失敗是 fixture 形狀過時：案例用 lock-disabled 的 task-transition coordinator 代表「非擁有者讀取」，但現行格式的可寫協調與 ownership 綁定，composer 會以 `SessionLockUnsupportedError` 拒絕該形狀（這本身是正確契約）。`df1bcc88` 改用 `createReadOnlySessionCoordinator` 作為非擁有者探測；capability 仍為 undefined、changed-method 拒絕仍成立。16 項全部通過，Typecheck 通過。
+
+同輪以 `pnpm run verify:all` 啟動固定版本全庫驗證（背景執行，日誌在 `C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/verify-all-round12.log`），用以取得修復後的完整失敗清單；此執行包含 66 個 workspace 專案的 test、typecheck、boundary 與 gateway 階段，跨輪完成。
+
+同批 triage 顯示 `managed-instruction-handoff`、`project-context` 的 native-execution／owned-Task 案例與部分 `managed-*` 案例屬於 redesign 尚未完成的 WIP 產品能力（測試先於實作），不是單純 fixture 過時：`managed-instruction-handoff` 的首個 publish 在 `domain.assertCurrent()` 取得「Original issued write needs reconciliation」，`project-context` 的寫入案例在 native execution 取得前即失敗。這些需要產品能力落地，不能以放寬斷言處理。
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
