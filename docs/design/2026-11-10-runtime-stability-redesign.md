@@ -200,6 +200,13 @@ executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-
 - `settings-watch-close`：mock 以 spread 副本回傳 service，丟失產品路徑會核對的原始身分（`Original service required`）；改為包裝真實 instance。兩個案例由全失敗變為 1 通過、1 待產品路徑確認（初始 extension refresh 目前不再被觸發）。`7d4f2686`。
 - `observed-settings` 的 `readFile` 觀測次數議題續留；`instruction-views` 卡在 WIP child agentTable；`usage-protocol-aux-host`、`interaction-resume`、`current-unfinished-catalog` 單獨執行通過（全庫併發 flake）。
 
+#### 第二十六批：observed-settings 的 loadObserved 讀取契約，及單案 triage
+
+observed-settings 現在透過 loadObserved 載入設定，對同一檔案讀取兩次（存在性探測＋observed bytes），原斷言「readFile 僅一次」編碼了過時內部次數。改為斷言所有讀取都指向同一 settings 路徑（初始化與首次啟動行為不變），**6/6 通過**、gateway typecheck 乾淨。
+
+
+ative-context-output（spy 到的 ExecService.run 未被呼叫）與 mixed-retention-quota（SQLite database or disk is full，磁碟仍有 300+ GB）屬 fixture/環境待查；etention-grants 單獨執行通過，確認全庫失敗為併發 flake。
+
 #### 第二十四批：容量等待觀測視窗，及第二輪驗證後的 triage
 
 `chat-stream-terminal-error.test.ts` 的 capacity 案例在 failed response connection 關閉後才非同步提交 `model/retry` waiting fact；實測最長約 **1.5 秒**才可觀察，超過 `vi.waitFor` 的 1 秒預設，因此斷言在 retry 出現前就失敗。`2b5cd052` 改為對實際 waiting fact 等待上限 5 秒（檔內註明量測），**11/11 通過**。
