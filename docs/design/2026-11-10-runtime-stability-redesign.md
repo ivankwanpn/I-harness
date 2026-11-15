@@ -126,6 +126,14 @@ executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-
 
 同批 triage 顯示 `managed-instruction-handoff`、`project-context` 的 native-execution／owned-Task 案例與部分 `managed-*` 案例屬於 redesign 尚未完成的 WIP 產品能力（測試先於實作），不是單純 fixture 過時：`managed-instruction-handoff` 的首個 publish 在 `domain.assertCurrent()` 取得「Original issued write needs reconciliation」，`project-context` 的寫入案例在 native execution 取得前即失敗。這些需要產品能力落地，不能以放寬斷言處理。
 
+#### 第十三批：physical-recovery-trace 量測期限，及全庫驗證的中途取消
+
+`physical-recovery-trace.test.ts` 的 cap20／cap9 案例各跑兩次真實 recovery turn（retry、summary、changed-input replay），於本機單獨量測第一案 **6.7 秒**，超過基線記錄的預設 5 秒逾時。`fb135850` 依量測給予成對案例 30 秒上限，檔案 **3/3 通過**，行為未變；Typecheck 通過。
+
+同輪啟動的固定版本 `verify:all` 在 stage 1/7（66 專案的遞迴測試）進行約一小時後仍停在 context-output（9/66 專案），估計需數小時；為避免長時間佔用機器而無法繼續定向批次，已取消該次中途執行並保留部分日誌作為證據，最終乾淨版本將在批次收斂後重新執行。
+
+同批 triage 發現三個需要產品層判讀的單案：`managed-runtime-context` 的未知 publication 目前被分類為 `FACT_PRECONDITION_STALE` 而非 `FACT_RECOVERY_REQUIRED`（source guard 把 domain 的 recovery 失敗吞成 false）；`title-action` 在 post-turn callback 持有 action 時提交第二輪，`settleFinishedActions` 拋出 `Managed facts require reconciliation`；`main-instruction-targets` 的 257 目錄讀取案例在真實 turn 中被 abort。三者需要產品契約核對，未以放寬斷言處理。
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
