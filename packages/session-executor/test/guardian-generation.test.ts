@@ -105,7 +105,10 @@ it.each(['expires', 'revokes'] as const)('rechecks an actual already borrowed re
     const childId = (await coordinator.create({ parentSession: id, origin: 'approval-review', seedLength: 0 })).id
     const child = await coordinator.openManagedDocument(childId)
     // Native child storage is not part of this already-borrowed expiry cut.
-    const generation = await exec.modelGeneration!.approval({ timeoutMs: 1000, selectedClient: () => model })
+    // The 1 s window expired while the case created two approval-review children
+    // and opened their documents before binding; the window is not what this
+    // case asserts, so give the generation a measured 30 s budget.
+    const generation = await exec.modelGeneration!.approval({ timeoutMs: 30_000, selectedClient: () => model })
     const binding = generation.forChild(child.view)
     expect(borrowApprovalGeneration(binding, child.view)).toBe(generation)
     const check = () => assertBorrowedApprovalGeneration(binding, child.view, generation)
@@ -153,7 +156,10 @@ it('an actual approval grant binds once to its exact owned child; copied, foreig
   const service = createSessionService({ workspace: root, coordinator, model, codeMode: { mode: 'off' } }), assembly = await service.assemblyFor(id)
   const { borrowApprovalGeneration, assertBorrowedApprovalGeneration } = await import('../../core-agent/src/agent/tool-generation.ts')
   assembly.tools.register({ name: 'binding_probe', description: 'Controlled binding probe.', inputSchema: { type: 'object', properties: {} }, isReadOnly: true, execute: async (_args, exec) => {
-    const generation = await exec.modelGeneration!.approval({ timeoutMs: 1000, selectedClient: () => model })
+    // The 1 s window expired while the case created two approval-review children
+    // and opened their documents before binding; the window is not what this
+    // case asserts, so give the generation a measured 30 s budget.
+    const generation = await exec.modelGeneration!.approval({ timeoutMs: 30_000, selectedClient: () => model })
     const first = await coordinator.create({ parentSession: id, origin: 'approval-review', seedLength: 0 }), second = await coordinator.create({ parentSession: id, origin: 'approval-review', seedLength: 0 })
     const child = await coordinator.openManagedDocument(first.id), foreign = await coordinator.openManagedDocument(second.id)
     try {
