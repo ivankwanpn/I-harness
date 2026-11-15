@@ -80,6 +80,12 @@
 
 `session-management.test.ts` 的兩個真實 Gateway fork 案例在無其他工作競爭、單獨執行時仍超過預設 5 秒：managed replacement fork 實測 5.086 秒，navigation fork 實測 6.092 秒，逾時發生在原生 fork 中段，屬期限與工作量不匹配而非產品失敗。`554ad012` 依量測把這兩案調整為 30 秒並在檔案內記錄原值、實測與理由；同檔其餘 25 案維持預設期限。調整後完整檔案 27 項全部通過。[量測收據](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/sm-fork-managed-measure.json) [navigation 量測](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/sm-fork-nav-measure.json) [調整後完整檔案](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/session-management-deadlines.json)
 
+#### 第五批：retained-mcp-result yield 視窗與期限，及 executor 普查第二批
+
+`retained-mcp-result.test.ts` 的 structured-data 案例在單次 host MCP 呼叫後直接斷言 cell 已完成，但沒有指定 `yield_time_ms`，因此落在預設 1 秒 yield 而取得 running 狀態；同檔多個案例執行真實 WASM／broker／4 MiB transfer，單獨量測 6.2 至 10.9 秒，超過預設 5 秒期限。`7c40234a` 為 structured-data 案例加 30 秒 yield（案例驗證回傳資料，不是 yield 預設），並依量測為受影響案例記錄 30 秒期限；完整檔案 10 項全部通過，Executor 型別與 diff check 通過。
+
+executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-acquisition`、`event-driven-steering`、`delivery-receiver`、`result-store-close`、`retained-state-negative`）共 48 項中 23 通過、25 失敗，失敗集中四類：owned Task host／native execution 組合缺口（event-driven-steering 4、project-context 與 native-context-child 同類）、清理審計順序與現行契約不一致（instruction-initial-acquisition 5）、fixture warning 過濾（delivery-receiver 3）、以及以 `putDocumentStrict` 直接寫 task state 造成冷開機要求 recovery（retained-state-negative 4，已驗證僅改 task transition coordinator 不足以修復）。普查證據已保存，這些檔案留待共用真實 host fixture 與逐案契約比較後處理。[MCP 最終](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/mcp-final.json) [second census](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/executor-census2.json)
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
