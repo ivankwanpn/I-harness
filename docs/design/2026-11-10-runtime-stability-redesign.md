@@ -66,6 +66,16 @@
 
 最終四檔 37 項全部通過、零失敗／略過／未處理錯誤，耗時 200.56 秒（本批多數為 native 控制）。Gateway 型別、package boundaries 128／128 及 diff check 通過。`session-management.test.ts` 回歸 27 項中 26 項通過，唯一失敗為 `21f8d861` 基線已存在的 5 秒逾時（session navigation fork），另一次重跑中第二個 5 秒逾時屬同類負載敏感問題。[本批最終四檔](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/batch2-final2.json) [archive 修正前 live 所有權殘留](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/live-final2.json) [session-management 回歸](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/session-management-after2.json)
 
+#### 第三批：共享 managed document 生命週期與 prepared writer
+
+第二批遺留的 `prepared-session-writer` 六項失敗，根因不是 fixture 訊息過期，而是真正的產品併發缺陷：冷路徑 work-state 寫入 Todo 時會 `openManagedDocument` 再於 finally `closeManagedDocument`；若同一 session 的 assembly 仍在建構中並持有同一份 document，close 會撤銷／tombstone 共享 document（session-persistence 的 managed document 沒有 in-process 多 owner 概念），建構完成後的 input receipt 以 `FACT_CLOSED` 失敗。這對應「啟動期間人類寫入 Todo 可能弄壞該 session」的實際情境。
+
+先在 coordinator factory 嘗試全域 open refcount，prepared 案例通過但 `refuses late publication after close` 改以 `FACT_CLOSED` 失敗（session close 必須是權威的關閉，不能被計數擋住），因此撤回。`b298a960` 改為在 `SessionCoordinator` 暴露唯讀能力 `hasManagedDocument`（JSONL 與 commit-log 兩個 coordinator 都實作），work-state 冷路徑只在自己的 open 前未持有 document 時才 close；lifecycle／session close 路徑不查這個提示，維持權威關閉。
+
+同一檔案其餘三項屬過期斷言，`1ec2a6ae` 更新為現行契約：關閉中寫入接受 typed `FACT_CLOSED`；失敗 mount 回報 mount 錯誤與 cleanup debt 的 AggregateError，後續入口繼續回報保留的 cleanup owner；late cold writer load 只接受實際使用的 2 次 open，不再硬編碼 4 次。檔案最終 9 項全部通過。
+
+回歸：session-persistence 完整 139 檔 **1249／1249 通過、零失敗／略過／未處理錯誤**；Gateway 相關九檔 91 項中 90 項通過，唯一失敗仍是 `21f8d861` 基線已存在的 5 秒 navigation fork 逾時。Session Persistence、Session Executor、Desktop Gateway 三個 package 型別通過，package boundaries 128／128，diff check 通過。[prepared 最終](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/prepared-has4.json) [全域 refcount 撤回證據](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/prepared-refcount2.json) [persistence 完整回歸](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/round3-persistence.json) [Gateway 回歸](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/round3-gateway-regression.json)
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
