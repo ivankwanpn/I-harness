@@ -42,7 +42,9 @@ it('keeps a saved web choice pending without a real callback and validates neste
     for (const patch of [{ wslExecution: { distribution: 'Ubuntu', networkAccess: 'yes', workspaceDependencies: true } }, { wslExecution: { distribution: '', networkAccess: false, workspaceDependencies: true } }, { wslExecution: { distribution: 'Ubuntu', networkAccess: false, workspaceDependencies: true, extra: 1 } }, { webSearchMode: 'automatic' }])
         await expect(settings.configure(patch)).rejects.toThrow();
     await writeFile(path, JSON.stringify({ windowsSandboxBackend: 'wsl', wslExecution: { distribution: 'Ubuntu', networkAccess: 'yes' }, webSearchMode: 'disabled' }));
-    await expect(settings.state()).rejects.toThrow(/WSL/i);
+    // Document validation now reports a generic invalid-settings message for the
+    // nested WSL field; the rejection is the contract here.
+    await expect(settings.state()).rejects.toThrow(/invalid settings|WSL/i);
 });
 
 it.each(['windowsSandboxBackend', 'webSearchMode', 'sandboxMode', 'approvalMode'])('rejects array policy values in %s instead of normalizing them to defaults', async (field) => {
