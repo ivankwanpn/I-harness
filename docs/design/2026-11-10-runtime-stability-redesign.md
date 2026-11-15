@@ -56,6 +56,16 @@
 
 修正後三個完整檔案 10 項全部通過，零失敗、零略過、零未處理錯誤，最終執行 81.90 秒（transform 9.41 秒、collect 30.94 秒、tests 49.70 秒）。反向控制暫時停用 retain 呼叫後，retirement 案例以 `unauthorized` 失敗，恢復後雜湊與原檔相同。Gateway 型別、package boundaries 128／128 及 diff check 通過。相鄰回歸 26 項中 25 項通過，`nested-fork-retention.test.ts` 的 30 秒逾時在 `21f8d861` 固定基線的 inventory 已經是相同失敗，屬既有待修期限問題而非本批回歸。[反向控制](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/negative-control-no-retention.log) [最終三檔](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/selected-public-final.json) [保留探針](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/probe-07.log) [相鄰回歸](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/adjacent-regression.json)
 
+#### 第二批：Gateway 守衛 backend seaming、archive 所有權與事件契約
+
+依 `21f8d861` inventory 挑出基準後未再改動的高失敗檔案重跑現況，7 檔 55 項得到 31 通過、24 失敗。本批先修其中四檔 37 項，其餘 `prepared-session-writer`（6）與 `native-context-child`（5）留待下一批。
+
+四個檔案失敗的共同教訓是 fixture 與 product 現行契約不一致。`execution-retirement-cycles` 在 coordinator 建構後替換 `backend.profile`，canonical-path guard 以 `PROCESS_READ_UNAVAILABLE` 正確拒絕；改由 `createJsonlBackend` 的 `wrap` 建構縫隙注入 hold。`selected-source-holder` 同樣在建構後改寫 `selectedCapture`（改走 `wrap`），以公開 `coordinator.putDocument` spy 攔截不到實際的內部 document writer（改為在 backend document 寫入縫隙 gating），並在持有 seed append 時先 await clear 造成 deadlock（改為啟動 clear、確認 revocation 開始後才釋放 append，兩者一起 settle，issuance 仍被 fence）。`live-ownership` 假設 move／archive 會先暫停 adopt；實際 writer admission 會先撤銷並 drain 原有 observation pin，因此改為斷言撤銷、drain 與最終所有權。`batch-isolation` 仍斷言已退役的頂層 `isError`／`output` 欄位，改為核對現行 `envelope.execution`／`retention` 契約。
+
+本批發現並修正一個真正產品缺陷：archive 透過 writer path 寫入 metadata 時會 adopt ownership，若 session 先前沒有 live owner，這個 adoption 在 archive 完成後仍保留，導致 archived session 持續被持有、外部 adoption 失敗並留下 owner。`b660dee6` 在 archive 前記錄原有 live 狀態，只釋放 archive 自己建立的那一次 adoption；真正 live 的 session 保留 owner。`live-ownership` 四個案例（move／archive × alreadyLive）在修正前全部逾時或留下所有權，修正後連續三次 4/4 通過。
+
+最終四檔 37 項全部通過、零失敗／略過／未處理錯誤，耗時 200.56 秒（本批多數為 native 控制）。Gateway 型別、package boundaries 128／128 及 diff check 通過。`session-management.test.ts` 回歸 27 項中 26 項通過，唯一失敗為 `21f8d861` 基線已存在的 5 秒逾時（session navigation fork），另一次重跑中第二個 5 秒逾時屬同類負載敏感問題。[本批最終四檔](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/batch2-final2.json) [archive 修正前 live 所有權殘留](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/live-final2.json) [session-management 回歸](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/session-management-after2.json)
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
