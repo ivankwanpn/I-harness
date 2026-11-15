@@ -16,6 +16,8 @@ import * as locking from '../../fs-lock/src/index.ts'
 import { createProcessAwareResultService } from '../src/lifecycle/process-result-service.ts'
 import { ContextStore } from '../../context-output/src/store.ts'
 import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
+import { createReadOnlySessionCoordinator } from '@i-harness/session-persistence'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { retryOriginalResultOrdering, beginOriginalResultOrderingRegistration, originalResultOrderingFor } from '../../session-persistence/src/result-ordering-internal.ts'
 import { captureHeldOwnershipClaim } from '../../session-persistence/src/coordinator/ownership.ts'
@@ -28,9 +30,10 @@ const capture = { sessionId: 'source', callId: 'c', label: 'c', text: 'original 
 it('detects only genuine lock-enabled ordering capability and refuses changed original methods',async()=>{
  const root=await mkdtemp(join(process.env.IH_LEGACY_FORK_EVIDENCE_ROOT!,'ordering-capability-'))
  const coordinator=createJsonlTaskTransitionCoordinator(join(root,'locked'),{lock:{enabled:true}},taskDocumentStorageContract)
- const unlocked=createJsonlTaskTransitionCoordinator(join(root,'unlocked'),{lock:{enabled:false}},taskDocumentStorageContract)
+ // A non-owning reader must use the read-only coordinator: current-format writable coordination is ownership-bound by contract.
+ const unlocked=createReadOnlySessionCoordinator(createJsonlBackend(join(root,'unlocked')))
  try{
-  expect(originalResultOrderingFor(unlocked)).toBeUndefined();expect(originalResultOrderingFor({...coordinator})).toBeUndefined()
+  expect(originalResultOrderingFor(unlocked as unknown as Parameters<typeof originalResultOrderingFor>[0])).toBeUndefined();expect(originalResultOrderingFor({...coordinator})).toBeUndefined()
   const capability=originalResultOrderingFor(coordinator)!
   expect(capability).toBeDefined();expect(()=>({...capability}).beginRegistration({})).toThrow(/Original/)
   const original=coordinator.create,changed=vi.spyOn(coordinator,'create').mockImplementation(meta=>original(meta))
