@@ -167,6 +167,12 @@ executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-
 
 同輪以 120 秒預算重測數個基線逾時檔案：`main-instruction-order` 單獨執行 **0.657 秒通過**（基線失敗應為併發負載下的 flake，無需改動）；`managed-ticket-close` 證實只需量測期限；`execution-fs-ack` 與 `resident-instruction-activation` 各有一案在 120 秒後仍掛起、`fork-handoff` 首案超過其 15 秒預算仍未完成——三者屬真實掛起，需要獨立診斷，暫不改期限。`fork-handoff` 的嘗試性預算修改因行號誤植已還原。
 
+#### 第十九批：default-parent-writer 的 coordinator 身分，及最終驗證啟動前 triage
+
+`default-parent-writer.test.ts` 以 `{...coordinator, loadOwned}` 的展開副本建立 assembly，展開副本失去 owned coordinator 身分，legacy result-ordering 註冊因此以 `Original result ordering coordinator required` 拒絕。`cfa87827` 改為在**原 coordinator** 上 `vi.spyOn(loadOwned)` 觀察載入次數；案例通過。
+
+`delivery-lifecycle` 仍有 1 案在 fixture close 時回報 `Delivery fixture cleanup failed`，其 fault-path 清理契約需與共用 helper 的清理期望一併核對，留待後續。自此進入**最終固定版本全庫驗證**階段：所有批次已提交、型別與 diff check 乾淨，接下來執行 `pnpm run verify:all` 取得完整結果，並在等待期間撰寫最終報告。
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
