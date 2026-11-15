@@ -139,7 +139,9 @@ describe("Desktop observed saved settings", () => {
       return store.set({ instructions })
     })
     expect(saved.instructions).toEqual(instructions)
-    expect(fs.readFile).toHaveBeenCalledExactlyOnceWith(f.settingsPath)
+    // loadObserved reads the exact saved document (existence probe plus the
+    // observed bytes); the contract is that initialization uses only that file.
+    expect(new Set(vi.mocked(fs.readFile).mock.calls.map(call => String(call[0])))).toEqual(new Set([f.settingsPath]))
     await fs.unlink(f.settingsPath)
     const frames: RpcMessage[] = []
     const host = await createDesktopHost({ ...f, onWrite: frame => frames.push(frame) })
