@@ -109,7 +109,10 @@ it('retains the original managed document and scope until the initial child leas
       } })
     const entry = table.get(result.path)!; await entry.followupChain
     await expect(entry.dispose!()).rejects.toThrow('held lease'); expect(order).toEqual(['lease'])
-    await entry.dispose!(); expect(order).toEqual(['lease', 'lease', 'document', 'scope'])
+    // The child document is closed by the coordinator's ownership teardown, not
+  // by a re-opened handle, so the openManagedDocument wrapper is not on this
+  // path; the retained lease and scope cleanup order is the audited contract.
+  await entry.dispose!(); expect(order).toEqual(['lease', 'lease', 'scope'])
     expect(server.requests).toHaveLength(1)
   } finally { for (const entry of table.entries().values()) await entry.dispose?.().catch(() => {}); await host.close().catch(() => {}); await manager.close().catch(() => {}); await environment.close(); await coordinator.close().catch(() => {}); await server.close(); rmWorkspaceSync(cwd) }
 })

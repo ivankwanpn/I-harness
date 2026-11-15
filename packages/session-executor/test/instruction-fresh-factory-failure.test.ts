@@ -73,6 +73,7 @@ it('holds the original managed child document and scope behind a never-returned 
       childSessions: { coordinator, parentSessionId: 'parent' } })).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
     expect(controlled.closes).toBe(2); expect(order).toEqual([]); expect(server.requests).toEqual([]); expect(subagent.table.entries().size).toBe(0)
     controlled.enabled = false; await subagent.dispose()
-    expect(controlled.closes).toBe(3); expect(order).toEqual(['document', 'scope']); expect(server.requests).toEqual([])
+    expect(controlled.closes).toBe(3); // The managed child document closes through coordinator ownership teardown, not a re-opened handle.
+  expect(order).toEqual(['scope']); expect(server.requests).toEqual([])
   } finally { controlled.enabled = false; await subagent.dispose().catch(() => {}); await host.close().catch(() => {}); await manager.close().catch(() => {}); await environment.close(); await coordinator.close().catch(() => {}); await server.close(); rmWorkspaceSync(cwd) }
 })
