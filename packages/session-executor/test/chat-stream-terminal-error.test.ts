@@ -175,7 +175,9 @@ it('genuine Stop cancels capacity waiting after the actual failed response conne
   const run = f.service.submit(f.id, 'wait then stop', stop.signal)
   void run.catch(() => {})
   try {
-    await vi.waitFor(async () => expect((await f.facts()).filter(event => event.type === 'model/retry' && event.retry.phase === 'waiting')).toHaveLength(1))
+    // The capacity wait fact is committed asynchronously; measured up to 1.5 s
+    // before the waiting retry becomes observable, above waitFor's 1 s default.
+    await vi.waitFor(async () => expect((await f.facts()).filter(event => event.type === 'model/retry' && event.retry.phase === 'waiting')).toHaveLength(1), { timeout: 5000 })
     const waiting = (await f.facts()).find(event => event.type === 'model/retry' && event.retry.phase === 'waiting')
     expect(waiting).toMatchObject({ retry: { code: 'CAPACITY', delayMs: 10_000 } })
     await closed.promise
