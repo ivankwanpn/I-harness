@@ -59,7 +59,13 @@ it('idle Stop followed by a new human input cannot revive the older child', asyn
 }, NATIVE_B2_CASE_MS)
 
 it('two genuine sources with equal presentation have distinct receipts and same-source rerender keeps original input', async () => {
-  const f = await createDeliveryFixture({ spawnCount: 2 })
+  // This case drives two genuine sources and replaces the renderer with a
+  // test-owned presentation override; the close settlement legitimately
+  // reports its reconciliation diagnostics for the injected unknown facts.
+  const f = await createDeliveryFixture({ spawnCount: 2, expectedWarnings: [
+    '[i-harness] original delivery settlement: FactRecoveryRequiredError: Managed facts require reconciliation',
+    '[i-harness] delivery reconciliation failed: FactRecoveryRequiredError: Managed facts require reconciliation',
+  ] })
   try {
     await f.start()
     const assembly = await f.service.assemblyFor('parent'), adapter = receivedInputsFor(assembly.factOwner, 'parent').delivery
@@ -86,7 +92,10 @@ it('two genuine sources with equal presentation have distinct receipts and same-
 }, NATIVE_B2_CASE_MS)
 
 it('reconciles a physically landed receipt on its original handle before one parent request', async () => {
-  const f = await createDeliveryFixture({ holdReceiptUnknown: true })
+  const f = await createDeliveryFixture({ holdReceiptUnknown: true, expectedWarnings: [
+    '[i-harness] original delivery settlement: AggregateError: Original delivery sources require settlement',
+    '[i-harness] delivery reconciliation failed: AggregateError: Original delivery sources require settlement',
+  ] })
   const boundary = async <T>(name: string, work: Promise<T>, resourceMs = 3000) => {
     let timer: ReturnType<typeof setTimeout>
     try { return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Original receipt boundary pending: ' + name)), resourceMs) })]) }
@@ -227,7 +236,12 @@ it('a lost original terminal acknowledgment activates same-capture recovery with
 }, NATIVE_B2_CASE_MS)
 
 it('original unknown terminal recovery continues after Stop while the generation forbids admission and wake', async () => {
-  const f = await createDeliveryFixture({ holdTerminalUnknown: true, expectStopDiagnostics: true })
+  const f = await createDeliveryFixture({ holdTerminalUnknown: true, expectStopDiagnostics: true, expectedWarnings: [
+    '[i-harness] original delivery settlement: AggregateError: Task notification and original progress cleanup failed',
+    '[i-harness] delivery reconciliation failed: AggregateError: Task notification and original progress cleanup failed',
+    '[i-harness] original delivery settlement: AggregateError: Required source drain needs recovery',
+    '[i-harness] delivery reconciliation failed: AggregateError: Required source drain needs recovery',
+  ] })
   try {
     await f.start(); f.releaseChild(); await f.waitForTerminalReconcile()
     f.service.cancelRunning!('parent')
