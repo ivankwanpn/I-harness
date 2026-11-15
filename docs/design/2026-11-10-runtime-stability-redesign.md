@@ -188,6 +188,12 @@ executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-
 - `delivery-active-wait`：即使把等待放寬到 15 秒，foreground handoff 仍被「later notification save」擋住（測試要求不得被擋），傾向真實排序問題。
 - `exec-direct-source` 的 `manual` 模式：durable session 上手動 dispatch Shell 被 `Original model Exec issuer required` 拒絕，需產品層決定手動／SDK 路徑是否應允許；未以放寬斷言處理。
 
+#### 第二十二批：subagent-settings 的預設角色工具集，及 gateway 掛起 triage
+
+`subagent-settings.test.ts` 的「清除 per-role allowlist」案例斷言清除後不含 `websearch`；但清除是還原角色預設，而現行 `research` 預設已含 `websearch`，原斷言編碼了過時預設。`e887038c` 先捕捉未被覆寫前的預設清單，再斷言清除與 role/clear 後都等於該預設。3/3 通過，desktop-gateway typecheck 乾淨。
+
+同輪 triage：`observed-settings` 的 `readFile` 由 1 次變為 2 次（同一路徑，屬觀察式讀取），需產品層確認一次初始化的可觀察契約；`approval-rules` 與 `host-fixture-model` 各自在 120 秒／15 秒後仍掛起，屬真實掛起；`current-unfinished-catalog` 單獨執行通過，屬全庫併發 flake。
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
