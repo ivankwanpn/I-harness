@@ -140,6 +140,15 @@ executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-
 
 同輪 triage 續；`instruction-diagnostics` 另有一個 60 秒逾時案例（基線未失敗）與排序斷言，暫不處理；`native-dependency-observer` 的唯一失敗是 native child session identity 與 parent 相同，屬 WIP native child birth 能力。
 
+#### 第十五批：backend pre-bind seam 的系統性遷移
+
+承接第十三批發現：多個 executor fixture 在建構後替換 `backend.appendOwnedBatch`／`reconcileOwnedBatch`，canonical-path guard 於建構時快照 descriptor，事後替換遭拒，注入的 unknown outcome 從未發生 —— 基線表現為 `PROCESS_READ_UNAVAILABLE`、計數全零或「expected false to be true」。`d0fe0871` 先修 `main-instruction-publication`（1/1），`3dc14af2` 再批次遷移四個完整檔案與一個部分檔案：
+
+- `nested-broker-retention` 4/4、`managed-context-output` 5/5、`retention-grants` 3/3、`instruction-unstarted-recovery` 2/2 全部通過。
+- `service-instruction-close` 第一個案例改為通過；第二案例（cold reader 在 held native cleanup 下應回報 unavailable）屬 read-result 契約問題，保留待查。
+
+遷移一律使用 `createJsonlBackend(root, { wrapOwnedBatch, wrapOwnedReconcile })` 建構縫隙，故障注入因此真正到達 journal 寫入路徑；Typecheck 與 diff check 通過。
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
