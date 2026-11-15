@@ -38,14 +38,15 @@ vi.mock("@i-harness/session-executor", async importOriginal => {
   const actual = await importOriginal<typeof import("@i-harness/session-executor")>()
   return { ...actual, createSessionService(...args: Parameters<typeof actual.createSessionService>) {
     const service = actual.createSessionService(...args)
-    return { ...service,
-      async refreshExtensions() {
-        if (!observed.holdRefresh) { await service.refreshExtensions(); observed.initialRefreshDone = true; return }
-        observed.refreshStarted = true
-        await new Promise<void>(resolve => { observed.releaseRefresh = resolve })
-      },
-      async close() { observed.events.push("service"); observed.releaseRefresh?.(); await service.close() },
+    // Keep the original service identity; product paths authenticate it.
+    const refresh = service.refreshExtensions.bind(service), close = service.close.bind(service)
+    service.refreshExtensions = async () => {
+      if (!observed.holdRefresh) { await refresh(); observed.initialRefreshDone = true; return }
+      observed.refreshStarted = true
+      await new Promise<void>(resolve => { observed.releaseRefresh = resolve })
     }
+    service.close = async () => { observed.events.push("service"); observed.releaseRefresh?.(); await close() }
+    return service
   } }
 })
 import { createDesktopHost } from "../src/host.ts"
