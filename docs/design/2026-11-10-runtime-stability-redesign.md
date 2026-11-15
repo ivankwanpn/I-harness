@@ -194,6 +194,12 @@ executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-
 
 同輪 triage：`observed-settings` 的 `readFile` 由 1 次變為 2 次（同一路徑，屬觀察式讀取），需產品層確認一次初始化的可觀察契約；`approval-rules` 與 `host-fixture-model` 各自在 120 秒／15 秒後仍掛起，屬真實掛起；`current-unfinished-catalog` 單獨執行通過，屬全庫併發 flake。
 
+#### 第二十三批：gateway 三個單案：WSL 分類、service 身分、觀察式讀取
+
+- `wsl-product-settings`：nested `wslExecution` 驗證現在回報通用 `invalid settings: document validation ...`，不再含 `WSL` 字樣；拒絕仍是契約，改為接受兩種分類。**10/10 通過**（`a874c322`）。
+- `settings-watch-close`：mock 以 spread 副本回傳 service，丟失產品路徑會核對的原始身分（`Original service required`）；改為包裝真實 instance。兩個案例由全失敗變為 1 通過、1 待產品路徑確認（初始 extension refresh 目前不再被觸發）。`7d4f2686`。
+- `observed-settings` 的 `readFile` 觀測次數議題續留；`instruction-views` 卡在 WIP child agentTable；`usage-protocol-aux-host`、`interaction-resume`、`current-unfinished-catalog` 單獨執行通過（全庫併發 flake）。
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
