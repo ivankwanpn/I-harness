@@ -135,6 +135,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     }:{}),    inspectBootstrap: managed.inspectBootstrap,
     ...(backend.storageRoot === undefined ? {} : { storageRoot: backend.storageRoot }),
     async openManagedDocument(sessionId) { assertDurableTransition(); managed.assertOutsideCapture(sessionId); observations.assertOutsideObservedSession(sessionId); observations.assertManagedSessionAdmission(sessionId); return managed.open(sessionId) },
+    hasManagedDocument(sessionId) { return managed.has(sessionId) },
     revokeManagedDocumentNewWork: managed.revoke,
     closeManagedDocument(sessionId) { return retire(sessionId, () => managed.closeOne(sessionId)) },
     ...(backend.deletionReceipt ? { deletionReceipt: (sessionId: string) => backend.deletionReceipt!(sessionId) } : {}),

@@ -85,6 +85,10 @@ export function createDesktopWorkState(coordinator: SessionCoordinator, _service
         // The cold path writes through the coordinator document directly: the
         // service's writable sessionmarks the session as a complete selection
         // and would refuse the managed runtime for every later turn.
+        // Another in-process owner (an assembly build holding the same
+        // document open) keeps its own handle: only the cold path's own open is
+        // released here, otherwise closing would retire the shared document.
+        const alreadyOpen = coordinator.hasManagedDocument?.(sessionId) ?? false
         const document = await coordinator.openManagedDocument(sessionId)
         try {
           const session = document.view as unknown as Session
@@ -92,7 +96,7 @@ export function createDesktopWorkState(coordinator: SessionCoordinator, _service
           if (actualRevision !== expectedRevision) throw new TodoRevisionConflictError(expectedRevision, actualRevision)
           committedFactSeqs(await actionMetadataFacts(document).admit({ type: "todo/write", version: 1, items }))
           return view(document.view as unknown as Session)
-        } finally { await coordinator.closeManagedDocument?.(sessionId).catch(() => {}) }
+        } finally { if (!alreadyOpen) await coordinator.closeManagedDocument?.(sessionId).catch(() => {}) }
       } finally {
         gate.resolve()
         if (writes.get(sessionId) === gate.promise) writes.delete(sessionId)

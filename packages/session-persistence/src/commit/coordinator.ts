@@ -70,6 +70,8 @@ export type CommitCoordinator = {
   loadOwned(sessionId: string): Promise<{ session: Session }>
   append(sessionId: string, events: SessionEvent[]): Promise<void>
   openManagedDocument(sessionId: string): Promise<ManagedDocument>
+  /** True while this process already holds the managed document open. */
+  hasManagedDocument?(sessionId: string): boolean
   /** Detached read-only document that must not disturb the owner's document. */
   openReadOnlyManagedDocument?(sessionId: string): Promise<{ document: ManagedDocument; close(): Promise<void> }>
   acquireExecution(sessionId: string): Promise<import('../execution-internal.ts').ManagedExecutionAttachment>
@@ -587,6 +589,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       })
     },
     sessionOfDocument(document) { return documentSessions.get(document) },
+    hasManagedDocument(sessionId) { return managed.has(sessionId) },
     capabilities() { return ownershipPorts },
     withProcessReadObservation(id, options, work, publish) {
       return withCommitProcessReadObservation({ open: sessionId => open(sessionId, 'read'), getDocument: getDocumentOf, metaOf }, id, options, work, publish)
