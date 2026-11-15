@@ -11,6 +11,8 @@ import { createSessionService } from '../src/index.ts'
 
 afterEach(() => vi.unstubAllGlobals())
 const completion = (delta: object) => new Response('data: ' + JSON.stringify({ choices: [{ delta, finish_reason: null }] }) + '\n\ndata: ' + JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] }) + '\n\ndata: [DONE]\n\n')
+// Each cap runs two real recovery turns with retry, summary and changed-input
+// replay work; 6.7 s was measured alone on 2026-11-15, above the default 5 s.
 it.each([20, 9])('actual retry→selected summary→changed-input recovery is bounded by literal cap%s without replaying an earlier tool', async cap => {
   const root = await mkdtemp(join(tmpdir(), 'ih-physical-recovery-')), backend = createJsonlBackend(root)
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
@@ -56,7 +58,7 @@ it.each([20, 9])('actual retry→selected summary→changed-input recovery is bo
     expect(events.filter(event => event.type === 'compaction/replacement')).toHaveLength(cap === 20 ? 1 : 0)
     expect(events.filter(event => event.type === 'tool/dispatch')).toHaveLength(1)
   } finally { await service.close().catch(() => {}); await coordinator.close().catch(() => {}) }
-})
+}, 30_000)
 
 it('accepted tool work settles across its model deadline and authorizes one fresh response without replay', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-tool-past-generation-')), backend = createJsonlBackend(root)
