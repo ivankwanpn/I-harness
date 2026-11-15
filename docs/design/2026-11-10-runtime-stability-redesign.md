@@ -86,6 +86,12 @@
 
 executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-acquisition`、`event-driven-steering`、`delivery-receiver`、`result-store-close`、`retained-state-negative`）共 48 項中 23 通過、25 失敗，失敗集中四類：owned Task host／native execution 組合缺口（event-driven-steering 4、project-context 與 native-context-child 同類）、清理審計順序與現行契約不一致（instruction-initial-acquisition 5）、fixture warning 過濾（delivery-receiver 3）、以及以 `putDocumentStrict` 直接寫 task state 造成冷開機要求 recovery（retained-state-negative 4，已驗證僅改 task transition coordinator 不足以修復）。普查證據已保存，這些檔案留待共用真實 host fixture 與逐案契約比較後處理。[MCP 最終](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/mcp-final.json) [second census](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/executor-census2.json)
 
+#### 第六批：notification-stop-owner 的 backend 建構縫隙
+
+`notification-stop-owner.test.ts` 的 9 項失敗全部源自同一 fixture 缺陷：每個案例都在 coordinator 建構後直接改寫 `backend.appendOwnedBatch`（部分另改 `reconcileOwnedBatch`）。canonical-path guard 在建構時快照 backend descriptor，取消批次路徑因此以 `PROCESS_READ_UNAVAILABLE` 失敗，測試的 held resolver 永遠不會被呼叫，其中 3 案掛滿 120 秒、6 案快速失敗於後續狀態。`6ebae59b` 把所有 batch／reconcile 注入改走 `createJsonlBackend` 的 `wrapOwnedBatch`／`wrap` 建構縫隙，並以 per-test hooks 保留原本的 unknown／debt 控制。修正後整個檔案 9 項全部通過，單案 0.6 至 1.3 秒，**沒有任何期限調整**；Executor 型別與 diff check 通過。[修正後完整檔案](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/nso-final.json)
+
+同批普查的 `managed-input-readiness` 五個 30 秒掛起另屬 module-mock 接縫失效：案例以 `vi.mock` 攔截 `subscribeManagedExecutionReadiness`／`associateExecutionDependencies` 並等待 `probe.waiting`，現行 service 路徑不再觸發該接縫，故等待永不完成；需要先確認現行 readiness 訂閱的真正入口再改寫，未在本批處理。
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
