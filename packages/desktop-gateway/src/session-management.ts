@@ -208,7 +208,12 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
           // in the saved conversation. Only running work blocks it.
           return fence.run(sessionId, async () => {
             await assertIdle(sessionId, false, true)
-            await coordinator.updateMeta(sessionId, { archived: true })
+            // The metadata write adopts a live writer. Release exactly that
+            // adoption: without a prior live owner it must not outlive the
+            // archive, while a genuinely live session keeps its owner.
+            const alreadyLive = coordinator.hasLiveOwnership?.(sessionId) ?? coordinator.ownerOf(sessionId)
+            try { await coordinator.updateMeta(sessionId, { archived: true }) }
+            finally { if (!alreadyLive) await coordinator.releaseOwnership(sessionId) }
             options.onVisibilityWithdrawn?.(sessionId)
             return { sessionId }
           })
