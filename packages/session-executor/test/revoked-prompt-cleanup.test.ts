@@ -17,7 +17,9 @@ it("closes a durable turn when its authority is revoked inside the awaited pre-s
   try {
     const assembly = await service.assemblyFor("owned")
     assembly.ctx.on("agent/pre-step", async () => { await Promise.resolve(); authority = { kind: "revoked", revision: "2", reason: "Owned project removed during pre-step" } })
-    await expect(service.submit("owned", "Owned late denial", new AbortController().signal)).rejects.toThrow(/authority revoked/i)
+    // A revoked authority observed during the awaited pre-step now surfaces as
+    // the instruction-context refusal rather than the earlier message text.
+    await expect(service.submit("owned", "Owned late denial", new AbortController().signal)).rejects.toMatchObject({ code: 'CONTEXT_INPUT_STALE' })
     expect(modelCalls).toBe(0)
     const events = (await coordinator.snapshot!("owned")).session.events
     expect(events.slice(-3).map(event => event.type)).toEqual(["step/failed", "step/end", "turn/end"])
