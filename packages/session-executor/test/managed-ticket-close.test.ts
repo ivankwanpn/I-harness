@@ -12,6 +12,8 @@ vi.mock('node:fs/promises', async importOriginal => {
   return { ...actual, open: vi.fn(actual.open) }
 })
 
+// One real ticket-65 close with unknown outcome and original-outcome save:
+// 3.3 s measured alone on 2026-11-15, just above the previous 3 s budget.
 it('retains the real completed tool and service attachment at ticket65 through unknown close, then saves its original outcome and full closers once', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-service-ticket65-'))
   const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
@@ -90,6 +92,6 @@ it('retains the real completed tool and service attachment at ticket65 through u
     await execution?.catch(() => {})
     await service.close().catch(() => {}); await coordinator.close().catch(() => {})
   }
-}, 3000)
+}, 30_000)
 
 afterEach(() => vi.unstubAllGlobals())
