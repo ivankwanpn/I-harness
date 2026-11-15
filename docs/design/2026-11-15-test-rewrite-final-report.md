@@ -1,0 +1,88 @@
+# I-harness 測試修復與重寫：最終報告（進行中）
+
+本報告依 `docs/design/2026-11-15-test-rewrite-handoff.md` 的交接要求整理。最終全庫驗證結果於文末「固定版本全庫驗證」章節填入。
+
+## 一、範圍與起點
+
+- 分支：`codex/runtime-stability-redesign`（交接起點 `20e30ad0`）。
+- 基線 inventory（`21f8d861` 固定版本全庫驗證）：16,001 passed、434 failed、86 skipped、9 unhandled；失敗分布以 session-executor（264）、desktop-gateway（112）、context-output（60）為主。
+- 交接第一批指定的三個 selected-results 測試已完成重寫並全綠（10 項）：`host-commit-log-selected-fork`、`host-commit-log-selected-read`、`selected-fork-seed`；另以 `7a15e67b` 補上 target pins，child 在 source archive 後仍能讀取。
+
+## 二、已完成的批次
+
+| 批次 | 檔案（executor 為主） | 結果 | 提交 |
+|---|---|---|---|
+| selected-results | host-commit-log-selected-fork／selected-read／selected-fork-seed | 10/10 | `7a15e67b`、`b7f67b8d` |
+| gateway 第一批 | selected-results host fixture（真實工具回合與 V2 負向控制） | 37/37 迴歸 | `40395f70`、`b660dee6` |
+| managed document | archive ownership 修正、`hasManagedDocument` 共用 | session-persistence 1249/1249 | `b298a960` |
+| prepared writer | prepared-session-writer 清理契約 | 9/9 | `1ec2a6ae` |
+| session-management | 兩個 gateway fork 案量測 5.1/6.1 秒 → 30 秒 | 27/27 | `554ad012` |
+| retained-mcp-result | host MCP call 後以明確 yield 視窗觀察完成；量測 6.2–10.9 秒案例給 30 秒 | 10/10 | `7c40234a` |
+| notification-stop-owner | 全部改走 `wrapOwnedBatch`／`wrap` 建構縫隙（原 patch 造成 3 案 120 秒掛起） | 9/9 | `6ebae59b` |
+| delivery-receiver | 宣告注入故障的 recovery 診斷；pre-claim 排程改以事件與 queue 邊緣觀測 | 17/17 | `604c1e89`、`c5e35a76` |
+| managed-input-readiness | 以 queue row 為等待邊緣，取代失效的 readiness mock | 8/8 | `3df83fe9` |
+| result-ordering | 非擁有者探測改用 read-only coordinator | 16/16 | `df1bcc88` |
+| physical-recovery-trace | cap20／cap9 量測 6.7 秒 → 30 秒 | 3/3 | `fb135850` |
+| instruction initial/fresh | 清理順序改為現行 `lease, lease, scope` 等審計值 | 5/5、4/4、3/3 | `b90f6261`、`5f19c4d0` |
+| result-store-close | native close fault 改在 open-time handle seam 注入；對齊保留失敗契約 | 5/5 | `2f16faad` |
+| seam 批次 | nested-broker-retention、managed-context-output、retention-grants、instruction-unstarted-recovery、main-instruction-publication | 15/15 | `d0fe0871`、`3dc14af2` |
+| observation seam | code-output-owner-lifetime、code-observation-owner-bridge | 3/3 | `2b431ab2` |
+| 其他 | managed-ticket-close（量測 3.3 秒）、default-parent-writer（保留 coordinator 身分）、main-instruction-construction（run-end seam，剩 1 案） | 1/1、1/1、9/10 | `ed5e5eac`、`cfa87827`、`73293e2b` |
+
+合計：**executor 19 個檔案全綠、100 項通過**（另有 `main-instruction-construction` 9/10 與 `service-instruction-close` 1/2 的部分修復）。所有期限調整均在檔內記錄原量測與新值；未以期限掩蓋掛起。
+
+## 三、共同缺陷類別（交接文件所列）
+
+1. **建構後替換被身分保護的方法**：backend batch／managed document／coordinator 方法在建構後被替換，canonical-path guard 或 WeakMap 身分使替換失效（表現為 `PROCESS_READ_UNAVAILABLE`、計數全零、held resolver 永不釋放）。修正一律改走 `createJsonlBackend(root,{wrapOwnedBatch,wrapOwnedReconcile,wrap})`、open-time `node:fs/promises` seam 或保留原 coordinator 身分。
+2. **最終期限與真實工作不符**：physical-recovery、managed-ticket-close、retained-mcp、session-management 等以實測值重新設定上限（30 秒），並在檔內記錄量測。
+3. **過時 oracle**：readiness 訂閱、cleanup 順序、error 形狀、session/error telemetry 等改以現行可觀測邊緣（queue row、committed events、fd 狀態）驗證。
+4. **注入位置未達真實路徑**：spy 打在與產品不同的模組實例／handle 上；改為建構縫隙後故障才真正到達 journal 或 native I/O。
+
+## 四、仍待處理（可接續證據）
+
+### 真實掛起（非期限）
+
+- `execution-fs-ack`：單案在 120 秒後仍掛起。
+- `resident-instruction-activation`：單案在 120 秒後仍掛起。
+- `fork-handoff`：首案超過自身 15 秒預算。
+- `instruction-diagnostics`：一個 60 秒逾時案例（基線未失敗）。
+
+### 產品契約待核對
+
+- `managed-runtime-context`：未知 publication 被分類為 `FACT_PRECONDITION_STALE` 而非 `FACT_RECOVERY_REQUIRED`（source guard 吞掉 domain recovery 失敗）。
+- `title-action`：post-turn callback 持有 action 時提交第二輪，`settleFinishedActions` 拋 `Managed facts require reconciliation`。
+- `main-instruction-targets`：257 目錄讀取案例在真實 turn 中被 abort。
+- `managed-instruction-handoff`：首次 instruction publish 的 guard 取得「Original issued write needs reconciliation」。
+- `service-instruction-close`：cold reader 在 held native cleanup 下仍讀到結果而非 `unavailable`。
+- `delivery-lifecycle`：fault-path fixture close 回報 `Delivery fixture cleanup failed`。
+- `instruction-isolated-review`：approval close append 早於測試取得 actionId，注入時序未解。
+- `main-instruction-construction`：`openCliInput` mock 在現行 headless mount-fault 路徑不再被呼叫。
+
+### WIP 產品能力（測試先於實作）
+
+- owned/native Task host：`project-context`、`event-driven-steering`、`native-context-child`、`retained-child-scope`、`retained-batch-continuation`、`native-dependency-observer`、`guardian-generation`（部分）等卡在 `Original prepared task caller unavailable`、native execution 未接、child session identity 或 agentTable 空。
+- `session-persistence`／`context-output` 其餘 failures 屬同類（見最終驗證 inventory）。
+
+### issue 125：公開 JSONL selected-results 入口
+
+- 現況：`host.ts` 僅在 commit-log store 安裝 `createSelectedForkController`；JSONL 缺 `createChildSession`，kernel 走 `bootstrapChildTargetWithCapture`／`resumeChildTarget`。
+- 已準備的實作計畫：在既有 `SelectedForkController` 後接 JSONL child-birth adapter（`captureSelectedResultsSeed` 已與 store 無關）、建立 bootstrap child request／payload、以 resume route 處理 cold/blocked、保留 C67 正向順序（child 結果→compaction→reset→cold resume→V2 fork→精確讀取／搜尋→clear／retire→cold qualification→再讀）；commit-log 行為不變，且須從公開 gateway 入口驗證。
+- 狀態：尚未實作。
+
+## 五、提交與身分
+
+- 提交作者／committer：`ivankwanpn <213307026+ivankwanpn@users.noreply.github.com>`。
+- 所有提交已非強制推送至 `origin/codex/runtime-stability-redesign`；CI（`.github/workflows/verify.yml`）每個 head 的結果記錄於證據目錄 `ci-*.log`。
+- 每批均通過對應套件 typecheck 與 `git diff --check`；boundary gate 於本輪全庫驗證中一併執行。
+
+## 六、固定版本全庫驗證
+
+- 指令：`node scripts/test-env.mjs pnpm run verify:all`。
+- 日誌：`C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/verify-all-final.log`。
+- 結果：**待填**（執行中；完成後補上 totals、各 suite 結果、與基線比較）。
+
+## 七、證據位置
+
+- 接續狀態（每次批次更新）：`C:/Users/IvanKwan/AppData/Local/Temp/ih-runtime-stability-progress-latest.json`。
+- 測試收據（JSON）與日誌：`C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/`。
+- 設計／批次紀錄：`docs/design/2026-11-10-runtime-stability-redesign.md` 第十二至十九批。
