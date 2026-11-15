@@ -48,9 +48,15 @@ import { createSessionManagementFence } from '../src/session-management-fence.ts
 
 it.each(['return', 'undefined', 'ignored-profile'] as const)('read-time guard retirement drains %s before notification and native disposal', async outcome => {
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR ?? tmpdir(), 'read-retirement-'))
-  const backend = createJsonlBackend(root), originalProfile = backend.profile.bind(backend)
   const profileEntered = Promise.withResolvers<void>(), profileGate = Promise.withResolvers<void>()
   let holdProfile = false
+  // The canonical-path guard snapshots backend descriptors at construction:
+  // the backend wrap seam is the supported injection point, while patching
+  // `profile` afterwards is rejected as PROCESS_READ_UNAVAILABLE by design.
+  const backend = createJsonlBackend(root, { wrap: b => {
+    const actual = b.profile.bind(b)
+    b.profile = (async (id: string) => { if (holdProfile && id === 't') { profileEntered.resolve(); await profileGate.promise }; return actual(id) }) as typeof b.profile
+  } })
   const options = { lock: { enabled: true, lockRoot: root }, acquireRetryMs: 1, acquireDeadlineMs: 25 }
   const coordinator = createSessionCoordinator(backend, options), other = createSessionCoordinator(createJsonlBackend(root), options)
   const fence = createSessionManagementFence(), observe = fence.observe.bind(fence)
@@ -61,7 +67,6 @@ it.each(['return', 'undefined', 'ignored-profile'] as const)('read-time guard re
   let retired = 0
   try {
     for (const id of ['s', 't']) { await coordinator.create({ sessionId: id }); await coordinator.releaseOwnership(id) }
-  backend.profile = async id => { if (holdProfile && id === 't') { profileEntered.resolve(); await profileGate.promise }; return originalProfile(id) }
     const ref = await coordinator.retainExistingSessionBindingObservation!({ sessionId: 't' }, () => {})
     const observed = broker.observeExecutionBinding(ref, () => { retired++; notified.resolve() })
     holdProfile = outcome === 'ignored-profile'

@@ -54,7 +54,7 @@ import { createProjectScopeBroker } from '../src/project-scope.ts'
 import { createNativeContextRuntime } from '../src/context-runtime.ts'
 import { selectedBootstrapPaths } from '../../session-persistence-jsonl/src/backend/selected-results-route-path.ts'
 it('does not confirm a byte-equal foreign header when original header issue never began',async()=>{
- const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'selected-no-header-issue-')),workspace=join(root,'w'),sessions=join(root,'s');await mkdir(workspace);const backend=createJsonlBackend(sessions),actual=backend.selectedCapture;backend.selectedCapture={...actual,async prepareSelectedHeader(){return {kind:'conflict'}}};const coordinator=createSessionCoordinator(backend,{lock:{enabled:true}}),projects=createProjectScopeBroker(coordinator,workspace);await coordinator.create({sessionId:'source'});await coordinator.append('source',[{type:'turn/start'},{type:'user/message',text:'original'},{type:'turn/end'}]);const runtime=await createNativeContextRuntime({workspace,storageRoot:join(root,'n'),coordinator,projectFor:projects.nativeScopeFor,resultReadScopeFor:projects.resultReadScopeFor,withBindingObservation:projects.withBindingObservation,retainSelectedProjectRead:projects.retainSelectedBindingRead,contextConfig:{enabled:true}})
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'selected-no-header-issue-')),workspace=join(root,'w'),sessions=join(root,'s');await mkdir(workspace);const backend=createJsonlBackend(sessions,{wrap:b=>{const jsonl=b as unknown as {selectedCapture:Record<string,unknown>};jsonl.selectedCapture={...jsonl.selectedCapture,async prepareSelectedHeader(){return {kind:'conflict'}}}}});const coordinator=createSessionCoordinator(backend,{lock:{enabled:true}}),projects=createProjectScopeBroker(coordinator,workspace);await coordinator.create({sessionId:'source'});await coordinator.append('source',[{type:'turn/start'},{type:'user/message',text:'original'},{type:'turn/end'}]);const runtime=await createNativeContextRuntime({workspace,storageRoot:join(root,'n'),coordinator,projectFor:projects.nativeScopeFor,resultReadScopeFor:projects.resultReadScopeFor,withBindingObservation:projects.withBindingObservation,retainSelectedProjectRead:projects.retainSelectedBindingRead,contextConfig:{enabled:true}})
  try{const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{},results:'selected-results-v1'}),{intent,requestDigest}=createSelectedResultsIntent(core,{kind:'unassigned'}),invocation={version:1 as const,operationId:'foreign-header',targetSessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',requestDigest},operation=readSelectedResultsOperation({version:2,kind:'session-fork-operation',prepared:{version:2,kind:'session-fork-prepared',core,requestIntent:intent,requestDigest},invocation}),holder=runtime.createSelectedSourceHolder(operation),captured=await holder.captureFirst();if(captured.kind!=='captured')throw Error('capture unavailable');const route={protocol:'public-results-v1' as const,request:{invocation,core,requestIntent:intent}};await writeFile(selectedBootstrapPaths(join(sessions,'target.jsonl'),route).stage,captured.stageBytes);await writeFile(join(sessions,'target.jsonl'),captured.headerBytes);expect((await holder.reconcilePassive()).kind).toBe('unknown');await holder.close()
  }finally{await runtime.close();await projects.close();await coordinator.close()}
 })
@@ -90,15 +90,26 @@ it('confirms the selected managed artifacts through the original result store',a
 },30000)
 
 it('drains an active selected project confirmation before releasing its original target claim',async()=>{
- const f=await createGatewayForkFixture();try{
+ const entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>()
+ let hold=false
+ // Instrument the document write through the backend constructor seam: the
+ // coordinator captures its document writer at construction, so spying on the
+ // public coordinator method never sees the target-preparation write.
+ const f=await createGatewayForkFixture({},undefined,true,backend=>{
+   const actual=backend.putDocument.bind(backend)
+   backend.putDocument=async(key,value)=>{ if(hold){entered.resolve();await leave.promise}; return actual(key,value) }
+ })
+ try{
   await f.coordinator.append('source',[{type:'turn/start'},{type:'user/message',text:'selected'},{type:'turn/end'}])
   const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{},results:'selected-results-v1'}),{intent,requestDigest}=createSelectedResultsIntent(core,{kind:'project',projectId:'p'}),operation=readSelectedResultsOperation({version:2,kind:'session-fork-operation',prepared:{version:2,kind:'session-fork-prepared',core,requestIntent:intent,requestDigest},invocation:{version:1,operationId:'selected-close-flight',targetSessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',requestDigest}}),holder=f.runtime.createSelectedSourceHolder(operation)
   expect((await holder.captureFirst()).kind).toBe('captured');expect(f.coordinator.ownerOf('target')).toBe(true)
-  const entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>(),original=f.coordinator.putDocument.bind(f.coordinator),spy=vi.spyOn(f.coordinator,'putDocument').mockImplementation(async(key,value)=>{entered.resolve();await leave.promise;return original(key,value)})
+  hold=true
   const confirmation=holder.confirmTarget().catch(error=>error);await entered.promise
-  let closed=false;const closing=holder.close().then(()=>{closed=true});try{await new Promise(resolve=>setTimeout(resolve,75));expect(closed).toBe(false);expect(f.coordinator.ownerOf('target')).toBe(true)}finally{leave.resolve();await confirmation;await closing;spy.mockRestore()}
+  let closed=false;const closing=holder.close().then(()=>{closed=true})
+  try{await new Promise(resolve=>setTimeout(resolve,75));expect(closed).toBe(false);expect(f.coordinator.ownerOf('target')).toBe(true)}finally{leave.resolve();await confirmation;await closing}
+  expect(closed).toBe(true);expect(f.coordinator.ownerOf('target')).toBe(false)
  }finally{await f.close()}
-})
+},30000)
 
 it('confirms exact selected legacy rows through the original store without a synthetic group',async()=>{
  const f=await createGatewayForkFixture();try{
@@ -141,7 +152,17 @@ it.each(['expiry','clear'] as const)('fences selected seed issuance after origin
   const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{},results:'selected-results-v1'}),{intent,requestDigest}=createSelectedResultsIntent(core,{kind:'project',projectId:'p'}),operation=readSelectedResultsOperation({version:2,kind:'session-fork-operation',prepared:{version:2,kind:'session-fork-prepared',core,requestIntent:intent,requestDigest},invocation:{version:1,operationId:'selected-expiry',targetSessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',requestDigest}}),holder=f.runtime.createSelectedSourceHolder(operation),captured=await holder.captureFirst();if(captured.kind!=='captured')throw Error('Selected capture unavailable')
   const entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>(),append=f.backend.selectedJournal.appendOwnedBatch.bind(f.backend.selectedJournal),spy=vi.spyOn(f.backend.selectedJournal,'appendOwnedBatch').mockImplementation(async(...args)=>{entered.resolve();await leave.promise;return append(...args)})
   const publishing=holder.publishWarm();await entered.promise;const now=mode==='expiry'?vi.spyOn(Date,'now').mockReturnValue(ref.expiresAt+1):undefined
-  try{if(mode==='clear')await f.runtime.contextOutput.clear('source');leave.resolve();const outcome=await publishing.catch(error=>error);expect(outcome instanceof Error||outcome.kind==='blocked').toBe(true)}finally{now?.mockRestore();leave.resolve();spy.mockRestore()}
+  try{if(mode==='clear'){
+   // Original clear waits for the in-flight seed issuance it revokes: start it
+   // without awaiting, release the held append once revocation has begun, then
+   // let both settle and require the issuance to be fenced.
+   const clearing=f.runtime.contextOutput.clear('source')
+   const deadline=Date.now()+2000
+   while(Date.now()<deadline&&f.runtime.contextOutput.status().state!=='stopping')await new Promise(resolve=>setTimeout(resolve,5))
+   leave.resolve()
+   const [outcome]=await Promise.all([publishing.catch(error=>error),clearing])
+   expect(outcome instanceof Error||outcome.kind==='blocked').toBe(true)
+  }else{leave.resolve();const outcome=await publishing.catch(error=>error);expect(outcome instanceof Error||outcome.kind==='blocked').toBe(true)}}finally{now?.mockRestore();leave.resolve();spy.mockRestore()}
   const {readFile}=await import('node:fs/promises');expect((await readFile(join(f.sessions,'target.jsonl'))).toString()).toBe(captured.headerBytes);await holder.close()
  }finally{await f.close()}
 },60000)

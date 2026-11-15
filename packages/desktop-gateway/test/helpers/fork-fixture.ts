@@ -19,11 +19,15 @@ import { createDesktopRouter, createGatewayWrite } from '../../src/router.ts'
 import type { DesktopHandlers } from '../../src/types.ts'
 import { createConversationResultReader } from '../../src/result-reader.ts'
 
-/** Actual Gateway owners and route; only provider/backend leaves are controlled. */
-export async function createGatewayForkFixture(options: Pick<SessionServiceOptions, 'model' | 'additionalTools' | 'shellRetention'> = {}, existingRoot?: string, taskTransition = true) {
+/** Actual Gateway owners and route; only provider/backend leaves are controlled.
+ *  `wrapBackend` installs instrumentation through the backend constructor seam:
+ *  patching guarded backend methods after construction is
+ *  PROCESS_READ_UNAVAILABLE by design. */
+type BackendWrap = NonNullable<NonNullable<Parameters<typeof createJsonlBackend>[1]>['wrap']>
+export async function createGatewayForkFixture(options: Pick<SessionServiceOptions, 'model' | 'additionalTools' | 'shellRetention'> = {}, existingRoot?: string, taskTransition = true, wrapBackend?: BackendWrap) {
   const root = existingRoot ?? await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-c-fork-')), workspace = join(root, 'workspace'), sessions = join(root, 'sessions')
   await mkdir(workspace, { recursive: true })
-  const backend=createJsonlBackend(sessions),coordinator = taskTransition ? composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract) : createSessionCoordinator(backend, { lock: { enabled: true } }), fence = createSessionManagementFence()
+  const backend=createJsonlBackend(sessions, wrapBackend ? { wrap: wrapBackend } : undefined),coordinator = taskTransition ? composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract) : createSessionCoordinator(backend, { lock: { enabled: true } }), fence = createSessionManagementFence()
   if (!existingRoot) { await coordinator.create({ sessionId: 'source' }); await coordinator.create({ sessionId: 'other' }) }
   const projects = createProjectScopeBroker(coordinator, workspace)
   const project = { id: 'p', name: 'Project', roots: [workspace], primaryRoot: workspace }

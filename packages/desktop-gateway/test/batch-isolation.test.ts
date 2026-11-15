@@ -28,8 +28,8 @@ it("a real root model turn receives an unknown tool result while its independent
     await coordinator.flush("root")
     const durable = (await coordinator.load("root")).session.events
     expect(durable.filter(event => event.type === "tool/result")).toMatchObject([
-      { name: "parent_only_tool", isError: true, output: { error: "unknown tool: parent_only_tool", code: "TOOL_FAILED" } },
-      { name: "write", output: { ok: true } },
+      { name: "parent_only_tool", envelope: { execution: { outcome: "failed", dispatch: "not-dispatched" }, retention: { kind: "inline", value: { error: "unknown tool: parent_only_tool", code: "TOOL_FAILED" } } } },
+      { name: "write", envelope: { execution: { outcome: "succeeded", dispatch: "dispatched" }, retention: { kind: "inline", value: { ok: true } } } },
     ])
     expect(durable.at(-1)?.type).toBe("turn/end")
   } finally { await assembly?.dispose(); await coordinator.close(); await rm(workspace, { recursive: true, force: true }) }
@@ -56,8 +56,8 @@ it("root assembly writes an independent file after an inactive goal_complete in 
     expect(await readFile(join(workspace, "sibling_test.txt"), "utf8")).toBe("independent write")
     const results = assembly.session.events.filter((event) => event.type === "tool/result")
     expect(results).toMatchObject([
-      { name: "goal_complete", isError: true, output: { error: "Goal is not active", code: "TOOL_FAILED" } },
-      { name: "write", output: { ok: true } },
+      { name: "goal_complete", envelope: { execution: { outcome: "failed" }, retention: { kind: "inline", value: { error: "Goal is not active", code: "TOOL_FAILED" } } } },
+      { name: "write", envelope: { execution: { outcome: "succeeded" }, retention: { kind: "inline", value: { ok: true } } } },
     ])
     await coordinator.flush("root")
     const durable = (await coordinator.load("root")).session.events
@@ -93,9 +93,9 @@ it("root assembly attempts close_agent and job_kill after schedule_delete fails 
     await assembly.agent.run("run the cleanup batch")
     const results = assembly.session.events.filter((event) => event.type === "tool/result")
     expect(results).toHaveLength(3)
-    expect(results[0]).toMatchObject({ name: "schedule_delete", output: { error: expect.stringContaining("schedule-1"), code: "TOOL_FAILED" } })
-    expect(results[1]).toMatchObject({ name: "close_agent", output: { error: expect.stringContaining("unknown subagent"), code: "TOOL_FAILED" } })
-    expect(results[2]).toMatchObject({ name: "job_kill", output: { error: expect.stringContaining("unknown job"), code: "TOOL_FAILED" } })
+    expect(results[0]).toMatchObject({ name: "schedule_delete", envelope: { execution: { outcome: "failed" }, retention: { kind: "inline", value: { error: expect.stringContaining("schedule-1"), code: "TOOL_FAILED" } } } })
+    expect(results[1]).toMatchObject({ name: "close_agent", envelope: { execution: { outcome: "failed" }, retention: { kind: "inline", value: { error: expect.stringContaining("unknown subagent"), code: "TOOL_FAILED" } } } })
+    expect(results[2]).toMatchObject({ name: "job_kill", envelope: { execution: { outcome: "failed" }, retention: { kind: "inline", value: { error: expect.stringContaining("unknown job"), code: "TOOL_FAILED" } } } })
     expect(assembly.session.events.filter((event) => event.type === "tool/dispatch")).toHaveLength(3)
   } finally {
     await assembly?.dispose()
