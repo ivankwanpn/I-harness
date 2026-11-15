@@ -12,13 +12,15 @@ it("keeps a coordinator-only parent fresh while mirroring dispatch before the ac
   const root = await mkdtemp(join(tmpdir(), "ih-default-parent-writer-")), backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
   let parentLoads = 0, calls = 0, bodySawDurableDispatch = false
-  const observed = { ...coordinator, async loadOwned() { parentLoads++; throw new Error("Fresh parent must not be loaded or recovered") } }
+  // Keep the original coordinator identity: assembling from a spread copy
+  // breaks the owned result-ordering registration. Observe the same method.
+  vi.spyOn(coordinator, 'loadOwned').mockImplementation(async () => { parentLoads++; throw new Error('Fresh parent must not be loaded or recovered') })
   const model = controlledModel(async function* () {
     if (++calls === 1) yield { type: "tool_call", call: { name: "owned_dispatch_probe", args: {} } }
     else yield { type: "text/chunk", text: "Owned completion" }
     yield { type: "end" }
   })
-  const service = createSessionService({ workspace: root, coordinator: observed, model, codeMode: { mode: "off" }, sandbox: "read-only",
+  const service = createSessionService({ workspace: root, coordinator, model, codeMode: { mode: "off" }, sandbox: "read-only",
     additionalTools: [{ name: "owned_dispatch_probe", description: "Inspect this fixture's actual durable dispatch", inputSchema: { type: "object", properties: {} }, isReadOnly: true,
       execute: async () => {
         const events = (await backend.read("parent")).events
