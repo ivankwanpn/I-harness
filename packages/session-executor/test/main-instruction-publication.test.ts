@@ -14,15 +14,17 @@ import { rmWorkspaceSync } from './helpers.ts'
 
 it('the original uncertain runtime publication keeps its staged view observed until real reconciliation and cleanup', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-instruction-publication-')); await writeFile(join(root, 'AGENTS.md'), 'ORIGINAL_PUBLICATION_TEXT')
-  const backend = createJsonlBackend(join(root, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
+  const backend = createJsonlBackend(join(root, 'sessions'), {
+    // The canonical-path guard snapshots batch descriptors at construction, so
+    // the publication fault travels through the documented pre-bind seams.
+    wrapOwnedBatch: actual => async (...args) => {
+      const outcome = await actual(...args)
+      if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'runtime/context')) { key = args[3].key; issues++; return { kind: 'unknown', key } }
+      return outcome
+    },
+    wrapOwnedReconcile: actual => (...args) => !ready && key?.batchId === args[3].key.batchId ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : actual(...args),
+  }), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
   let key: BatchKey | undefined, ready = false, issues = 0, sends = 0, closes = 0
-  backend.appendOwnedBatch = async (...args) => {
-    const outcome = await append(...args)
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'runtime/context')) { key = args[3].key; issues++; return { kind: 'unknown', key } }
-    return outcome
-  }
-  backend.reconcileOwnedBatch = (...args) => !ready && key?.batchId === args[3].key.batchId ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : reconcile(...args)
   const environment = createProjectInstructionEnvironment(), create = environment.host.create.bind(environment.host), sources: InstructionService[] = []
   environment.host.create = scope => { const source = create(scope), close = source.close.bind(source); const observed = { ...source, async close() { closes++; await close() } }; sources.push(observed); return observed }
   const server = createServer((_request, response) => { sends++; response.writeHead(500).end('Unexpected instruction publication send') })
