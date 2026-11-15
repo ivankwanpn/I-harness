@@ -179,6 +179,15 @@ executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-
 
 `service-approval-mode.test.ts` 以 `vi.spyOn(coordinator,'create')` 證明未建立 child session，但 result ordering 對 `create` 方法 descriptor 做身分核對，spy 使 assembly 以 `Original result ordering coordinator required` 拒絕；改以 `coordinator.list()` 只列出原始 session 的可觀察結果。另該案兩個 delegated isolated review 實測 **5.8 秒**，超過預設 5 秒，依量測給 30 秒上限。`7ab44d19`／`175c865b` 後 2/2 通過、Typecheck 乾淨。
 
+#### 第二十一批：guardian-generation 的 approval 視窗，及兩個真實行為 triage
+
+`guardian-generation.test.ts` 的 binding 案例以 **1 秒** approval generation 視窗開啟檢查，期間建立了兩個 approval-review child、開啟兩份 document 並執行多個 binding 檢查；視窗在案例中途到期，於是 copied／foreign receiver 回報 `GENERATION_EXPIRED` 而非斷言的 `GENERATION_STALE`。視窗不是本案例的驗收對象，`1e0c33b0` 依實測改為 30 秒（檔內註明），**10/10 通過**，Typecheck 與 diff check 乾淨。
+
+同輪 triage 兩個「疑似真實行為」而非 fixture 的失敗，暫不改期限或斷言：
+
+- `delivery-active-wait`：即使把等待放寬到 15 秒，foreground handoff 仍被「later notification save」擋住（測試要求不得被擋），傾向真實排序問題。
+- `exec-direct-source` 的 `manual` 模式：durable session 上手動 dispatch Shell 被 `Original model Exec issuer required` 拒絕，需產品層決定手動／SDK 路徑是否應允許；未以放寬斷言處理。
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
