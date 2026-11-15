@@ -149,6 +149,12 @@ executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-
 
 遷移一律使用 `createJsonlBackend(root, { wrapOwnedBatch, wrapOwnedReconcile })` 建構縫隙，故障注入因此真正到達 journal 寫入路徑；Typecheck 與 diff check 通過。
 
+#### 第十六批：observation fixture 的 pre-bind seam
+
+`code-output-owner-lifetime` 與 `code-observation-owner-bridge` 同樣以建構後替換 `backend.appendOwnedBatch` 來記錄 journal；guard 拒絕後基線為 `PROCESS_READ_UNAVAILABLE`、證據為空。`2b431ab2` 改以 `wrapOwnedBatch` 在寫入前觀察真實 writer：兩檔分別 **1/1、2/2 通過**，故障路徑仍是真正的 journal 寫入；Typecheck 與 diff check 通過。
+
+同輪嘗試並撤回的檔案：`retained-child-scope` 在 seam 修好後暴露 `subagentState().agentTable` 為空、`retained-batch-continuation` 暴露 child request 缺欄位，兩者都是 WIP owned/native child 能力，不是 seam 問題；改動已還原以免留下未驗證 fixture。
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
