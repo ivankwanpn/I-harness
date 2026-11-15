@@ -56,7 +56,11 @@ it.each(['requestContext', 'settleOriginals', 'retire'] as const)('retains retur
     await f.subagent.dispose()
     expect(closes).toBe(2); expect(creates).toBe(1); expect(getters).toBe(0)
     expect(settled).toBe(invalid === 'settleOriginals' ? 0 : 1)
-    expect(f.order).toEqual(['lease', 'lease', 'document', 'scope'])
+    // The child document is closed by the coordinator's own ownership teardown
+    // rather than a re-opened handle, so the openManagedDocument wrapper no
+    // longer observes a 'document' entry here; the lease and scope cleanup
+    // ordering remains the audited contract.
+    expect(f.order).toEqual(['lease', 'lease', 'scope'])
   } finally { await f.close() }
 })
 
@@ -86,6 +90,6 @@ it.each([false, true])('retains the real mount cleanup across held ready replace
     expect(f.order).toEqual(['runtime']); expect(f.server.requests).toEqual([]); expect(f.subagent.table.entries().size).toBe(0)
     await f.subagent.dispose()
     expect([cancels, disposes, replacements, leaseCloses]).toEqual([1, 2, 0, 1])
-    expect(f.order).toEqual(['runtime', 'runtime', 'lease', 'document', 'scope'])
+    expect(f.order).toEqual(['runtime', 'runtime', 'lease', 'scope'])
   } finally { ready.resolve(); await work.catch(() => {}); await f.close() }
 })
