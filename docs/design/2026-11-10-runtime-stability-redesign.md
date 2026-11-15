@@ -161,6 +161,12 @@ executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-
 
 `instruction-isolated-review` 嘗試同類 seam 後撤回：真正的 approval close append 在測試取得 `opened.actionId` **之前**就已寫入，按 actionId 過濾會漏接；改為「第一個 context/action close」注入又破壞 input settlement（`Input execution settlement requires recovery`）並使 false 案逾時。已還原，此檔需要先釐清 approval generation 關閉時序再改寫。
 
+#### 第十八批：managed-ticket-close 的量測期限，及 fork-handoff 掛起 triage
+
+`managed-ticket-close.test.ts` 的唯一案例自帶 3 秒預算；單獨量測真實 ticket-65 unknown close 加 original-outcome save 需 **3.3 秒**，因此基線記錄為逾時。`ed5e5eac` 依量測改為 30 秒上限並在檔內記錄量測，案例於 3.3 秒通過。
+
+同輪以 120 秒預算重測數個基線逾時檔案：`main-instruction-order` 單獨執行 **0.657 秒通過**（基線失敗應為併發負載下的 flake，無需改動）；`managed-ticket-close` 證實只需量測期限；`execution-fs-ack` 與 `resident-instruction-activation` 各有一案在 120 秒後仍掛起、`fork-handoff` 首案超過其 15 秒預算仍未完成——三者屬真實掛起，需要獨立診斷，暫不改期限。`fork-handoff` 的嘗試性預算修改因行號誤植已還原。
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
