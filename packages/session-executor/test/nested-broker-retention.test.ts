@@ -13,23 +13,27 @@ import { installNativeContextOutput } from '../src/context-output.ts'
 
 it.each(['unknown', 'unknown-stop', 'grant-refused', 'grant-refused-stop'] as const)('retains an actual nested broker after-next body and source through %s', async mode => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-nested-retention-'))
-  const backend = createJsonlBackend(join(root, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const refused = mode.startsWith('grant')
+  let bodies = 0, captures = 0, grants = 0, finalizers = 0, blocked = true, key: BatchKey | undefined
+  // The canonical-path guard snapshots batch descriptors at construction, so
+  // the unknown-batch fault must travel through the documented pre-bind seams.
+  const backend = createJsonlBackend(join(root, 'sessions'), {
+    wrapOwnedBatch: actual => async (...args) => {
+      const outcome = await actual(...args)
+      if (!refused && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'context/result-ref')) { key = args[3].key; return { kind: 'unknown', key } }
+      return outcome
+    },
+    wrapOwnedReconcile: actual => async (...args) => blocked ? { kind: 'unknown', key: args[3].key } : actual(...args),
+  }), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   await coordinator.create({ sessionId: 'actor' }); await coordinator.create({ sessionId: 'parent' })
   const actor = await coordinator.openManagedDocument('actor'), parent = await coordinator.openManagedDocument('parent')
   const ctx = createContext(), tools = createToolRegistry(ctx), output = createContextOutputService({ root: join(root, 'outputs'), workspaceId: 'fixture', config: { enabled: true } })
-  const refused = mode.startsWith('grant'), destination = refused ? parent : actor
+  const destination = refused ? parent : actor
   installNativeContextOutput(ctx, { service: output, session: destination.view, factOwner: destination, sessionId: refused ? 'parent' : 'actor' })
   const raw = 'Original actual nested body 中文 '.repeat(3000)
-  let bodies = 0, captures = 0, grants = 0, finalizers = 0, blocked = true, key: BatchKey | undefined
-  const capture = output.capture.bind(output), append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
+  const capture = output.capture.bind(output)
   output.capture = async (...args) => { captures++; return capture(...args) }
   if (refused) output.grant = async () => { grants++; throw new Error('controlled grant disposition unavailable') }
-  backend.appendOwnedBatch = async (...args) => {
-    const outcome = await append(...args)
-    if (!refused && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'context/result-ref')) { key = args[3].key; return { kind: 'unknown', key } }
-    return outcome
-  }
-  backend.reconcileOwnedBatch = async (...args) => blocked ? { kind: 'unknown', key: args[3].key } : reconcile(...args)
   tools.register({ name: 'long_text', description: '', inputSchema: {}, execute: async () => { bodies++; return raw } })
   ctx.on('tools/post-execute', () => { finalizers++ })
   const controller = new AbortController(), broker = createCodeModeBroker(ctx, tools, { session: actor.view, sessionId: 'actor', factOwner: actor })

@@ -15,10 +15,21 @@ import { createAgent } from '../../core-agent/src/index.ts'
 import { createLoopbackProvider } from '../../core-agent/test/helpers/provider-loopback.ts'
 
 it.each([false, true])('recovers the original untransferred source and its accepted batch pin (releaseFault=%s)', async releaseFault => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-untransferred-')), backend = createJsonlBackend(join(root, 'sessions'))
-  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  const environment = createProjectInstructionEnvironment(), sources = new Set<SettlementFacts<ProducerFactOutcome>>()
+  const root = await mkdtemp(join(tmpdir(), 'ih-untransferred-'))
   let accepted = false, registrationFailed = false, allowRecovery = false, key: BatchKey | undefined, bodies = 0, releases = 0
+  // The canonical-path guard snapshots batch descriptors at construction, so
+  // the unknown-batch fault must travel through the documented pre-bind seams.
+  const backend = createJsonlBackend(join(root, 'sessions'), {
+    wrapOwnedBatch: actual => async (...args) => {
+      const unknown = !key && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'tool/result')
+      const outcome = await actual(...args)
+      if (unknown) { key = args[3].key; return { kind: 'unknown', key } }
+      return outcome
+    },
+    wrapOwnedReconcile: actual => (...args) => key && !allowRecovery ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : actual(...args),
+  })
+  const environment = createProjectInstructionEnvironment(), sources = new Set<SettlementFacts<ProducerFactOutcome>>()
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const manager = createMainInstructionManager({ session: document.view, environment, cwd: root, authority: () => ({ kind: 'unbound', revision: '1', workspaceRoot: root }), available: () => true, publish: async () => {} })
   const begin = document.beginAction.bind(document)
   document.beginAction = signal => {
@@ -29,14 +40,6 @@ it.each([false, true])('recovers the original untransferred source and its accep
     }
     return action
   }
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => {
-    const unknown = !key && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'tool/result')
-    const outcome = await append(...args)
-    if (unknown) { key = args[3].key; return { kind: 'unknown', key } }
-    return outcome
-  }
-  backend.reconcileOwnedBatch = (...args) => key && !allowRecovery ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : reconcile(...args)
   const server = await createLoopbackProvider('/v1/chat/completions', [async response => { response.end(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'original', function: { name: 'probe', arguments: '{}' } }] }, finish_reason: 'tool_calls' }] })}\n\ndata: [DONE]\n\n`) }])
   const ctx = createContext(), tools = createToolRegistry(ctx)
   tools.register({ name: 'probe', description: '', inputSchema: {}, execute: async () => { bodies++; return 'never' } })

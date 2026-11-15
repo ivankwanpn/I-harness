@@ -72,23 +72,23 @@ it('retains actual after-next output/ref across a held then rejected grant, bloc
 
 it.each(['quota-refused', 'f1-unknown'] as const)('keeps one real emitted window and no implicit parent publication (%s)', async mode => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-emitted-grants-'))
-  const backend = createJsonlBackend(join(root, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  let sends = 0, calls = 0, finalizers = 0, key: BatchKey | undefined
+  let blocked = mode === 'f1-unknown'
+  // The canonical-path guard snapshots batch descriptors at construction, so
+  // the unknown-batch fault must travel through the documented pre-bind seams.
+  const backend = createJsonlBackend(join(root, 'sessions'), {
+    wrapOwnedReconcile: actual => async (...args) => blocked ? { kind: 'unknown', key: args[3].key } : actual(...args),
+    wrapOwnedBatch: actual => async (...args) => {
+      const outcome = await actual(...args)
+      if (mode === 'f1-unknown' && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/output')) { key = args[3].key; return { kind: 'unknown', key } }
+      return outcome
+    },
+  }), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const actorId = (await coordinator.create()).id, parentId = (await coordinator.create()).id
   const actor = await coordinator.openManagedDocument(actorId), parent = await coordinator.openManagedDocument(parentId)
   const output = createContextOutputService({ root: join(root, 'outputs'), workspaceId: 'controlled', config: { enabled: true } })
   if (mode === 'quota-refused') await output.configure({ maxDiskBytes: 4096 })
   const ctx = createContext(), tools = createToolRegistry(ctx)
-  let sends = 0, calls = 0, finalizers = 0, key: BatchKey | undefined
-  const actualAppend = backend.appendOwnedBatch!, actualReconcile = backend.reconcileOwnedBatch!
-  let blocked = mode === 'f1-unknown'
-  if (mode === 'f1-unknown') {
-    backend.reconcileOwnedBatch = async (...args) => blocked ? { kind: 'unknown', key: args[3].key } : actualReconcile(...args)
-    backend.appendOwnedBatch = async (...args) => {
-      const outcome = await actualAppend(...args)
-      if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/output')) { key = args[3].key; return { kind: 'unknown', key } }
-      return outcome
-    }
-  }
   ctx.on('tools/post-execute', () => { finalizers++ })
   const mount = registerCodeMode(ctx, tools, { session: actor.view, sessionId: actorId, factOwner: actor, config: { mode: 'mixed' },
     retainText: createCodeTextRetention({ service: output, sessionId: actorId }),

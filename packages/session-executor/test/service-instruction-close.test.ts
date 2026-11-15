@@ -54,15 +54,17 @@ afterEach(() => {
 it('keeps the actual default instruction owner open while its retained assembly publication is unknown', async () => {
   const root = await mkdtemp(join(tmpdir(), 'default-publication-')), settings = join(root, 'settings.json')
   await writeFile(join(root, 'AGENTS.md'), 'SERVICE_OWNED_ORIGINAL_PUBLICATION'); await writeFile(settings, '{}')
-  const backend = createJsonlBackend(join(root, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
   let key: BatchKey | undefined, ready = false, issues = 0, requests = 0
-  backend.appendOwnedBatch = async (...args) => {
-    const outcome = await append(...args)
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'runtime/context')) { key = args[3].key; issues++; return { kind: 'unknown', key } }
-    return outcome
-  }
-  backend.reconcileOwnedBatch = (...args) => !ready && key?.batchId === args[3].key.batchId ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : reconcile(...args)
+  // The canonical-path guard snapshots batch descriptors at construction, so
+  // the uncertain publication travels through the documented pre-bind seams.
+  const backend = createJsonlBackend(join(root, 'sessions'), {
+    wrapOwnedBatch: actual => async (...args) => {
+      const outcome = await actual(...args)
+      if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'runtime/context')) { key = args[3].key; issues++; return { kind: 'unknown', key } }
+      return outcome
+    },
+    wrapOwnedReconcile: actual => (...args) => !ready && key?.batchId === args[3].key.batchId ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : actual(...args),
+  }), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
   // No instructionEnvironment option: the service creates and owns this actual
   // environment, including its host, observation owner and watch service.
   const service = createSessionService({ workspace: root, coordinator, contextOutputSettingsPath: settings, model: controlledModel(async function* () { requests++; yield { type: 'end' } }), contextWindow: 100000, codeMode: { mode: 'off' } })

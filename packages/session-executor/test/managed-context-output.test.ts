@@ -42,25 +42,26 @@ it('refuses result references through generic metadata even with a runtime cast 
 
 it.each([true,false])('retains the actual after-next output and exact reference until its journal receipt without rerunning or fabricating a result (unresolved=%s)', async holdReconcile => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-context-outcome-'))
-  const backend = createJsonlBackend(join(root, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  let bodies = 0, finalizations = 0, sends = 0, captures = 0, key: BatchKey | undefined, blocked = holdReconcile
+  // The canonical-path guard snapshots batch descriptors at construction, so
+  // the unknown-batch fault must travel through the documented pre-bind seams.
+  const backend = createJsonlBackend(join(root, 'sessions'), {
+    wrapOwnedReconcile: actual => async (...args) => blocked ? { kind: 'unknown', key: args[3].key } : actual(...args),
+    wrapOwnedBatch: actual => async (...args) => {
+      const outcome = await actual(...args)
+      if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'context/result-ref')) { key = args[3].key; return { kind: 'unknown', key } }
+      return outcome
+    },
+  }), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const service = createContextOutputService({ root: join(root, 'context'), workspaceId: 'fixture', config: { enabled: true } })
   const ctx = createContext(), tools = createToolRegistry(ctx)
   installNativeContextOutput(ctx, { service, session: document.view, factOwner: document, sessionId: id })
   const raw = 'the real original body '.repeat(2000)
-  let bodies = 0, finalizations = 0, sends = 0, captures = 0, key: BatchKey | undefined, blocked=holdReconcile
   const capture = service.capture.bind(service)
   service.capture = async (...args) => { captures++; return capture(...args) }
   tools.register({ name: 'long_text', description: '', inputSchema: {}, execute: async () => { bodies++; return raw } })
   ctx.on('tools/post-execute', () => { finalizations++ })
-  const actual = backend.appendOwnedBatch!
-  const reconcile=backend.reconcileOwnedBatch!
-  backend.reconcileOwnedBatch=async(...args)=>blocked?{kind:'unknown',key:args[3].key}:reconcile(...args)
-  backend.appendOwnedBatch = async (...args) => {
-    const outcome = await actual(...args)
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'context/result-ref')) { key = args[3].key; return { kind: 'unknown', key } }
-    return outcome
-  }
   const agent = createAgent(ctx, { generationFactory: action => createGenerationLifecycle(document.view, id, action), session: document.view, factOwner: document, tools, sessionId: id, systemPrompt: '', model: controlledModel(async function* () {
     sends++; yield { type: 'tool_call', call: { id: 'outer', name: 'long_text', args: {} } }; yield { type: 'end' }
   }) })
