@@ -74,6 +74,18 @@
 - 已準備的實作計畫：在既有 `SelectedForkController` 後接 JSONL child-birth adapter（`captureSelectedResultsSeed` 已與 store 無關）、建立 bootstrap child request／payload、以 resume route 處理 cold/blocked、保留 C67 正向順序（child 結果→compaction→reset→cold resume→V2 fork→精確讀取／搜尋→clear／retire→cold qualification→再讀）；commit-log 行為不變，且須從公開 gateway 入口驗證。
 - 狀態：尚未實作。
 
+## 四之一、剩餘失敗的結構化清單（215 項／94 檔，head `cf92d076` 驗證）
+
+| 類別 | 代表檔案／數量 | 判定 | 可接續位置 |
+|---|---|---|---|
+| 真實掛起（非期限） | execution-fs-ack、resident-instruction-activation、fork-handoff、main-instruction-targets、approval-rules、host-fixture-model、execution-source-prereq（各 1） | 長預算後仍不完成；不得以放寬期限掩蓋 | 各檔 triage 記錄於接續狀態與 redesign 文件 |
+| 產品契約待核 | managed-runtime-context（未知 publication 分類）、title-action（post-turn 持有時第二輪提交）、delivery-active-wait（後續 notification save 阻擋 handoff）、delivery-lifecycle（fault-path cleanup）、service-instruction-close（cold reader 讀取契約）、r6-private-input-cutover（unsupported private context 被接受）、native-context-jobs（archive 拒絕原因） | 需產品層決定或修正，非 fixture 放寬 | 同上，含每次重現指令與 log |
+| WIP owned/native Task 能力 | project-context、event-driven-steering、native-context-child、retained-child-scope、retained-batch-continuation、retained-code-output、wsl-assembly、instruction-views、native-dependency-observer、owned-* 系列等 | 卡在 `Original prepared task caller unavailable`、child session identity／agentTable、native execution 未接 | redesign 文件批次紀錄與 inventory |
+| 既有環境／觀察點 | mixed-retention-quota（SQLite disk full，磁碟充足）、observed-settings（已修）、native-context-output（Exec 觀察點） | fixture/環境或觀察點需更新 | 各檔 triage |
+| 併發 flake（全庫 `--maxWorkers=2`） | usage-protocol-aux-host、interaction-resume、current-unfinished-catalog、retention-grants、selected-native-source 等 | 單獨執行通過；兩次全庫結果差異即此類 | `verify-final*.log` 與單獨執行收據 |
+
+- issue 125（公開 JSONL selected-results 入口）仍未實作；現況、kernel 證據與實作計畫見上文「## 四、仍待處理」。
+- 上述失敗皆已保存逐檔清單（`verify-final2-file-failures.json`）、重現指令與日誌，可在固定 head 上接續。
 ## 五、提交與身分
 
 - 提交作者／committer：`ivankwanpn <213307026+ivankwanpn@users.noreply.github.com>`。
