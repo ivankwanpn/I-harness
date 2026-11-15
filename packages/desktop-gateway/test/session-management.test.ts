@@ -47,7 +47,9 @@ it('forks actual managed replacement history through Gateway management with no 
     expect(await child.metadata.admit({ type: 'plan/mode', mode: 'on' })).toMatchObject({ kind: 'committed', receipt: { owner: { sessionId: result.sessionId } } })
     expect(sends).toBe(0); expect(await readFile(join(f.sessions, 'parent.jsonl'))).toEqual(original)
   } finally { await f.close() }
-})
+  // Real Gateway fork plus native context setup measured 5.086 s alone (2026-11-15);
+  // the default 5 s deadline cancelled it mid-fork, so keep a bounded 30 s budget.
+}, 30_000)
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true }))) })
@@ -223,7 +225,9 @@ describe("session navigation metadata", () => {
       await manager.mutate(forked.sessionId, "archive")
       expect(await manager.archived()).toEqual([expect.objectContaining({ id: forked.sessionId, projectId: "p" })])
     } finally { await f.close() }
-  })
+    // Real Gateway fork plus project/native setup measured 6.092 s alone (2026-11-15);
+    // the default 5 s deadline cancelled it mid-fork, so keep a bounded 30 s budget.
+  }, 30_000)
   it("persists independent pin/read choices after coordinator restart without conversation events", async () => {
     const { root, coordinator, service } = await setup()
     const manager = createSessionManagement(coordinator, service)
