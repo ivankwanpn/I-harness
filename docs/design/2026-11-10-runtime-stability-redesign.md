@@ -100,6 +100,12 @@ executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-
 
 同輪 triage：`managed-input-readiness` 的 30 秒掛起來自 module-mock 接縫：`waitForManagedInputObservation` 只在 `inbox.pending()` 拋錯時訂閱 `subscribeManagedExecutionReadiness`，而 fixture 的 dependency gate 目前不會讓 `pending()` 拋錯，`probe.waiting` 因此永不觸發；需要先以現行 receiver/observation 契約確認等待入口再重寫。
 
+#### 第八批：instruction-initial-acquisition 清理順序審計，及 result-store-close 注入縫隙
+
+`instruction-initial-acquisition.test.ts` 五項失敗全部是清理順序斷言：fixture 以建構後替換 `coordinator.openManagedDocument`／`ctx.scope.mount` 記錄 `document`／`scope` 條目，但 child document 現由 coordinator 自身的 ownership teardown 關閉，不再經過重新開啟的 handle，因此 `document` 條目消失。保留被審計的契約（每次嘗試一次 retained lease close、不得觸發 accessor、零模型請求、subagent 表為空）並改為斷言現行順序（`lease, lease, scope` 及 `runtime, runtime, lease, scope`）。`b90f6261` 後 5 項全部通過。此案與 `notification-stop-owner` 的 backend patch 同屬「建構後替換被身分保護的方法令測試觀察失效」；此處被替換的是記錄用的 coordinator 方法，產品行為本身正確。
+
+`result-store-close.test.ts` 的兩個 120 秒掛起已定位為另一種注入縫隙：案例以 `vi.spyOn(f.original.body,'close')` 注入 native close fault，但現行 store 關閉路徑不再經過該 instance 方法，fault 永不觸發、held resolver 永不釋放（量測顯示 release 正常完成且 `body.fd`／`leaves.fd` 均已為 -1，即**產品確實關閉了真實 handle**）。另兩項 error-shape 斷言（期待 AggregateError）亦屬舊契約。此檔需要新的 native close 故障注入 seam（或改為斷言可觀察的 fd／lease 狀態），未在本批修改。[instruction 修正後](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/initial-acq1.json) [result-store-close 量測與診斷](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/result-store-close1.json)
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
