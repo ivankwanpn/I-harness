@@ -69,6 +69,10 @@ async function coldRead(f: Awaited<ReturnType<typeof fixture>>, ref: ManagedArti
   } finally { await cold.close() }
 }
 
+// Several cases below run real WASM, broker and 4 MiB transfer work that measured
+// 6.2-10.9 s alone on 2026-11-15, above the default 5 s deadline; those cases
+// carry a bounded 30 s budget. The yield windows are explicit where the case
+// asserts a completed cell after a host MCP call.
 it.each([true, false])('describes genuine managed MCP blocks beyond leading binary (supported images=%s)', async images => {
   const f = await fixture()
   let calls = 0, hooks = 0, sends = 0
@@ -101,7 +105,7 @@ it.each([true, false])('describes genuine managed MCP blocks beyond leading bina
     expect(JSON.parse(coldEncodedBytes.toString())).toEqual(normalized(false, images))
     expect({ calls, hooks }).toEqual({ calls: 1, hooks: 1 })
   } finally { await f.close() }
-})
+}, 30_000)
 
 it.each([false, true].flatMap(failed => [false, true].map(quota => ({ failed, quota }))))('keeps managed MCP outcome and full program independent of storage ($failed/$quota)', async ({ failed, quota }) => {
   const f = await fixture(quota)
@@ -129,7 +133,7 @@ it.each([false, true].flatMap(failed => [false, true].map(quota => ({ failed, qu
     }
     expect({ calls, hooks }).toEqual({ calls: 1, hooks: 1 })
   } finally { await broker.dispose(); await f.close() }
-})
+}, 30_000)
 
 it('transfers full MCP structured data through real WASM and refuses >4MiB while retaining the full host artifact', async () => {
   const f = await fixture()
@@ -145,8 +149,8 @@ it('transfers full MCP structured data through real WASM and refuses >4MiB while
   const broker = createCodeModeBroker(f.ctx, f.tools, { session: f.document.view, sessionId: f.id, factOwner: f.document })
   const runtime = createCodeModeRuntime({ tools: () => broker.definitions(), invoke: call => broker.invoke(call), onEvent(event) { if (event.type === 'started') broker.startCell(event.cellId) } })
   try {
-    expect(await runtime.exec({ code: 'const v=await tools.remote({}); text([v.structuredContent.sentinel,v.isError,v.content.map(b=>b.type)]);' }, { sessionId: f.id })).toMatchObject({ status: 'completed', text: '["BEYOND_PREVIEW",false,["audio","text","image","resource","image","resource_link"]]' })
-    const capped = await runtime.exec({ code: 'await tools.large({}); text("must not fulfill");' }, { sessionId: f.id })
+    expect(await runtime.exec({ code: 'const v=await tools.remote({}); text([v.structuredContent.sentinel,v.isError,v.content.map(b=>b.type)]);', yield_time_ms: 30000 }, { sessionId: f.id })).toMatchObject({ status: 'completed', text: '["BEYOND_PREVIEW",false,["audio","text","image","resource","image","resource_link"]]' })
+    const capped = await runtime.exec({ code: 'await tools.large({}); text("must not fulfill");', yield_time_ms: 30000 }, { sessionId: f.id })
     expect(capped.status).toBe('failed')
     expect(capped.error).toMatch(/Tool result.*limit|Tool result.*exceed/i)
     expect(capped.text).not.toContain('must not fulfill')
@@ -158,7 +162,7 @@ it('transfers full MCP structured data through real WASM and refuses >4MiB while
     expect((await coldRead(f, second.envelope.retention.ref)).equals(Buffer.from(JSON.stringify(expected)))).toBe(true)
     expect({ calls, hooks }).toEqual({ calls: 2, hooks: 2 })
   } finally { await runtime.dispose(); await broker.dispose(); await f.close() }
-})
+}, 30_000)
 
 it('settles the same original managed MCP finish-unknown operation without replaying callbacks or hooks', async () => {
   const f = await fixture()
@@ -202,7 +206,7 @@ it('settles the same original managed MCP finish-unknown operation without repla
     expect(finishes).toBeGreaterThan(1)
     expect((await f.backend.read(f.id)).events.filter(event => event.type === 'tool/result')).toHaveLength(1)
   } finally { blocked = false; vi.restoreAllMocks(); await f.close() }
-})
+}, 30_000)
 
 it('keeps a genuine ordinary lookalike inline with successful outcome despite similarly named payload fields', async () => {
   const f = await fixture()
