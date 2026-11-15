@@ -1,118 +1,134 @@
+import { createHash } from 'node:crypto'
 import { expect, it } from 'vitest'
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { isRpcSuccess, type RpcMessage } from '@i-harness/sdk'
-import { controlledModel } from '../../session-executor/test/controlled-model.ts'
-import { createJsonlCommitCoordinator } from '../../session-persistence-jsonl/src/commit-coordinator.ts'
-import { createCommitCoordinator } from '../../session-persistence/src/commit/coordinator.ts'
-import { codecRef } from '../../core-session/test/fixtures/selected-results.ts'
-import { createDesktopHost } from '../src/host.ts'
+import {
+  SELECTED_RESULTS_HEADER, createSelectedResultsHostFixture, forkSelected, seedManagedRows, storedSession,
+} from './helpers/selected-results-host.ts'
 
-// Repro for Plan 10: a host-level model turn still hits a managed-write
-// conflict ("Fact admission requires recovery or was cancelled") plus private
-// delivery reconciliation failures, while the composed-owned surface test
-// without the host plugins runs the same kind of turn. Kept skipped so the
-// reproduction is available without a red suite.
-it('forks a session with selected results on the commit log', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-gateway-scl-turn-')), workspace = join(root, 'workspace'), sessionDir = join(root, 'sessions')
-  await mkdir(workspace)
-  const settingsPath = join(root, 'settings.json'), credentialsPath = join(root, 'credentials.json')
-  await writeFile(settingsPath, JSON.stringify({ autoTitle: false, sandboxMode: 'read-only', compaction: { auto: false }, codeMode: { mode: 'off' }, llm: { providers: { fixture: { protocol: 'openai-completions', baseURL: 'http://127.0.0.1:1', apiKeyEnv: 'IH_TURN_KEY', models: [{ id: 'fixture', contextWindow: 32000 }] } }, defaultModel: { provider: 'fixture', model: 'fixture' } } }))
-  await writeFile(credentialsPath, JSON.stringify({ refs: { IH_TURN_KEY: 'controlled' } }))
-  let requests = 0, toolCalls = 0
-  const frames: RpcMessage[] = []
-  const host = await createDesktopHost({ workspace, sessionDir, settingsPath, credentialsPath, sessionStore: 'commit-log', onWrite: frame => frames.push(frame), buildProviderClient: () => controlledModel(request => ({ async *stream(request) {
-    request.signal?.throwIfAborted()
-    request.validateBeforeTransport?.()
-    requests++
-    if (request.messages.at(-1)?.role === 'tool') { yield { type: 'text/chunk', text: 'controlled answer' }; yield { type: 'end' }; return }
-    if (request.messages.at(-1)?.content === 'use todo' && toolCalls === 0) {
-      toolCalls++
-      yield { type: 'tool_call', call: { id: 'call-todo', name: 'todo_write', args: { todos: [{ content: 'do it', status: 'pending' }] } } }
-      yield { type: 'end' }
-      return
-    }
-    if (request.messages.at(-1)?.content === 'read big' && toolCalls === 1) {
-      toolCalls++
-      yield { type: 'tool_call', call: { id: 'call-read', name: 'read', args: { path: 'big.txt' } } }
-      yield { type: 'end' }
-      return
-    }
-    yield { type: 'text/chunk', text: 'controlled answer' }
-    yield { type: 'end' }
-  } } as import('@i-harness/llm-seam').ModelClient).stream(request)) })
-  let serial = 0
-  const call = async (method: string, params: unknown = {}) => {
-    const id = ++serial
-    await host.handleLine(JSON.stringify({ jsonrpc: '2.0', id, method, params }))
-    const frame = frames.findLast(frame => 'id' in frame && frame.id === id)
-    if (!frame) throw new Error('missing reply for ' + method)
-    if (!isRpcSuccess(frame)) throw new Error(JSON.stringify(frame))
-    return frame.result
-  }
+/** The source turn must really execute the read tool: the model scripts one
+ *  registry-dispatched call, and the fork must hand the target the exact
+ *  retained bytes of that call's saved result. */
+it('forks a real tool turn and keeps its selected result readable on the child', async () => {
+  const fixture = await createSelectedResultsHostFixture()
+  const client = await fixture.open()
   try {
-    await call('initialize')
-    await writeFile(join(workspace, 'big.txt'), 'x'.repeat(20000), 'utf8')
-    const created = await call('session/create') as { sessionId: string }
-    await call('session/prompt', { sessionId: created.sessionId, prompt: 'read big' })
-    const prepared = await call('session/fork/prepare', { version: 2, sourceSessionId: created.sessionId, results: 'selected-results-v1' }) as { version?: number; kind?: string; requestDigest?: string }
-    expect(prepared).toMatchObject({ version: 2, kind: 'session-fork-prepared' })
-    const operation = { version: 2, kind: 'session-fork-operation', prepared,
-      invocation: { version: 1, operationId: 'selected-fork', targetSessionId: 'selected-child', createdAt: new Date().toISOString(), requestDigest: prepared.requestDigest } }
-    expect(await call('session/fork/begin', { operation })).toMatchObject({ version: 2, kind: 'ready', sessionId: 'selected-child' })
-    expect(((await call('session/list')) as { sessions: { id: string }[] }).sessions.map(row => row.id)).toContain('selected-child')
-    const observer = createJsonlCommitCoordinator(sessionDir, { lock: { enabled: true, lockRoot: sessionDir } })
-    try {
-      const events = (await observer.load('selected-child')).session.events as { type: string; page?: { rows?: unknown[] } }[]
-      expect(events.some(event => event.type === 'conversation/seed-manifest')).toBe(true)
-      const pages = events.filter(event => event.type === 'conversation/seed-results')
-      expect(pages).toHaveLength(0)
-    } finally { await observer.close() }
+    await client.call('initialize')
+    const created = await client.call('session/create') as { sessionId: string }
+    const sourceSessionId = created.sessionId
+    await client.call('session/prompt', { sessionId: sourceSessionId, prompt: 'read big' })
+    // Two model exchanges: the tool call and the answer after the tool result.
+    expect(client.stats).toMatchObject({ modelCalls: 2, toolCalls: 1 })
+
+    const source = await storedSession(fixture.sessionDir, sourceSessionId)
+    // The tool ran once through the real registry: one call, one dispatch, one
+    // artifact result. A model branch that did not execute the tool would fail
+    // these assertions instead of silently forking an empty selection.
+    expect(source.events.filter(event => event.type === 'tool/call' && (event as { name?: string }).name === 'read')).toHaveLength(1)
+    expect(source.events.filter(event => event.type === 'tool/dispatch')).toHaveLength(1)
+    expect(source.artifactResultCount).toBe(1)
+    expect(source.results).toHaveLength(1)
+    const saved = source.results[0]!
+
+    const before = await client.readAll(sourceSessionId, saved.ref)
+    expect(before.text.includes(SELECTED_RESULTS_HEADER)).toBe(true)
+    expect(before.pages).toBeGreaterThan(1)
+    expect(before.bytes).toBe(saved.ref.encodedBytes)
+    expect(createHash('sha256').update(Buffer.from(before.text, 'utf8')).digest('hex')).toBe(saved.ref.contentDigest)
+
+    const { prepared, operation, begin } = await forkSelected(client, sourceSessionId, 'selected-child', 'selected-fork')
+    expect(prepared).toMatchObject({ version: 2, kind: 'session-fork-prepared', core: { sourceSessionId, results: 'selected-results-v1' } })
+    expect(begin).toMatchObject({ kind: 'ready', capture: 'captured', sessionId: 'selected-child' })
+    expect(begin.receipt.results).toMatchObject({ version: 1, rows: 1, pages: 1 })
+
+    const child = await storedSession(fixture.sessionDir, 'selected-child')
+    expect(child.header.semanticSeed).toMatchObject({ version: 3, codec: 'semantic-seed-v3', operationId: 'selected-fork', requestDigest: prepared.requestDigest })
+    const manifest = child.events[0] as { type: string; version: number; codec: string; results: unknown; resultPageCount: number; digest: string }
+    expect(manifest).toMatchObject({ type: 'conversation/seed-manifest', version: 3, codec: 'semantic-seed-v3', resultPageCount: 1, results: begin.receipt.results })
+    expect(manifest.digest).toBe(begin.receipt.seedDigest)
+    expect(begin.seedLength).toBe(child.events.filter(event => ['conversation/seed-manifest', 'conversation/seed-results', 'conversation/seed-group'].includes(event.type)).length)
+    const rows = seedManagedRows(child.events)
+    expect(rows).toHaveLength(1)
+    // The saved event (not a rebuilt or codec-shaped stand-in) is the source of
+    // the reference: exact artifact identity and exact original address.
+    expect(rows[0]!.ref).toEqual(saved.ref)
+    expect(rows[0]!.original).toEqual({ kind: 'local', sessionId: sourceSessionId, seq: saved.seq, event: 'tool/result', slot: 'envelope.retention.ref' })
+
+    const inherited = await client.readAll('selected-child', saved.ref)
+    expect(inherited.text).toBe(before.text)
+    expect(inherited.pages).toBe(before.pages)
+
+    // A rewritten revision, a replaced identifier or altered content identity
+    // must not read the retained bytes; the child's own query is what selects
+    // the page and the host verifies the committed artifact identity.
+    expect(await client.readPage('selected-child', { ...saved.ref, revision: 'c'.repeat(64) })).toMatchObject({ kind: 'unavailable' })
+    expect(await client.readPage('selected-child', { ...saved.ref, id: 'ctxv1_' + 'd'.repeat(64) })).toMatchObject({ kind: 'unavailable' })
+    expect(await client.readPage('selected-child', { ...saved.ref, contentDigest: 'e'.repeat(64) })).toMatchObject({ kind: 'unavailable' })
+
+    // Retrying the same operation adopts the same durable child without a
+    // second capture, model request or seed write.
+    const retried = await client.call('session/fork/begin', { operation }) as typeof begin
+    expect(retried.kind).toBe('ready')
+    expect(retried.receipt).toEqual(begin.receipt)
+    expect(client.stats).toMatchObject({ modelCalls: 2, toolCalls: 1 })
+    const retriedChild = await storedSession(fixture.sessionDir, 'selected-child')
+    expect(seedManagedRows(retriedChild.events)).toEqual(rows)
+
+    // The target's retention is its own: archiving the source denies the source
+    // but the child still reads the exact inherited bytes.
+    await client.call('desktop/session/manage', { sessionId: sourceSessionId, action: 'archive' })
+    expect(await client.readPage(sourceSessionId, saved.ref)).toMatchObject({ kind: 'unavailable' })
+    expect((await client.readAll('selected-child', saved.ref)).text).toBe(before.text)
+
+    await client.close()
+    // Closing twice is idempotent: the host reports no retained cleanup debt.
+    await client.close()
   } finally {
-    await host.close()
+    await client.close().catch(() => {})
+    await fixture.dispose()
   }
-}, 60000)
-it('forks a source that already references a result', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-gateway-scl-selected-ref-')), workspace = join(root, 'workspace'), sessionDir = join(root, 'sessions')
-  await mkdir(workspace)
-  const settingsPath = join(root, 'settings.json'), credentialsPath = join(root, 'credentials.json')
-  await writeFile(settingsPath, JSON.stringify({ autoTitle: false, sandboxMode: 'read-only', compaction: { auto: false }, codeMode: { mode: 'off' }, llm: { providers: { fixture: { protocol: 'openai-completions', baseURL: 'http://127.0.0.1:1', apiKeyEnv: 'IH_SEL_KEY', models: [{ id: 'fixture' }] } } } }))
-  await writeFile(credentialsPath, JSON.stringify({ refs: { IH_SEL_KEY: 'controlled' } }))
-  const seeder = createCommitCoordinator({ root: sessionDir })
+}, 120000)
+
+/** A source that already saved several results must carry every exact
+ *  reference, and results produced after the fork stay outside the child. */
+it('carries every saved result reference and excludes results produced after the fork', async () => {
+  const fixture = await createSelectedResultsHostFixture()
+  const client = await fixture.open()
   try {
-    await seeder.create({ sessionId: 'seeded' })
-    await seeder.append('seeded', [
-      { type: 'turn/start' }, { type: 'step/start' },
-      { type: 'tool/call', callId: 'c', name: 'read', args: {} },
-      { type: 'assistant/message', text: '', toolCalls: [{ id: 'c', name: 'read', args: {} }] },
-      { type: 'tool/dispatch', callId: 'c', eventSeq: 2 },
-      { type: 'tool/result', callId: 'c', name: 'read', envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: '', media: [], retention: { kind: 'artifact', ref: { ...codecRef } } } },
-      { type: 'context/result-ref', ref: { id: codecRef.id, workspaceId: 'w', sessionId: 'seeded', callId: 'c', label: 'read', revision: codecRef.revision, bytes: 12, originalBytes: 12, complete: true, expiresAt: 0 } },
-      { type: 'step/end' }, { type: 'turn/end' },
-    ] as never)
-  } finally { await seeder.close() }
-  const frames: RpcMessage[] = []
-  const host = await createDesktopHost({ workspace, sessionDir, settingsPath, credentialsPath, sessionStore: 'commit-log', onWrite: frame => frames.push(frame), buildProviderClient: () => controlledModel(() => ({ async *stream() { yield { type: 'text/chunk', text: 'unused' }; yield { type: 'end' } } } as import('@i-harness/llm-seam').ModelClient).stream({} as never)) })
-  let serial = 0
-  const call = async (method: string, params: unknown = {}) => {
-    const id = ++serial
-    await host.handleLine(JSON.stringify({ jsonrpc: '2.0', id, method, params }))
-    const frame = frames.findLast(frame => 'id' in frame && frame.id === id)
-    if (!frame || !isRpcSuccess(frame)) throw new Error(JSON.stringify(frame))
-    return frame.result
+    await client.call('initialize')
+    const created = await client.call('session/create') as { sessionId: string }
+    const sourceSessionId = created.sessionId
+    await client.call('session/prompt', { sessionId: sourceSessionId, prompt: 'read big' })
+    await client.call('session/prompt', { sessionId: sourceSessionId, prompt: 'read big again' })
+    expect(client.stats).toMatchObject({ toolCalls: 2 })
+
+    const source = await storedSession(fixture.sessionDir, sourceSessionId)
+    expect(source.results).toHaveLength(2)
+    const texts = await Promise.all(source.results.map(result => client.readAll(sourceSessionId, result.ref)))
+    expect(new Set(source.results.map(result => result.ref.id)).size).toBe(2)
+    for (const text of texts) expect(text.text.includes(SELECTED_RESULTS_HEADER)).toBe(true)
+
+    const { begin } = await forkSelected(client, sourceSessionId, 'multi-child', 'selected-multi')
+    // One page per selected turn extent: both results stay exact and ordered.
+    expect(begin.receipt.results).toMatchObject({ rows: 2, pages: 2 })
+    const child = await storedSession(fixture.sessionDir, 'multi-child')
+    const rows = seedManagedRows(child.events)
+    expect(rows.map(row => row.ref)).toEqual(source.results.map(result => result.ref))
+    for (const [index, result] of source.results.entries()) {
+      expect((await client.readAll('multi-child', result.ref)).text).toBe(texts[index]!.text)
+    }
+
+    // A result created after the fork is not part of the child's selection even
+    // though the child's parent keeps producing results.
+    await client.call('session/prompt', { sessionId: sourceSessionId, prompt: 'read big after the fork' })
+    const after = await storedSession(fixture.sessionDir, sourceSessionId)
+    expect(after.results).toHaveLength(3)
+    const future = after.results[2]!
+    expect(rows.some(row => row.ref!.id === future.ref.id)).toBe(false)
+    expect(await client.readPage('multi-child', future.ref)).toMatchObject({ kind: 'unavailable' })
+    expect((await client.readAll(sourceSessionId, future.ref)).text.includes(SELECTED_RESULTS_HEADER)).toBe(true)
+
+    await client.close()
+  } finally {
+    await client.close().catch(() => {})
+    await fixture.dispose()
   }
-  try {
-    await call('initialize')
-    const prepared = await call('session/fork/prepare', { version: 2, sourceSessionId: 'seeded', results: 'selected-results-v1' }) as { version?: number; kind?: string; requestDigest?: string }
-    expect(prepared).toMatchObject({ version: 2, kind: 'session-fork-prepared' })
-    const operation = { version: 2, kind: 'session-fork-operation', prepared,
-      invocation: { version: 1, operationId: 'selected-ref', targetSessionId: 'ref-child', createdAt: new Date().toISOString(), requestDigest: prepared.requestDigest } }
-    expect(await call('session/fork/begin', { operation })).toMatchObject({ version: 2, kind: 'ready', sessionId: 'ref-child' })
-    const observer = createJsonlCommitCoordinator(sessionDir, { lock: { enabled: true, lockRoot: sessionDir } })
-    try {
-      const events = (await observer.load('ref-child')).session.events as { type: string }[]
-      expect(events.filter(event => event.type === 'conversation/seed-results').length).toBeGreaterThan(0)
-    } finally { await observer.close() }
-  } finally { await host.close() }
-}, 90000)
+}, 120000)

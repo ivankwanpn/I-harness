@@ -1,81 +1,173 @@
 import { expect, it } from 'vitest'
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { isRpcSuccess, type RpcMessage } from '@i-harness/sdk'
-import { controlledModel } from '../../session-executor/test/controlled-model.ts'
-import { createJsonlCommitCoordinator } from '../../session-persistence-jsonl/src/commit-coordinator.ts'
-import { createDesktopHost } from '../src/host.ts'
+import {
+  bindProject, createSelectedResultsHostFixture, forkSelected, managedArtifactPaths, seedManagedRows, storedSession,
+} from './helpers/selected-results-host.ts'
 
-// E2E: a source turn writes a real artifact and references it; after the host
-// restart the selected-results fork must let the child read the same page.
-it('reads an inherited result page on the selected child', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-gateway-scl-selected-read-')), workspace = join(root, 'workspace'), sessionDir = join(root, 'sessions')
-  await mkdir(workspace)
-  const settingsPath = join(root, 'settings.json'), credentialsPath = join(root, 'credentials.json')
-  await writeFile(settingsPath, JSON.stringify({ autoTitle: false, sandboxMode: 'read-only', compaction: { auto: false }, codeMode: { mode: 'off' }, llm: { providers: { fixture: { protocol: 'openai-completions', baseURL: 'http://127.0.0.1:1', apiKeyEnv: 'IH_SEL_READ_KEY', models: [{ id: 'fixture', contextWindow: 32000 }] } }, defaultModel: { provider: 'fixture', model: 'fixture' } } }))
-  await writeFile(credentialsPath, JSON.stringify({ refs: { IH_SEL_READ_KEY: 'controlled' } }))
-  await writeFile(join(workspace, 'big.txt'), 'x'.repeat(200 * 1024), 'utf8')
-  const model = () => controlledModel(request => ({ async *stream(request) {
-    request.signal?.throwIfAborted()
-    if (request.messages.at(-1)?.role === 'tool') { yield { type: 'text/chunk', text: 'done' }; yield { type: 'end' }; return }
-    if (request.messages.at(-1)?.content === 'read big') { yield { type: 'tool_call', call: { id: 'call-read', name: 'read', args: { path: 'big.txt' } } }; yield { type: 'end' }; return }
-    yield { type: 'text/chunk', text: 'ok' }; yield { type: 'end' }
-  } } as import('@i-harness/llm-seam').ModelClient).stream(request))
-  const frameSink = () => { const frames: RpcMessage[] = []; return { frames, call: async (host: Awaited<ReturnType<typeof createDesktopHost>>, serialRef: { n: number }, method: string, params: unknown = {}) => {
-    const id = ++serialRef.n
-    await host.handleLine(JSON.stringify({ jsonrpc: '2.0', id, method, params }))
-    const frame = frames.findLast(frame => 'id' in frame && frame.id === id)
-    if (!frame || !isRpcSuccess(frame)) throw new Error(JSON.stringify(frame))
-    return frame.result
-  } } }
-  const first = frameSink()
-  const hostA = await createDesktopHost({ workspace, sessionDir, settingsPath, credentialsPath, sessionStore: 'commit-log', onWrite: frame => first.frames.push(frame), buildProviderClient: () => model() })
-  const serialA = { n: 0 }
-  let sessionId = ''
+/** The accepted selected-results contract: the target keeps reading the exact
+ *  inherited bytes through source retirement, source deletion, nested forks,
+ *  clear and a full host restart. */
+it('keeps inherited managed results readable after source retirement, deletion and a cold reopen', async () => {
+  const fixture = await createSelectedResultsHostFixture()
+  const first = await fixture.open()
+  let sourceSessionId = ''
+  let ref: { id: string; revision: string } = { id: '', revision: '' }
+  let expected = ''
   try {
-    await first.call(hostA, serialA, 'initialize')
-    sessionId = ((await first.call(hostA, serialA, 'session/create')) as { sessionId: string }).sessionId
-    await first.call(hostA, serialA, 'session/prompt', { sessionId, prompt: 'read big' })
-  } finally { await hostA.close() }
-  const ref = await (async () => {
-    const seeder = createJsonlCommitCoordinator(sessionDir, { lock: { enabled: true, lockRoot: sessionDir } })
-    try {
-      const { session } = await seeder.load(sessionId)
-      const result = session.events.filter(event => event.type === 'tool/result' && (event as { name?: string }).name === 'read').at(-1) as { callId?: string; envelope?: { retention?: { ref?: { id: string; revision: string } } } } | undefined
-      const artifact = result?.envelope?.retention?.ref
-      if (!artifact) throw new Error('the turn did not produce an artifact result')
-      await seeder.append(sessionId, [{ type: 'context/result-ref', ref: { id: artifact.id, workspaceId: 'w', sessionId, callId: result!.callId ?? 'call-read', label: 'read', revision: artifact.revision, bytes: 12, originalBytes: 200 * 1024, complete: true, expiresAt: 0 } }] as never)
-      return artifact
-    } finally { await seeder.close() }
-  })()
-  const second = frameSink()
-  const hostB = await createDesktopHost({ workspace, sessionDir, settingsPath, credentialsPath, sessionStore: 'commit-log', onWrite: frame => second.frames.push(frame), buildProviderClient: () => model() })
-  const serialB = { n: 0 }
+    await first.call('initialize')
+    const created = await first.call('session/create') as { sessionId: string }
+    sourceSessionId = created.sessionId
+    await bindProject(first, sourceSessionId, fixture.project)
+    await first.call('session/prompt', { sessionId: sourceSessionId, prompt: 'read big' })
+    const source = await storedSession(fixture.sessionDir, sourceSessionId)
+    ref = source.results[0]!.ref
+    expected = (await first.readAll(sourceSessionId, ref)).text
+    expect((await managedArtifactPaths(fixture.sessionDir, ref.id)).length).toBeGreaterThan(0)
+    await first.close()
+  } finally { await first.close().catch(() => {}) }
+
+  const second = await fixture.open()
   try {
-    await second.call(hostB, serialB, 'initialize')
-    const sourcePage = await second.call(hostB, serialB, 'session/result/read', { sessionId, ref, maxBytes: 4096 }) as { data?: unknown }
-    expect(sourcePage.data).toBeDefined()
-    const prepared = await second.call(hostB, serialB, 'session/fork/prepare', { version: 2, sourceSessionId: sessionId, results: 'selected-results-v1' }) as { version?: number; requestDigest?: string }
-    expect(prepared).toMatchObject({ version: 2 })
-    const operation = { version: 2, kind: 'session-fork-operation', prepared,
-      invocation: { version: 1, operationId: 'selected-read', targetSessionId: 'read-child', createdAt: new Date().toISOString(), requestDigest: prepared.requestDigest } }
-    expect(await second.call(hostB, serialB, 'session/fork/begin', { operation })).toMatchObject({ version: 2, kind: 'ready', sessionId: 'read-child' })
-    const childPage = await second.call(hostB, serialB, 'session/result/read', { sessionId: 'read-child', ref, maxBytes: 4096 }) as { data?: unknown; kind?: string; reason?: string }
-    expect(childPage).toMatchObject({ data: expect.anything() })
-    // A ref the child did not inherit stays denied: the fallback never widens
-    // authorization beyond the seed pages.
-    const foreign = { ...(ref as Record<string, unknown>), id: 'ctxv1_' + 'b'.repeat(64), revision: 'b'.repeat(64) }
-    const foreignPage = await second.call(hostB, serialB, 'session/result/read', { sessionId: 'read-child', ref: foreign, maxBytes: 4096 }) as { kind?: string }
-    expect(foreignPage).toMatchObject({ kind: 'unavailable' })
-    // A selected child can be forked again: the child's own seed pages supply
-    // the inherited metadata the v3 export validates against.
-    const nested = await second.call(hostB, serialB, 'session/fork/prepare', { version: 2, sourceSessionId: 'read-child', results: 'selected-results-v1' }) as { version?: number; requestDigest?: string }
-    expect(nested).toMatchObject({ version: 2, kind: 'session-fork-prepared' })
-    const nestedOperation = { version: 2, kind: 'session-fork-operation', prepared: nested,
-      invocation: { version: 1, operationId: 'selected-read-nested', targetSessionId: 'read-grandchild', createdAt: new Date().toISOString(), requestDigest: nested.requestDigest } }
-    expect(await second.call(hostB, serialB, 'session/fork/begin', { operation: nestedOperation })).toMatchObject({ version: 2, kind: 'ready', sessionId: 'read-grandchild' })
-    const grandchildPage = await second.call(hostB, serialB, 'session/result/read', { sessionId: 'read-grandchild', ref, maxBytes: 4096 }) as { data?: unknown }
-    expect(grandchildPage).toMatchObject({ data: expect.anything() })
-  } finally { await hostB.close() }
+    await second.call('initialize')
+    await second.call('desktop/project/sync', { projects: [fixture.project] })
+    // The source itself is cold but still readable, and its exact bytes match.
+    expect((await second.readAll(sourceSessionId, ref)).text).toBe(expected)
+    const { begin } = await forkSelected(second, sourceSessionId, 'child', 'selected-read')
+    expect(begin).toMatchObject({ kind: 'ready', capture: 'captured' })
+    expect(begin.receipt.results).toMatchObject({ version: 1, rows: 1, pages: 1 })
+    expect((await second.readAll('child', ref)).text).toBe(expected)
+    expect(await second.call('desktop/session/project/state', { sessionId: 'child' })).toMatchObject({ projectId: fixture.project.id })
+
+    // Retiring the source removes the ancestor the metadata-only fallback could
+    // have read through: the target must still read its own retained bytes.
+    await second.call('desktop/session/manage', { sessionId: sourceSessionId, action: 'archive' })
+    expect(await second.readPage(sourceSessionId, ref)).toMatchObject({ kind: 'unavailable' })
+    expect((await second.readAll('child', ref)).text).toBe(expected)
+
+    // Clearing the source's context output must not withdraw inherited bytes
+    // the target already retained.
+    await second.call('desktop/context-subsystems/action', { command: { target: 'context', action: 'clear', sessionId: sourceSessionId } })
+    expect((await second.readAll('child', ref)).text).toBe(expected)
+
+    // A nested selected fork inherits from the child and keeps its own copy.
+    const nested = await forkSelected(second, 'child', 'grandchild', 'selected-read-nested')
+    expect(nested.begin).toMatchObject({ kind: 'ready', capture: 'captured', sessionId: 'grandchild' })
+    expect((await second.readAll('grandchild', ref)).text).toBe(expected)
+
+    await second.call('desktop/session/manage', { sessionId: 'child', action: 'archive' })
+    expect(await second.readPage('child', ref)).toMatchObject({ kind: 'unavailable' })
+    expect((await second.readAll('grandchild', ref)).text).toBe(expected)
+
+    // The store forbids deleting a session that still has descendants, so a
+    // source deletion with a live target is not an available operation; the
+    // target's own release and the final artifact reclamation are covered by
+    // 'releases inherited retention when the owning sessions are deleted'.
+    await second.close()
+  } finally { await second.close().catch(() => {}) }
+
+  const third = await fixture.open()
+  try {
+    await third.call('initialize')
+    await third.call('desktop/project/sync', { projects: [fixture.project] })
+    // Cold replay of the retained bytes, with the deleted source and archived
+    // child permanently unavailable.
+    expect(await third.readPage(sourceSessionId, ref)).toMatchObject({ kind: 'unavailable' })
+    expect((await third.readAll('grandchild', ref)).text).toBe(expected)
+    const grandchild = await storedSession(fixture.sessionDir, 'grandchild')
+    expect(seedManagedRows(grandchild.events).map(row => row.ref!.id)).toEqual([ref.id])
+  } finally {
+    await third.close().catch(() => {})
+    await fixture.dispose()
+  }
+}, 180000)
+
+/** Selection, rewind and authorization boundaries on the public route. */
+it('denies results that were not selected, hidden by rewind or given a different identity', async () => {
+  const fixture = await createSelectedResultsHostFixture()
+  const client = await fixture.open()
+  try {
+    await client.call('initialize')
+    await client.call('desktop/project/sync', { projects: [fixture.project] })
+    const created = await client.call('session/create') as { sessionId: string }
+    const sourceSessionId = created.sessionId
+    await bindProject(client, sourceSessionId, fixture.project)
+    await client.call('session/prompt', { sessionId: sourceSessionId, prompt: 'read big' })
+    const firstTurn = await storedSession(fixture.sessionDir, sourceSessionId)
+    const hidden = firstTurn.results[0]!.ref
+    const hiddenText = (await client.readAll(sourceSessionId, hidden)).text
+
+    // Rewind the whole first turn away, then produce a result on the new branch.
+    const plan = await client.call('desktop/rewind/plan', { sessionId: sourceSessionId, target: 0, mode: 'conversation' }) as { fingerprint: string }
+    await client.call('desktop/rewind/execute', { sessionId: sourceSessionId, target: 0, mode: 'conversation', fingerprint: plan.fingerprint })
+    await client.call('session/prompt', { sessionId: sourceSessionId, prompt: 'read big after rewind' })
+    const branch = await storedSession(fixture.sessionDir, sourceSessionId)
+    expect(branch.results).toHaveLength(2)
+    const visible = branch.results[1]!.ref
+    expect(visible.id).not.toBe(hidden.id)
+    const visibleText = (await client.readAll(sourceSessionId, visible)).text
+
+    const { begin } = await forkSelected(client, sourceSessionId, 'branch-child', 'selected-branch')
+    expect(begin.receipt.results).toMatchObject({ rows: 1, pages: 1 })
+    const child = await storedSession(fixture.sessionDir, 'branch-child')
+    const rows = seedManagedRows(child.events)
+    expect(rows.map(row => row.ref!.id)).toEqual([visible.id])
+    expect((await client.readAll('branch-child', visible)).text).toBe(visibleText)
+    // The rewound result was never selected: no seed row and no read authority.
+    expect(await client.readPage('branch-child', hidden)).toMatchObject({ kind: 'unavailable' })
+    expect(hiddenText.includes('SELECTED_RESULTS_HOST_HEADER')).toBe(true)
+
+    // An unrelated session's real artifact is not inherited by this child.
+    const other = await client.call('session/create') as { sessionId: string }
+    await bindProject(client, other.sessionId, fixture.project)
+    await client.call('session/prompt', { sessionId: other.sessionId, prompt: 'read big' })
+    const foreignResult = (await storedSession(fixture.sessionDir, other.sessionId)).results[0]!.ref
+    expect(await client.readPage('branch-child', foreignResult)).toMatchObject({ kind: 'unavailable' })
+
+    // Exact identity is part of the read authority, not just the id.
+    expect(await client.readPage('branch-child', { ...visible, revision: 'f'.repeat(64) })).toMatchObject({ kind: 'unavailable' })
+    expect(await client.readPage('branch-child', { ...visible, id: 'ctxv1_' + 'a'.repeat(64) })).toMatchObject({ kind: 'unavailable' })
+
+    await client.close()
+  } finally {
+    await client.close().catch(() => {})
+    await fixture.dispose()
+  }
+}, 120000)
+
+/** Deleting the target must release its retention so the shared store can be
+ *  reclaimed once no document still owns the artifact. */
+it('releases inherited retention when the owning sessions are deleted', async () => {
+  const fixture = await createSelectedResultsHostFixture()
+  const client = await fixture.open()
+  try {
+    await client.call('initialize')
+    await client.call('desktop/project/sync', { projects: [fixture.project] })
+    const created = await client.call('session/create') as { sessionId: string }
+    const sourceSessionId = created.sessionId
+    await bindProject(client, sourceSessionId, fixture.project)
+    await client.call('session/prompt', { sessionId: sourceSessionId, prompt: 'read big' })
+    const source = await storedSession(fixture.sessionDir, sourceSessionId)
+    const ref = source.results[0]!.ref
+    const expected = (await client.readAll(sourceSessionId, ref)).text
+    await forkSelected(client, sourceSessionId, 'owned-child', 'selected-owned')
+    expect((await managedArtifactPaths(fixture.sessionDir, ref.id)).length).toBeGreaterThan(0)
+
+    // Deleting the target releases its own pin but keeps the source's copy: the
+    // artifact is retained for the remaining owner and still reads exactly.
+    const childDeletion = await client.call('desktop/session/batch', { command: { action: 'delete', sessionIds: ['owned-child'] } }) as { results: { sessionId: string; ok: boolean }[] }
+    expect(childDeletion.results.map(row => [row.sessionId, row.ok])).toEqual([['owned-child', true]])
+    expect(await client.readPage('owned-child', ref)).toMatchObject({ kind: 'unavailable' })
+    expect((await managedArtifactPaths(fixture.sessionDir, ref.id)).length).toBeGreaterThan(0)
+    expect((await client.readAll(sourceSessionId, ref)).text).toBe(expected)
+
+    // With the last owning document deleted the artifact bytes and its pins are
+    // gone: no silent resource debt is left behind for future reads.
+    const sourceDeletion = await client.call('desktop/session/batch', { command: { action: 'delete', sessionIds: [sourceSessionId] } }) as { results: { sessionId: string; ok: boolean }[] }
+    expect(sourceDeletion.results.map(row => [row.sessionId, row.ok])).toEqual([[sourceSessionId, true]])
+    expect(await managedArtifactPaths(fixture.sessionDir, ref.id)).toEqual([])
+    expect(await client.readPage(sourceSessionId, ref)).toMatchObject({ kind: 'unavailable' })
+    await client.close()
+  } finally {
+    await client.close().catch(() => {})
+    await fixture.dispose()
+  }
 }, 120000)
