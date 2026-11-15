@@ -1,11 +1,10 @@
 import { afterEach as afterFixture, vi as fixtureVi } from 'vitest'
 afterFixture(() => fixtureVi.unstubAllGlobals())
 import { controlledModel } from "./controlled-model.ts"
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "vitest"
 import { registerApprovalAnswerer } from "@i-harness/interaction"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { createSessionService } from "../src/service.ts"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
@@ -14,6 +13,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 describe("live approval modes", () => {
+  // Two delegated isolated reviews, measured 5.8 s alone on 2026-11-15, above
+  // the default 5 s deadline, so this case carries a bounded 30 s budget.
   it("runs an isolated reviewer on its selected model without creating child sessions", async () => {
     const root = await mkdtemp(join(tmpdir(), 'ih-f1-reviewer-owner-'))
     const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
@@ -45,7 +46,7 @@ describe("live approval modes", () => {
       // assert the observable outcome: no child session was created.
       expect((await coordinator.list()).sort()).toEqual(['s'])
     } finally { await service.close(); await coordinator.close() }
-  })
+}, 30_000)
   it("delegates tool review and switches the same assembly back to manual approval", async () => {
     let mode: "delegate" | "ask-all" | "dangerous" = "delegate"
     let mainCalls = 0
