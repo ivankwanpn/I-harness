@@ -225,10 +225,14 @@ it('a failed initial input close still permits safe environment cleanup and retr
 it('a real failed run-end frame preserves the mount error and still closes the owned environment', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-headless-run-end-')), workspace = join(root, 'workspace'), settingsPath = join(root, 'settings.json')
   await mkdir(workspace); await writeFile(settingsPath, '{}')
-  const backend = createJsonlBackend(join(root, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
-  const append = backend.appendOwnedBatch!, fault = Error('original mount before run-end'), previousHome = process.env.IH_CONFIG_DIR
+  const fault = Error('original mount before run-end'), previousHome = process.env.IH_CONFIG_DIR
   let runEnds = 0, modelCalls = 0
-  backend.appendOwnedBatch = (...args) => { if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'operator/run-end')) { runEnds++; return Promise.resolve({ kind: 'absent' as const, key: args[3].key }) }; return append(...args) }
+  // The canonical-path guard snapshots batch descriptors at construction, so
+  // the run-end refusal travels through the documented pre-bind seam.
+  const backend = createJsonlBackend(join(root, 'sessions'), { wrapOwnedBatch: actual => (...args) => {
+    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'operator/run-end')) { runEnds++; return Promise.resolve({ kind: 'absent' as const, key: args[3].key }) }
+    return actual(...args)
+  } }), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
   process.env.IH_CONFIG_DIR = root
   try {
     const result = await runHeadless('construction with original journal', { workspace, coordinator, sessionId: id, instructionSettingsPath: settingsPath,
