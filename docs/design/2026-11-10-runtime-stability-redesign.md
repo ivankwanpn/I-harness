@@ -155,6 +155,12 @@ executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-
 
 同輪嘗試並撤回的檔案：`retained-child-scope` 在 seam 修好後暴露 `subagentState().agentTable` 為空、`retained-batch-continuation` 暴露 child request 缺欄位，兩者都是 WIP owned/native child 能力，不是 seam 問題；改動已還原以免留下未驗證 fixture。
 
+#### 第十七批：run-end seam 與 isolated-review 的注入時序
+
+`main-instruction-construction` 的 run-end 案例原以建構後 patch 替換 `appendOwnedBatch`，真實 failed run-end frame 從未發生（其兩項基線失敗之一）。`73293e2b` 改以 `wrapOwnedBatch` 注入 absent run-end，該案轉綠，檔案由 2 項失敗降為 1 項；剩餘案例 mock CLI `openCliInput`，但現行 headless 路徑在此 mount-fault 情境不再開啟該 input，屬產品路徑待查。
+
+`instruction-isolated-review` 嘗試同類 seam 後撤回：真正的 approval close append 在測試取得 `opened.actionId` **之前**就已寫入，按 actionId 過濾會漏接；改為「第一個 context/action close」注入又破壞 input settlement（`Input execution settlement requires recovery`）並使 false 案逾時。已還原，此檔需要先釐清 approval generation 關閉時序再改寫。
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
