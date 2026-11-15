@@ -134,6 +134,12 @@ executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-
 
 同批 triage 發現三個需要產品層判讀的單案：`managed-runtime-context` 的未知 publication 目前被分類為 `FACT_PRECONDITION_STALE` 而非 `FACT_RECOVERY_REQUIRED`（source guard 把 domain 的 recovery 失敗吞成 false）；`title-action` 在 post-turn callback 持有 action 時提交第二輪，`settleFinishedActions` 拋出 `Managed facts require reconciliation`；`main-instruction-targets` 的 257 目錄讀取案例在真實 turn 中被 abort。三者需要產品契約核對，未以放寬斷言處理。
 
+#### 第十四批：instruction-fresh-child／factory-failure 的清理順序審計
+
+兩個 fixture 同樣以建構後替換 `coordinator.openManagedDocument` 來記錄 `document` 清理條目；child document 現由 coordinator 自身 ownership teardown 關閉，不經過重新開啟的 wrapper，因此該條目不再存在。`5f19c4d0` 保留被審計契約（retained lease close、scope unmount、零模型請求）並改為斷言現行順序：fresh child 為 `['lease','lease','scope']`、factory failure 為 `['scope']`。兩檔合計 **7/7 通過**，Typecheck 通過。[收據](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/ifc2.json)
+
+同輪 triage 續；`instruction-diagnostics` 另有一個 60 秒逾時案例（基線未失敗）與排序斷言，暫不處理；`native-dependency-observer` 的唯一失敗是 native child session identity 與 parent 相同，屬 WIP native child birth 能力。
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
