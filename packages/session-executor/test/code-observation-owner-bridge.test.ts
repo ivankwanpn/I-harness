@@ -36,13 +36,14 @@ async function bridge(arm: 'H1' | 'H2') {
       observerFailures++; record('fixture.observer.failed', { error: errorInfo(error) })
     }); return promise
   }
-  const backend = createJsonlBackend(join(root, 's')), append = backend.appendOwnedBatch!
   const appends: unknown[] = []
-  backend.appendOwnedBatch = (...args) => {
+  // The canonical-path guard snapshots batch descriptors at construction, so
+  // the journal observation travels through the documented pre-bind seam.
+  const backend = createJsonlBackend(join(root, 's'), { wrapOwnedBatch: actual => (...args) => {
     const captured = { key: args[3].key, bytes: Buffer.from(args[3].bytes).toString('base64'), events: decodeFactBatch(args[3].bytes).events }
     appends.push(captured); record('journal.append', { key: captured.key, types: captured.events.map(event => event.type) })
-    return observe(append.apply(backend, args), outcome => record('journal.receipt', { outcome }), error => record('journal.error', { error: errorInfo(error) }))
-  }
+    return observe(actual(...args), outcome => record('journal.receipt', { outcome }), error => record('journal.error', { error: errorInfo(error) }))
+  } })
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const ctx = createContext(), tools = createToolRegistry(ctx)
