@@ -106,6 +106,10 @@ executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-
 
 `result-store-close.test.ts` 的兩個 120 秒掛起已定位為另一種注入縫隙：案例以 `vi.spyOn(f.original.body,'close')` 注入 native close fault，但現行 store 關閉路徑不再經過該 instance 方法，fault 永不觸發、held resolver 永不釋放（量測顯示 release 正常完成且 `body.fd`／`leaves.fd` 均已為 -1，即**產品確實關閉了真實 handle**）。另兩項 error-shape 斷言（期待 AggregateError）亦屬舊契約。此檔需要新的 native close 故障注入 seam（或改為斷言可觀察的 fd／lease 狀態），未在本批修改。[instruction 修正後](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/initial-acq1.json) [result-store-close 量測與診斷](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/result-store-close1.json)
 
+#### 第九批：result-store-close 的 open-time native close seam
+
+`result-store-close.test.ts` 的兩個 120 秒掛起與兩個 error-shape 失敗都源自注入位置：案例在 fixture 寫入 artifact 之後才 `vi.spyOn(f.original.body,'close')`，但 result writer 在建立時就 `handle.close.bind(handle)` 捕捉關閉方法，事後 patch 永遠到不了產品關閉路徑（先前量測已證明 release 正常完成且兩個 fd 皆為 -1，因此**不是** handle 洩漏）。`2f16faad` 以 hoisted `node:fs/promises` open seam 在開啟時注入 native close fault（與 `context-output/test/close-ownership.test.ts` 相同 seam），並把案例對齊現行關閉契約：被拒絕的最終 retirement 會把保留的原始失敗回報給之後每一次 admission／retry、呼叫者擁有 native handle 的清理權、只有成功 retirement 後才會換成新的 store 實例。五項全部通過，單案 0.3 至 0.8 秒，**沒有期限調整**；Executor 型別與 diff check 通過。[修正後完整檔案](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/result-store-close-final2.json)
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
