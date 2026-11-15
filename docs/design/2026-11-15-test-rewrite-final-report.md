@@ -75,11 +75,19 @@
 - 所有提交已非強制推送至 `origin/codex/runtime-stability-redesign`；CI（`.github/workflows/verify.yml`）每個 head 的結果記錄於證據目錄 `ci-*.log`。
 - 每批均通過對應套件 typecheck 與 `git diff --check`；boundary gate 於本輪全庫驗證中一併執行。
 
-## 六、固定版本全庫驗證
+## 六、固定版本全庫驗證（2026-11-15 完成）
 
-- 指令：`node scripts/test-env.mjs pnpm run verify:all`。
-- 日誌：`C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/verify-all-final.log`。
-- 結果：**待填**（執行中；完成後補上 totals、各 suite 結果、與基線比較）。
+- 指令：`node scripts/test-env.mjs pnpm run verify:all`，head `e6dad10d`，日誌 `verify-all-final.log`。
+- **suite：16,215 passed｜105 skipped｜219 failed**（82/82 projects reported）。
+- typecheck：exit 0（全部 workspace 專案）。
+- e2e：exit 0，10 檔 127 項通過。
+- reachability gate：PASS（374 rows，baseline 337，無新增）。
+- package boundaries：exit 0（128 筆，與 baseline 一致）。
+- compiled gateway + Windows ACL：exit 0（`IH_COMPILED_GATEWAY_OK`、`IH_COMPILED_ACL_OK`）。
+- 與基線 `21f8d861` 比較：**failed 434 → 219（-215）**、passed 16,001 → 16,215（+214）；unhandled 9 → 0；skipped 86 → 105。
+- 逐套件失敗數：session-executor 102、desktop-gateway 74、context-output 28（基線 60）、apps/cli 4、desktop 3、acp 2、guard-approval 2、session-persistence 2、fs-watch 1、terminal 1。
+- 逐檔清單：`C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/verify-final-file-failures.json`（102 個檔案列有失敗；session-executor 51 檔、desktop-gateway 35 檔）。
+- 說明：此 head 之後仍有接續修復，最終版本將在收尾批次後再跑一次同指令驗證並更新本節。
 
 ## 七、證據位置
 
