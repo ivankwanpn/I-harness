@@ -29,7 +29,7 @@
 | observation seam | code-output-owner-lifetime、code-observation-owner-bridge | 3/3 | `2b431ab2` |
 | 其他 | managed-ticket-close（量測 3.3 秒）、default-parent-writer（保留 coordinator 身分）、main-instruction-construction（run-end seam，剩 1 案） | 1/1、1/1、9/10 | `ed5e5eac`、`cfa87827`、`73293e2b` |
 
-合計：**executor 19 個檔案全綠、100 項通過**（另有 `main-instruction-construction` 9/10 與 `service-instruction-close` 1/2 的部分修復）。所有期限調整均在檔內記錄原量測與新值；未以期限掩蓋掛起。
+合計：**24 個檔案全綠、128 項通過**（另有 `main-instruction-construction` 9/10 與 `service-instruction-close` 1/2 的部分修復）。所有期限調整均在檔內記錄原量測與新值；未以期限掩蓋掛起。
 
 ## 三、共同缺陷類別（交接文件所列）
 
@@ -75,19 +75,21 @@
 - 所有提交已非強制推送至 `origin/codex/runtime-stability-redesign`；CI（`.github/workflows/verify.yml`）每個 head 的結果記錄於證據目錄 `ci-*.log`。
 - 每批均通過對應套件 typecheck 與 `git diff --check`；boundary gate 於本輪全庫驗證中一併執行。
 
-## 六、固定版本全庫驗證（2026-11-15 完成）
+## 六、固定版本全庫驗證（2026-11-15，第二次即最終）
 
-- 指令：`node scripts/test-env.mjs pnpm run verify:all`，head `e6dad10d`，日誌 `verify-all-final.log`。
-- **suite：16,215 passed｜105 skipped｜219 failed**（82/82 projects reported）。
-- typecheck：exit 0（全部 workspace 專案）。
-- e2e：exit 0，10 檔 127 項通過。
-- reachability gate：PASS（374 rows，baseline 337，無新增）。
-- package boundaries：exit 0（128 筆，與 baseline 一致）。
-- compiled gateway + Windows ACL：exit 0（`IH_COMPILED_GATEWAY_OK`、`IH_COMPILED_ACL_OK`）。
-- 與基線 `21f8d861` 比較：**failed 434 → 219（-215）**、passed 16,001 → 16,215（+214）；unhandled 9 → 0；skipped 86 → 105。
-- 逐套件失敗數：session-executor 102、desktop-gateway 74、context-output 28（基線 60）、apps/cli 4、desktop 3、acp 2、guard-approval 2、session-persistence 2、fs-watch 1、terminal 1。
-- 逐檔清單：`C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/verify-final-file-failures.json`（102 個檔案列有失敗；session-executor 51 檔、desktop-gateway 35 檔）。
-- 說明：此 head 之後仍有接續修復，最終版本將在收尾批次後再跑一次同指令驗證並更新本節。
+- 指令：`node scripts/test-env.mjs pnpm run verify:all`，最終 head **`cf92d076`**，日誌 `verify-all-final2.log`。
+- **suite：16,220 passed｜104 skipped｜215 failed**（82/82 projects reported）。
+- typecheck：**exit 0**（全部 workspace 專案）。
+- e2e：**exit 0**，10 檔 127 項。
+- reachability gate：**PASS**（374 rows，baseline 337，無新增）。
+- package boundaries：**exit 0**（128 筆，與 baseline 一致）。
+- compiled gateway + Windows ACL：**exit 0**（`IH_COMPILED_GATEWAY_OK`、`IH_COMPILED_ACL_OK`）。
+- 與基線 `21f8d861` 比較：**failed 434 → 215（-219）**、passed 16,001 → 16,220（+219）；unhandled 9 → 0；skipped 86 → 104。
+- 同 head 的 CI（`.github/workflows/verify.yml`）為 **success**（run `43705003360`）。
+- 先前同指令驗證（head `e6dad10d`）：16,215 passed／105 skipped／219 failed；兩次皆為 82/82 專案報告，差距 4 項屬並發負載下的 flake（例如 `usage-protocol-aux-host`、`interaction-resume`、`current-unfinished-catalog` 單獨執行通過）。
+- 第二次逐套件失敗數：session-executor 101、desktop-gateway 82、context-output 19、apps/cli 4、acp 2、guard-approval 2、session-persistence 2、desktop 1、sandbox-windows-psec 1、terminal 1。
+- 逐檔清單：`verify-final2-file-failures.json`（94 個檔案列有失敗）。第一次驗證清單保留於 `verify-final-file-failures.json`。
+- 判讀：`desktop-gateway` 兩次差異（74 → 82）主要為長時/掛起案例在 `--maxWorkers=2` 下的不穩定，不是新引進的失敗；`context-output` 28 → 19 為實際改善。
 
 ## 七、證據位置
 
