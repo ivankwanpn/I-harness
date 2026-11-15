@@ -92,6 +92,14 @@ executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-
 
 同批普查的 `managed-input-readiness` 五個 30 秒掛起另屬 module-mock 接縫失效：案例以 `vi.mock` 攔截 `subscribeManagedExecutionReadiness`／`associateExecutionDependencies` 並等待 `probe.waiting`，現行 service 路徑不再觸發該接縫，故等待永不完成；需要先確認現行 readiness 訂閱的真正入口再改寫，未在本批處理。
 
+#### 第七批：delivery-receiver 注入故障的診斷宣告
+
+`delivery-receiver.test.ts` 四個失敗中三個源自 fixture 的警告白名單：這些案例刻意注入 unknown receipt／terminal 狀態並以測試自己的 renderer override 取代呈現，close settlement 因此如實輸出對應 recovery 診斷（`FactRecoveryRequiredError: Managed facts require reconciliation`、`AggregateError: Original delivery sources require settlement`、`Task notification and original progress cleanup failed`、`Required source drain needs recovery`），而 fixture 只允許既有白名單訊息。`604c1e89` 依案例以 fixture 既有的 `expectedWarnings` 精確宣告這四組訊息，保留全域「非預期警告即失敗」的檢查；檔案由 4 項失敗降為 1 項。
+
+剩下一個案例「pending original receipt is scheduled after its first pre-claim prerequisite failure settles」在 owner signal 後等待 queue row 變更；診斷顯示 `registeredOrder=undefined`、queue row 不存在、executionErrors 為空，代表 pre-claim source-close 失敗後其 registration callback 沒有在 receipt 落地後再執行。這可能是產品行為變更（失敗的 original source close 不再重試）而非期限問題，暫不改期限，留待產品契約核對。
+
+同輪 triage：`managed-input-readiness` 的 30 秒掛起來自 module-mock 接縫：`waitForManagedInputObservation` 只在 `inbox.pending()` 拋錯時訂閱 `subscribeManagedExecutionReadiness`，而 fixture 的 dependency gate 目前不會讓 `pending()` 拋錯，`probe.waiting` 因此永不觸發；需要先以現行 receiver/observation 契約確認等待入口再重寫。
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
