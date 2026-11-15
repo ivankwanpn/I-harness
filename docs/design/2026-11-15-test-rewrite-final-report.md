@@ -29,7 +29,7 @@
 | observation seam | code-output-owner-lifetime、code-observation-owner-bridge | 3/3 | `2b431ab2` |
 | 其他 | managed-ticket-close（量測 3.3 秒）、default-parent-writer（保留 coordinator 身分）、main-instruction-construction（run-end seam，剩 1 案） | 1/1、1/1、9/10 | `ed5e5eac`、`cfa87827`、`73293e2b` |
 
-合計：**25 個檔案全綠、139 項通過**（另有 `main-instruction-construction` 9/10 與 `service-instruction-close` 1/2 的部分修復）。所有期限調整均在檔內記錄原量測與新值；未以期限掩蓋掛起。
+合計：**26 個檔案全綠、145 項通過**（另有 `main-instruction-construction` 9/10 與 `service-instruction-close` 1/2 的部分修復）。所有期限調整均在檔內記錄原量測與新值；未以期限掩蓋掛起。
 
 ## 三、共同缺陷類別（交接文件所列）
 
