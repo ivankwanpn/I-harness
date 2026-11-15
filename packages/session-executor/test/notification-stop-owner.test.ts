@@ -22,8 +22,24 @@ function failureData(value: unknown, depth = 0): unknown {
     errors: value instanceof AggregateError ? value.errors.slice(0, 20).map(error => failureData(error, depth + 1)) : undefined }
   return String(value)
 }
-async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'nso-')), backend = createJsonlBackend(root)
+type OwnedBatch = NonNullable<ReturnType<typeof createJsonlBackend>['appendOwnedBatch']>
+type BatchArgs = Parameters<OwnedBatch>
+type FixtureBackendHooks = {
+  append?(actual: OwnedBatch, args: BatchArgs): ReturnType<OwnedBatch>
+  reconcile?(actual: NonNullable<ReturnType<typeof createJsonlBackend>['reconcileOwnedBatch']>, args: Parameters<NonNullable<ReturnType<typeof createJsonlBackend>['reconcileOwnedBatch']>>): ReturnType<NonNullable<ReturnType<typeof createJsonlBackend>['reconcileOwnedBatch']>>
+}
+async function fixture(hooks: FixtureBackendHooks = {}) {
+  const root = await mkdtemp(join(tmpdir(), 'nso-'))
+  // The canonical-path guard snapshots backend descriptors at construction:
+  // batch instrumentation must travel through the constructor seam, not be
+  // assigned afterwards (which is PROCESS_READ_UNAVAILABLE by design).
+  const backend = createJsonlBackend(root, {
+    wrapOwnedBatch: actual => async (...args) => hooks.append ? hooks.append(actual, args) : actual(...args),
+    wrap: b => {
+      const reconcile = b.reconcileOwnedBatch?.bind(b)
+      if (reconcile) b.reconcileOwnedBatch = async (...args) => hooks.reconcile ? hooks.reconcile(reconcile, args) : reconcile(...args)
+    },
+  })
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   await coordinator.create({ sessionId: 'parent' })
   const document = await coordinator.openManagedDocument('parent')
@@ -58,19 +74,21 @@ async function fixture() {
 }
 
 it.each(['committed', 'unknown'] as const)('joins both actual default-service Stop callers on the original cancellation promise before reporting Stop (%s)', async report => {
-  const f = await fixture(), entered = Promise.withResolvers<void>(), releaseAdmit = Promise.withResolvers<void>()
+  const entered = Promise.withResolvers<void>(), releaseAdmit = Promise.withResolvers<void>()
   const cancelEntered = Promise.withResolvers<void>(), releaseCancel = Promise.withResolvers<void>()
-  const admit = f.assembly.inbox.admit.bind(f.assembly.inbox), append = f.backend.appendOwnedBatch!.bind(f.backend)
+  const f = await fixture({
+    append: async (actual, args) => {
+      const cancelled = decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/cancelled')
+      const result = await actual(...args)
+      if (cancelled) {
+        f.keys.push(args[3].key); cancelEntered.resolve(); await releaseCancel.promise
+        if (report === 'unknown') return { kind: 'unknown', key: args[3].key }
+      }
+      return result
+    },
+  })
+  const admit = f.assembly.inbox.admit.bind(f.assembly.inbox)
   f.assembly.inbox.admit = async (...args) => { const value = await admit(...args); entered.resolve(); await releaseAdmit.promise; return value }
-  f.backend.appendOwnedBatch = async (...args) => {
-    const cancelled = decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/cancelled')
-    const result = await append(...args)
-    if (cancelled) {
-      f.keys.push(args[3].key); cancelEntered.resolve(); await releaseCancel.promise
-      if (report === 'unknown') return { kind: 'unknown', key: args[3].key }
-    }
-    return result
-  }
   const pending = f.notify.admit(observation).then(() => ({ stopped: false }), error => ({ stopped: error instanceof ParentNotificationStoppedError, error }))
   try {
     await entered.promise
@@ -99,14 +117,15 @@ it.each(['committed', 'unknown'] as const)('joins both actual default-service St
 })
 
 it('retains a successful Stop while separate original native disposal debt remains unknown', async () => {
-  const f = await fixture(), append = f.backend.appendOwnedBatch!.bind(f.backend), reconcile = f.backend.reconcileOwnedBatch!.bind(f.backend)
   let debtKey: BatchKey | undefined, allow = false
-  f.backend.appendOwnedBatch = async (...args) => {
-    const outcome = await append(...args)
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'subagent/inbox' && event.messageId === 'disposal-debt')) { debtKey = args[3].key; return { kind: 'unknown', key: debtKey } }
-    return outcome
-  }
-  f.backend.reconcileOwnedBatch = async (...args) => debtKey?.batchId === args[3].key.batchId && !allow ? { kind: 'unknown', key: args[3].key } : reconcile(...args)
+  const f = await fixture({
+    append: async (actual, args) => {
+      const outcome = await actual(...args)
+      if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'subagent/inbox' && event.messageId === 'disposal-debt')) { debtKey = args[3].key; return { kind: 'unknown', key: debtKey } }
+      return outcome
+    },
+    reconcile: async (actual, args) => debtKey?.batchId === args[3].key.batchId && !allow ? { kind: 'unknown', key: args[3].key } : actual(...args),
+  })
   try {
     await f.notify.admit(observation)
     f.service.cancelRunning!('parent')
@@ -129,12 +148,13 @@ it('retains a successful Stop while separate original native disposal debt remai
 })
 
 it('joins the original admission before snapshotting a late-created Stop record', async () => {
-  const f = await fixture(), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  const append = f.backend.appendOwnedBatch!.bind(f.backend)
-  f.backend.appendOwnedBatch = async (...args) => {
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/admitted')) { entered.resolve(); await release.promise }
-    return append(...args)
-  }
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const f = await fixture({
+    append: async (actual, args) => {
+      if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/admitted')) { entered.resolve(); await release.promise }
+      return actual(...args)
+    },
+  })
   const pending = f.notify.admit(observation).catch(error => error)
   let closing: Promise<void> | undefined
   try {
@@ -152,18 +172,19 @@ it('joins the original admission before snapshotting a late-created Stop record'
 })
 
 it('retains continued unknown under the original source until explicit recovery and releases acknowledged disposal once', async () => {
-  const f = await fixture(), append = f.backend.appendOwnedBatch!.bind(f.backend), reconcile = f.backend.reconcileOwnedBatch!.bind(f.backend)
   let key: BatchKey | undefined, allow = false, writes = 0
   const reconciliationKeys: BatchKey[] = []
-  f.backend.appendOwnedBatch = async (...args) => {
-    const outcome = await append(...args)
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/cancelled')) { writes++; key = args[3].key; return { kind: 'unknown', key } }
-    return outcome
-  }
-  f.backend.reconcileOwnedBatch = async (...args) => {
-    if (key?.batchId === args[3].key.batchId) { reconciliationKeys.push(args[3].key); if (!allow) return { kind: 'unknown', key: args[3].key } }
-    return reconcile(...args)
-  }
+  const f = await fixture({
+    append: async (actual, args) => {
+      const outcome = await actual(...args)
+      if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/cancelled')) { writes++; key = args[3].key; return { kind: 'unknown', key } }
+      return outcome
+    },
+    reconcile: async (actual, args) => {
+      if (key?.batchId === args[3].key.batchId) { reconciliationKeys.push(args[3].key); if (!allow) return { kind: 'unknown', key: args[3].key } }
+      return actual(...args)
+    },
+  })
   try {
     await f.notify.admit(observation)
     await expect(f.service.close()).rejects.toBeDefined()
@@ -187,13 +208,14 @@ it('retains continued unknown under the original source until explicit recovery 
 })
 
 it('keeps an old acknowledged Stop owner separate from an equal-ID replacement assembly', async () => {
-  const f = await fixture(), append = f.backend.appendOwnedBatch!.bind(f.backend)
   let writes = 0
-  f.backend.appendOwnedBatch = async (...args) => {
-    const result = await append(...args)
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/cancelled')) { writes++; f.keys.push(args[3].key); return { kind: 'unknown', key: args[3].key } }
-    return result
-  }
+  const f = await fixture({
+    append: async (actual, args) => {
+      const result = await actual(...args)
+      if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/cancelled')) { writes++; f.keys.push(args[3].key); return { kind: 'unknown', key: args[3].key } }
+      return result
+    },
+  })
   try {
     await f.notify.admit(observation)
     const input = f.assembly.inbox.pending()[0]!
@@ -216,13 +238,14 @@ it('keeps an old acknowledged Stop owner separate from an equal-ID replacement a
 })
 
 it.each(['all', 'session'] as const)('retains unknown Stop through actual disposal then retries old owner without repeating disposal (%s)', async mode => {
-  const f = await fixture(), append = f.backend.appendOwnedBatch!.bind(f.backend)
   let unknownKey: BatchKey | undefined, writes = 0
-  f.backend.appendOwnedBatch = async (...args) => {
-    const result = await append(...args)
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/cancelled')) { writes++; unknownKey = args[3].key; f.keys.push(unknownKey); return { kind: 'unknown', key: unknownKey } }
-    return result
-  }
+  const f = await fixture({
+    append: async (actual, args) => {
+      const result = await actual(...args)
+      if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/cancelled')) { writes++; unknownKey = args[3].key; f.keys.push(unknownKey); return { kind: 'unknown', key: unknownKey } }
+      return result
+    },
+  })
   const close = () => mode === 'all' ? f.service.close() : f.service.closeSession('parent')
   try {
     await f.notify.admit(observation)
@@ -244,13 +267,14 @@ it.each(['all', 'session'] as const)('retains unknown Stop through actual dispos
 })
 
 it('preserves strict different-reason rejection while the original received cancellation is pending', async () => {
-  const f = await fixture(), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  const append = f.backend.appendOwnedBatch!.bind(f.backend)
-  f.backend.appendOwnedBatch = async (...args) => {
-    const result = await append(...args)
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/cancelled')) { entered.resolve(); await release.promise }
-    return result
-  }
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const f = await fixture({
+    append: async (actual, args) => {
+      const result = await actual(...args)
+      if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/cancelled')) { entered.resolve(); await release.promise }
+      return result
+    },
+  })
   try {
     await f.notify.admit(observation)
     const id = f.assembly.inbox.pending()[0]!.inputId
