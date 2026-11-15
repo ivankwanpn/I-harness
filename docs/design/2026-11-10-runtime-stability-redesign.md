@@ -173,6 +173,12 @@ executor 普查第二批（`managed-instruction-handoff`、`instruction-initial-
 
 `delivery-lifecycle` 仍有 1 案在 fixture close 時回報 `Delivery fixture cleanup failed`，其 fault-path 清理契約需與共用 helper 的清理期望一併核對，留待後續。自此進入**最終固定版本全庫驗證**階段：所有批次已提交、型別與 diff check 乾淨，接下來執行 `pnpm run verify:all` 取得完整結果，並在等待期間撰寫最終報告。
 
+#### 第二十批：revoked-prompt-cleanup 分類與 service-approval-mode 身分／期限
+
+`revoked-prompt-cleanup.test.ts` 期待 `/authority revoked/` 訊息；在 awaited pre-step 中撤銷 authority 現由 instruction observer 以 `CONTEXT_INPUT_STALE`（`Observed instructions unavailable`）拒絕。`5e5db2de` 改為斷言該分類，保留「拒絕、零模型呼叫、step/failed→step/end→turn/end、queue 閒置」的驗收；3/3 通過。
+
+`service-approval-mode.test.ts` 以 `vi.spyOn(coordinator,'create')` 證明未建立 child session，但 result ordering 對 `create` 方法 descriptor 做身分核對，spy 使 assembly 以 `Original result ordering coordinator required` 拒絕；改以 `coordinator.list()` 只列出原始 session 的可觀察結果。另該案兩個 delegated isolated review 實測 **5.8 秒**，超過預設 5 秒，依量測給 30 秒上限。`7ab44d19`／`175c865b` 後 2/2 通過、Typecheck 乾淨。
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
