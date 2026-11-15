@@ -46,6 +46,16 @@
 
 移除一個未使用變數並整理新加入的兩段程式後，Core Session、ContextOutput、Persistence、Executor 及 Gateway 五個 package 型別全部通過。最後固定 22 個 source／test 檔案，再完整執行 coherent transfer 十二項及 native 六檔八項，全部通過。Native 命令耗時 261.88 秒，執行前後逐檔雜湊相同，package boundaries 為 128／128，diff check 通過。[本輪完整收據](C:/Users/IvanKwan/AppData/Local/Temp/ih-selected-results-integration/receipt.json)
 
+#### 第十批：selected-results 公開入口測試重寫與 target 保留修正
+
+三個 selected-results 測試檔在 `20e30ad0` 上原本 7 項全綠，但閱讀後確認部分驗收沒有覆蓋測試名稱宣稱的功能。`host-commit-log-selected-fork.test.ts` 第一個案例的模型分支要求 `toolCalls===1` 才發出 `read big`，案例本身只提交 `read big`，因此工具從未執行、selected pages 為零仍斷言通過；第二個案例以 codec fixture 與手工 `context/result-ref` 宣告資料取代真實結果。`host-commit-log-selected-read.test.ts` 先產生真正 managed artifact，之後再手工 append 一筆虛構 `workspaceId`／`bytes`／`originalBytes` 的 legacy 宣告，因此只量到測試自己寫入的資料。`selected-fork-seed.test.ts` 的混合層級案例把 codec 資料用於轉移與可讀性宣稱。
+
+重寫後三檔改用真正 Desktop Host、實際 RPC 入口、受控模型與 registry prepare／dispatch 的工具回合。正向案例核對：工具呼叫、dispatch 與 artifact 結果各一次；真正保存的 `tool/result` ref；完整分頁重組 bytes 與 `contentDigest`；V2 prepare／begin／retry 的 operation identity 與 receipt；child V3 seed 的 manifest、result page 與 exact original address；nested fork、source archive／clear 後 target 仍讀取精確內容、冷重啟重讀；未選取、rewind 隱藏、fork 後才產生、替換 revision／id／digest、外來 session 結果均被拒絕；刪除 target 釋放 pin、最後 owner 刪除後 artifact 目錄與 pin 一併清除。seed 檔案改為明確標示 codec／controller 層級，並保留 grant 失敗即不得回報 ready 的反向控制。
+
+這批同時暴露並修正一個真正產品缺陷：commit-log store 的公開 V2 selected fork 只複製 seed metadata，child 沒有任何自己的 target 保留，所有繼承頁面只靠 `result-reader.ts` 沿 ancestor chain 回退讀取；來源 archive、clear 或 nested fork 之後即失效，不符合 target 依自身保留契約讀取的驗收。根因是 commit-log 沒有 selected-results bootstrap kernel，controller 只寫入 child birth。修正 `7a15e67b` 在 child 建立後，為每筆繼承的 managed row 向 context-output 發佈 target durable pin（每次 grant 上限 100），服務會先核對 source 仍持有 exact committed ref；grant 失敗時 operation 不會被 ACK，重試沿用 idempotent birth 再次發佈。legacy row 仍未取得 L1 transfer plan，`requireObservedLegacyRecipients` 下 child 無法讀取 legacy body，與 JSONL 公開入口一併列為第 125 項後續工作；dependency-catalog member 的 membership witness 亦尚未轉移。
+
+修正後三個完整檔案 10 項全部通過，零失敗、零略過、零未處理錯誤，最終執行 81.90 秒（transform 9.41 秒、collect 30.94 秒、tests 49.70 秒）。反向控制暫時停用 retain 呼叫後，retirement 案例以 `unauthorized` 失敗，恢復後雜湊與原檔相同。Gateway 型別、package boundaries 128／128 及 diff check 通過。相鄰回歸 26 項中 25 項通過，`nested-fork-retention.test.ts` 的 30 秒逾時在 `21f8d861` 固定基線的 inventory 已經是相同失敗，屬既有待修期限問題而非本批回歸。[反向控制](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/negative-control-no-retention.log) [最終三檔](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/selected-public-final.json) [保留探針](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/probe-07.log) [相鄰回歸](C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/adjacent-regression.json)
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
