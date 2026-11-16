@@ -2,10 +2,10 @@ import { it, expect, vi } from 'vitest'
 const state = vi.hoisted(() => ({ exec: undefined as any, workflow: undefined as any, attached: { exec: 0, workflow: 0 }, detached: { exec: 0, workflow: 0 }, launches: 0, controls: [] as { root: PromiseWithResolvers<{ exitCode: number }>; tree: PromiseWithResolvers<void> }[] }))
 vi.mock('@i-harness/exec', async original => {
   const actual = await original<any>()
-  return { ...actual, registerExec(...args: any[]) {
-    const service = actual.registerExec(...args), subscribe = service.subscribeJobs.bind(service)
-    service.subscribeJobs = (listener: () => void) => { state.attached.exec++; const off = subscribe(listener); return () => { state.detached.exec++; off() } }
-    state.exec = service; return service
+  return { ...actual, registerExecWithReservation(...args: any[]) {
+    const pair = actual.registerExecWithReservation(...args), subscribe = pair.service.subscribeJobs.bind(pair.service)
+    pair.service.subscribeJobs = (listener: () => void) => { state.attached.exec++; const off = subscribe(listener); return () => { state.detached.exec++; off() } }
+    state.exec = pair.service; return pair
   } }
 })
 vi.mock('@i-harness/workflow', async original => {
@@ -81,4 +81,4 @@ it('forwards the real registered Exec collection and detaches both owners once t
       expect(vi.getTimerCount()).toBe(0)
     } finally { failCleanup = false; for (const control of state.controls) { control.root.resolve({ exitCode: 0 }); control.tree.resolve() }; await finiteSetup(owner.close()) }
   } finally { vi.useRealTimers() }
-}, 15000)
+}, 60000)

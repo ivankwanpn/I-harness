@@ -465,6 +465,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - **split revocation**（`result-revocation`＋`ownership`）：`acquireOriginalRevocationCoverage` 對多 target 改成逐 target 在 revocation ordering ledger 下取得單一 batch，再以 `combineOriginalOwnershipBatches` 組成同一 coverage batch；避開「已 retained 的 a＋fresh 的 b」被 reorder guard 拒絕，同時保留 batch 的 `assertCovered`/`close` 介面與失敗 rollback。單 target 仍走原本 batch。
 - **staged body 保留**（`release-inventory`）：`removeBody` 只對 `phase==='committed'` 的 operation 生效；staged/refused operation 的 pins 可在 clear/deletion 移除，但本體留給 operation recovery（test 期望 staged body 存在、pins 空、reconcile 仍 recovery-required）。
 - 驗證：`mixed-retention-native` **1/1**、`mixed-retention-quota` **4/4**；executor retention/ordering 5 檔 **42/42**；context-output 目標 6 檔 **35 passed/2 skipped**；`session-persistence` 全套件通過；兩個 package typecheck 0。executor 殘餘約 **20**。
+#### 第七十五批：execution-source-prereq 的 registerExecWithReservation seam
+
+- 產品已改走 `registerExecWithReservation` 註冊 Exec pair，舊 test mock 只包 `registerExec`，`state.attached.exec` 永遠是 0；mock 改包 reservation 回傳的 `pair.service.subscribeJobs`。
+- `finiteSetup` 在 fake timers 下的 module-loader 零延遲回合需真實時間，原 `15_000` 上限在高負載會 timeout；提高到 `60_000`（連跑兩次都綠）。
+- 驗證：`execution-source-prereq` **1/1**（兩次），executor typecheck 0。executor 殘餘約 **19**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
