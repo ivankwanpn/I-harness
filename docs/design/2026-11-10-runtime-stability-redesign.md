@@ -485,6 +485,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 以 `lease.service.status().pendingResults` 在 read 前後取樣，成功偵測 read 期間新增的 pending sink；`service.readResultPage` 已可回 `unavailable`（test 第 119 行通過）。
 - 剩餘缺口：reader 沒有把該 pending sink 的 cleanup 保留成 reader debt，故 `service.close()` 仍 resolve；test 第 120 行要求 `/cleanup/`。
 - 嘗試在 reader 內 `await service.close()` 或單純 deny 都無法讓 service.close 失敗；pending sink 所屬 owner 與 service 收尾 owner 的 identity 仍需對齊（可能需 service 把 pinned result owner 傳給 reader 或提供 retry cleanup predicate）。實驗已回退。
+#### 第七十九批：cold reader cleanup 契約衝突
+
+- 將 `unfinishedResult` 的 held native close 以 fs-open seam 放到 sink 建立前，並在 reader 用 `pendingResults` 前後差拒絕頁面後，`service-instruction-close` 已可讓第一次 `service.close()` 失敗；但第二次（allow 後）仍失敗，除非 writer 的 `retainClose` 允許失敗後重試。
+- 若讓 `retainClose` 失敗後可重試，`close-ownership` 4 案立即回歸：其契約明確要求 failed close 永遠 sticky（attempts 仍 1、反覆 service.close 都回同一 fault）。
+- 兩個契約目前直接衝突：reader cleanup 需 retry，一般 artifact close 需 sticky。需產品定義「reader-owned cold service 的 close 可重試、一般 close 不可」的區分，或由 reader 保留自己的 lease 而不關閉共用 service。實驗全部回退。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
