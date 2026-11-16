@@ -50,7 +50,7 @@ it('captures every accepted item once and reads the exact retained text after th
   const expected = first + '\n' + second
   const code = 'text(' + JSON.stringify(first) + '); image(' + JSON.stringify('data:image/png;base64,' + PNG) + '); text(' + JSON.stringify(second) + ');'
   try {
-    const observation = (await tools.execute({ name: 'code_exec', args: { code } })).output as { status: string; text: string; items: { type: string }[]; textRetention: CodeModeTextRetention }
+    const observation = (await tools.execute({ name: 'code_exec', args: { code, yield_time_ms: 30000 } })).output as { status: string; text: string; items: { type: string }[]; textRetention: CodeModeTextRetention }
     expect(observation.status).toBe('completed')
     // Item order is preserved: text, image, text.
     expect(observation.items.map(item => item.type)).toEqual(['text', 'image', 'text'])

@@ -191,3 +191,10 @@
   - 1：`bounded-file-production`、`owned-code-service`、`owned-service-shell`、`retained-batch-continuation`、`retained-child-scope`、`retained-hook-recovery`、`retained-state-cold`、`service-instruction-close`、`owned-code-nested-shell`、`native-dependency-observer`、`managed-runtime`、`mixed-retention-native`、`title-action`、`managed-runtime-context`、`main-instruction-construction`、`instruction-diagnostics`、`generation-actions`、`fork-handoff`、`execution-source-prereq`、`exec-direct-source`、`delivery-lifecycle`、`delivery-active-wait`、`mixed-retention-quota`、`wsl-assembly`。
 - 產品級待修（已以故障注入定位、非 fixture 放寬）：title action abort 後 settlement source 未 `closeRequested`（`settleFinishedActions` 見 2 required pending／0 eligible）；delivery falsey ack 的 close recovery 未在一次 `close()` 完成；publication-pins 首次 delete pin／access 的 `Original deletion recovery required`；isolated source 在 close recovery 後未 retire；child native job receipt owner 仍記為 parent session；mixed-retention revocation inventory recovery 與 SQLite logical-full。
 - 證據：JSON `p1-executor-full.json`、失敗清單 `p1-executor-full-fails.json`、日誌 `p1-executor-full.log`（皆在 `C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/`）。
+
+### 八之一、第二輪 executor 全套件實測（2026-11-16，head `0716eafe`）
+
+- 指令同上（單一 worker）。結果：**231 檔、1,405 項：1,367 passed／38 failed／0 skipped**（第一輪 46 failed）。
+- 本輪新增全綠：`execution-authority`、`main-instruction-construction`、`delivery-retry`、`owned-code-service`、`owned-code-nested-shell`、`retained-child-scope`、`wsl-assembly`、`retained-code-output`（全跑時因 async cell 回到 running，已補 `yield_time_ms:30000` 修正）。
+- 仍存 38 項／26 檔；product 級主因：title settlement source ownership、delivery close/handoff recovery、publication-pins deletion recovery、retained coordinator cleanup。
+- 證據：`p1-executor-full2.json`、`p1-executor-full2-fails.json`、`p1-executor-full2.log`。
