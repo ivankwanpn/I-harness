@@ -93,7 +93,7 @@ it('managed filesystem rewind fences its own genuine bound child before restorat
 }, NATIVE_B2_CASE_MS)
 
 it('original unclassified task save failure blocks terminal delivery until explicit same-source settlement recovers', async () => {
-  const f = await createDeliveryFixture({ holdTaskSaveFailure: true })
+  const f = await createDeliveryFixture({ holdTaskSaveFailure: true, expectCleanupDebt: true })
   try {
     await f.start(); f.releaseChild(); await boundary('original task save refused', f.waitForTaskSaveFailed())
     const assembly = await f.service.assemblyFor('parent')

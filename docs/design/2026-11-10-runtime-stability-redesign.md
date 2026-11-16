@@ -352,6 +352,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 
 - 第二輪 executor 38 failed 分類（legacy state restore 5、instruction/handoff 10、delivery 3、context-output 5、Task/native 6、project/steering 3、fork/retained 2），動態 cwd 修正後約 36；詳見最終報告「十、P1 殘餘與 P3 計畫」。
 - P3 將以固定 HEAD 跑 `verify:all`、負載敏感單獨比較與效能群組，並在最後更新 totals 與 CI。
+#### 第五十五批：Stop receipt 的 bounded re-reconcile
+
+- 根因：unknown receipt 後的 typed Stop 重試會 join 到前一輪「尚未看到 allow」的 settle，第一次 reconcile 仍回 transient unknown，整個 retry 因此失敗；實測同一 reconcile 稍後即可 committed。
+- 修正（core-agent `execution-inputs.settleCapture`）：第一次 reconcile 後若仍是 unknown／recovery-required／not-issued recovery，先讓出一輪事件迴圈，再做**一次** bounded re-reconcile；仍失敗才 fail closed（不是無限重試）。
+- 結果：`owned-service-shell` **15/15**、`delivery-lifecycle` **16/16**（falsey/unclassified task save 案以 fixture `expectCleanupDebt` 記錄預期 recovery debt）、`delivery-retry` 3/3、`service` 43/43；core-agent 全套件通過；executor typecheck 0。executor 殘餘由約 36 降至 **約 34**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

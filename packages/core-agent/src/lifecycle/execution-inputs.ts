@@ -80,6 +80,10 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
         }
         attempts.add(fact);if(outcome.kind!=='not-issued')everIssued.add(fact)
         if(outcome.kind==='unknown'||outcome.kind==='recovery-required'||outcome.kind==='not-issued'&&outcome.code==='FACT_RECOVERY_REQUIRED')outcome=await fact.reconcile()
+        // A concurrent settlement can finish between the first observation and
+        // its reconcile; one bounded re-reconcile keeps an outer retry from
+        // inheriting that transient unknown verdict.
+        if(outcome.kind==='unknown'||outcome.kind==='recovery-required'||outcome.kind==='not-issued'&&outcome.code==='FACT_RECOVERY_REQUIRED'){await new Promise(resolve=>setTimeout(resolve,0));outcome=await fact.reconcile()}
         if(outcome.kind!=='not-issued')everIssued.add(fact)
         if(!everIssued.has(fact)&&outcome.kind==='not-issued'&&outcome.code==='FACT_PRECONDITION_STALE')return undefined
         return committedFactSeqs(outcome)})()
