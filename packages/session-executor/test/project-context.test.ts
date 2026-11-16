@@ -5,6 +5,8 @@ import { join } from "node:path"
 import { type LLMRequest, type ModelClient } from "@i-harness/llm-seam"
 import { controlledModel } from "./controlled-model.ts"
 import { createSessionAssembly, type SessionProjectContext } from "../src/assembly.ts"
+import { createUnmanagedTaskChildHost } from "../src/lifecycle/task-child-host.ts"
+import { spawnDurable } from "./helpers/durable-spawn.ts"
 import { createSessionService } from "../src/service.ts"
 import { rmWorkspaceSync } from "./helpers.ts"
 import { createMockClient } from "@i-harness/llm-mock"
@@ -39,25 +41,26 @@ async function waitFor(check: () => boolean | Promise<boolean>) {
 }
 
 it("writes to another project folder without an extra approval and revokes a removed default cwd", async () => {
-  const { a, b, c } = fixture()
+  const { root, a, b, c } = fixture()
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
+  await coordinator.create({ sessionId: "parent" })
   let context: SessionProjectContext = { id: "p", name: "Project One", roots: [a, b], primaryRoot: a }
-  const assembly = await createSessionAssembly({ workspace: a, model: quietModel, sandbox: "workspace-write", projectContext: () => context })
+  const assembly = await createSessionAssembly({ workspace: a, sessionId: "parent", coordinator, model: quietModel, sandbox: "workspace-write", approveAll: true, projectContext: () => context })
   try {
     expect((await assembly.tools.execute({ name: "write", args: { path: join(b, "allowed.txt"), text: "second folder" } })).output).toMatchObject({ ok: true })
     expect(readFileSync(join(b, "allowed.txt"), "utf8")).toBe("second folder")
-    const directWrite = assembly.tools.get("write")!
-    const outside = await directWrite.execute({ path: join(c, "denied.txt"), text: "outside" }, {}) as { error?: string }
-    expect(outside.error).toContain("SANDBOX_DENIED")
+    const denied = (await assembly.tools.execute({ name: "write", args: { path: join(c, "denied.txt"), text: "outside" } })).output as { error?: string }
+    expect(denied.error).toContain("SANDBOX_DENIED")
     expect(existsSync(join(c, "denied.txt"))).toBe(false)
 
     context = { ...context, roots: [b], primaryRoot: b }
-    const removed = await directWrite.execute({ path: "old-cwd.txt", text: "removed" }, {}) as { error?: string }
+    const removed = (await assembly.tools.execute({ name: "write", args: { path: "old-cwd.txt", text: "removed" } })).output as { error?: string }
     expect(removed.error).toContain("SANDBOX_DENIED")
     expect(existsSync(join(a, "old-cwd.txt"))).toBe(false)
     context = { ...context, roots: [b, c] }
     expect((await assembly.tools.execute({ name: "write", args: { path: join(c, "newly-added.txt"), text: "new project folder" } })).output).toMatchObject({ ok: true })
     expect(readFileSync(join(c, "newly-added.txt"), "utf8")).toBe("new project folder")
-  } finally { await assembly.dispose() }
+  } finally { await assembly.dispose(); await coordinator.close() }
 })
 
 it("normal and rebuilt resident children inherit the live project scope for requests and writes", async () => {
@@ -74,11 +77,12 @@ it("normal and rebuilt resident children inherit the live project scope for requ
     yield { type: "end" }
   })
   const options = { workspace: a, sessionId: "parent", coordinator, model, approveAll: true, sandbox: "workspace-write" as const, projectContext: () => context,
+    prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: "unmanaged" as const }),
     pluginAgents: [{ name: "project-child", description: "project worker", systemPrompt: "PROJECT_CHILD", tools: ["write"] }],
   }
   let assembly = await createSessionAssembly(options)
   try {
-    const spawn = await assembly.tools.execute({ name: "spawn_agent", args: { task_name: "project-worker", agent_type: "project-child", message: "write initial file", fork_turns: "none", background: false } })
+    const spawn = await spawnDurable(assembly, "parent", { task_name: "project-worker", agent_type: "project-child", message: "write initial file", fork_turns: "none", background: false })
     const path = (spawn.output as { agent_path: string }).agent_path
     expect(existsSync(target), JSON.stringify(spawn.output)).toBe(true)
     expect(readFileSync(target, "utf8")).toBe("child wrote current project")
@@ -104,13 +108,16 @@ it("normal and rebuilt resident children inherit the live project scope for requ
 })
 
 it.each(["read-only", "danger-full-access"] as const)("keeps %s semantics across project roots", async (sandbox) => {
-  const { a, b, c } = fixture()
+  const { root, a, b, c } = fixture()
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
+  await coordinator.create({ sessionId: "parent" })
   writeFileSync(join(b, "read.txt"), "second-folder content")
-  const assembly = await createSessionAssembly({ workspace: a, model: quietModel, sandbox, projectContext: () => ({ id: "p", name: "Project One", roots: [a, b], primaryRoot: a }) })
+  const assembly = await createSessionAssembly({ workspace: a, sessionId: "parent", coordinator, model: quietModel, sandbox, approveAll: true, projectContext: () => ({ id: "p", name: "Project One", roots: [a, b], primaryRoot: a }) })
   try {
-    expect((await assembly.tools.execute({ name: "read", args: { path: join(b, "read.txt") } })).output).toEqual({ content: "second-folder content" })
+    const readResult = (await assembly.tools.execute({ name: "read", args: { path: join(b, "read.txt") } })).output
+    expect(readResult).toMatchObject({ content: "second-folder content" })
     const target = join(sandbox === "read-only" ? b : c, "mode.txt")
-    const output = await assembly.tools.get("write")!.execute({ path: target, text: "mode respects policy" }, {}) as { ok?: boolean; error?: string }
+    const output = (await assembly.tools.execute({ name: "write", args: { path: target, text: "mode respects policy" } })).output as { ok?: boolean; error?: string }
     if (sandbox === "read-only") {
       expect(output.error).toContain("SANDBOX_DENIED")
       expect(existsSync(target)).toBe(false)
@@ -118,15 +125,16 @@ it.each(["read-only", "danger-full-access"] as const)("keeps %s semantics across
       expect(output.ok).toBe(true)
       expect(readFileSync(target, "utf8")).toBe("mode respects policy")
     }
-  } finally { await assembly.dispose() }
+  } finally { await assembly.dispose(); await coordinator.close() }
 })
 
 it.each(["legacy", "binding"] as const)("passes session-local live project getters through the %s service construction path", async (path) => {
-  const { a, b, c } = fixture()
+  const { root, a, b, c } = fixture()
+  writeFileSync(join(root, "settings.json"), "{}")
   const contexts = new Map<string, SessionProjectContext>([["one", { id: "p1", name: "First Project", roots: [a, b], primaryRoot: a }], ["two", { id: "p2", name: "Second Project", roots: [c], primaryRoot: c }]])
   const requests: LLMRequest[] = []
   const model: ModelClient = { async *stream(request) { requests.push(request); yield { type: "text/chunk", text: "ok" }; yield { type: "end" } } }
-  const service = createSessionService({ workspace: a, sandbox: "workspace-write", model,
+  const service = createSessionService({ workspace: a, sandbox: "workspace-write", model, instructionSettingsPath: join(root, "settings.json"),
     ...(path === "binding" ? { modelBindingFor: async () => ({ status: "ready" as const, binding: { model, providerId: "fixture", modelId: "fixture", label: "fixture" } }) } : {}),
     projectContextFor: async (id) => () => contexts.get(id),
   })
@@ -143,7 +151,7 @@ it.each(["legacy", "binding"] as const)("passes session-local live project gette
     expect(requests.at(-1)!.systemPrompt).toContain("Second Project")
     expect(requests.at(-1)!.systemPrompt).not.toContain(JSON.stringify(b))
     const one = await service.assemblyFor("one")
-    const result = await one.tools.get("write")!.execute({ path: join(c, "cross-project.txt"), text: "denied" }, {}) as { error?: string }
+    const result = (await one.tools.execute({ name: "write", args: { path: join(c, "cross-project.txt"), text: "denied" } })).output as { error?: string }
     expect(result.error).toContain("SANDBOX_DENIED")
     expect(existsSync(join(c, "cross-project.txt"))).toBe(false)
   } finally { await service.close() }

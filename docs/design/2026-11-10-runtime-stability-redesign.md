@@ -237,6 +237,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 `event-driven-steering` 改用它，並補上 `prepareTaskChild: createUnmanagedTaskChildHost({coordinator,policy:'unmanaged'})` 與 close-child 案的 coordinator；呼叫端錯誤消失，**由 5 失敗降為 2 失敗（12/14）**。剩餘兩案：
 - `foreground`：模型回合內 spawn 已記 `subagent/start`，但 child model 未啟動、tool call 懸置；direct `createSessionAssembly` 缺 service 層的 parent notify/delivery wiring，待改用 service 正常入口或補齊 wiring。
 - `tasks`：child host 啟用後 dispose 回報 `Assembly original producer cleanup incomplete`，需釐清 task child host 的清理責任。
+#### 第三十二批：project-context 的 durable 入口與 prepared spawn
+
+- 第一案改為 durable assembly（coordinator＋sessionId＋approveAll），denial 改走 registry `tools.execute` 的 native-plan 入口；通過。
+- read-only／danger-full-access 案補 durable assembly 與 approveAll；read 回傳現在含 `instruction_scope`（reference-only/outside-root），斷言改 `toMatchObject`；兩案通過。
+- 居民 child 案改用 `spawnDurable` 與 `createUnmanagedTaskChildHost`；初始 spawn 與 write 成功，但 `followup_task` 後 child 未再寫入（waitFor target timeout），屬 live project scope 在 followup 的產品/fixture 問題，待續。
+- service 兩案補 `instructionSettingsPath` 後仍以 `Observed instructions unavailable`（manager authority）失敗；authority 來源待查。
+- 檔案由 4/10 提升到 **7/10**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
