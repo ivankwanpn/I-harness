@@ -49,7 +49,7 @@ async function fixture(count: number, response: (ordinal: number, directories: s
 it.each([3, 257])('%i actual registered directory reads select fresh exact views with required ancestry and revisit reload', async count => {
   const f = await fixture(count, (ordinal, paths) => answer(ordinal < paths.length ? [{ id: `read-${ordinal}`, path: paths[ordinal]! }] : []))
   try {
-    await f.service.submit(f.id, 'visit sequential directories', AbortSignal.timeout(540000))
+    await f.service.submit(f.id, 'visit sequential directories', AbortSignal.timeout(900000))
     expect(f.bodies).toHaveLength(count + 1)
     for (let index = 1; index < f.bodies.length; index++) {
       const body = f.bodies[index]!
@@ -71,7 +71,7 @@ it.each([3, 257])('%i actual registered directory reads select fresh exact views
     expect(f.bodies.at(-1)).not.toContain(`DIRECTORY_${count - 1}_SENTINEL`)
     expect(f.lifetime()).toEqual({ opened: count + 2, closed: count + 1, live: 1, peak: 2 })
   } finally { await f.close() }
-}, 600000)
+}, 900000)
 
 it('a single over-cap read wave blocks honestly and a genuinely promoted small human task recovers', async () => {
   const f = await fixture(130, (ordinal, paths) => answer(ordinal === 0 ? paths.map((path, index) => ({ id: `wide-${index}`, path })) : []), true)

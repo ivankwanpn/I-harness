@@ -1064,7 +1064,7 @@ describe("createSessionService — real session queue projection (Task 11)", () 
       // its own gate). NO queue() read afterwards → the record state is
       // deliberately stale while the lane is running this row.
       releaseBinding()
-      await waitFor(() => seen.length === 1)
+      await waitFor(() => seen.length === 1, 20000)
       expect(await service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
       expect(await service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
       // the running turn keeps executing to completion (no abort path taken);

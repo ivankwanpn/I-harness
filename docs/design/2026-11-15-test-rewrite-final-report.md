@@ -228,3 +228,10 @@ P3 執行計畫（在固定 HEAD）：
 - 負載敏感單獨比較：`selected-native-source`、`usage-protocol-aux-host`、`interaction-resume`、`current-unfinished-catalog`、`retention-grants`（單獨 vs 全庫 `--maxWorkers=2`）。
 - 效能群組：legacy-funding-batch、legacy-fork-scale／performance、10,001 observations。
 - 完成後更新本報告 totals、CI 結果與殘餘清單；CI 需在推送 head 上 success。
+
+### 八之二、第三輪 executor 全套件實測（2026-11-16，head `bc0e93a2`）
+
+- **231 檔、1,405 項：1,373 passed／32 failed／0 skipped**（第二輪 1,367/38）。
+- 第三輪新增全綠：`publication-pins`（18/18）、`main-instruction-construction`、`execution-authority`、`owned-code-service`、`owned-code-nested-shell`、`delivery-retry`、`delivery-lifecycle`、`owned-service-shell`、`retained-code-output`、`project-context`（9/10）。
+- `service.test` 與 `main-instruction-targets` 兩案為負載敏感：lane promotion 等待由 5s→20s；257 次目錄讀取實測 538.7s，`AbortSignal.timeout` 由 540s→900s。修正後預期殘餘約 30。
+- 證據：`p1-executor-full3.json`、`p1-executor-full3-fails.json`、`p1-executor-full3.log`。

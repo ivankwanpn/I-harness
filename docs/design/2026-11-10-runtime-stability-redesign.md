@@ -381,6 +381,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
   3. committed operation 的 survivor pin 仍要求 access；requested（將被刪除）的 pending pin 允許缺 access；deletion effect 對已不存在的 access 檔案改為冪等。
 - 驗證：`publication-pins` **18/18** 全綠；context-output `cold-selected-qualification` 8/8、`selected-metadata` 13/13、`dependency-foundations` 7/7；context-output typecheck 0。
 - `mixed-retention-native` 已前進到另一個既有缺口（`Original held bundle cannot be reordered`），不再卡 revocation inventory。
+#### 第五十九批：第三輪 executor 全套件與負載敏感校正
+
+- 第三輪完整 executor（單一 worker）：**231 檔／1,405 項：1,373 passed、32 failed、0 skipped**（第一輪 46、第二輪 38）。
+- 其中 2 案屬此機器負載敏感而非產品回歸：
+  - `service.test` 的 lane promotion `waitFor` 5s 預算不足，實測 release binding 後需要更久；將該次等待改為 20s（其他 waitFor 不動），43/43。
+  - `main-instruction-targets` 的 257 次 actual directory read 案實測需 **538.7s**，原本 `AbortSignal.timeout(540000)` 只差 1.3s 被 abort；負載校正為 900s（案例 timeout 同步 900s）後通過。
+- 修正後 executor 預期殘餘約 **30**；其餘仍為 product 類（retained state restore、managed handoff bootstrap、title settlement、delivery handoff 排序、context-output staged release 後的 ownership 排序、child read artifact paging 等）。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
