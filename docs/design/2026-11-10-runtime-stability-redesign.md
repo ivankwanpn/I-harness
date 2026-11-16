@@ -388,6 +388,10 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
   - `service.test` 的 lane promotion `waitFor` 5s 預算不足，實測 release binding 後需要更久；將該次等待改為 20s（其他 waitFor 不動），43/43。
   - `main-instruction-targets` 的 257 次 actual directory read 案實測需 **538.7s**，原本 `AbortSignal.timeout(540000)` 只差 1.3s 被 abort；負載校正為 900s（案例 timeout 同步 900s）後通過。
 - 修正後 executor 預期殘餘約 **30**；其餘仍為 product 類（retained state restore、managed handoff bootstrap、title settlement、delivery handoff 排序、context-output staged release 後的 ownership 排序、child read artifact paging 等）。
+#### 第六十批：retained-batch-continuation 的 pre-bind 注入與 coordinator 語意
+
+- 先把 fault injection 移進 `createJsonlBackend(..., { wrap })`（避免 canonical guard 捕捉後 patch 造成 `PROCESS_READ_UNAVAILABLE`），並把 coordinator 改為 `composeJsonlTaskTransitionCoordinator(...taskDocumentStorageContract)`＋`createUnmanagedTaskChildHost`，child spawn 不再因 task transition 缺 id 而 `artifactPath(undefined)`。
+- 但 composed coordinator 下 `options.factOwner.assertReady()` 在 unknown write 被觀察時不再 throw，`heldAtRejection` 期望失敗；此測試原設計依賴 plain coordinator 的 readiness 語意，與 service task 入口需求衝突。未合併，保留 plain 原版；後續需讓 service 可在 plain coordinator 上以 task storage 啟動 child，或提供等價 readiness wrapper。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
