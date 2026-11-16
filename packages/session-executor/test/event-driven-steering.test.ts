@@ -39,7 +39,7 @@ function modelFixture(script: MockStep[]) {
 async function untilStarted(control: ReturnType<typeof deferred>) {
   let entered = false
   void control.promise.then(() => { entered = true })
-  await vi.waitFor(() => expect(entered).toBe(true), { timeout: 5000 })
+  await vi.waitFor(() => expect(entered).toBe(true), { timeout: 30000 })
 }
 
 function results(assembly: SessionAssembly, name: string) {
@@ -51,7 +51,7 @@ function results(assembly: SessionAssembly, name: string) {
 }
 
 async function dispatched(assembly: SessionAssembly, name: string) {
-  await vi.waitFor(() => expect(assembly.session.events.some(event => event.type === "tool/call" && event.name === name)).toBe(true), { timeout: 5000 })
+  await vi.waitFor(() => expect(assembly.session.events.some(event => event.type === "tool/call" && event.name === name)).toBe(true), { timeout: 30000 })
 }
 
 function assertAdmission(assembly: SessionAssembly, inputId: string, request: LLMRequest) {
@@ -130,7 +130,7 @@ describe("real assembly: steering releases observation and preserves the produce
         expect(assembly.session.events.filter(event => event.type === "agent/input/admitted" && event.intent === "system")).toHaveLength(0)
       }
     } finally { release.resolve(); executor.dispose(); await assembly.dispose(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
-  }, 15_000)
+  }, 60000)
 
   it.each(["code_exec", "code_wait"] as const)("%s yields only the outer observer, while an arbitrary nested invocation outlives the parent turn", async name => {
     const root = await mkdtemp(join(tmpdir(), "ih-steer-cell-")), started = deferred(), release = deferred()
@@ -172,7 +172,7 @@ describe("real assembly: steering releases observation and preserves the produce
       expect(assembly.session.events.filter(event => event.type === "tool/result" && event.callId === observation.callId)).toHaveLength(1)
       expect(calls).toBe(1); expect(aborts).toBe(0); expect(assembly.liveResources!().codeCells).toEqual([])
     } finally { release.resolve(); executor.dispose(); await assembly.dispose(); await rm(root, { recursive: true, force: true }) }
-  }, 15_000)
+  }, 60000)
 
   it("closing the real child releases a long target observation and retains its original task result", async () => {
     const root = await mkdtemp(join(tmpdir(), "ih-steer-child-close-")), release = deferred()
@@ -203,7 +203,7 @@ describe("real assembly: steering releases observation and preserves the produce
       expect(final).toMatchObject({ tasks: [{ task_id: handle.task_id, outcome: "cancelled" }] })
       expect(results(assembly, "wait_agent")).toHaveLength(1)
     } finally { release.resolve(); executor.dispose(); await assembly.dispose(); await coordinator.close().catch(() => {}); await rm(root, { recursive: true, force: true }) }
-  }, 15_000)
+  }, 60000)
 
   it("an already dispatched arbitrary direct sibling still bounds the next provider request", async () => {
     const root = await mkdtemp(join(tmpdir(), "ih-steer-sibling-")), started = deferred(), release = deferred(), observationReturned = deferred()
@@ -237,7 +237,7 @@ describe("real assembly: steering releases observation and preserves the produce
       expect(results(assembly, "held_read")).toHaveLength(1); expect(siblingCalls).toBe(1); expect(aborts).toBe(0)
       job.finish("completed", "original job result")
     } finally { release.resolve(); job.finish("completed", "cleanup"); executor.dispose(); await assembly.dispose(); await rm(root, { recursive: true, force: true }) }
-  }, 15_000)
+  }, 60000)
 
   it.each(["stop", "close"] as const)("%s after steering still cancels and joins the original nested owner", async action => {
     const root = await mkdtemp(join(tmpdir(), "ih-steer-stop-")), release = deferred()
@@ -264,7 +264,7 @@ describe("real assembly: steering releases observation and preserves the produce
       expect(assembly.liveResources!().codeCells).toEqual([])
       expect(assembly.session.events.filter(event => event.type === "tool/result" && event.callId === observation.callId)).toHaveLength(1)
     } finally { release.resolve(); executor.dispose(); await assembly.dispose(); await rm(root, { recursive: true, force: true }) }
-  }, 15_000)
+  }, 60000)
 
   it.each(["exec-job", "workflow-job", "workflow-run"] as const)("%s retains one real local process until release and retrieves it in a later turn", async family => {
     const root = await mkdtemp(join(tmpdir(), "ih-steer-process-")), launch = join(root, "launch"), release = join(root, "release"), producer = join(root, "producer.cjs")
@@ -297,5 +297,5 @@ describe("real assembly: steering releases observation and preserves the produce
       expect(assembly.session.events.filter(event => event.type === "tool/result" && event.callId === observation.callId)).toHaveLength(1)
       expect(assembly.liveResources!().backgroundJobs).toEqual([])
     } finally { await writeFile(release, "cleanup"); executor.dispose(); await assembly.dispose(); await rm(root, { recursive: true, force: true }) }
-  }, 15_000)
+  }, 60000)
 })

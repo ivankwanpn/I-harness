@@ -514,6 +514,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - `fork-handoff` 第一個 CLI host 測試固定 15s timeout；在 current-node 下穩定需要 ~15s 以上（其餘 4 案各 0.4–4.3s 通過）。
 - 將該案 timeout 提高到 60s；連跑兩次皆 5/5 綠。
 - 無產品改動；executor typecheck 不涉及（test only）。executor 殘餘約 **17**。
+#### 第八十四批：event-driven-steering 負載校正（部分）
+
+- `untilStarted`/`dispatched` 的 5s waitFor 與 test 的 15s timeout 在高負載不足；提高到 30s/60s 後，foreground/target/all/subagent-job 4 個 family 全數通過（原本 foreground 也失敗）。
+- 只剩 `tasks` family 在 body 通過後，`assembly.dispose()` 回 `Subagent settlement requires recovery`（cleanup incomplete）；retain background spawn handles、等待 tasks completed 都未解，屬產品 task settlement 缺口。
+- 檔案仍紅（13 pass/1 fail），但失敗面由 2 案縮到 1 案；timeout 校正已提交。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
