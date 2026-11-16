@@ -14,6 +14,8 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { taskDocKey, type TaskProtocolDocument } from "@i-harness/subagent"
 import { createSessionAssembly, type SessionAssembly } from "../src/assembly.ts"
+import { spawnDurable } from "./helpers/durable-spawn.ts"
+import { createUnmanagedTaskChildHost } from "../src/lifecycle/task-child-host.ts"
 
 function deferred() {
   let resolve!: () => void
@@ -75,10 +77,11 @@ describe("real assembly: steering releases observation and preserves the produce
       approveAll: true, sandbox: "danger-full-access", pluginAgents: [{ name: "probe", description: "Controlled child", systemPrompt: "Complete the fixture", tools: [] }],
       roleSelectionFor: () => ({ provider: "fixture", model: "child" }), allowSubagentModelSelection: true,
       resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }),
+      prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: "unmanaged" }),
     })
     const executor = createSessionExecutor({ session: assembly.session, agent: assembly.agent, inbox: assembly.inbox })
     try {
-      const spawn = (name: string) => assembly.tools.execute({ name: "spawn_agent", args: { task_name: name, agent_type: "probe", message: "held work" } })
+      const spawn = (name: string) => spawnDurable(assembly, "parent", { task_name: name, agent_type: "probe", message: "held work" })
       const handles = family === "foreground" ? [] : [(await spawn("held")).output as Record<string, string>]
       if (family === "tasks") handles.push((await spawn("second")).output as Record<string, string>)
       const name = family === "foreground" ? "spawn_agent" : family === "tasks" ? "get_task_output" : family === "subagent-job" ? "job_output" : "wait_agent"
@@ -173,18 +176,21 @@ describe("real assembly: steering releases observation and preserves the produce
 
   it("closing the real child releases a long target observation and retains its original task result", async () => {
     const root = await mkdtemp(join(tmpdir(), "ih-steer-child-close-")), release = deferred()
+    const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
+    await coordinator.create({ sessionId: "parent" })
     let childCalls = 0, aborts = 0
     const child: ModelClient = controlledModel(async function* (request) {
       childCalls++; request.signal?.addEventListener("abort", () => { aborts++; release.resolve() }, { once: true })
       await release.promise; yield { type: "text/chunk", text: "closed producer" }; yield { type: "end" }
     })
     const fixture = modelFixture([{ role: "assistant", toolCalls: [{ name: "wait_agent", args: { target: "root/held", timeout_ms: 300_000 } }] }, { role: "assistant", text: "closed child observed" }])
-    const assembly = await createSessionAssembly({ workspace: root, sessionId: "parent", model: fixture.model, sandbox: "danger-full-access", approveAll: true,
+    const assembly = await createSessionAssembly({ workspace: root, sessionId: "parent", coordinator, model: fixture.model, sandbox: "danger-full-access", approveAll: true,
       allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: "fixture", model: "child" }), resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }),
+      prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: "unmanaged" }),
     })
     const executor = createSessionExecutor({ session: assembly.session, agent: assembly.agent, inbox: assembly.inbox })
     try {
-      const handle = (await assembly.tools.execute({ name: "spawn_agent", args: { task_name: "held", message: "held child" } })).output as { task_id: string; job_id: string }
+      const handle = (await spawnDurable(assembly, "parent", { task_name: "held", message: "held child" })).output as { task_id: string; job_id: string }
       await vi.waitFor(() => expect(childCalls).toBe(1))
       executor.submit({ tier: "send", text: "observe child" })
       await vi.waitFor(() => expect(assembly.session.events.some(event => event.type === "tool/dispatch")).toBe(true))
@@ -196,7 +202,7 @@ describe("real assembly: steering releases observation and preserves the produce
       const final = (await assembly.tools.execute({ name: "get_task_output", args: { task_ids: [handle.task_id] } })).output
       expect(final).toMatchObject({ tasks: [{ task_id: handle.task_id, outcome: "cancelled" }] })
       expect(results(assembly, "wait_agent")).toHaveLength(1)
-    } finally { release.resolve(); executor.dispose(); await assembly.dispose(); await rm(root, { recursive: true, force: true }) }
+    } finally { release.resolve(); executor.dispose(); await assembly.dispose(); await coordinator.close().catch(() => {}); await rm(root, { recursive: true, force: true }) }
   }, 15_000)
 
   it("an already dispatched arbitrary direct sibling still bounds the next provider request", async () => {

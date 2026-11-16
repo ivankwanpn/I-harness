@@ -230,6 +230,13 @@ ative-context-output（spy 到的 ExecService.run 未被呼叫）與 mixed-reten
 - `managed-runtime-context`（unknown publication + archive cleanup 案）：失敗錯誤為 `committedFactSeqs(not-issued FACT_PRECONDITION_STALE)`，`probe.appends=0`，admit 在 append 前即被 guard 拒絕；已排除 fixture 的 `Set.delete(undefined)` 撞針，guard/currentness 來源待續查。
 - `service-instruction-close`（cold reader cleanup 案）：期待 `{kind:'unavailable'}`，實際仍讀到 page；屬已知 cold reader 契約待產品決策。
 - `title-action`（post-turn row 案）：目前提交鏈在 post-turn callback 持有時序列化，第二個 submit 尚未取得 queue row；修正此期待後，`cancelRunning` 於 post-turn 期間取消會留下 pending managed frame，下一個 submit 在 `settleFinishedActions` 以 `FACT_RECOVERY_REQUIRED` 失敗（managed-document.ts:782：pending frame 的 authorization action 在 post-turn finish 後不再 eligible）。屬產品 recovery gap。
+#### 第三十一批：Task/child fixture 的 prepared spawn seam
+
+P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`：durable Task leaf 只接受原始 prepared body，缺 managed action／call identity／settlement source 時會被正確拒絕（`Original prepared task caller unavailable`）。本批新增 `test/helpers/durable-spawn.ts`，以現有 seam 重現 agent tool batch 的準備：action → tool/call＋dispatch facts → `registerSettlementSource` → `prepare({session,sessionId,callId,callEventSeq,settlementSource})` → `dispatch`。
+
+`event-driven-steering` 改用它，並補上 `prepareTaskChild: createUnmanagedTaskChildHost({coordinator,policy:'unmanaged'})` 與 close-child 案的 coordinator；呼叫端錯誤消失，**由 5 失敗降為 2 失敗（12/14）**。剩餘兩案：
+- `foreground`：模型回合內 spawn 已記 `subagent/start`，但 child model 未啟動、tool call 懸置；direct `createSessionAssembly` 缺 service 層的 parent notify/delivery wiring，待改用 service 正常入口或補齊 wiring。
+- `tasks`：child host 啟用後 dispose 回報 `Assembly original producer cleanup incomplete`，需釐清 task child host 的清理責任。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
