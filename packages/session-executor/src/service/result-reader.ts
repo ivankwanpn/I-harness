@@ -27,6 +27,7 @@ export function createResultPageReader(options: ResultStoreOptions, available: (
     // Schedule work only after its complete lifetime is registered. In
     // particular close must join profile/settings/acquisition and release.
     const operation = Promise.resolve().then(async (): Promise<ResultPageResult> => {
+      let sourcePendingBefore = 0
       let lease: Awaited<ReturnType<typeof acquireResultReadStore>> | undefined
       let result: ResultPageResult = unavailable()
       let assertScope = () => {}
@@ -62,7 +63,11 @@ export function createResultPageReader(options: ResultStoreOptions, available: (
         assertScope()
         if (lease.service && available(sessionId)) {
           const service = lease.service
+          sourcePendingBefore = service.status().pendingResults ?? 0
           result = 'withProcessReadContext' in lease ? await lease.withProcessReadContext(() => readManagedResultPage(service, { sessionId }, query)) : await readManagedResultPage(service, { sessionId }, query)
+          // A page must not escape while this read itself left a result sink
+          // open on its owner; releasing the lease retains that cleanup debt.
+          if (!('kind' in result) && (service.status().pendingResults ?? 0) > sourcePendingBefore) result = deny()
         }
         if ('kind' in result) deny(result)
         assertScope()

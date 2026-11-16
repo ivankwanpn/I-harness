@@ -53,7 +53,7 @@ export interface ContextOutputService {
   search(access: ContextAccess, query: { query: string; refIds?: string[]; limit?: number; maxBytes?: number }): Promise<ContextSearchResult>;
   grant(access: ContextAccess, refIds: string[], targetSessionId: string): Promise<void>;
   clear(sessionId?: string): Promise<ContextOutputStatus>;
-  close(): Promise<void>;
+  close(options?: { retryFailedHandles?: boolean }): Promise<void>;
 }
 export interface ContextOutputOptions {
   /** Host composition must enable this before publishing legacy transfers. */

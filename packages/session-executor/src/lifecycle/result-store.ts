@@ -186,7 +186,7 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
     const retirement = entry.retirement!
     if (retirement.complete) return
     if (!retirement.flight) retirement.flight = Promise.resolve().then(async () => {
-      entry.bridge.retireBridge(); await entry.service.close()
+      entry.bridge.retireBridge(); await entry.service.close({ retryFailedHandles: mode === 'reader' })
       entry.stopObserving()
       retirement.complete = true
       if (stores.get(key) === pending) stores.delete(key)

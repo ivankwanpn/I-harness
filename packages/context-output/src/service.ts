@@ -758,7 +758,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       }).promise
       return status()
     },
-    async close() {
+    async close(options?: { retryFailedHandles?: boolean }) {
       while (pendingDeletionTopologies().length) await joinDeletionUse()
       if (finiteClear) {
         if (clearContext.getStore() === finiteClear) throw Error('Original clear operation reentry')
@@ -783,7 +783,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
           try { unsubscribeDeletions?.(); deletionsUnsubscribed = true } catch (failure) { failures.push(failure) }
         }
         if (!artifactsClosed) {
-          try { await artifacts.close(); artifactsClosed = true } catch (failure) { failures.push(failure) }
+          try { await artifacts.close(options); artifactsClosed = true } catch (failure) { failures.push(failure) }
         }
         if (candidate && !selectedReaders.size) {
           try { const original=candidate;await gate.exclusive(undefined, async lease => {await original.close(lease);closedSelectedStore=original;acknowledgeSelectedAcquisitions(original)}); candidate = undefined; store = undefined } catch (failure) { failures.push(failure) }

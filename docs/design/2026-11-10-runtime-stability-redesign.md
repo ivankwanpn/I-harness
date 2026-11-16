@@ -490,6 +490,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 將 `unfinishedResult` 的 held native close 以 fs-open seam 放到 sink 建立前，並在 reader 用 `pendingResults` 前後差拒絕頁面後，`service-instruction-close` 已可讓第一次 `service.close()` 失敗；但第二次（allow 後）仍失敗，除非 writer 的 `retainClose` 允許失敗後重試。
 - 若讓 `retainClose` 失敗後可重試，`close-ownership` 4 案立即回歸：其契約明確要求 failed close 永遠 sticky（attempts 仍 1、反覆 service.close 都回同一 fault）。
 - 兩個契約目前直接衝突：reader cleanup 需 retry，一般 artifact close 需 sticky。需產品定義「reader-owned cold service 的 close 可重試、一般 close 不可」的區分，或由 reader 保留自己的 lease 而不關閉共用 service。實驗全部回退。
+#### 第八十批：reader-owned retry close 區分
+
+- `ContextOutputService.close(options?:{retryFailedHandles?})` 新增 optional retry；只有 **reader-mode cold store release** 傳 `retryFailedHandles:true`，一般 `service.close()` 仍走 sticky 行為（`close-ownership` 15/15 不變）。
+- artifact writer 的 `retainClose` 增加 `reset()`；`suspend({retryFailedHandles})` 只在此模式下清掉失敗快取並重試 body/leaves close。
+- reader 在 read 前後比較 `status().pendingResults`，若讀取本身留下 pending sink 則拒絕頁面；cold lease release 因而保留可重試 cleanup debt。
+- `service-instruction-close` fixture 改以 `node:fs/promises.open` wrapper 在 sink 建立前安裝 held native close（writer 會捕獲 close delegate）。
+- 驗證：`service-instruction-close` **2/2**；context-output `close-ownership` 15/15、`managed-ownership` 6/6、`pending-result-status` 1/1；executor retention/order/prereq 4 檔 **10/10**；兩個 package typecheck 0。executor 殘餘約 **18**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

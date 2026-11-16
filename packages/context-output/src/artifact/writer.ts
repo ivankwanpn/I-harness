@@ -18,7 +18,7 @@ export interface WriterAuthority {
   cancelPublication(): Promise<void>
   closed(): void
 }
-export interface OwnedArtifactSink extends ResultArtifactSink { suspend(): Promise<void> }
+export interface OwnedArtifactSink extends ResultArtifactSink { suspend(options?: { retryFailedHandles?: boolean }): Promise<void> }
 interface FailedIssue { admitted: PendingWrite; cause?: unknown; candidate: boolean; finalized: boolean; consumed: boolean; applied: boolean }
 interface PendingWrite { bytes: Buffer; start: number; ordinal: number; digest: string; bodyDone: boolean; accounted: boolean; copied: number; reserved: boolean }
 
@@ -67,12 +67,15 @@ export async function createArtifactWriter(authority: WriterAuthority, recoverEm
   const retainClose = (handle: FileHandle) => {
     const close = handle.close.bind(handle)
     let original: Promise<void> | undefined
-    return () => original ??= Promise.resolve().then(close)
+    const invoke = () => original ??= Promise.resolve().then(close)
+    invoke.reset = () => { original = undefined }
+    return invoke as (() => Promise<void>) & { reset(): void }
   }
   const closeBody = retainClose(body), closeLeaves = retainClose(leaves)
   let closeFailed = false, closeFailure: unknown
-  async function closeFiles() {
+  async function closeFiles(retryFailedHandles = false) {
     if (closed) return
+    if (retryFailedHandles) { closeFailed = false; closeFailure = undefined; closeBody.reset(); closeLeaves.reset() }
     const results = await Promise.allSettled([closeBody(), closeLeaves()])
     const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
     if (failures.length) {
@@ -244,7 +247,7 @@ export async function createArtifactWriter(authority: WriterAuthority, recoverEm
     },
     reconcileWrite() { return enqueue(async () => { try { await applyPending(); return 'ready' as const } catch { return 'recovery-required' as const } }) },
     reconcile() { return enqueue(commit) },
-    suspend() { return enqueue(async () => { await closeFiles() }) },
+    suspend(options?: { retryFailedHandles?: boolean }) { return enqueue(async () => { await closeFiles(options?.retryFailedHandles === true) }) },
   }
   return result
 }

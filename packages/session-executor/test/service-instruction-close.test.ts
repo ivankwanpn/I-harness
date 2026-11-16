@@ -7,6 +7,15 @@ const controls = vi.hoisted(() => ({
   owners: [] as import('@i-harness/context-output').ContextOutputService[],
   beforeRead: undefined as undefined | ((owner: import('@i-harness/context-output').ContextOutputService) => Promise<void>),
 }))
+const nativeIO = vi.hoisted(() => ({ close: undefined as undefined | ((handle: import('node:fs/promises').FileHandle, close: () => Promise<void>) => Promise<void>) }))
+vi.mock('node:fs/promises', async original => {
+  const fs = await original<typeof import('node:fs/promises')>()
+  return { ...fs, async open(...args: Parameters<typeof fs.open>) {
+    const handle = await fs.open(...args), close = handle.close.bind(handle)
+    handle.close = () => nativeIO.close ? nativeIO.close(handle, close) : close()
+    return handle
+  } }
+})
 vi.mock('@i-harness/instructions', async original => {
   const native = await original<typeof import('@i-harness/instructions')>()
   return { ...native, createObservedInstructionService: (...args: Parameters<typeof native.createObservedInstructionService>) => {
@@ -112,9 +121,11 @@ it('still closes an independent actual default environment when only cold-reader
     expect(controls.sourceCloses).toEqual([]); expect(controls.environmentCloses).toEqual([])
     controls.beforeRead = async owner => {
       if (original) return
+      nativeIO.close = async (handle, close) => {
+        if (handle === original?.body && !allow) throw new Error('reader original native cleanup remains held')
+        await close()
+      }
       original = await unfinishedResult(owner, root, 'reader-original')
-      const nativeClose = original.body.close.bind(original.body)
-      spy = vi.spyOn(original.body, 'close').mockImplementation(async () => { if (!allow) throw new Error('reader original native cleanup remains held'); await nativeClose() })
     }
     expect(await service.readResultPage!(id, { ref: saved.ref })).toMatchObject({ kind: 'unavailable' })
     await expect(service.close()).rejects.toThrow(/cleanup/)
@@ -126,6 +137,6 @@ it('still closes an independent actual default environment when only cold-reader
     expect(controls.environmentCloses).toEqual([environment]); expect(controls.sourceCloses).toHaveLength(1)
   } finally {
     allow = true; controls.beforeRead = undefined; await service.close(); await seed.release()
-    spy?.mockRestore(); await original?.body.close(); await original?.leaves.close(); await coordinator.close(); rmWorkspaceSync(root)
+    spy?.mockRestore(); nativeIO.close = undefined; await original?.body.close(); await original?.leaves.close(); await coordinator.close(); rmWorkspaceSync(root)
   }
 })

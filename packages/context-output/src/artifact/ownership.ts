@@ -260,7 +260,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
       if (closed) throw new Error('Artifact owner closed')
       return reconcileArtifact(root, directory(id), options.workspaceId, operationId, id)
     }),
-    close: async () => {
+    close: async (options?: { retryFailedHandles?: boolean }) => {
       // Fence new turns immediately, while already issued callbacks retain
       // their original lifecycle until the shared queue drains.
       closing = true
@@ -270,7 +270,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
       const failures: unknown[] = []
       try { await transfers.closeTransfers() } catch (failure) { failures.push(failure) }
       for (const writer of [...writers]) {
-        try { await writer.suspend(); writers.delete(writer) } catch (failure) { failures.push(failure) }
+        try { await writer.suspend(options); writers.delete(writer) } catch (failure) { failures.push(failure) }
       }
       failuresTogether(failures, 'Original artifact writers failed to close')
     },
