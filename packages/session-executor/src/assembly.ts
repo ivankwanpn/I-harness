@@ -1827,12 +1827,15 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   }
 
   async function disposeOriginals(): Promise<void> {
-    childObservation?.dispose()
     const processCleanupFailures: unknown[] = []
     const phase = async (identity: unknown, close: () => unknown) => {
       if (cleanupDone.has(identity)) return
       try { await close(); cleanupDone.add(identity) } catch (error) { processCleanupFailures.push(error) }
     }
+    childObservation?.dispose()
+    // Isolated instruction generations own a read view of the live document;
+    // close them before retiring the execution surface that provides it.
+    await phase('isolated-instructions', () => isolatedInstructionHost?.close())
     const draining:Promise<void>[]=[]
     for (const job of backgroundJobs.values()) {
       if (cleanupDone.has(job)) continue

@@ -113,7 +113,16 @@ it.each([false, true])('keeps the real approval generation open through its time
   const { OwnedGenerationAction } = await import('../src/lifecycle/generation-action.ts')
   const recover = vi.spyOn(OwnedGenerationAction.prototype, 'recoverClose')
   const sessionRoot = await mkdtemp(join(tmpdir(), 'ih-isolated-sessions-'))
-  const backend = createJsonlBackend(sessionRoot)
+  let closeAppends = 0, openedActionId = "", uncertainInjected = false
+  let decode: typeof import('@i-harness/core-session').decodeFactBatch | undefined
+  const backend = createJsonlBackend(sessionRoot, { wrapOwnedBatch: append => async (...args: Parameters<typeof append>) => {
+    if (!openedActionId || !decode) return append(...args)
+    const isClose = decode(args[3].bytes).events.some(event => event.type === 'context/action' && event.op === 'close' && event.actionId === openedActionId)
+    if (!isClose) return append(...args)
+    closeAppends++
+    const result = await append(...args)
+    return uncertainInjected && closeAppends === 1 ? { kind: 'unknown' as const, key: args[3].key } : result
+  } })
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
   let release!: () => void, started!: () => void
   const gate = new Promise<void>(resolve => { release = resolve }), entered = new Promise<void>(resolve => { started = resolve })
@@ -143,14 +152,9 @@ it.each([false, true])('keeps the real approval generation open through its time
     expect(opened).toBeDefined()
     if (!opened || opened.type !== 'context/action' || opened.op !== 'open') throw new Error('missing approval action')
     expect(assembly.session.events.some(event => event.type === 'context/action' && event.op === 'close' && event.actionId === opened.actionId)).toBe(false)
-    const append = backend.appendOwnedBatch!, { decodeFactBatch } = await import('@i-harness/core-session')
-    let closeAppends = 0
-    backend.appendOwnedBatch = async (...args) => {
-      const isClose = decodeFactBatch(args[3].bytes).events.some(event => event.type === 'context/action' && event.op === 'close' && event.actionId === opened.actionId)
-      if (!isClose) return append(...args)
-      closeAppends++; const result = await append(...args)
-      return uncertain && closeAppends === 1 ? { kind: 'unknown', key: args[3].key } : result
-    }
+    decode = (await import('@i-harness/core-session')).decodeFactBatch
+    openedActionId = opened.actionId
+    uncertainInjected = uncertain
     release(); await run.catch(() => {}); await service.close().catch(() => {}); await service.close().catch(() => {})
     expect(closeAppends).toBe(1); expect(originalSource.closes).toBe(1)
     if (uncertain) expect(recover).toHaveBeenCalledTimes(1)

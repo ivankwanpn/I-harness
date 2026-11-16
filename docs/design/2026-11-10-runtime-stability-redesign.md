@@ -450,6 +450,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - `instruction-isolated-review`：在 `close uncertainty` 兩案加入 holder close trace 後，**holder.close 從未被呼叫**；isolated lease 未進 close 路徑，代表 assembly.dispose 在到達 isolated host 前就因其他 cleanup 失敗而停止。需讓 assembly 逐階段 best-effort cleanup 並在後續階段仍關閉 isolated host（或把 isolated host 提前）。
 - `service-instruction-close`：冷讀在 session close 後仍回 artifact page；test 期望在 held reader cleanup 存在時 unavailable。產品需定義「無 assembly 的 cold read + pending result writer/cleanup」deny 契約；目前 reader availability 只看 service closed/closing，未看 pending writer。
 - 兩者皆為產品層 cleanup/readiness 契約，不是 fixture 小修。
+#### 第七十二批：isolated instruction generation 提前關閉與 fixture pre-bind 注入
+
+- 根因一（產品）：`disposeOriginals` 的 `isolated-instructions` phase 原本排在 producer/source cleanup 的 early throw 之後；一旦 `terminal`/`exec` 或 document-sources 有 cleanup debt，流程就不會走到 isolated host，held approval generation 永遠不關。現將 isolated phase 提到 phase 建立後最前面，仍保留原本後段的 retry（cleanupDone 去重），dispose() 的同步 retire/revoke 契約不變。
+- 根因二（fixture）：test 在 assembly 建立後直接替換 `backend.appendOwnedBatch`，會觸發 canonical artifact path 的 descriptor identity guard（`PROCESS_READ_UNAVAILABLE`）。改為建立 backend 時使用 `wrapOwnedBatch` pre-bind seam，以 mutable flags 注入 first close unknown。
+- 驗證：`instruction-isolated-review` **7/7**、`execution-surface-lifecycle` **10/10**；assembly disposal 回歸 9 檔 **84/84**；executor typecheck 0。executor 殘餘約 **21**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
