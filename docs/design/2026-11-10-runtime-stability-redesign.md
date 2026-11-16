@@ -324,6 +324,10 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 
 - falsey task-parent ack 測試刻意注入保存失敗；產品在 `code`/delivery 完成後保留 recovery debt 是**預期行為**（warnings 已明示 `Task notification…`／`Required source drain needs recovery`）。delivery fixture 新增 `expectCleanupDebt` 選項：只有當每個 close failure 都匹配 recovery/unresolved/cleanup/FACT_ 時才容忍，並把失敗寫入 `cleanup-<root>` evidence，**不做吞掉或放寬 delivery 斷言**。`delivery-retry` 兩案啟用後 **3/3 通過**，typecheck 0。
 - triage：`owned-code-service` 的 readiness FACT_CLOSED 警告經 stack 證實發生在 **teardown**（document close 後），不是 wake 失敗原因；實際 wake 缺口另尋。
+#### 第四十九批：owned-code delivery 的喚醒容量
+
+- `owned-code-service`／`owned-code-nested-shell` 的 wake timeout 根因不是 delivery：private drain 確實排入 `session.delivery.code` 並呼叫 `schedule`，但喚醒用的 `submitUnfenced` 以 **`prompt_too_long: prepared context cannot fit the owned window (3715 input tokens; 128 output reserve)`** 被拒絕，且在 drain 的 settle-only 包裝下不產生警告（加 debug 才看到）。
+- fixture 的 `contextWindow:4096,maxOutputTokens:128` 對喚醒請求太窄；提高到 `100000/512`（只放寬容量，不改任何 delivery 斷言）。兩檔分別 **2/2、2/2 通過**，一起跑 4/4，typecheck 0。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
