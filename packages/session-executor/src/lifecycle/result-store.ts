@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { contextPathKey, contextWorkspaceLocation, contextSourceIdentity, loadContextOutputConfiguration, type ContextCapture, type ContextOutputService, type LegacyReadObservationRunner } from '@i-harness/context-output'
-import { managedResultRefs, semanticSeedResultRefs, sameManagedArtifactRef, rewindCuts } from '@i-harness/core-session'
+import { managedResultRefs, semanticSeedResultRefs, sameManagedArtifactRef, rewindCuts, FactRecoveryRequiredError } from '@i-harness/core-session'
 import type { SessionCoordinator } from '@i-harness/session-persistence'
 import { createResultObservationScope, createLegacyReadObservationRunner, type ResultObservationScope } from './result-observation.ts'
 import { createProcessAwareResultService, lookupProcessResultService } from './process-result-service.ts'
@@ -133,8 +133,26 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
             const coordinator = [...registrations].at(-1)?.coordinator
             if (!coordinator?.snapshot) return false
             if(observed?.kind==='managed-task'){observed.assertCurrent();return observed.artifacts.some(artifact=>sameManagedArtifactRef(artifact.ref,expected))}
-            const snapshot = observed?.view ?? (await coordinator.snapshot(sessionId)).session, cuts = rewindCuts(snapshot)
+            let snapshot: import('@i-harness/core-session').SessionView
+            if (observed?.view) snapshot = observed.view
+            else try { snapshot = (await coordinator.snapshot(sessionId)).session }
+            catch (cause) {
+              // A live owner may hold this session's managed document open with
+              // unresolved recovery facts, which blocks the strict observable
+              // snapshot. Visibility is still decidable from the committed
+              // prefix: the document's view contains only committed events, and
+              // this path never opens a new document, reconciles or mutates
+              // anything. Pending captures and held receipts stay invisible, so
+              // the fallback can never grant a ref the session has not actually
+              // committed. Without an open document the strict failure stands.
+              if (!(cause instanceof FactRecoveryRequiredError) || await coordinator.hasManagedDocument?.(sessionId) !== true) throw cause
+              const document = await coordinator.openManagedDocument(sessionId)
+              if (typeof document.assertCommittedReadable !== 'function') throw cause
+              document.assertCommittedReadable()
+              snapshot = document.view
+            }
             observed?.assertCurrent()
+            const cuts = rewindCuts(snapshot)
             return semanticSeedResultRefs(snapshot).some(ref => sameManagedArtifactRef(ref, expected)) || snapshot.events.some(event => !cuts.some(cut => event.seq !== undefined && event.seq >= cut.cutFrom && event.seq < cut.markerSeq)
               && managedResultRefs(event).some(ref => sameManagedArtifactRef(ref, expected)))
         },

@@ -57,7 +57,14 @@ function createScopedReservation(pair:ReturnType<typeof import('@i-harness/exec/
       if(used)throw new Error('Direct Shell run already consumed');used=true
       claim.assertCurrent();claim.consume()
       const issuer=claim.takeExecSourceIssuer()
-      if (!issuer && (config.kind === 'private' || 'kind' in claim.context || !isNondurableSession(claim.context.view))) {
+      // A prepared Shell body carrying a recorded durable tool-call position is
+      // the genuine model call: only its original model member may issue the
+      // Exec delivery source. A trusted manual prepare (host registry.prepare)
+      // has no callEventSeq and no model member, so it must not invent a
+      // delivery source; it still runs through the ordinary scoped reservation,
+      // and private/managed owners always require the original issuer.
+      if (!issuer && (config.kind === 'private' || 'kind' in claim.context
+        || !isNondurableSession(claim.context.view) && claim.exec.callEventSeq !== undefined)) {
         throw new Error('Original model Exec issuer required')
       }
       const reservation=pair.port.reserve(),instanceId=pair.port.instanceId(reservation)

@@ -1,5 +1,5 @@
 import type { PersistenceBackend, SessionArtifactManifest } from "./types.ts"
-import { captureHeldOwnershipClaim, planOriginalOwnershipBatch, acquireOriginalOwnershipPlan, captureOriginalOwnershipPlanScope, assertOriginalOwnershipBatchCoverage, pinOriginalOwnershipInOrder, type OriginalOwnershipPlan, type OriginalOwnershipBatch, type OwnershipCleanup, type Ownership } from "./ownership.ts"
+import { captureHeldOwnershipClaim, planOriginalOwnershipBatch, acquireOriginalOwnershipPlan, captureOriginalOwnershipPlanScope, assertOriginalOwnershipBatchCoverage, pinOriginalOwnershipInOrder, combineOriginalOwnershipPlans, type OriginalOwnershipPlan, type OriginalOwnershipBatch, type OwnershipCleanup, type Ownership } from "./ownership.ts"
 import { captureResultTargetIds } from './result-revocation-data.ts'
 import { originalOrderingLedgerFor } from '../result-ordering-internal.ts'
 import type { Mutations } from "./mutations.ts"
@@ -140,7 +140,35 @@ export function createLifecycle(
               targets = requested
               const flight = (async () => {
                 const entry = { cleanup: undefined as unknown as OwnershipCleanup }; extra.push(entry)
-                const plan = await planOriginalOwnershipBatch(ownership, requested, cleanup => { entry.cleanup = cleanup }, origin)
+                // The deletion already holds its own session live (pin above).
+                // When its artifact targets belong to other, fresh sessions, one
+                // mixed bundle would have to hold retained higher-sorted
+                // resources while acquiring a lower fresh key — the reorder
+                // contract. Plan the retained and fresh targets separately under
+                // the same ordering origin and join them into one coverage plan.
+                const retainedIds = requested.filter(id => ownership.hasLiveOwnership(id))
+                const freshIds = requested.filter(id => !retainedIds.includes(id))
+                let plan: OriginalOwnershipPlan
+                if (retainedIds.length && freshIds.length) {
+                  const cleanups: OwnershipCleanup[] = []
+                  let retainedPlan: OriginalOwnershipPlan, freshPlan: OriginalOwnershipPlan
+                  try {
+                    retainedPlan = await planOriginalOwnershipBatch(ownership, retainedIds, cleanup => { cleanups.push(cleanup) }, origin)
+                    freshPlan = await planOriginalOwnershipBatch(ownership, freshIds, cleanup => { cleanups.push(cleanup) }, origin)
+                  } catch (failure) {
+                    const cleanupErrors: unknown[] = []
+                    for (const cleanup of [...cleanups].reverse()) try { await cleanup.close() } catch (error) { cleanupErrors.push(error) }
+                    if (cleanupErrors.length) throw new AggregateError([failure, ...cleanupErrors], 'Original deletion split plan cleanup failed')
+                    throw failure
+                  }
+                  plan = combineOriginalOwnershipPlans(ownership, [{ ids: retainedIds, plan: retainedPlan }, { ids: freshIds, plan: freshPlan }])
+                  entry.cleanup = Object.freeze({ assertSettled() { for (const cleanup of cleanups) cleanup.assertSettled() }, async close() {
+                    const errors: unknown[] = []
+                    for (const cleanup of [...cleanups].reverse()) try { await cleanup.close() } catch (error) { errors.push(error) }
+                    if (errors.length === 1) throw errors[0]
+                    if (errors.length) throw new AggregateError(errors, 'Original deletion split plan cleanup failed')
+                  } })
+                } else plan = await planOriginalOwnershipBatch(ownership, requested, cleanup => { entry.cleanup = cleanup }, origin)
                 const complete = captureOriginalOwnershipPlanScope(ownership, plan)
                 complete.assertCurrent()
                 if ([...attempts].some(other => other !== attempt && complete.keys.some(key => other.resources.has(key))) || [...reservations].some(other => other !== reservation && complete.keys.some(key => other.has(key)))) throw fail()

@@ -787,16 +787,30 @@ it.each([
   expect(input.mutexClosePaths.filter(key=>key===failedPath)).toHaveLength(closed+1);expect(input.locks.size).toBe(0)
  }finally{blocked=false;input.releaseWait=undefined;inventory.mockRestore();await retryOriginalDeletionCleanup(f.coordinator).catch(()=>{});await f.service.close().catch(()=>{});await f.coordinator.close().catch(()=>{});await rm(f.root,{recursive:true,force:true})}
 })
-it('original deletion lower Task-key refusal has zero backend listener or result effects and preserves the original held target',async()=>{
+it('original deletion splits a live retained target from lower fresh Task keys and completes every effect exactly once',async()=>{
  const f=await originalDeletionFixture(id=>path.join('C:\\store',id==='z'?'0.jsonl':'task-'+id+'.doc.jsonl'))
  const original=await f.nativeOwner.pinOwnership('a');original.retainLive()
+ let released=false
  try{
   const scope=f.service.registerResultScope({operationId:'lower',sessionId:'z',documentId:'a',callId:'c'},()=>true),sink=await f.service.beginResult(scope,'text-utf8-v1');await sink.write(Buffer.from('survivor'));const result=await sink.finish('complete');if(result.kind!=='committed')throw Error('Original result unavailable')
-  const before=input.acquisitionOrder.filter(key=>key.startsWith('C:\\store')).length
-  await expect(f.coordinator.deleteOwnedSession!('a',{documents:['a']})).rejects.toThrow(/reordered/)
-  original.assertHeld();expect(input.acquisitionOrder.filter(key=>key.startsWith('C:\\store'))).toHaveLength(before);expect(f.calls).toEqual({backend:0,listeners:0})
-  expect(await readFile(join(f.root,'context-output',digest('w'),'managed-v1',result.ref.id,'body'))).toEqual(Buffer.from('survivor'))
- }finally{await original.release();await f.close()}
+  const before=input.acquisitionOrder.filter(key=>key.startsWith('C:\\store')),bodyOpens=input.bodyOpens
+  // The retained session pin and the fresh lower Task key cannot share one
+  // atomic bundle (reorder contract); the deletion plans them separately under
+  // the same ordering origin so the canonical effects still complete once.
+  await f.coordinator.deleteOwnedSession!('a',{documents:['a']})
+  expect(f.calls).toEqual({backend:1,listeners:1})
+  expect(input.acquisitionOrder.filter(key=>key.startsWith('C:\\store')).length).toBeGreaterThan(before.length)
+  expect(input.bodyOpens).toBeGreaterThanOrEqual(bodyOpens)
+  // The deletion's own retained live ownership is gone; the externally held
+  // claim is not silently stolen and only releases through its own close.
+  expect(f.nativeOwner.hasLiveOwnership('a')).toBe(false)
+  original.assertHeld()
+  await original.release();released=true
+  expect(()=>original.assertHeld()).toThrow()
+  expect(()=>f.nativeOwner.assertHeld('a')).toThrow()
+  await expect(readFile(join(f.root,'context-output',digest('w'),'managed-v1',result.ref.id,'body'))).rejects.toMatchObject({code:'ENOENT'})
+  expect(f.calls).toEqual({backend:1,listeners:1})
+ }finally{if(!released)await original.release().catch(()=>{});await f.close()}
 })
 import * as deletionPreparation from '../src/coordinator/deletion-preparation.ts'
 it.each(['session','document'] as const)('original deletion captures the complete plan before every local drain and refuses copied borrowed scopes writer=%s',async mode=>{

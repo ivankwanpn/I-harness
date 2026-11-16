@@ -572,6 +572,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
     }
     const document: ManagedDocument & {
         assertObservable(): void;
+        assertCommittedReadable(): void;
     } = {
         importSeed: events => admit({ kind: 'seed-import', events }, rootAuthorization),
         assertReady() {
@@ -707,6 +708,16 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
             execution?.assertCurrent();
             held.assertHeld();
         },
+        /** Read-only committed-prefix observation for visibility authorization.
+         * The public view advances only when a batch commits, so unresolved
+         * pending, quarantined or recovery-held facts are never part of it and
+         * must not fence a read-only authorization check. Unlike
+         * assertObservable this grants no new work and never reconciles. */
+        assertCommittedReadable() {
+            if (closing || closed || !bootstrapReady || state === undefined) throw new FactRecoveryRequiredError();
+            execution?.assertCurrent();
+            held.assertHeld();
+        },
         ...(state?{view:state.view}:{}),
         async reconcile(key) {
             assertTaskOutside();
@@ -832,7 +843,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
             if(core){for(const member of actionMembers)core.releaseSource(member.source);actionMembers.clear();await core.close()}
             closed = true;
         },
-    } as ManagedDocument & {assertObservable():void};
+    } as ManagedDocument & {assertObservable():void;assertCommittedReadable():void};
     bootstrap?.bind({ held, bindSelected() {
         if(!bootstrap.selected||!selectedJournal||!backend.settleBootstrapCaptureIO||closed||closing)return Promise.reject(new FactRecoveryRequiredError());
         if(selectedLane)return Promise.resolve();if(selectedBindFlight)return selectedBindFlight;

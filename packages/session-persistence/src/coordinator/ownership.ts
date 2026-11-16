@@ -43,6 +43,47 @@ export function captureOriginalOwnershipPlanScope(owner: Ownership, plan: Origin
   const record = originalPlan(owner, plan); record.check()
   return Object.freeze({ keys: Object.freeze([...record.keys]), assertCurrent() { record.check() } })
 }
+/**
+ * Join several already-planned single-surface plans into one coverage plan.
+ *
+ * A canonical deletion may target a session it already holds live together with
+ * fresh artifact-owner sessions (for example a retained child-owned frame). A
+ * single bundle cannot hold the retained higher-sorted resources and acquire a
+ * lower fresh resource — that is the reorder contract. Planning the retained
+ * and fresh targets under the same ordering origin and joining the plans keeps
+ * one coverage surface for the deletion participant while each part still
+ * acquires under the original ordering ledger.
+ */
+export function combineOriginalOwnershipPlans(owner: Ownership, parts: readonly { ids: readonly string[]; plan: OriginalOwnershipPlan }[]): OriginalOwnershipPlan {
+  if (!Array.isArray(parts) || !parts.length || utilTypes.isProxy(parts)) throw TypeError('Original plan parts required')
+  const captured = parts.map(part => {
+    if (!part || typeof part !== 'object' || utilTypes.isProxy(part) || !part.plan || utilTypes.isProxy(part.plan)) throw TypeError('Original plan part required')
+    const record = originalPlan(owner, part.plan)
+    return Object.freeze({ ids: captureResultTargetIds(part.ids), record })
+  })
+  const ids = Object.freeze([...new Set(captured.flatMap(part => part.ids))].sort())
+  if (!ids.length || ids.length !== captured.reduce((sum, part) => sum + part.ids.length, 0)) throw TypeError('Original distinct plan targets required')
+  let consumed = false
+  const composite = Object.freeze({}) as OriginalOwnershipPlan
+  batchPlans.set(composite, {
+    owner, ids, keys: Object.freeze([...new Set(captured.flatMap(part => part.record.keys))].sort()),
+    check() { if (consumed) throw Error('Original batch plan already consumed'); for (const part of captured) part.record.check() },
+    async acquire() {
+      if (consumed) throw Error('Original batch plan already consumed')
+      consumed = true
+      const acquired: { ids: readonly string[]; batch: OriginalOwnershipBatch }[] = []
+      try { for (const part of captured) acquired.push({ ids: part.ids, batch: await part.record.acquire() }) }
+      catch (failure) {
+        const cleanupErrors: unknown[] = []
+        for (const part of [...acquired].reverse()) try { await part.batch.close() } catch (error) { cleanupErrors.push(error) }
+        if (cleanupErrors.length) throw new AggregateError([failure, ...cleanupErrors], 'Original combined plan acquisition cleanup failed')
+        throw failure
+      }
+      return combineOriginalOwnershipBatches(owner, acquired)
+    },
+  })
+  return composite
+}
 export function assertOriginalOwnershipPlanCoverage(owner: Ownership, plan: OriginalOwnershipPlan, ids: readonly string[]): void {
   const record = originalPlan(owner, plan); record.check()
   if (captureResultTargetIds(ids).some(id => !record.ids.includes(id))) throw Error('Original batch plan target not covered')

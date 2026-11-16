@@ -20,6 +20,8 @@ export interface OwnedFactBackend {
 export interface ManagedDocument extends FactPorts {
   importSeed(events: readonly import('@i-harness/core-session').SessionEvent[]): Promise<import('@i-harness/core-session').FactOutcome>
   assertReady(): void
+  /** Read-only committed-prefix observation for visibility authorization. */
+  assertCommittedReadable?(): void
   readonly view: SessionView
   ownsAction(action: object): boolean
   registerReceivedInputSource(drain: () => Promise<void>): import('@i-harness/core-session').ReceivedInputSource<import('@i-harness/core-session').FactOutcome>

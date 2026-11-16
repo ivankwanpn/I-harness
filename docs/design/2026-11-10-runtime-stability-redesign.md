@@ -586,6 +586,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - `remapConversationSeed` 在 semantic bootstrap header + legacy projection（format<11 或無 leading manifest）時，改用實際 legacy seed header（`parentSession`、`seedLength=source.length`），讓 projection 的 seeded observations 通過 input-preparation 規則；真 semantic/無 header source 不變。
 - fixture 尾段 detached-import 改在真正的 owner（`compileDetachedSeed.assertTarget`）驗證相同 declaration/refusal 契約，仍走真實 `openExecutorDocument` detached-import 路徑。
 - 驗證：`generation-actions` **15/15**；typecheck subagent/session-persistence/executor 0；fork/child/seed/fork-baseline 回歸全綠。executor 定點殘餘由 8 降至 **7**。
+#### 第九十三批：manual Exec issuer、committed-prefix visibility、deletion split
+
+- **scoped-exec manual Shell**：model Exec issuer 只在 private/managed owner 或真正 durable prepared Shell（有 `callEventSeq`）時要求；ad-hoc host `registry.prepare`（無 callEventSeq）走普通 scoped reservation，不偽造 delivery source/owner。`shell-retry-authority` 的拒絕仍保留。
+- **result visibility**：`genericVisible` 先走嚴格 snapshot；只有 `FactRecoveryRequiredError` 且 coordinator 已有 live managed document 時，才用該 document 的 `assertCommittedReadable()` committed-prefix view（read-only，不開新 doc、不 reconcile；無 open doc 則 fail closed）。新增 `ManagedDocument.assertCommittedReadable?`。
+- **canonical deletion split**：`lifecycle.planTargets` 按 `hasLiveOwnership` 分組，僅 retained+fresh mix 時以同一 ordering origin 分別 plan 再 join（`combineOriginalOwnershipPlans`＋既有 `combineOriginalOwnershipBatches`）；reorder guard 對直接 mixed bundle caller 仍拒絕（canonical-ownership/ownership-native-count reserve callers 仍綠）。`ownership-native-count` 的舊 lower Task-key refusal 測試更新為 caller-split 成功契約（exactly-once effects、retained released、fresh body deleted）。
+- **native-dependency-observer fixture**：補 `prepareTaskChild`；改用 `settleFinishedActions()` 對 host-owned doc 做 reconciliation；rewind publication 移出 result-read mutation；timeout 60s→120s。
+- 驗證：`exec-direct-source` 38/38、`native-dependency-observer` 1/1（合計 39/39）；四 package typecheck 0；executor 4 檔回歸 36/36；`session-persistence` 全套件 **1249/1249**（root 重跑）。executor 定點殘餘由 15 降至 **7**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
