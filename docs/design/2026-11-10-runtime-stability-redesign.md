@@ -569,6 +569,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 這 15 個 failure 即 P1/P3 目前 executor 的實質殘餘（比 third full run 的 32 少 17）。
 - 其餘原失敗檔（isolated-review、bounded-file、hook-recovery、fork-handoff、service-instruction-close、execution-source-prereq、mixed-retention-native 等）已全綠。
 - 本表作為 P3 最終 `verify:all` 的對帳基準；下一步按表逐檔處理。
+#### 第九十一批：legacy v2 state fixtures 使用真實 Task host
+
+- 根因：parent session 是 v14，cold reopen 的 `task-document-transition` 要求真正的 `task-<parent>` document 與 `subagent/start|end` 一致；fixture 手寫 v2 `SubagentStateSnapshot` 並提交 `subagent/end`，但沒有對應 Task row，所以 `TASK_TRANSITION_RECOVERY_REQUIRED`。
+- 修正（test fixtures only）：
+  - `retained-state-negative` / `retained-state-cold` 的 child 改由真實 `createTaskRegistry`＋`createTaskResultRetention` 建立：submit→claim→terminalize→retainResult→flushPersistence，寫出真正的 v2 `task-parent` row 與 retained result。
+  - v2 state mirror 與 `subagent/end`、`job/status` 使用真實 task id，parent log 與 Task document 一致；lazy resultText getter 保留「body 只被讀一次」斷言。
+- 驗證：`retained-state-negative` **4/4**、`retained-state-cold` **3/3**（共 7/7），executor typecheck 0（agent + root 各跑一次）；無產品改動。executor 定點殘餘由 15 降至 **8**（11 檔中 2 檔轉綠、共 7 failures 消失）。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
