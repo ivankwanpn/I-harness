@@ -286,6 +286,14 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
   - `generation-actions`：第二次 fork 現在明確拒絕（`retained seed cannot preserve conversation semantics`）；detached seed import 需要 task-transition 生命週期，plain coordinator 會 `TASK_TRANSITION_FAILED`，需專屬 durable fixture。
   - `instruction-diagnostics`：preflight 失敗後 `manager.capture()` 回 `instruction-request`（非 undefined），且 diagnostics 狀態在讀取時可能已是 `ready`；stale 契約需重新確認。
   - `execution-source-prereq`（exec 觀測 0/1）、`main-instruction-construction`（retry 0/1）、`native-dependency-observer`（child 與 parent session id 相同）尚未修。
+#### 第四十一批：retained-code-output 的正常 Task 入口
+
+- 改以 `spawnDurable`（prepared action／call identity／settlement source）取代 `tools.get('spawn_agent').execute(...)`；service 補 `approveAll`、`prepareTaskChild: createUnmanagedTaskChildHost`，coordinator 改 `composeJsonlTaskTransitionCoordinator`＋task storage contract。**4/4 通過**。
+- triage（未修）：
+  - `retained-batch-continuation`：以 pre-bind `wrap` 注入 append/reconcile 後，child 的 `code/output` 事件未觸發原 key 記錄（childId undefined，其後 openManagedDocument(undefined) 崩潰）；需確認 v3 下 code/output append 的 session/key 參數。
+  - `mixed-retention-native`：`Original revocation inventory recovery required`（產品刪除/revocation recovery 缺口）。
+  - `mixed-retention-quota`：SQLite `database or disk is full`（index-lifecycle commit）。
+  - `native-dependency-observer`：child native job receipt 的 owner sessionId 等於 parent。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

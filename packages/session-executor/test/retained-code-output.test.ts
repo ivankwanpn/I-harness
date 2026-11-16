@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createContext } from '@i-harness/core-plugin'
 import { createToolRegistry } from '@i-harness/core-tools'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createContextOutputService } from '@i-harness/context-output'
 import { registerCodeMode } from '@i-harness/code-mode'
@@ -16,6 +15,10 @@ import { createCodeTextRetention } from '../src/lifecycle/code-text-retention.ts
 import { PNG } from '../../image-validation/test/fixtures.ts'
 import { createSessionService, createDurableSessionLoader } from '../src/index.ts'
 import { controlledModel } from './controlled-model.ts'
+import { spawnDurable } from './helpers/durable-spawn.ts'
+import { createUnmanagedTaskChildHost } from '../src/lifecycle/task-child-host.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/backend-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 
 /** Independent page reader: the expected text is a literal fixture, never the
  * product serializer's own output. */
@@ -34,7 +37,7 @@ async function readArtifact(service: ReturnType<typeof createContextOutputServic
 
 it('captures every accepted item once and reads the exact retained text after the guest exits', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-a3-code-output-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const service = createContextOutputService({ root: join(root, 'context'), workspaceId: 'fixture', config: { enabled: true } })
   const ctx = createContext(), tools = createToolRegistry(ctx)
@@ -79,7 +82,7 @@ it('captures every accepted item once and reads the exact retained text after th
 
 it('recovers an unknown artifact finish through the same original operation without a second guest run', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-a3-code-unknown-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create()
   await coordinator.openManagedDocument(id)
   const service = createContextOutputService({ root: join(root, 'context'), workspaceId: 'fixture', config: { enabled: true } })
@@ -119,7 +122,7 @@ it('recovers an unknown artifact finish through the same original operation with
 
 it('binds the emitted-text artifact to the acting child document, never a parent grant', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-a3-child-scope-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } }, taskDocumentStorageContract)
   const parentId = (await coordinator.create()).id, childId = (await coordinator.create()).id
   const parent = await coordinator.openManagedDocument(parentId), child = await coordinator.openManagedDocument(childId)
   const service = createContextOutputService({ root: join(root, 'context'), workspaceId: 'fixture', config: { enabled: true },
@@ -140,7 +143,7 @@ it('binds the emitted-text artifact to the acting child document, never a parent
 
 it('uses the actual restricted child assembly mount and preserves its own durable output authority', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-a3-role-child-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: 'parent' })
   const output = createContextOutputService({ root: join(root, 'results'), workspaceId: 'fixture', config: { enabled: false } })
   let requests = 0
@@ -150,15 +153,16 @@ it('uses the actual restricted child assembly mount and preserves its own durabl
     yield { type: 'end' }
   })
   const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), contextOutput: output,
-    modelPolicy: 'test-mock', sandbox: 'danger-full-access', codeMode: { mode: 'only' }, contextWindow: 100000,
+    modelPolicy: 'test-mock', sandbox: 'danger-full-access', approveAll: true, codeMode: { mode: 'only' }, contextWindow: 100000,
     pluginAgents: [{ name: 'probe', description: 'restricted test role', systemPrompt: 'Use only your role tools', tools: ['list_dir', 'code_exec', 'code_wait'] }],
     additionalTools: [{ name: 'parent_secret', description: '', inputSchema: {}, execute: async () => { throw new Error('Child must not call parent-only tools') } }],
+    prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: 'unmanaged' }),
     allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: 'fixture', model: 'child' }),
     resolveRoleModel: async () => ({ status: 'ready', binding: { client: child, contextWindow: 100000 } }),
   })
   try {
     const assembly = await service.assemblyFor('parent')
-    await assembly.tools.get('spawn_agent')!.execute({ task_name: 'probe', agent_type: 'probe', message: 'emit once', fork_turns: 'none', background: false }, { sessionId: 'parent' })
+    await spawnDurable(assembly, 'parent', { task_name: 'probe', agent_type: 'probe', message: 'emit once', fork_turns: 'none', background: false })
     const rows = await assembly.tools.get('list_agents')!.execute({}, { sessionId: 'parent' }) as { agents: { path: string; sessionId: string }[] }
     const id = rows.agents.find(row => row.path === 'root/probe')!.sessionId
     const events = (await coordinator.snapshot!(id)).session.events
