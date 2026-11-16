@@ -364,7 +364,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     const issue = store?.indexIssue() && `${cleanupIndexUnavailable && cleanupFailures.size === 0 ? 'Requested cleanup completed; ' : ''}${store.indexIssue()!.message}`
     const message = [error, ...cleanupFailures.values(), issue].filter(Boolean).join('; ')
     return { enabled: config.enabled && !closing && !closed, state: message && state !== 'stopping' && state !== 'disabled' ? 'error' : state, config: { ...config },
-      ...(store?.counters() ?? { retainedBytes: 0, results: 0 }), activeJobs: jobs.size,
+      ...(store?.counters() ?? { retainedBytes: 0, results: 0 }), activeJobs: jobs.size, pendingResults: artifacts.pendingResultCount(),
       ...(message ? { error: message } : {}), ...(protectedResults ? { protectedResults, clearDisposition: 'protected' as const } : {}) }
   }
   function serial<T>(operation: () => Promise<T>): Promise<T> {

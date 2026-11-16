@@ -14,7 +14,7 @@ export interface ContextResultRef {
 }
 export interface ContextOutputStatus {
   enabled: boolean; state: 'disabled'|'ready'|'stopping'|'error'; config: ContextOutputConfig;
-  retainedBytes: number; results: number; activeJobs: number; error?: string;
+  retainedBytes: number; results: number; activeJobs: number; pendingResults?: number; error?: string;
   protectedResults?: number; clearDisposition?: 'cleared' | 'protected';
 }
 export interface ContextReadResult {

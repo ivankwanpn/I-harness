@@ -475,6 +475,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - **service-instruction-close**：cold read 期間 `unfinishedResult(owner)` 建立的 pending sink 不計入 `status().activeJobs`（`jobs` 只記 native background captures），所以 reader 無法用 activeJobs 偵測「讀取本身留下 pending writer」。產品需在 status/reader 曝露 pending result sink，或由 owner 提供 pending-writer predicate；實驗已回退。
 - **retained-batch-continuation**：把 backend 注入改為 pre-bind `wrapOwnedBatch`/`wrapOwnedReconcile` 後，`PROCESS_READ_UNAVAILABLE` 消失，但下一個失敗是 `task-document-transition` 的 `beginMutation` 以 `ids=[null]` 呼叫 `artifactScope` → `artifactPath(undefined)`；child task document transition 在 child session id 尚未確定時就帶 null。屬產品 transition scope 契約，需在 transition 前確保 session id，或 transition 對 pending child 使用 placeholder。
 - 兩者皆需產品層改動，本輪未合併；工作樹已回退乾淨。
+#### 第七十七批：ContextOutputStatus.pendingResults
+
+- `ContextOutputStatus` 新增 optional `pendingResults`，由 artifact owner 的 `writers.size` 提供；service `status()` 回傳 pending result sink 數。
+- 新測試 `pending-result-status`：開啟 original sink 時 `pendingResults=1`，refuse 後回 0；`close-ownership` 15/15 仍綠。
+- 用途：cold reader 可據此偵測「讀取本身留下 pending writer」的 cleanup debt。reader 端 wiring 仍待做（目前 reader 的 lease service 與 beforeRead owner 未必同一實例，需下一批對齊 owner identity）。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

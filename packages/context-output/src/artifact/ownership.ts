@@ -250,7 +250,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
     return Object.freeze({operationId:registered.owner.operationId,sessionId:registered.owner.sessionId,callId:registered.owner.callId,source:Object.freeze({...registered.owner.source}),ref:Object.freeze({...ref})})
   }
   const transfers = createSeedDependencyTransfer({ root, options, directory, quota, mutate, membership, authorized, available: document => !closed && !deletedDocuments.has(document) })
-  return { ...transfers, inventory, assertOriginalManifestScope, captureConfirmedCodeManifest,
+  return { ...transfers, inventory, assertOriginalManifestScope, captureConfirmedCodeManifest, pendingResultCount: () => writers.size,
     prepareCoveredRelease(turn: import('../workspace-mutation.ts').WorkspaceMutationTurn, inventory: ManagedReleaseInventory, coverage: OriginalRevocationCoverage) { mutations.assertTurn(turn); return prepareOriginalManagedRelease(root, inventory, coverage) },
     async applyCoveredRelease(turn: import('../workspace-mutation.ts').WorkspaceMutationTurn, operation: OriginalManagedRelease) { mutations.assertTurn(turn); const documents = await applyOriginalManagedRelease(root, operation, () => mutations.assertTurn(turn)); for (const document of documents) deletedDocuments.add(document) },
     assertCoveredReleaseSettled: assertOriginalManagedReleaseSettled,
