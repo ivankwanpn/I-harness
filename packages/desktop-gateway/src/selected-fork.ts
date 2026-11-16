@@ -1,4 +1,4 @@
-import { createManagedSessionState } from '@i-harness/core-session'
+import { canonicalJsonData, createManagedSessionState } from '@i-harness/core-session'
 import type { SessionCoordinator } from '@i-harness/session-persistence'
 import { createCompletedPassiveContext } from '@i-harness/core-session/internal/conversation-passive-context'
 import { exportSelectedResultsConversationSeed } from '../../core-session/src/conversation/seed-export.ts'
@@ -10,6 +10,7 @@ import { createSelectedResultsIntent, readSelectedResultsCore, type ForkCommandV
  *  can fold a session (the commit log included). */
 export async function captureSelectedResultsSeed(
   coordinator: SessionCoordinator, sourceSessionId: string, assertCurrent: () => void = () => {},
+  selection: { kind: 'completed'; atSeq?: number } = { kind: 'completed' },
 ): Promise<{ kind: 'compiled'; compiled: CompiledSelectedResultsSemanticSeed } | { kind: 'refused'; reason: string }> {
   assertCurrent()
   const { session } = await coordinator.load(sourceSessionId)
@@ -34,7 +35,7 @@ export async function captureSelectedResultsSeed(
         }
       } }
     : { assertCurrent, async *legacy() { assertCurrent() } }
-  const context = createCompletedPassiveContext(owner as never, { kind: 'completed' })
+  const context = createCompletedPassiveContext(owner as never, selection as never)
   if (context.kind !== 'ready') return { kind: 'refused', reason: context.reason }
   assertCurrent()
   const exported = await exportSelectedResultsConversationSeed(context.context as never, inherited as never)
@@ -57,20 +58,72 @@ function selectedManagedRefIds(compiled: CompiledSelectedResultsSemanticSeed): s
   return [...ids]
 }
 
-/** The commit-log store has no selected-results bootstrap kernel, so the seed
- *  capture alone leaves the child with metadata only: every inherited page was
- *  readable only while an ancestor still owned it. Publishing one durable pin
- *  per inherited managed artifact is the target's retention contract here; the
- *  service refuses the grant unless the source still owns the exact committed
- *  ref, and the pin is what keeps the bytes alive when the source is retired. */
+/** One durable document per selected operation: the first authorized capture,
+ *  the completed grant progress and the acknowledged outcome. Replaying the
+ *  same operation after an ACK loss, a failed grant or a host restart adopts
+ *  this state instead of re-capturing a source that may have moved on. */
+type SelectedForkSuccess = Extract<ForkOutcomeV2, { kind: 'ready' | 'adopted' }>
+type StoredSelectedForkState = {
+  version: 1
+  capture?: CompiledSelectedResultsSemanticSeed
+  granted?: number
+  outcome?: SelectedForkSuccess
+}
+const GRANT_BATCH = 100
+function storedSelectedForkState(value: unknown): StoredSelectedForkState | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const state = value as Record<string, unknown>
+  if (state.version !== 1) return undefined
+  if (state.capture !== undefined) {
+    const capture = state.capture as { digest?: unknown; records?: unknown }
+    if (!capture || typeof capture !== 'object' || typeof capture.digest !== 'string' || !Array.isArray(capture.records)) return undefined
+  }
+  if (state.granted !== undefined && (!Number.isSafeInteger(state.granted) || (state.granted as number) < 0)) return undefined
+  if (state.outcome !== undefined) {
+    const outcome = state.outcome as { kind?: unknown }
+    if (!outcome || typeof outcome !== 'object' || (outcome.kind !== 'ready' && outcome.kind !== 'adopted')) return undefined
+  }
+  return state as StoredSelectedForkState
+}
+async function selectedOperationKey(operation: ForkCommandV2['operation']): Promise<string> {
+  const { createHash } = await import('node:crypto')
+  return 'selected-fork-' + createHash('sha256').update(canonicalJsonData(operation)).digest('hex')
+}
+async function selectedTargetStatus(coordinator: SessionCoordinator, operation: ForkCommandV2['operation']): Promise<'ready' | 'absent' | 'conflict' | 'policy'> {
+  const id = operation.invocation.targetSessionId
+  try {
+    // The durable target identity is the session profile, not the reduced
+    // managed-document header: profile carries createdAt, lineage and the
+    // committed birth seed.
+    const { meta } = await coordinator.profile(id) as { meta: { parentSession?: string; origin?: string; createdAt?: string; archived?: boolean; semanticSeed?: { operationId?: string; requestDigest?: string } } }
+    if (!meta || typeof meta !== 'object') return 'absent'
+    if (meta.parentSession !== operation.prepared.core.sourceSessionId || meta.origin !== 'fork'
+      || meta.createdAt !== operation.invocation.createdAt
+      || meta.semanticSeed?.operationId !== operation.invocation.operationId
+      || meta.semanticSeed?.requestDigest !== operation.invocation.requestDigest) return 'conflict'
+    return meta.archived ? 'policy' : 'ready'
+  } catch { return 'absent' }
+}
+function sameProjectIntent(current: { kind: string; projectId?: string }, prepared: { kind: string; projectId?: string }): boolean {
+  if (current.kind !== prepared.kind) return false
+  return current.kind !== 'project' || current.projectId === prepared.projectId
+}
+
+/** Grant one batch at a time and persist the acknowledged batch count so a
+ *  retry resumes at the first ungranted batch instead of repeating effects. */
 async function retainSelectedManagedResults(
-  contextOutput: { grant(access: { sessionId: string }, refIds: string[], targetSessionId: string): Promise<void> } | undefined,
-  compiled: CompiledSelectedResultsSemanticSeed, sourceSessionId: string, targetSessionId: string,
+  contextOutput: { grant(access: { sessionId: string }, refIds: string[], targetSessionId: string): Promise<void> },
+  ids: string[], sourceSessionId: string, targetSessionId: string,
+  state: StoredSelectedForkState, persist: (state: StoredSelectedForkState) => Promise<void>,
 ): Promise<void> {
-  const ids = selectedManagedRefIds(compiled)
-  if (!contextOutput || ids.length === 0) return
-  // The service bounds one grant at 100 references.
-  for (let index = 0; index < ids.length; index += 100) await contextOutput.grant({ sessionId: sourceSessionId }, ids.slice(index, index + 100), targetSessionId)
+  let granted = state.granted ?? 0
+  for (let index = granted; index < ids.length; index += GRANT_BATCH) {
+    const end = Math.min(index + GRANT_BATCH, ids.length)
+    await contextOutput.grant({ sessionId: sourceSessionId }, ids.slice(index, end), targetSessionId)
+    granted = end
+    state = { ...state, granted }
+    await persist(state)
+  }
 }
 
 /** The commit-log implementation of the v2 (selected-results) fork seams. */
@@ -86,11 +139,12 @@ export function createSelectedForkController(options: {
   return {
     async prepare(request) {
       options.assertAvailable?.()
-      const captured = await captureSelectedResultsSeed(coordinator, request.sourceSessionId, options.assertAvailable)
+      const selection = request.selection ?? { kind: 'completed' as const }
+      const captured = await captureSelectedResultsSeed(coordinator, request.sourceSessionId, options.assertAvailable, selection)
       if (captured.kind !== 'compiled') return { kind: 'unavailable', reason: captured.reason === 'source-changed' ? 'source-unavailable' : 'unsupported' }
       const project = (await options.projectOf?.(request.sourceSessionId)) ?? { kind: 'unmanaged' as const }
       const core = { version: 2 as const, kind: 'session-fork-core' as const, sourceSessionId: request.sourceSessionId,
-        selection: request.selection ?? { kind: 'completed' as const }, sourceCapture: 'first-authorized-capture' as const,
+        selection, sourceCapture: 'first-authorized-capture' as const,
         metadata: request.metadata ?? {}, results: 'selected-results-v1' as const }
       const { intent, requestDigest } = createSelectedResultsIntent(core, project)
       return { kind: 'prepared', prepared: { version: 2, kind: 'session-fork-prepared', core: readSelectedResultsCore(core), requestIntent: intent, requestDigest } }
@@ -98,36 +152,69 @@ export function createSelectedForkController(options: {
     async execute(command) {
       options.assertAvailable?.()
       const operation = command.operation
-      const captured = await captureSelectedResultsSeed(coordinator, operation.prepared.core.sourceSessionId, options.assertAvailable)
-      if (captured.kind !== 'compiled') return { version: 2, kind: 'not-issued', operation, capture: 'uncaptured', reason: 'source-unavailable' }
-      const compiled = captured.compiled
+      const key = await selectedOperationKey(operation)
+      const persist = async (state: StoredSelectedForkState) => { await coordinator.putDocument(key, Object.freeze(state)) }
+      let state = storedSelectedForkState(await coordinator.getDocument(key))
+      // A completed operation is durable: replay adopts the committed target
+      // and exact receipt even if the source has since changed, been archived
+      // or cleared. No capture, grant or seed write is repeated.
+      if (state?.outcome) {
+        const status = await selectedTargetStatus(coordinator, operation)
+        if (status === 'ready') return { ...state.outcome, kind: 'adopted' as const }
+        if (status === 'policy') return { version: 2 as const, kind: 'refused' as const, operation, capture: 'captured' as const, reason: 'target-policy' as const }
+        if (status === 'conflict') return { version: 2 as const, kind: 'refused' as const, operation, capture: 'captured' as const, reason: 'conflict' as const }
+        return { version: 2 as const, kind: 'not-issued' as const, operation, capture: 'captured' as const, reason: 'unavailable' as const }
+      }
+      // The prepared project intent is part of the operation identity; a source
+      // re-bound between prepare and begin cannot silently fork into the old or
+      // new project.
+      if (options.projectOf) {
+        const current = await options.projectOf(operation.prepared.core.sourceSessionId)
+        if (!sameProjectIntent(current, operation.prepared.requestIntent.project)) {
+          return { version: 2 as const, kind: 'not-issued' as const, operation, capture: state?.capture ? 'captured' as const : 'uncaptured' as const, reason: 'policy' as const }
+        }
+      }
+      let capture = state?.capture
+      if (!capture) {
+        const captured = await captureSelectedResultsSeed(coordinator, operation.prepared.core.sourceSessionId, options.assertAvailable, operation.prepared.core.selection)
+        if (captured.kind !== 'compiled') return { version: 2 as const, kind: 'not-issued' as const, operation, capture: 'uncaptured' as const, reason: 'source-unavailable' as const }
+        capture = captured.compiled
+        state = { version: 1, capture, granted: 0 }
+        await persist(state)
+      }
+      const ids = selectedManagedRefIds(capture)
+      if (ids.length > 0 && !options.contextOutput) {
+        return { version: 2 as const, kind: 'not-issued' as const, operation, capture: 'captured' as const, reason: 'unsupported' as const }
+      }
       const createChildSession = (coordinator as unknown as { createChildSession?: (request: never, options: { closure: string }) => Promise<{ id: string; receipt: { manifestDigest: string; seedLength: number; dependencyClosureDigest: string } }> }).createChildSession
-      if (!createChildSession) return { version: 2 as const, kind: 'not-issued' as const, operation, capture: 'uncaptured' as const, reason: 'unsupported' as const }
+      if (!createChildSession) return { version: 2 as const, kind: 'not-issued' as const, operation, capture: state?.capture ? 'captured' as const : 'uncaptured' as const, reason: 'unsupported' as const }
       const created = await createChildSession.call(coordinator, {
         invocation: operation.invocation, target: { kind: 'new' }, metadata: operation.prepared.core.metadata,
-        lineage: { origin: 'fork', parentSession: operation.prepared.core.sourceSessionId }, seed: compiled,
-      } as never, { closure: compiled.dependencyDigest })
+        lineage: { origin: 'fork', parentSession: operation.prepared.core.sourceSessionId }, seed: capture,
+      } as never, { closure: capture.dependencyDigest })
       // Retain after the child exists: a failed birth must not leave pins for a
-      // document that was never created. A failed grant keeps the child
-      // unfinished for this operation; the retry route re-runs the same capture
-      // and grant, and the idempotent birth returns the existing target.
+      // document that was never created. Grant progress is persisted per batch,
+      // so a retry resumes at the first ungranted batch on the same capture.
       options.assertAvailable?.()
-      await retainSelectedManagedResults(options.contextOutput, compiled, operation.prepared.core.sourceSessionId, created.id)
+      if (options.contextOutput) await retainSelectedManagedResults(options.contextOutput, ids, operation.prepared.core.sourceSessionId, created.id, state!, persist)
       options.assertAvailable?.()
+      state = storedSelectedForkState(await coordinator.getDocument(key)) ?? state
       if (options.taskDocumentEmpty && await coordinator.getDocument('task-' + created.id) === undefined) await coordinator.putDocument('task-' + created.id, options.taskDocumentEmpty())
       const project = operation.prepared.requestIntent.project
       if (project.kind === 'project') {
         const { createHash } = await import('node:crypto')
-        const key = 'desktop-session-project-' + createHash('sha256').update(operation.invocation.targetSessionId).digest('hex')
-        if (await coordinator.getDocument(key) === undefined) await coordinator.putDocument(key, Object.freeze({ version: 1, projectId: project.projectId }))
+        const projectKey = 'desktop-session-project-' + createHash('sha256').update(operation.invocation.targetSessionId).digest('hex')
+        if (await coordinator.getDocument(projectKey) === undefined) await coordinator.putDocument(projectKey, Object.freeze({ version: 1, projectId: project.projectId }))
       }
-      const manifest = compiled.records[0] as { results?: { version: 1; rows: number; pages: number; digest: string } }
-      return { version: 2 as const, kind: 'ready' as const, operation, capture: 'captured' as const, sessionId: operation.invocation.targetSessionId,
+      const manifest = capture.records[0] as { results?: { version: 1; rows: number; pages: number; digest: string } }
+      const outcome = { version: 2 as const, kind: 'ready' as const, operation, capture: 'captured' as const, sessionId: operation.invocation.targetSessionId,
         seedLength: created.receipt.seedLength,
         receipt: { version: 2 as const, invocation: operation.invocation, manifestDigest: created.receipt.manifestDigest, seedLength: created.receipt.seedLength,
-          dependencyClosureDigest: created.receipt.dependencyClosureDigest, seedDigest: compiled.digest,
-          sourceObservation: { kind: 'semantic' as const, digest: (compiled.sourceObservation as { digest: string }).digest },
+          dependencyClosureDigest: created.receipt.dependencyClosureDigest, seedDigest: capture.digest,
+          sourceObservation: { kind: 'semantic' as const, digest: (capture.sourceObservation as { digest: string }).digest },
           results: manifest.results ?? { version: 1 as const, rows: 0, pages: 0, digest: '0'.repeat(64) } } }
+      await persist({ ...(state ?? { version: 1, capture }), capture, outcome })
+      return outcome
     },
   }
 }

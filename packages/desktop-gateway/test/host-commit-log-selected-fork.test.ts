@@ -64,9 +64,9 @@ it('forks a real tool turn and keeps its selected result readable on the child',
     expect(await client.readPage('selected-child', { ...saved.ref, contentDigest: 'e'.repeat(64) })).toMatchObject({ kind: 'unavailable' })
 
     // Retrying the same operation adopts the same durable child without a
-    // second capture, model request or seed write.
-    const retried = await client.call('session/fork/begin', { operation }) as typeof begin
-    expect(retried.kind).toBe('ready')
+    // second capture, model request, seed write or retention effect.
+    const retried = await client.call('session/fork/retry', { operation }) as typeof begin
+    expect(retried.kind).toBe('adopted')
     expect(retried.receipt).toEqual(begin.receipt)
     expect(client.stats).toMatchObject({ modelCalls: 2, toolCalls: 1 })
     const retriedChild = await storedSession(fixture.sessionDir, 'selected-child')

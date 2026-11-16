@@ -86,14 +86,13 @@ it('prepares and executes a selected-results fork on the commit log and retains 
     const child = await fixture.session.load('child')
     expect((child.session.header as { semanticSeed?: { version?: number; codec?: string } }).semanticSeed).toMatchObject({ version: 3, codec: 'semantic-seed-v3' })
 
-    // Retrying the same operation adopts the durable child and re-publishes the
-    // same retention without a second seed write.
+    // Retrying the same operation adopts the durable child and the acknowledged
+    // receipt without a second seed write or repeated retention effect.
     const retried = await controller.execute({ operation, mode: 'retry' } as never)
-    expect(retried).toMatchObject({ kind: 'ready', sessionId: 'child' })
+    expect(retried).toMatchObject({ kind: 'adopted', sessionId: 'child' })
     if (!('receipt' in retried)) throw new Error(JSON.stringify(retried))
     expect(retried.receipt).toEqual(outcome.receipt)
-    expect(grantCalls).toHaveLength(2)
-    expect(grantCalls[1]).toEqual(grantCalls[0])
+    expect(grantCalls).toHaveLength(1)
   } finally { await fixture.close() }
 }, 60000)
 
@@ -162,4 +161,74 @@ it('captures a nested selected child with its inherited metadata row', async () 
     expect(page.page.rows.map(row => ({ protocol: row.protocol, ref: row.ref }))).toEqual([{ protocol: 'managed', ref: codecRef }])
     expect(grants).toEqual([[codecRef.id]])
   } finally { await fixture.close() }
+}, 60000)
+
+it('refuses ready when managed retention has no port', async () => {
+  const fixture = await savedResultFixture()
+  try {
+    const controller = createSelectedForkController({ coordinator: fixture.session })
+    const prepared = await controller.prepare({ version: 2, sourceSessionId: 's1', results: 'selected-results-v1' } as never)
+    if (prepared.kind !== 'prepared') throw new Error(JSON.stringify(prepared))
+    const operation = {
+      version: 2, kind: 'session-fork-operation', prepared: prepared.prepared,
+      invocation: { version: 1, operationId: 'selected-no-port', targetSessionId: 'child', createdAt: '2026-11-06T00:00:00.000Z', requestDigest: prepared.prepared.requestDigest },
+    }
+    const outcome = await controller.execute({ operation, mode: 'begin' } as never)
+    expect(outcome).toMatchObject({ kind: 'not-issued', reason: 'unsupported' })
+    await expect(fixture.session.load('child')).rejects.toBeTruthy()
+  } finally { await fixture.close() }
+}, 30000)
+
+it('resumes a partially granted multi-batch retention at the first ungranted batch', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-gw-selected-batches-'))
+  const coordinator = createCommitCoordinator({ root })
+  const session = asSessionCoordinator(coordinator)
+  try {
+    await session.create({ sessionId: 's-batches' })
+    const synthetic = (index: number) => {
+      const hex = (suffix: number) => (index.toString(16).padStart(4, '0') + suffix.toString(16).padStart(4, '0')).padStart(64, 'b')
+      return { version: 1, id: 'ctxv1_' + hex(1), revision: hex(2), codec: 'json-utf8-v1', encodedBytes: 12, contentDigest: hex(3), completeness: 'source-limited' }
+    }
+    const events = []
+    for (let index = 0; index < 101; index++) {
+      events.push(
+        { type: 'turn/start' }, { type: 'step/start' },
+        { type: 'tool/call', callId: 'call-' + index, name: 'read', args: {} },
+        { type: 'assistant/message', text: '', toolCalls: [{ id: 'call-' + index, name: 'read', args: {} }] },
+        { type: 'tool/dispatch', callId: 'call-' + index, eventSeq: index },
+        { type: 'tool/result', callId: 'call-' + index, name: 'read', envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: '', media: [], retention: { kind: 'artifact', ref: synthetic(index) } } },
+        { type: 'step/end' }, { type: 'turn/end' },
+      )
+    }
+    await session.append('s-batches', events as never)
+    const batches: string[][] = []
+    let failSecond = true
+    const controller = createSelectedForkController({ coordinator: session,
+      contextOutput: { async grant(_access, ids) {
+        batches.push([...ids])
+        if (failSecond && batches.length === 2) { failSecond = false; throw new Error('injected second-batch refusal') }
+      } } })
+    const prepared = await controller.prepare({ version: 2, sourceSessionId: 's-batches', results: 'selected-results-v1' } as never)
+    if (prepared.kind !== 'prepared') throw new Error(JSON.stringify(prepared))
+    const operation = {
+      version: 2, kind: 'session-fork-operation', prepared: prepared.prepared,
+      invocation: { version: 1, operationId: 'selected-batches', targetSessionId: 'batch-child', createdAt: '2026-11-06T00:00:00.000Z', requestDigest: prepared.prepared.requestDigest },
+    }
+    await expect(controller.execute({ operation, mode: 'begin' } as never)).rejects.toThrow('injected second-batch refusal')
+    expect(batches.map(batch => batch.length)).toEqual([100, 1])
+    const resumed = await controller.execute({ operation, mode: 'retry' } as never)
+    expect(resumed).toMatchObject({ kind: 'ready', sessionId: 'batch-child' })
+    // The retry resumes at the first ungranted batch; the acknowledged first
+    // batch is not repeated.
+    expect(batches.map(batch => batch.length)).toEqual([100, 1, 1])
+    expect(batches[2]).toEqual(batches[1])
+    const adopted = await controller.execute({ operation, mode: 'retry' } as never)
+    expect(adopted).toMatchObject({ kind: 'adopted', sessionId: 'batch-child' })
+    expect(batches).toHaveLength(3)
+    const child = await session.load('batch-child')
+    const managed = (child.session.events as { type: string; page?: { rows?: { protocol?: string }[] } }[])
+      .filter(event => event.type === 'conversation/seed-results')
+      .flatMap(event => (event.page?.rows ?? []).filter(row => row.protocol === 'managed'))
+    expect(managed).toHaveLength(101)
+  } finally { await coordinator.close().catch(() => {}); await rm(root, { recursive: true, force: true }) }
 }, 60000)

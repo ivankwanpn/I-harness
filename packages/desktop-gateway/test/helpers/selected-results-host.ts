@@ -127,20 +127,34 @@ export async function bindProject(client: SelectedHostClient, sessionId: string,
   await client.call('desktop/session/project/bind', { sessionId, projectId: project.id })
 }
 
-/** Prepare + begin one selected-results (V2) fork through the public RPC. */
-export async function forkSelected(client: SelectedHostClient, sourceSessionId: string, targetSessionId: string, operationId: string) {
-  const prepared = await client.call('session/fork/prepare', { version: 2, sourceSessionId, results: 'selected-results-v1' }) as {
+/** Prepare one selected-results (V2) fork through the public RPC. */
+export async function prepareSelected(client: SelectedHostClient, sourceSessionId: string, targetSessionId: string, operationId: string,
+  selection?: { kind: 'completed'; atSeq?: number }) {
+  const prepared = await client.call('session/fork/prepare', { version: 2, sourceSessionId, results: 'selected-results-v1', ...(selection === undefined ? {} : { selection }) }) as {
     version: number; kind: string; core: { sourceSessionId: string; results: string }; requestDigest: string
   }
   const operation = {
     version: 2, kind: 'session-fork-operation', prepared,
     invocation: { version: 1, operationId, targetSessionId, createdAt: new Date().toISOString(), requestDigest: prepared.requestDigest },
   }
-  return { prepared, operation, begin: await client.call('session/fork/begin', { operation }) as {
-    kind: string; capture: string; sessionId: string; seedLength: number; receipt: {
-      seedDigest: string; manifestDigest: string; results: { version: number; rows: number; pages: number; digest: string }
-    }
-  } }
+  return { prepared, operation }
+}
+
+type SelectedBegin = {
+  kind: string; capture: string; sessionId: string; seedLength: number; receipt: {
+    seedDigest: string; manifestDigest: string; results: { version: number; rows: number; pages: number; digest: string }
+  }
+}
+
+/** Begin or retry one prepared operation through its real public route. */
+export async function executeSelected(client: SelectedHostClient, operation: unknown, mode: 'begin' | 'retry' = 'begin'): Promise<SelectedBegin> {
+  return await client.call(mode === 'begin' ? 'session/fork/begin' : 'session/fork/retry', { operation }) as SelectedBegin
+}
+
+/** Prepare + begin one selected-results (V2) fork through the public RPC. */
+export async function forkSelected(client: SelectedHostClient, sourceSessionId: string, targetSessionId: string, operationId: string) {
+  const { prepared, operation } = await prepareSelected(client, sourceSessionId, targetSessionId, operationId)
+  return { prepared, operation, begin: await executeSelected(client, operation) }
 }
 
 /** Managed rows declared by the child's immutable V3 seed pages. */
