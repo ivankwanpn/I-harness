@@ -535,6 +535,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 把最後一案的 backend 注入從 post-bind assignment 改為建立 backend 時的 `wrapOwnedBatch`/`wrapOwnedReconcile`，變數（facts/key）提前宣告；不再觸發 descriptor identity 差異造成的 cleanup 路徑。
 - 驗證：`retained-hook-recovery` **3/3**（連跑兩次），executor typecheck 0。
 - 無產品改動；executor 殘餘約 **16**。
+#### 第八十八批：legacy state 現況再量測
+
+- `retained-state-cold` 現在已 **2/3 綠**（absent、job 通過；source=end 仍 `TASK_TRANSITION_FAILED`，cause `TASK_TRANSITION_RECOVERY_REQUIRED`）。這是近批 runtime-context/document 修正後的新進展。
+- source=end 的 end 事實要求 parent task document v3 一致性；cold reopen 時 task doc 仍是 v2 state 或不存在，`consistency` 失敗。
+- `retained-state-negative` 4 案仍全部 TASK_TRANSITION_FAILED；把 state 改到 `state-parent` 後仍失敗（端到端仍缺 task doc bootstrap）。
+- 需產品在 managed document 首次寫入/建立時持久化 v3 task document（或 cold reopen 可由 session file 重建 empty task doc），再談 state 驗證。
+- 工作樹已回乾淨。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
