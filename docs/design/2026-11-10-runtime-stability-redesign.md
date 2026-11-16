@@ -269,6 +269,12 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - triage（未修）：
   - `inherited-context-budget`：parent turn 結束後以 prepared spawn 建立背景 child，`dispatch` 回 `Fact admission requires recovery or was cancelled`；需釐清 turn 後 parent task admission 的 seam。
   - `publication-pins` 的 `first-pin`／`first-access` delete cuts：child producer 在 `context-output/service.ts:858` 拋 `Original deletion recovery required` 而崩潰，屬產品刪除 recovery 缺口。
+#### 第三十八批：runtime-context snapshot 的現行形狀
+
+- `skills-section` 與 `subagent-stale-section` 的 helper 仍以舊 `user/message` + plugin source 讀 snapshot；現行產品以獨立 `runtime/context` 記錄發布，sections 需自行渲染 `## <name>` 標題。兩檔改為讀 `runtime/context`（stale 檔保留空 sections 記錄，才能觀察 section 移除）。
+- `skills-section` 改由真實 `agent.agent.run` admission 發布（原本手動 emit `agent/pre-step` 已不再觸發 publish），並提供三個 mock responses。
+- `subagent-stale-section` 第二案在 idle 視窗前等待 child `running` 與 child model 第一次呼叫（calls=3），避免 child turn/start 與 model call 落入 idle 量測。
+- 結果：**1/1、3/3 通過**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

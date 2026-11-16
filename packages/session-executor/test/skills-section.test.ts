@@ -4,7 +4,6 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createSession, type Session, type SessionEvent } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
-import { RUNTIME_CONTEXT_SOURCE_PLUGIN } from "@i-harness/runtime-context"
 import { createSessionAssembly } from "../src/assembly.ts"
 import { rmWorkspaceSync } from "./helpers.ts"
 
@@ -25,12 +24,12 @@ function writeSkill(root: string, name: string, description: string): void {
 }
 
 function snapshots(session: Session): string[] {
+  // Runtime context is published as its own `runtime/context` record (the
+  // legacy plugin-source user/message shape is no longer used).
   return session.events
-    .filter(
-      (e): e is Extract<SessionEvent, { type: "user/message" }> =>
-        e.type === "user/message" && e.source?.kind === "plugin" && e.source.plugin === RUNTIME_CONTEXT_SOURCE_PLUGIN,
-    )
-    .map((e) => e.text)
+    .filter((e): e is Extract<SessionEvent, { type: "runtime/context" }> => e.type === "runtime/context")
+    .filter(e => (e.sections ?? []).length > 0)
+    .map(e => e.sections.map(section => `## ${section.name}\n\n${section.text}`).join("\n\n"))
 }
 
 describe("the skills catalogue through the assembly (M6 C1)", () => {
@@ -54,13 +53,13 @@ describe("the skills catalogue through the assembly (M6 C1)", () => {
       const assembly = await createSessionAssembly({
         workspace: ws,
         session,
-        model: createMockClient([{ role: "assistant", text: "ok" }]),
+        model: createMockClient([{ role: "assistant", text: "ok" }, { role: "assistant", text: "ok" }, { role: "assistant", text: "ok" }]),
         approveAll: true,
       })
       try {
-        const step = async (): Promise<void> => {
-          await assembly.ctx.emit("agent/pre-step", { task: "step", session: assembly.session })
-        }
+        // The catalogue snapshot is published by the real main admission
+        // (instruction manager reconcile), not by a synthetic pre-step emit.
+        const step = async (): Promise<void> => { await assembly.agent.run("step") }
 
         await step()
         const first = snapshots(session)
@@ -69,18 +68,11 @@ describe("the skills catalogue through the assembly (M6 C1)", () => {
         expect(text).toContain("## skills\n\n- `alpha` — Alpha skill")
         expect(text.indexOf("## instructions")).toBeGreaterThanOrEqual(0)
         expect(text.indexOf("## instructions")).toBeLessThan(text.indexOf("## skills"))
-        // Harness bookkeeping, not something the user typed (M59's internal flag,
-        // the same one every runtime-context snapshot carries).
-        expect(session.events.find((e) => e.type === "user/message")).toMatchObject({
-          type: "user/message",
-          internal: true,
-          source: { kind: "plugin", plugin: RUNTIME_CONTEXT_SOURCE_PLUGIN },
-        })
+        // The harness publishes the snapshot as a runtime-context record.
+        expect(session.events.find((e) => e.type === "runtime/context" && (e.sections ?? []).length > 0)).toBeDefined()
 
-        // The set is unchanged: the next boundary appends NOTHING.
-        const afterFirstStep = session.events.length
+        // The set is unchanged: the next admission appends NOTHING.
         await step()
-        expect(session.events.length).toBe(afterFirstStep)
         expect(snapshots(session)).toHaveLength(1)
 
         // One new skill ⇒ exactly one new snapshot, carrying both lines.

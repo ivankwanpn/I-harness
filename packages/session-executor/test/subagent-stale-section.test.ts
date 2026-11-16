@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest"
 import { createSession, type Session, type SessionEvent } from "@i-harness/core-session"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import { createMockClient } from "@i-harness/llm-mock"
-import { RUNTIME_CONTEXT_SOURCE_PLUGIN } from "@i-harness/runtime-context"
 import { createSessionAssembly } from "../src/assembly.ts"
 
 // W11, end to end, through the REAL assembly — the wiring the unasked path
@@ -27,12 +26,11 @@ function sleep(ms: number): Promise<void> {
 }
 
 function snapshots(session: Session): string[] {
+  // Runtime context is published as its own `runtime/context` record; an empty
+  // section set is published too, so removal is observable in the artifact.
   return session.events
-    .filter(
-      (e): e is Extract<SessionEvent, { type: "user/message" }> =>
-        e.type === "user/message" && e.source?.kind === "plugin" && e.source.plugin === RUNTIME_CONTEXT_SOURCE_PLUGIN,
-    )
-    .map((e) => e.text)
+    .filter((e): e is Extract<SessionEvent, { type: "runtime/context" }> => e.type === "runtime/context")
+    .map(e => (e.sections ?? []).map(section => `## ${section.name}\n\n${section.text}`).join("\n\n"))
 }
 
 /** A model routed by message content (the shape assembly.test.ts's Task-12
@@ -150,6 +148,13 @@ describe("W11 subagents section through the assembly", () => {
     })
     try {
       await assembly.agent.run("spawn a helper")
+      // The child's own turn/start can land just after the parent run returns;
+      // wait for the observable running state so the idle window below really
+      // begins after every child event.
+      await vi.waitFor(() => expect(assembly.tasks().some((row) => row.id === "root/helper" && row.status === "running")).toBe(true))
+      // The child's first model request may start just after the task row flips
+      // to running; include it in the idle baseline.
+      await vi.waitFor(() => expect(calls).toBe(3))
       // The child was spawned BEFORE this run returned, so the idle window
       // below is a LOWER BOUND on its age: 400ms of waiting means it has been
       // running at least 8x the 50ms threshold while the session is idle.
