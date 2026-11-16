@@ -519,6 +519,12 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - `untilStarted`/`dispatched` 的 5s waitFor 與 test 的 15s timeout 在高負載不足；提高到 30s/60s 後，foreground/target/all/subagent-job 4 個 family 全數通過（原本 foreground 也失敗）。
 - 只剩 `tasks` family 在 body 通過後，`assembly.dispose()` 回 `Subagent settlement requires recovery`（cleanup incomplete）；retain background spawn handles、等待 tasks completed 都未解，屬產品 task settlement 缺口。
 - 檔案仍紅（13 pass/1 fail），但失敗面由 2 案縮到 1 案；timeout 校正已提交。
+#### 第八十五批：task settlement / legacy state / project child 探測
+
+- `event-driven-steering` tasks family：dispose 量到 `Original entry cleanup incomplete` 內層為 `Earlier owned task save requires resolution`；retain background spawn handles、等待 tasks completed 均未解，需在 subagent owner close 前做 task persistence recovery（spawn.ts 已有同錯誤的單點 recover，dispose 路徑缺）。
+- `retained-state-cold`：以 `fromJSONL` 直讀 parent session 可避開 TASK_TRANSITION，但 `restoreState` 的 `qualifiedParent` 要求 managed fact owner（`isManagedFactOwner(parent, owner)`），nondurable owner 會讓 committed 案變 recovery-required；仍需真正的 managed parent document。
+- `project-context`：direct assembly 使用 `createUnmanagedTaskChildHost`，其 project 固定 `unmanaged`（host 明確拒絕 project binding），child 工具權限仍是 workspace a，followup 寫 c 被拒；需 service 級 project host 或 unmanaged host 的 live authority 設計。
+- 三者皆產品/架構層，未合併。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
