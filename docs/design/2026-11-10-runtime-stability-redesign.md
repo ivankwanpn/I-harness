@@ -221,6 +221,15 @@ ative-context-output（spy 到的 ExecService.run 未被呼叫）與 mixed-reten
 - `execution-fs-ack`：pause seam 仍以最終路徑比對 `writeFile`，但 `writeFileAtomic` 先寫同目錄隱藏 `.<name>.<hex>.tmp` 再 rename，因此 `entered` 永不觸發（表現為 60 秒逾時）。改為暫停實際 sibling temp 寫入，仍讓 revocation 與進行中的寫入 join；**2/2 通過**。
 - `resident-instruction-activation`：`prior-result` 案在回合完成後才 patch `entry.resultCapture.settle`，但現行 drive 在回合結束前就 settle 前一結果，patch 永遠不會被呼叫。改為透過 task-result-retention seam 持有原始回合的 result settlement，在 settle 進行中排入 followup、撤銷 new work，再釋放；驗證撤銷後不新增 sourceInputs／capture／generation。**22/22 通過**。
 - `fork-handoff` 第一案仍未修復：第一次 fork 成功；第二次（nested，source=child）在 header issued 之後卡在 `context-output` 的 `confirmLegacyForkTransfer`（legacy L1 transfer），15 秒 timeout。已用正常 CLI host、真實 coordinator、逐段 instrument 證實等待位置；後續需單獨處理 nested legacy transfer 的死鎖。
+#### 第三十批：P1 持久化群組 triage（五案逐一）
+
+本批只做正常入口重現與等待／錯誤來源定位，尚未提交產品修正：
+
+- `delivery-active-wait` 第二案：19.9 秒後失敗 `Original handoff waited for a later notification save`；later-foreground-save gate 未被放行，屬 foreground handoff 被後續 notification save 阻擋的真實排序問題。
+- `delivery-lifecycle`（unclassified task save 案）：body 全部斷言通過（含 releaseTaskSave、same-source settlement、terminal delivery），但 `f.close()` 仍帶回 `Controlled original task document save refused`（EPERM）與 `Subagent settlement requires recovery`；cleanup debt 在成功復原後仍被 join，需釐清產品生命週期。
+- `managed-runtime-context`（unknown publication + archive cleanup 案）：失敗錯誤為 `committedFactSeqs(not-issued FACT_PRECONDITION_STALE)`，`probe.appends=0`，admit 在 append 前即被 guard 拒絕；已排除 fixture 的 `Set.delete(undefined)` 撞針，guard/currentness 來源待續查。
+- `service-instruction-close`（cold reader cleanup 案）：期待 `{kind:'unavailable'}`，實際仍讀到 page；屬已知 cold reader 契約待產品決策。
+- `title-action`（post-turn row 案）：目前提交鏈在 post-turn callback 持有時序列化，第二個 submit 尚未取得 queue row；修正此期待後，`cancelRunning` 於 post-turn 期間取消會留下 pending managed frame，下一個 submit 在 `settleFinishedActions` 以 `FACT_RECOVERY_REQUIRED` 失敗（managed-document.ts:782：pending frame 的 authorization action 在 post-turn finish 後不再 eligible）。屬產品 recovery gap。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
