@@ -287,7 +287,11 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       assertOutsideUse(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close')},
       async drain(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close');if(active)await active.catch(()=>{})},
       revoke(){retired=true;original?.revoke()},
-      async close(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close');retired=true;original?.revoke();if(active)await active.catch(()=>{});if(legacyTransfer)await legacyTransfer.close();projectPreparation?.close();if(original)await original.close()},
+      async close(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close');retired=true;original?.revoke();if(active)await active.catch(()=>{});try{if(legacyTransfer)await legacyTransfer.close();projectPreparation?.close();if(original)await original.close()}finally{
+        // Cleanup settles, so the same operation may rebuild a holder. A
+        // concurrent duplicate stays refused while this key is present.
+        if(selectedOperations.get(key)===encoded)selectedOperations.delete(key)
+      }},
     })
     return holder
   }
@@ -382,7 +386,16 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
         })
       },
     })
-  const createSelectedSourceHolder=(input:unknown)=>{assertSelectedResultsNodeAdmission(input);if(!selectedComposer)throw Error('Selected source unavailable');return selectedComposer.create(input)}
+  const createSelectedSourceHolder=(input:unknown)=>{
+    assertSelectedResultsNodeAdmission(input);if(!selectedComposer)throw Error('Selected source unavailable')
+    const key=readSelectedResultsOperation(input).invocation.operationId,owned=selectedOperations.has(key)
+    try{return selectedComposer.create(input)}catch(error){
+      // Construction failed before a holder existed: never retain the operation
+      // identity it may have registered, or a later retry could never rebuild.
+      if(!owned&&selectedOperations.has(key))selectedOperations.delete(key)
+      throw error
+    }
+  }
   // The supplied service is Gateway's fast path. Capture broker currentness
   // around its real readers as source identity alone cannot detect ABA.
   async function guardedRead<T>(sessionId:string, operation:()=>Promise<T>):Promise<T>{

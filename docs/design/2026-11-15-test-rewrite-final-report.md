@@ -198,3 +198,12 @@
 - 本輪新增全綠：`execution-authority`、`main-instruction-construction`、`delivery-retry`、`owned-code-service`、`owned-code-nested-shell`、`retained-child-scope`、`wsl-assembly`、`retained-code-output`（全跑時因 async cell 回到 running，已補 `yield_time_ms:30000` 修正）。
 - 仍存 38 項／26 檔；product 級主因：title settlement source ownership、delivery close/handoff recovery、publication-pins deletion recovery、retained coordinator cleanup。
 - 證據：`p1-executor-full2.json`、`p1-executor-full2-fails.json`、`p1-executor-full2.log`。
+
+## 九、P2（issue 125）交付：JSONL selected-results 公開 route
+
+- 新增 `createJsonlSelectedForkController`：JSONL store 的 v2 selected fork 走專用 `public-results-v1` route（`captureSelectedResultsRoute`），以 selected-source holder 完成 `captureFirst`→`publishWarm`；durable operation outcome 讓重試回 `adopted`＋原 receipt，不重複 capture；project intent 漂移回 `not-issued policy`。
+- 既有 target 不再重建，改以 `inspectColdSelectedTarget`＋`beginColdSelectedFinalization` 做 cold qualification（status ready/conflict/blocked 均為契約合法分類）；partial publication 回誠實 blocked token（`phase:'header'`、`manifest:'unknown'`），重啟後 cold 可 adopted。
+- `context-runtime`：holder cleanup 完成後釋放 operation key，同一 operation 可重試、並行 duplicate 仍拒絕；construction 失敗不殘留 key。
+- `host`：JSONL 也安裝 selected-fork controller、傳遞 `ForkExecutionControl.signal`、關機先 join controller 再關 native context；測試 helper `storedSession` 支援 JSONL read-only coordinator。
+- 驗證：新測試 3 檔（host-jsonl-fork 3、recovery 3、holder-retry 2）＋既有 selected-fork 回歸（commit-log fork/read/recovery、selected-source-holder、selected-fork-seed）共 **42/42**；host 回歸 4 檔 **15/15**；gateway typecheck 0；package boundaries PASS（128=baseline）。
+- 已知 kernel 缺口（已誠實回 blocked／not-issued，未造假）：同 process warm header 發佈被 blocked 無法 cold resume（重啟後可）；capture reservation 已寫但 header 未發的 crash 視窗無 resume API；outcome persist 失敗時效果已 commit 但同 process retry 可能 blocked。

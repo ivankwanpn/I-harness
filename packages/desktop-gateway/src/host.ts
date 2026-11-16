@@ -19,7 +19,7 @@ import { foldGoal } from "@i-harness/goal"
 import { createIsolatedReviewerPool, type GuardianIsolatedConfig } from "@i-harness/guard-approval"
 import { isOwnedTitleSnapshot, maybeAutoTitle } from "@i-harness/session-title"
 import { createForkSessionController, createSessionCoordinator } from "@i-harness/session-persistence"
-import { createSelectedForkController } from "./selected-fork.ts"
+import { createJsonlSelectedForkController, createSelectedForkController } from "./selected-fork.ts"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createJsonlCommitCoordinator } from "@i-harness/session-persistence-jsonl/internal/commit-coordinator"
 import { asSessionCoordinator } from "@i-harness/session-persistence/internal/commit-facade"
@@ -606,24 +606,34 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const forkController=createForkSessionController(coordinator,createGatewayForkHost({workspace:options.workspace,coordinator,projects,nativeContext,
     releaseReadyTarget: !commitLogStore,
     assertAvailable(){if(shutdownRequested)throw new Error('Desktop host is closing')}}))
-  // Selected-results (v2) forks are host-supported only on the commit log: the
-  // controller captures the v3 seed from the store's own snapshot.
+  // Selected-results (v2) forks are host-supported on both stores. The commit
+  // log captures the v3 seed from the store's own snapshot; the JSONL store uses
+  // the dedicated public `public-results-v1` route through its selected-source
+  // holder and the original cold qualification.
+  /** The commit-log path keeps its historical private intent for an unbound
+   *  source. The original broker only prepares project or unassigned bootstrap
+   *  intents, so the JSONL path names an unbound source explicitly unassigned. */
+  const selectedProjectOf = (absent: { kind: 'unmanaged' } | { kind: 'unassigned' }) => async (sourceSessionId: string) => {
+    const value = await coordinator.getDocument('desktop-session-project-' + createHash('sha256').update(sourceSessionId).digest('hex')) as { projectId?: string } | undefined
+    return typeof value?.projectId === 'string' ? { kind: 'project' as const, projectId: value.projectId } : absent
+  }
   const selectedFork = commitLogStore ? createSelectedForkController({ coordinator,
     contextOutput: nativeContext.contextOutput,
-    async projectOf(sourceSessionId) {
-      const value = await coordinator.getDocument('desktop-session-project-' + createHash('sha256').update(sourceSessionId).digest('hex')) as { projectId?: string } | undefined
-      return typeof value?.projectId === 'string' ? { kind: 'project', projectId: value.projectId } : { kind: 'unmanaged' }
-    },
+    projectOf: selectedProjectOf({ kind: 'unmanaged' }),
     taskDocumentEmpty: () => taskDocumentStorageContract.empty(),
     assertAvailable() { if (shutdownRequested) throw new Error('Desktop host is closing') },
-  }) : undefined
+  }) : createJsonlSelectedForkController({ coordinator, runtime: nativeContext,
+    projectOf: selectedProjectOf({ kind: 'unassigned' }),
+    assertAvailable() { if (shutdownRequested) throw new Error('Desktop host is closing') },
+  })
   const base = createSdkServer(service, {
     readResultPage: conversationRead,
     supportsResultDependencyMembership: true,
     coordinator,
     prepareForkSession:request=>forkController.prepare(request),
     executeForkSession:(command,control)=>forkController.execute(command,control),
-    ...(selectedFork ? { prepareSelectedForkSession: request => selectedFork.prepare(request), executeSelectedForkSession: command => selectedFork.execute(command) } : {}),
+    prepareSelectedForkSession: request => selectedFork.prepare(request),
+    executeSelectedForkSession: (command, control) => selectedFork.execute(command, control),
     modelState: async (sessionId) => {
       await coordinator.profile(sessionId)
       return service.modelState(sessionId)
@@ -727,6 +737,9 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         await once("router", () => router.close())
         await once("execution observation", () => executionObservation.close(cleanupOperation))
         await once('fork controller',()=>forkController.close())
+        // Join every selected-fork holder before the native context that owns
+        // its source claims is closed; a blocked close keeps its debt reported.
+        await once('selected fork controller',()=>selectedFork.close?.()??Promise.resolve())
         await once("coding plans", () => codingPlans.close())
         await once("WSL settings", () => wslSettings.close())
         await once("session subagents", () => sessionSubagents.close())

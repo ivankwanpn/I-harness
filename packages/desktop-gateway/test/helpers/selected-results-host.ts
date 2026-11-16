@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isRpcSuccess, type RpcMessage } from '@i-harness/sdk'
 import { controlledModel } from '../../../session-executor/test/controlled-model.ts'
+import { createReadOnlySessionCoordinator } from '@i-harness/session-persistence'
+import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createJsonlCommitCoordinator } from '../../../session-persistence-jsonl/src/commit-coordinator.ts'
 import { createDesktopHost } from '../../src/host.ts'
 
@@ -38,15 +40,28 @@ export type SelectedHostClient = {
 
 /** Session-store facts written by the real host, read back through the store. */
 export type StoredResultRef = { callId?: string; seq: number; ref: { id: string; revision: string; contentDigest: string; encodedBytes: number } }
-export async function storedSession(sessionDir: string, sessionId: string) {
+type StoredSessionEvent = { type: string; name?: string; callId?: string; seq?: number; page?: { ordinal: number; rows?: { protocol?: string; ref?: { id?: string }; original?: unknown }[] }; results?: unknown; version?: number; digest?: string; envelope?: { retention?: { kind?: string; ref?: StoredResultRef['ref'] } } }
+type StoredSessionHeader = { semanticSeed?: { version?: number; codec?: string; operationId?: string; requestDigest?: string } }
+function summarizeStoredSession(header: StoredSessionHeader, events: StoredSessionEvent[]) {
+  const results: StoredResultRef[] = events.filter(event => event.type === 'tool/result' && event.name === 'read')
+    .flatMap(event => event.envelope?.retention?.kind === 'artifact' && event.envelope.retention.ref ? [{ callId: event.callId, seq: event.seq!, ref: event.envelope.retention.ref }] : [])
+  const artifactResultCount = events.filter(event => event.type === 'tool/result' && event.envelope?.retention?.kind === 'artifact').length
+  return { header, events, results, artifactResultCount }
+}
+/** Read one session through its own store. The JSONL store uses a read-only
+ *  coordinator (never the commit-log generation reader). */
+export async function storedSession(sessionDir: string, sessionId: string, store: SelectedHostStore = 'commit-log') {
+  if (store === 'jsonl') {
+    const reader = createReadOnlySessionCoordinator(createJsonlBackend(sessionDir), { lock: { enabled: false } })
+    try {
+      const session = (await reader.snapshot(sessionId)).session
+      return summarizeStoredSession(session.header as StoredSessionHeader, session.events as StoredSessionEvent[])
+    } finally { await reader.close() }
+  }
   const observer = createJsonlCommitCoordinator(sessionDir, { lock: { enabled: true, lockRoot: sessionDir } })
   try {
     const { session } = await observer.load(sessionId)
-    const events = session.events as { type: string; name?: string; callId?: string; seq?: number; page?: { ordinal: number; rows?: { protocol?: string; ref?: { id?: string }; original?: unknown }[] }; results?: unknown; version?: number; digest?: string; envelope?: { retention?: { kind?: string; ref?: StoredResultRef['ref'] } } }[]
-    const results: StoredResultRef[] = events.filter(event => event.type === 'tool/result' && event.name === 'read')
-      .flatMap(event => event.envelope?.retention?.kind === 'artifact' && event.envelope.retention.ref ? [{ callId: event.callId, seq: event.seq!, ref: event.envelope.retention.ref }] : [])
-    const artifactResultCount = events.filter(event => event.type === 'tool/result' && event.envelope?.retention?.kind === 'artifact').length
-    return { header: session.header as { semanticSeed?: { version?: number; codec?: string; operationId?: string; requestDigest?: string } }, events, results, artifactResultCount }
+    return summarizeStoredSession(session.header as StoredSessionHeader, session.events as StoredSessionEvent[])
   } finally { await observer.close() }
 }
 
@@ -144,6 +159,7 @@ type SelectedBegin = {
   kind: string; capture: string; sessionId: string; seedLength: number; receipt: {
     seedDigest: string; manifestDigest: string; results: { version: number; rows: number; pages: number; digest: string }
   }
+  reason?: string; token?: { version: number; phase: string; manifest?: string; manifestDigest?: string }
 }
 
 /** Begin or retry one prepared operation through its real public route. */

@@ -343,6 +343,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 修正：`createMainInstructionManager` 的 `cwd` 改接受 `string | (() => string)`，authority containment／host.create／prepare targets／scope 全部用即時 `cwdNow()`；assembly 主 manager 傳 `() => opts.projectContext?.()?.primaryRoot ?? opts.workspace`。
 - project-context 的兩個 service getter 案原本卡在 instructions authority，現在前進到 write 需要 approval；fixture service 補 `approveAll: true` 後通過。**project-context 9/10**（僅剩 child followup live scope）。
 - 回歸：`skills-section`、`main-instruction-construction`、`subagent-stale-section` 仍綠；typecheck 0。
+#### 第五十三批：P2 issue 125 JSONL public-results-v1 route
+
+- 新增 `createJsonlSelectedForkController`（selected-fork.ts）：`public-results-v1` route、holder captureFirst/publishWarm、durable outcome/重試 adopted、project drift policy、cold qualification 與誠實 blocked token；`context-runtime` 清理 operation key；`host` JSONL 安裝 controller 並於 shutdown join；測試 helper store-aware。
+- 驗證：新測試＋既有 selected-fork 回歸 8 檔 42/42、host 回歸 4 檔 15/15、gateway typecheck 0、boundary PASS。
+- kernel 殘留缺口：warm blocked partial publication 無同 process resume；reservation→header crash 視窗無 resume；outcome persist 失敗時 retry 可能 blocked（效果已 commit）。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
