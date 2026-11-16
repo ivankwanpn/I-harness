@@ -320,6 +320,10 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 
 - 「failed initial input close」案：產品現在把失敗的 mounted environment 保留給 `retryCleanup` 的顯式重試，headless 失敗當下 `closeCalls` 為 0；改斷言 0（retry 後仍為 2，`policy.ready()` 於重試前 reject）。同檔第二案（service 建構失敗）仍由 `service.close()` 擁有 outer environment，維持 `closeCalls=1`。**10/10 通過**，typecheck 0。
 - 同輪 triage：`owned-code-service` 的 private code delivery 在 `code/end` 後 readiness 以 `FACT_CLOSED` 退役，未喚醒持續模型請求（產品 delivery 缺口）；`managed-runtime-context` unknown publication 分類為 `FACT_PRECONDITION_STALE`。
+#### 第四十八批：delivery-retry 的預期 cleanup debt
+
+- falsey task-parent ack 測試刻意注入保存失敗；產品在 `code`/delivery 完成後保留 recovery debt 是**預期行為**（warnings 已明示 `Task notification…`／`Required source drain needs recovery`）。delivery fixture 新增 `expectCleanupDebt` 選項：只有當每個 close failure 都匹配 recovery/unresolved/cleanup/FACT_ 時才容忍，並把失敗寫入 `cleanup-<root>` evidence，**不做吞掉或放寬 delivery 斷言**。`delivery-retry` 兩案啟用後 **3/3 通過**，typecheck 0。
+- triage：`owned-code-service` 的 readiness FACT_CLOSED 警告經 stack 證實發生在 **teardown**（document close 後），不是 wake 失敗原因；實際 wake 缺口另尋。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

@@ -54,7 +54,7 @@ it.each([undefined, false])('committed receiver input wakes once despite falsey 
     `[i-harness] ${prefix}: AggregateError: Task notification and original progress cleanup failed`,
     `[i-harness] ${prefix}: AggregateError: Required source drain needs recovery`,
   ])
-  const f = await createDeliveryFixture({ expectedWarnings: warnings })
+  const f = await createDeliveryFixture({ expectedWarnings: warnings, expectCleanupDebt: true })
   let failures = 0
   const create = vi.mocked(createOwnedDocumentWrite).getMockImplementation()!
   vi.mocked(createOwnedDocumentWrite).mockImplementation(input => {

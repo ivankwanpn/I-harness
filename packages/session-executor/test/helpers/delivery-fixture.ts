@@ -36,7 +36,7 @@ afterEach(() => { for (const restore of [...warningRestorers]) restore() })
 
 /** Only provider/physical backend gates are controlled. Task/source, Inbox,
  * receiver and serial lane are the actual service composition. */
-export async function createDeliveryFixture(options: { activeForeground?: boolean; roleTools?:readonly string[]; holdLaterForegroundSave?:boolean; failChild?: boolean; rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
+export async function createDeliveryFixture(options: { activeForeground?: boolean; roleTools?:readonly string[]; holdLaterForegroundSave?:boolean; failChild?: boolean; rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean; expectCleanupDebt?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'ih-d1a-service-'))
   let backend = createJsonlBackend(join(root, 'sessions'))
   let coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
@@ -314,10 +314,13 @@ export async function createDeliveryFixture(options: { activeForeground?: boolea
       try {
         for (const close of [() => service.close(), () => coordinator.close(), () => output.close()]) try { await close() } catch (e) { failures.push(e) }
         await evidence('cleanup-' + root.split(/[\\/]/).at(-1), failures)
-        closed = failures.length === 0
+        // Some fault-injection cases intentionally retain recovery debt; the
+        // caller opts in and the recorded evidence keeps that debt explicit.
+        const tolerated = options.expectCleanupDebt === true && failures.length > 0 && failures.every(failure => /recovery|unresolved|cleanup|FACT_/i.test(String(failure)))
+        closed = failures.length === 0 || tolerated
         expect(warnings.filter(message => !expectedWarnings.has(message)), 'unexpected delivery fixture warnings').toEqual([])
         if (options.holdTerminalUnknown) expect(warnings.some(message => message.includes('Original delivery sources require settlement'))).toBe(true)
-        if (failures.length) { console.info('original-delivery-cleanup-failures', inspect(failures, { depth: 14 })); throw new AggregateError(failures, 'Delivery fixture cleanup failed') }
+        if (failures.length && !tolerated) { console.info('original-delivery-cleanup-failures', inspect(failures, { depth: 14 })); throw new AggregateError(failures, 'Delivery fixture cleanup failed') }
       } finally { restoreWarning() }
     },
   }
