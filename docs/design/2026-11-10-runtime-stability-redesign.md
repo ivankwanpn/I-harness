@@ -275,6 +275,10 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - `skills-section` 改由真實 `agent.agent.run` admission 發布（原本手動 emit `agent/pre-step` 已不再觸發 publish），並提供三個 mock responses。
 - `subagent-stale-section` 第二案在 idle 視窗前等待 child `running` 與 child model 第一次呼叫（calls=3），避免 child turn/start 與 model call 落入 idle 量測。
 - 結果：**1/1、3/3 通過**。
+#### 第三十九批：Code Mode 完成觀察與 native ref 重播
+
+- `native-context-lifecycle`：產品現在以 `code/output` session event 發布 Code Mode 的 managed artifact；`code_exec` 的 model-facing 結果是 pending observation（`status:'running'`），必須再以真實 `code_wait` 觀察完成後，artifact ref 才會進入下一個 model request。fixture 的 controlled model 增加 step3：從上一個 tool 訊息取 `cell_id` 呼叫 `code_wait(yield_time_ms:30000)`，五種 protocol framing 的 tool 數量由 2 改為 3；direct artifact ref 仍逐一驗證。**1/1 通過**。
+- triage（未修）：`bounded-file-production` 的 child 讀頁現在收到 artifact envelope（`retention.kind='artifact'`、僅 4KB preview）而非 inline page JSON；child 需以 `context_output_read` 取回頁面，屬 fixture 需改走新 model-facing 入口。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

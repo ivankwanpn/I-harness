@@ -27,6 +27,13 @@ it('replays actual native Agent and Code Mode refs across five protocol framings
     requests.push(structuredClone(request));step++
     if(step===1)yield{type:'tool_call',call:{id:'direct-native',name:'fixture_long',args:{}}}
     else if(step===2)yield{type:'tool_call',call:{id:'code-native',name:'code_exec',args:{code:'text("x".repeat(20000)+"CODE_MIDDLE"+"y".repeat(20000));',max_output_tokens:16}}}
+    else if(step===3){
+      // A real Code Mode caller observes the running cell; only then does the
+      // completed output (with its managed artifact) reach the next request.
+      const tool=request.messages.filter(message=>message.role==='tool').at(-1)
+      const observation=JSON.parse(String((tool as {content?:unknown}).content)) as {cell_id?:string;cellId?:string}
+      yield{type:'tool_call',call:{id:'wait-native',name:'code_wait',args:{cell_id:observation.cell_id ?? observation.cellId,yield_time_ms:30000}}}
+    }
     else yield{type:'text/chunk',text:'Finished native capture.'}
     yield{type:'end'}
   })
@@ -45,7 +52,7 @@ it('replays actual native Agent and Code Mode refs across five protocol framings
     // plain object. These independent wire replays need a fresh live signal.
     const replay={...requests.at(-1)!,signal:new AbortController().signal}
     const tools=replay.messages.filter(message=>message.role==='tool')
-    expect(tools).toHaveLength(2)
+    expect(tools).toHaveLength(3)
     const envelopes=tools.map(message=>JSON.parse(String((message as {content?:unknown}).content)) as {retention?:{kind:string;ref?:Record<string,unknown>};textRetention?:{envelope?:{retention?:{kind?:string;ref?:Record<string,unknown>}}}})
     const directEnvelope=envelopes.find(envelope=>envelope.retention?.kind==='artifact')
     const directRef=directEnvelope?.retention?.ref as {id:string;revision:string;codec:string;encodedBytes:number;contentDigest:string;completeness:string;version:1}
@@ -67,19 +74,19 @@ it('replays actual native Agent and Code Mode refs across five protocol framings
     const [responses,chat,anthropic,gemini,bedrock]=bodyRequests
     const responseCalls=responses!.input.filter((item:any)=>item.type==='function_call')
     const responseResults=responses!.input.filter((item:any)=>item.type==='function_call_output')
-    expect(responseResults).toHaveLength(2)
+    expect(responseResults).toHaveLength(3)
     expect(responseResults.map((item:any)=>item.call_id)).toEqual(responseCalls.map((item:any)=>item.call_id))
     const chatCalls=chat!.messages.flatMap((item:any)=>item.tool_calls??[])
-    expect(chatCalls).toHaveLength(2)
+    expect(chatCalls).toHaveLength(3)
     expect(chat!.messages.filter((item:any)=>item.role==='tool').map((item:any)=>item.tool_call_id)).toEqual(chatCalls.map((item:any)=>item.id))
     const anthropicBlocks=anthropic!.messages.flatMap((item:any)=>Array.isArray(item.content)?item.content:[])
-    expect(anthropicBlocks.filter((item:any)=>item.type==='tool_result')).toHaveLength(2)
+    expect(anthropicBlocks.filter((item:any)=>item.type==='tool_result')).toHaveLength(3)
     expect(anthropicBlocks.filter((item:any)=>item.type==='tool_result').map((item:any)=>item.tool_use_id)).toEqual(anthropicBlocks.filter((item:any)=>item.type==='tool_use').map((item:any)=>item.id))
     const geminiParts=gemini!.contents.flatMap((item:any)=>item.parts)
-    expect(geminiParts.filter((item:any)=>item.functionResponse)).toHaveLength(2)
+    expect(geminiParts.filter((item:any)=>item.functionResponse)).toHaveLength(3)
     expect(geminiParts.filter((item:any)=>item.functionResponse).map((item:any)=>item.functionResponse.name)).toEqual(geminiParts.filter((item:any)=>item.functionCall).map((item:any)=>item.functionCall.name))
     const bedrockBlocks=bedrock!.messages.flatMap((item:any)=>item.content)
-    expect(bedrockBlocks.filter((item:any)=>item.toolResult)).toHaveLength(2)
+    expect(bedrockBlocks.filter((item:any)=>item.toolResult)).toHaveLength(3)
     expect(bedrockBlocks.filter((item:any)=>item.toolResult).map((item:any)=>item.toolResult.toolUseId)).toEqual(bedrockBlocks.filter((item:any)=>item.toolUse).map((item:any)=>item.toolUse.toolUseId))
     for(const body of bodyRequests){expect(JSON.stringify(body)).toContain(directRef.id);expect(JSON.stringify(body)).toContain(codeRef.id);expect(JSON.stringify(body)).not.toContain('context/result-ref')}
     restoreControlledTransport()
