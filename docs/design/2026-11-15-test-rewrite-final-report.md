@@ -114,6 +114,17 @@
 舊基線 86 → 104（+18，10 檔）：其中 +20 是 `IH_TASK_D_PREDECESSOR_FIXTURES` 執行環境差異（基線該檔 9 項實際執行、本次未配置）、+1 是 pwsh App Execution Alias 在 Node `existsSync` 下不可見（環境漂移），-3 是條件不再成立。逐項原因、condition、原始碼行號與日誌位置在 `p0a-skip-items.json`。
 
 證據：`p0a-failure-list.json`、`p0a-reconciliation.json`、`p0a-gap-attribution.json`、`p0a-skip-items.json`、`p0a-skip-delta-attribution.json`、`p0a-report.md`（`C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/`）。
+## P0-B target pins 的失敗與重試契約（2026-11-16）
+
+審查 `7a15e67b` 與三個第一輪 selected-results 測試後，於 `packages/desktop-gateway/src/selected-fork.ts` 補齊 recovery 契約：
+
+- 每個 operation 以 durable document 保存 first authorized capture、逐批 grant 進度與 acknowledged outcome；重試沿用首次捕獲，不再重新捕獲已變動的 source。
+- 已確認操作重試先驗證 target profile 身分（parentSession/origin/createdAt/semanticSeed operationId/requestDigest），回 `kind:'adopted'` 與相同 receipt，不重複 capture/grant/seed write；target archive → `refused target-policy`，身分不符 → `refused conflict`。
+- grant 分批（100 refs）成功後持久化 `granted`；中途失敗的 retry 從第一個未 grant 批次 resume，不重複已生效批次。
+- `selection.atSeq` 真正傳入 `createCompletedPassiveContext`，completed boundary 會排除邊界後結果。
+- 有 managed refs 但無 retention port 時回 `not-issued unsupported`，不建立 child；source project binding 在 prepare→begin 間變動時回 `not-issued policy`。
+
+驗證：4 個 selected-results 檔案 **19/19 通過**（fork 2、read 3、recovery 7、seed 7），gateway typecheck 0。九項控制（grant 失敗、多批部分失敗、ACK 遺失、source 變更、重啟＋archive/clear、未完成操作 resume、project 漂移、缺 port、atSeq）逐項對照見證據目錄 `p0b-report.md`；仍待處理：grant 執行中關閉 host、grant 永久失敗的 blocked token、result-reader ancestor fallback 與大型選取文件成本。
 ## 四之一、剩餘失敗的結構化清單（215 項／125 檔，head `cf92d076` 驗證；P0-A 對帳後）
 
 | 類別 | 代表檔案／數量 | 判定 | 可接續位置 |

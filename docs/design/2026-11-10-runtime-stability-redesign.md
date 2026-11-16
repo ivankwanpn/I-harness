@@ -213,6 +213,9 @@ ative-context-output（spy 到的 ExecService.run 未被呼叫）與 mixed-reten
 
 第二輪驗證後其餘單一失敗 triage：`managed-runtime`（`Observed instructions unavailable`）、`retained-code-output`（`Original prepared task caller unavailable`）、`mixed-retention-native`（`Original revocation inventory recovery required`）分別屬既有產品契約與 WIP owned/native 能力，未以放寬斷言處理。
 
+#### 第二十八批：selected-results 的首次捕獲、grant 進度與 adopted 契約
+
+`7a15e67b` 的 target pins 只覆蓋正向可讀；P0-B 審查補上 recovery 契約：operation 以 durable document 保存首次 capture、grant 逐批進度與 acknowledged outcome；重試沿用首次捕獲、從未 grant 批次 resume，已確認操作回 `adopted` 且不重複效果；並把 `selection.atSeq` 傳入 passive context、缺 retention port 與 project 漂移改成明確的 not-issued。新增 `host-commit-log-selected-recovery.test.ts` 七案，連同既有三檔共 19/19 通過。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
