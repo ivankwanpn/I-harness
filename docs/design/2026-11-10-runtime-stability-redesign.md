@@ -244,6 +244,10 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 居民 child 案改用 `spawnDurable` 與 `createUnmanagedTaskChildHost`；初始 spawn 與 write 成功，但 `followup_task` 後 child 未再寫入（waitFor target timeout），屬 live project scope 在 followup 的產品/fixture 問題，待續。
 - service 兩案補 `instructionSettingsPath` 後仍以 `Observed instructions unavailable`（manager authority）失敗；authority 來源待查。
 - 檔案由 4/10 提升到 **7/10**。
+#### 第三十三批：背景保留群組與 owned metadata 的 fixture 對齊
+
+- `retained-background-summary`／`retained-background-summary-diagnostic`／`retained-background-exec`：shell 背景命令（`& "node" …`）現在走 approval gate，fixture 未註冊 answerer；補 `approveAll: true` 後三檔皆 1/1 通過。
+- `owned-metadata-runtime`：「competing write 未確認時拒絕 Goal completion」案的實際分類是 `FACT_PRECONDITION_STALE`（競爭寫入確實 in flight → 本次 capture stale，非 uncertain），改為期待 stale；仍驗證不寫 completion fact、釋放後 `goal-stale-ref`。**18/18 通過**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

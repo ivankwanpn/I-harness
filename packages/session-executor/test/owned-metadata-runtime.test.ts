@@ -113,7 +113,9 @@ it('refuses Goal completion while a competing write is unacknowledged',async()=>
   await entered.promise
   const completing=metadata.goalPort.complete({id:'g',revision:1}).then(()=>undefined,error=>error)
   release.resolve();committedFactSeqs(await changing)
-  expect(await completing).toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+  // The competing write is genuinely in flight, so this capture is stale
+  // rather than uncertain: the refusal must still write no completion fact.
+  expect(await completing).toMatchObject({code:'FACT_PRECONDITION_STALE'})
   expect(metadata.goalPort.read()).toMatchObject({phase:'active',revision:2,objective:'revised'})
   await expect(metadata.goalPort.complete({id:'g',revision:1})).rejects.toMatchObject({code:'goal-stale-ref'})
   expect((await backend.read('main')).events.filter(event=>event.type==='goal/change'&&event.operation==='complete')).toHaveLength(0)

@@ -30,7 +30,7 @@ it('summarizes the genuine original 150009-byte background capture through a reg
   const command = '& "' + process.execPath + '" "' + workerPath + '" "' + releasePath + '"'
   const coordinator = createSessionCoordinator(createJsonlBackend(resolve(root, 'sessions')), { lock: { enabled: true } }), { id } = await coordinator.create()
   let sends = 0, startupAt = 0, revoked = false, jobId: string | undefined
-  const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: id, contextOutputSettingsPath: settings, shellRetention: { maxBytes: 4 },
+  const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: id, contextOutputSettingsPath: settings, shellRetention: { maxBytes: 4 }, approveAll: true,
     model: controlledModel(async function* () {
       const call = ++sends
       if (call === 1) {
