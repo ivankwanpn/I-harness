@@ -1,7 +1,7 @@
 import { originalOrderingLedgerFor } from '../result-ordering-internal.ts'
 import { types } from 'node:util'
 import type { SessionCoordinator } from './types.ts'
-import { assertOriginalBatchParticipant, reserveOriginalOwnershipBatch, assertOriginalOwnershipBatchCoverage, type OriginalOwnershipBatch, type Ownership, type OwnershipCleanup } from './ownership.ts'
+import { assertOriginalBatchParticipant, reserveOriginalOwnershipBatch, assertOriginalOwnershipBatchCoverage, combineOriginalOwnershipBatches, type OriginalOwnershipBatch, type Ownership, type OwnershipCleanup } from './ownership.ts'
 import type { OriginalLegacyOrderingParticipant, OriginalOrderingOrigin } from './result-ordering-types.ts'
 import { captureResultTargetIds } from './result-revocation-data.ts'
 import { captureOriginalDeletionBatch, captureOriginalDeletionPlan, captureOriginalDeletionScope, type DeletionPreparationScope } from './deletion-preparation.ts'
@@ -141,7 +141,32 @@ export async function acquireOriginalRevocationCoverage(domain: OriginalRevocati
     // Every local owner retains this original acquisition before its first wait.
     for (let index = 0; index < record.ports.length; index++) record.ports[index]!.bindOriginalCoverage(record.tickets[index]!, coverage)
     await Promise.all(record.ports.map((port, index) => port.joinLocalTargets(record.tickets[index]!, ids)))
-    if (ids.length) record.batch = await reserveOriginalOwnershipBatch(record.owner, ids, cleanup => { record.native = cleanup }, origin)
+    if (ids.length) {
+      if (ids.length === 1) record.batch = await reserveOriginalOwnershipBatch(record.owner, ids, cleanup => { record.native = cleanup }, origin)
+      else {
+        // A target may already be retained while a lower-sorted fresh target is
+        // added by this revocation. Acquire each target under the revocation
+        // ordering ledger, then expose one combined coverage batch.
+        const parts: { ids: readonly string[]; batch: OriginalOwnershipBatch }[] = [], cleanups: OwnershipCleanup[] = []
+        try {
+          for (const id of ids) parts.push({ ids: [id], batch: await reserveOriginalOwnershipBatch(record.owner, [id], cleanup => { cleanups.push(cleanup) }, origin) })
+        } catch (failure) {
+          const cleanupErrors: unknown[] = []
+          for (const part of [...parts].reverse()) try { await part.batch.close() } catch (cleanup) { cleanupErrors.push(cleanup) }
+          if (cleanupErrors.length) throw new AggregateError([failure, ...cleanupErrors], 'Original revocation split acquisition cleanup failed')
+          throw failure
+        }
+        record.batch = combineOriginalOwnershipBatches(record.owner, parts)
+        record.native = {
+          close: async () => {
+            const errors: unknown[] = []
+            for (const cleanup of cleanups) try { await cleanup.close() } catch (error) { errors.push(error) }
+            if (errors.length) throw new AggregateError(errors, 'Original revocation native cleanup failed')
+          },
+          assertSettled: () => { for (const cleanup of cleanups) cleanup.assertSettled() },
+        }
+      }
+    }
     if (ids.length) assertOriginalRevocationCoverage(coverage, ids)
     return coverage
   } finally { done.resolve() }

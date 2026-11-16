@@ -169,7 +169,8 @@ export async function passiveManagedReleaseInventory(root: string, workspaceId: 
     }
     // Exact metadata plus original survivor enumeration is retained for later effects.
     witness.push([id, [...pins], [...pins].filter(([, pin]) => !requested.has(pin.documentId)), pins.size > 0 && [...pins.values()].every(pin => requested.has(pin.documentId))])
-    const removed = [...pins.values()].filter(pin => requested.has(pin.documentId)), removeBody = requested.size > 0 && [...pins.values()].every(pin => requested.has(pin.documentId))
+    const removed = [...pins.values()].filter(pin => requested.has(pin.documentId)), removeBody = operation.phase === 'committed' && requested.size > 0 && [...pins.values()].every(pin => requested.has(pin.documentId))
+
     if (removeBody) targets.add(operation.owner.sessionId)
     entries.push({ directory, pins: Object.freeze([...pins.values()]), removed: Object.freeze(removed), removeBody })
   }

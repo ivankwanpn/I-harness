@@ -63,6 +63,44 @@ export function reserveOriginalOwnershipBatch(owner: Ownership, ids: readonly st
   if (!reserve || utilTypes.isProxy(owner)) throw TypeError('Original batch ownership required')
   return reserve(ids, retain, origin)
 }
+/**
+ * Join several ordered single-target reservations into one coverage batch.
+ *
+ * Revocation coverage may target sessions that are already retained. Such a
+ * mixed batch cannot be reserved atomically (holding a higher-sorted Task key
+ * and acquiring a lower fresh key is the reorder contract), but it can still
+ * be acquired one target at a time under the revocation ordering ledger. This
+ * composite keeps the batch-method surface for coverage assertions and close.
+ */
+export function combineOriginalOwnershipBatches(owner: Ownership, parts: readonly { ids: readonly string[]; batch: OriginalOwnershipBatch }[]): OriginalOwnershipBatch {
+  if (!parts.length || utilTypes.isProxy(parts)) throw TypeError('Original batch parts required')
+  const captured = parts.map(part => {
+    if (!part || utilTypes.isProxy(part) || !part.batch || utilTypes.isProxy(part.batch)) throw TypeError('Original batch part required')
+    return Object.freeze({ ids: captureResultTargetIds(part.ids), batch: part.batch })
+  })
+  let retired = false
+  const combined: OriginalOwnershipBatch = Object.freeze({
+    assertCovered(requested: readonly string[]) {
+      if (this !== combined || retired) throw TypeError('Original active batch receiver required')
+      const ids = captureResultTargetIds(requested)
+      for (const id of ids) {
+        const part = captured.find(entry => entry.ids.includes(id))
+        if (!part) throw Error('Original batch target not covered')
+        part.batch.assertCovered([id])
+      }
+    },
+    async close() {
+      if (this !== combined) throw TypeError('Original batch receiver required')
+      if (retired) return
+      retired = true
+      const errors: unknown[] = []
+      for (const part of [...captured].reverse()) try { await part.batch.close() } catch (error) { errors.push(error) }
+      if (errors.length) throw errors.length === 1 ? errors[0] : new AggregateError(errors, 'Original combined batch cleanup failed')
+    },
+  })
+  batchCoverage.set(combined, { owner, assertCovered: ids => combined.assertCovered(ids) })
+  return combined
+}
 type ClaimRecord = { readonly role: 'session' | 'document'; id: string; claim: Claim; assertHeld: Claim['assertHeld']; retainLive: Claim['retainLive']; release: Claim['release'] }
 const ownerClaims = new WeakMap<object, WeakMap<object, ClaimRecord>>()
 function orderingMethod(original: object, key: string): Function {

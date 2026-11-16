@@ -460,6 +460,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - `mixed-retention-native` 的 reorder 失敗量到 batch pin `id='a'`、`batchIds=["a","b"]`、`origin={}`；resources 為 A/B/TASK-A/TASK-B，retained 為 A/TASK-A。這是 **clear/批次 caller 把已 retained 的 a 與 fresh 的 b 混在同一 batch**。
 - 嘗試移除 `borrowBundle` 的 reorder guard 後，mixed test 前進到「staged artifact body 被刪」的另一缺口；但 `session-persistence` 有 3 個契約測試明確要求拒絕 lower fresh/Task companion（canonical-ownership、ownership-native-count），證明 guard 是必要契約。
 - 正確修法在 caller：clear/revocation 批次不得混合 retained 與 fresh target；需先處理 fresh targets（或在批次前釋放 retained），再單獨處理 retained。已回退 guard 實驗，未合併。
+#### 第七十四批：mixed retention 的 split revocation 與 staged body 保留
+
+- **split revocation**（`result-revocation`＋`ownership`）：`acquireOriginalRevocationCoverage` 對多 target 改成逐 target 在 revocation ordering ledger 下取得單一 batch，再以 `combineOriginalOwnershipBatches` 組成同一 coverage batch；避開「已 retained 的 a＋fresh 的 b」被 reorder guard 拒絕，同時保留 batch 的 `assertCovered`/`close` 介面與失敗 rollback。單 target 仍走原本 batch。
+- **staged body 保留**（`release-inventory`）：`removeBody` 只對 `phase==='committed'` 的 operation 生效；staged/refused operation 的 pins 可在 clear/deletion 移除，但本體留給 operation recovery（test 期望 staged body 存在、pins 空、reconcile 仍 recovery-required）。
+- 驗證：`mixed-retention-native` **1/1**、`mixed-retention-quota` **4/4**；executor retention/ordering 5 檔 **42/42**；context-output 目標 6 檔 **35 passed/2 skipped**；`session-persistence` 全套件通過；兩個 package typecheck 0。executor 殘餘約 **20**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
