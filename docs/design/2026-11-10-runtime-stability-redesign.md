@@ -279,6 +279,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 
 - `native-context-lifecycle`：產品現在以 `code/output` session event 發布 Code Mode 的 managed artifact；`code_exec` 的 model-facing 結果是 pending observation（`status:'running'`），必須再以真實 `code_wait` 觀察完成後，artifact ref 才會進入下一個 model request。fixture 的 controlled model 增加 step3：從上一個 tool 訊息取 `cell_id` 呼叫 `code_wait(yield_time_ms:30000)`，五種 protocol framing 的 tool 數量由 2 改為 3；direct artifact ref 仍逐一驗證。**1/1 通過**。
 - triage（未修）：`bounded-file-production` 的 child 讀頁現在收到 artifact envelope（`retention.kind='artifact'`、僅 4KB preview）而非 inline page JSON；child 需以 `context_output_read` 取回頁面，屬 fixture 需改走新 model-facing 入口。
+#### 第四十批：Native Code Mode 的 async cell 與 managed shell 觀察
+
+- `native-context-output`：兩個 `code_exec` 案補 `yield_time_ms:30000`（未帶時 cell 回 pending `status:'running'`，`textRetention` 尚未產生）；managed shell 現在經由自己的 execution host 啟動，不再呼叫 assembly 的 legacy `exec/service.run`，移除失效的 spy，改由實際 tool/result 的 `dependencies:{kind:'artifact-set',count:1}`、`exitCode:7` 與完整 stdout/stderr 證明單次實際啟動。**10/10 連續兩次通過**。
+- triage（未修）：
+  - `generation-actions`：第二次 fork 現在明確拒絕（`retained seed cannot preserve conversation semantics`）；detached seed import 需要 task-transition 生命週期，plain coordinator 會 `TASK_TRANSITION_FAILED`，需專屬 durable fixture。
+  - `instruction-diagnostics`：preflight 失敗後 `manager.capture()` 回 `instruction-request`（非 undefined），且 diagnostics 狀態在讀取時可能已是 `ready`；stale 契約需重新確認。
+  - `execution-source-prereq`（exec 觀測 0/1）、`main-instruction-construction`（retry 0/1）、`native-dependency-observer`（child 與 parent session id 相同）尚未修。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

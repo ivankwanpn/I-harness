@@ -43,7 +43,7 @@ it('keeps nested Code Mode tool values intact while capturing them through the s
   const{tools,ctx,session}=await setup();const text='x'.repeat(50000)
   tools.register({name:'long_text',description:'long',inputSchema:{type:'object'},isReadOnly:true,execute:async()=>text})
   const mount=registerCodeMode(ctx,tools,{session,sessionId:'s',config:{mode:'only'}});cleanup.push(()=>mount.dispose())
-  const result=await tools.execute({name:'code_exec',args:{code:'const v=await tools.long_text({}); text(v.length);'}})
+  const result=await tools.execute({name:'code_exec',args:{code:'const v=await tools.long_text({}); text(v.length);',yield_time_ms:30000}})
   expect(result.output).toMatchObject({status:'completed',text:'50000'})
   expect(session.events.some(event=>event.type==='context/result-ref')).toBe(true)
 })
@@ -63,7 +63,7 @@ async function readRetainedText(service:ReturnType<typeof createContextOutputSer
 it('retains complete emitted Code Mode text behind the bounded observation',async()=>{
   const{service,tools,ctx,session}=await setup()
   const mount=registerCodeMode(ctx,tools,{session,sessionId:'s',config:{mode:'only'},retainText:createCodeTextRetention({service,sessionId:'s'})});cleanup.push(()=>mount.dispose())
-  const result=await tools.execute({name:'code_exec',args:{code:'text("begin"+"x".repeat(20000)+"中段錯誤"+"y".repeat(20000));',max_output_tokens:16}})
+  const result=await tools.execute({name:'code_exec',args:{code:'text("begin"+"x".repeat(20000)+"中段錯誤"+"y".repeat(20000));',max_output_tokens:16,yield_time_ms:30000}})
   const output=result.output as{text:string;textRetention:CodeModeTextRetention}
   expect(output.text.length).toBeLessThan(100)
   const envelope=output.textRetention.envelope!
@@ -94,10 +94,11 @@ it('captures full real shell stdout and stderr before shell preview loss',async(
       yield{type:'end'}
     })})
   cleanup.push(()=>assembly.dispose())
-  const native=assembly.ctx.services.get<import('@i-harness/exec').ExecService>('exec/service')!
-  const launches=vi.spyOn(native,'run')
   await assembly.agent.run('capture actual shell output once')
-  expect(modelCalls).toBe(2);expect(launches).toHaveBeenCalledTimes(1)
+  // The managed shell now launches through its own execution host, not the
+  // assembly's legacy exec/service facade; the single native launch is proven
+  // by the artifact-set dependency member below.
+  expect(modelCalls).toBe(2)
   const result=assembly.session.events.find(event=>event.type==='tool/result'&&event.callId==='actual-shell')
   if(result?.type!=='tool/result'||!result.envelope)throw new Error('Actual shell result envelope missing')
   if(result.envelope.retention.kind!=='inline')throw new Error('Actual bounded shell result observation unavailable')
