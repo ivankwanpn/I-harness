@@ -348,6 +348,10 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 新增 `createJsonlSelectedForkController`（selected-fork.ts）：`public-results-v1` route、holder captureFirst/publishWarm、durable outcome/重試 adopted、project drift policy、cold qualification 與誠實 blocked token；`context-runtime` 清理 operation key；`host` JSONL 安裝 controller 並於 shutdown join；測試 helper store-aware。
 - 驗證：新測試＋既有 selected-fork 回歸 8 檔 42/42、host 回歸 4 檔 15/15、gateway typecheck 0、boundary PASS。
 - kernel 殘留缺口：warm blocked partial publication 無同 process resume；reservation→header crash 視窗無 resume；outcome persist 失敗時 retry 可能 blocked（效果已 commit）。
+#### 第五十四批：P1 殘餘分類與 P3 計畫
+
+- 第二輪 executor 38 failed 分類（legacy state restore 5、instruction/handoff 10、delivery 3、context-output 5、Task/native 6、project/steering 3、fork/retained 2），動態 cwd 修正後約 36；詳見最終報告「十、P1 殘餘與 P3 計畫」。
+- P3 將以固定 HEAD 跑 `verify:all`、負載敏感單獨比較與效能群組，並在最後更新 totals 與 CI。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

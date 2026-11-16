@@ -207,3 +207,22 @@
 - `host`：JSONL 也安裝 selected-fork controller、傳遞 `ForkExecutionControl.signal`、關機先 join controller 再關 native context；測試 helper `storedSession` 支援 JSONL read-only coordinator。
 - 驗證：新測試 3 檔（host-jsonl-fork 3、recovery 3、holder-retry 2）＋既有 selected-fork 回歸（commit-log fork/read/recovery、selected-source-holder、selected-fork-seed）共 **42/42**；host 回歸 4 檔 **15/15**；gateway typecheck 0；package boundaries PASS（128=baseline）。
 - 已知 kernel 缺口（已誠實回 blocked／not-issued，未造假）：同 process warm header 發佈被 blocked 無法 cold resume（重啟後可）；capture reservation 已寫但 header 未發的 crash 視窗無 resume API；outcome persist 失敗時效果已 commit 但同 process retry 可能 blocked。
+
+## 十、P1 殘餘（38→36）與 P3 計畫
+
+`p1-executor-full2.json` 的 38 failed 在動態 project cwd 修正（`680617ad`）後，`project-context` 由 3→1，實際約 36 項；依根因分類：
+
+1. **legacy state restore（5）**：`retained-state-negative`(4)、`retained-state-cold`(1)。v14 任務轉換要求每個 session 有一致 task document，舊 v2 state doc 冷開被拒 `TASK_TRANSITION_RECOVERY_REQUIRED`；需以 v3 Task 生命週期重建 fixture 或產品提供 v2→v3 遷移。
+2. **instruction/handoff 持久化（10）**：`managed-runtime`(1)、`managed-runtime-context`(1)、`instruction-diagnostics`(1)、`instruction-isolated-review`(2)、`managed-instruction-handoff`(3)、`title-action`(1)、`generation-actions`(1)。含 private runtime bootstrap 入口未建立、post-turn title 取消後 settlement source 無 `closeRequested`、isolated source recovery 後未 retire、legacy seed import 任務生命週期等。
+3. **delivery recovery（3）**：`delivery-lifecycle`(1)、`delivery-active-wait`(1)、`owned-service-shell`(1)。Stop receipt 的 never-issued capture 重試、falsey acknowledgement 的 close/handoff debt。
+4. **context-output 刪除/保留（5）**：`publication-pins`(2)、`mixed-retention-native`(1)、`mixed-retention-quota`(1)、`service-instruction-close`(1)。首次 delete pin/access 的 `Original deletion recovery required`、SQLite logical-full、cold reader 契約。
+5. **Task/child native（6）**：`native-dependency-observer`(1)、`exec-direct-source`(1)、`execution-source-prereq`(1)、`bounded-file-production`(1)、`inherited-context-budget`(2)。child job owner、prepared Exec issuer、fake-timer registration 等。
+6. **project/steering（3）**：`project-context`(1)、`event-driven-steering`(2)。child followup live scope、foreground model-driven spawn 的 service wiring。
+7. **fork/retained（2）**：`fork-handoff`(1)、`retained-hook-recovery`(1)。nested legacy L1 transfer、coordinator retained cleanup debt。
+8. **other（2）**：`retained-batch-continuation`(1)、`instruction-isolated-review` 已列於 2。
+
+P3 執行計畫（在固定 HEAD）：
+- `node scripts/test-env.mjs pnpm run verify:all`（上次同指令於 `cf92d076` 約 4h44m，含 suite／typecheck／e2e／reachability／boundaries／compiled gateway）。
+- 負載敏感單獨比較：`selected-native-source`、`usage-protocol-aux-host`、`interaction-resume`、`current-unfinished-catalog`、`retention-grants`（單獨 vs 全庫 `--maxWorkers=2`）。
+- 效能群組：legacy-funding-batch、legacy-fork-scale／performance、10,001 observations。
+- 完成後更新本報告 totals、CI 結果與殘餘清單；CI 需在推送 head 上 success。
