@@ -4,6 +4,7 @@ const controls = vi.hoisted(() => ({
   subStores: [] as (import('@i-harness/subagent').TaskResultStore | undefined)[],
   sourceInputs: [] as Parameters<NonNullable<import('@i-harness/subagent').TaskResultStore['forSource']>>[],
   holdSource: undefined as undefined | (() => Promise<void>), captures: 0,
+  holdSettle: undefined as undefined | (() => Promise<void>),
   holdOpen: undefined as undefined | (() => Promise<void>), opens: 0, closes: 0, drains: 0,
 }))
 vi.mock('@i-harness/subagent', async original => {
@@ -37,7 +38,18 @@ vi.mock('../src/lifecycle/task-result-retention.ts', async original => {
     store.forSource = async (...input) => {
       controls.sourceInputs.push(input)
       const bound = await forSource(...input), capture = bound.capture.bind(bound)
-      bound.capture = (...captureArgs) => { controls.captures++; return capture(...captureArgs) }
+      // Hold the original result settlement itself: the followup drive must
+      // revalidate against a prior result whose durable capture is still in
+      // flight, not a settled one.
+      bound.capture = (...captureArgs) => {
+        controls.captures++
+        const handle = capture(...captureArgs)
+        if (handle && typeof handle.settle === 'function') {
+          const settle = handle.settle.bind(handle)
+          handle.settle = async (...settleArgs) => { await controls.holdSettle?.(); return settle(...settleArgs) }
+        }
+        return handle
+      }
       await controls.holdSource?.()
       return bound
     }
@@ -204,17 +216,30 @@ it('joins the original late source with the exact current callback and admits no
 
 it.each(['prior-result', 'table-callback', 'job-callback'] as const)('revalidates the original service execution after %s', async gap => {
   const f = await heldCold(), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  let off = () => {}, previousSettles = 0
+  let off = () => {}
   try {
     if (gap === 'prior-result') {
-      f.release(); await f.constructing
-      await expect.poll(() => f.entry.result?.kind).toBe('retained')
-      const previous = f.entry.resultCapture!, settle = previous.settle.bind(previous)
-      previous.settle = async () => { previousSettles++; entered.resolve(); await release.promise; return settle() }
-      controls.sourceInputs = []; controls.captures = 0
-      await f.assembly.tools.get('followup_task')!.execute({ target: f.entry.path, message: 'next' }, {})
-      await entered.promise
-    } else if (gap === 'table-callback') {
+      // The original turn has consumed its inbox and is holding its result
+      // settlement; a followup is queued while that prior result is pending.
+      controls.holdSettle = async () => { entered.resolve(); await release.promise }
+      try {
+        f.release(); await f.constructing
+        await entered.promise
+        controls.sourceInputs = []; controls.captures = 0
+        const cursor = f.entry.lastInboxSeq
+        await f.assembly.tools.get('followup_task')!.execute({ target: f.entry.path, message: 'next' }, {})
+        f.assembly.revokeNewWork()
+        release.resolve()
+        await expect.poll(() => controls.sourceInputs.length).toBe(0)
+        await f.entry.followupChain
+        expect(f.entry.lastInboxSeq).toBe(cursor)
+        expect(controls.sourceInputs).toEqual([])
+        expect(controls.captures).toBe(0)
+        expect(f.requests()).toBe(1)
+      } finally { controls.holdSettle = undefined; release.resolve() }
+      return
+    }
+    if (gap === 'table-callback') {
       off = f.sub.table.subscribe(change => { if (change.entry === f.entry && change.entry.status === 'running') f.assembly.revokeNewWork() })
     } else {
       const job = f.sub.jobs.registerJob('root', 'subagent', 'original job')
@@ -222,13 +247,11 @@ it.each(['prior-result', 'table-callback', 'job-callback'] as const)('revalidate
       off = f.sub.jobs.subscribe(job.id, row => { if (row.status === 'running') f.assembly.revokeNewWork() })
     }
     const cursor = f.entry.lastInboxSeq
-    if (gap === 'prior-result') f.assembly.revokeNewWork()
-    else { f.release(); await f.constructing }
+    f.release(); await f.constructing
     release.resolve(); await f.entry.followupChain
     expect(f.entry.lastInboxSeq).toBe(cursor)
     expect(controls.sourceInputs).toEqual([]); expect(controls.captures).toBe(0)
-    expect(f.requests()).toBe(gap === 'prior-result' ? 1 : 0)
-    if (gap === 'prior-result') expect(previousSettles).toBe(1)
+    expect(f.requests()).toBe(0)
   } finally { off(); release.resolve(); await f.close() }
 })
 

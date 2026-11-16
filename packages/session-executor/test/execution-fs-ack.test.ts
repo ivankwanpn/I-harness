@@ -1,12 +1,18 @@
 import { expect, it, vi } from "vitest"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs"
-import { resolve } from "node:path"
+import { basename, dirname, resolve } from "node:path"
 import type { AuthorityState } from "@i-harness/sandbox"
 const pause = vi.hoisted(() => ({ target: "", entered: () => {}, wait: Promise.resolve() }))
 vi.mock("node:fs/promises", async importOriginal => {
   const fs = await importOriginal<typeof import("node:fs/promises")>()
   return { ...fs, async writeFile(...args: Parameters<typeof fs.writeFile>) {
-    if (args[0] === pause.target) { pause.entered(); await pause.wait }
+    // Atomic writes land in a hidden `.<name>.<hex>.tmp` beside the target and
+    // are renamed into place afterwards; pause the actual write, not the final
+    // path, so the write is genuinely in flight when authority is revoked.
+    const written = typeof args[0] === "string" ? args[0] : ""
+    const siblingTemp = dirname(written) === dirname(pause.target)
+      && basename(written).startsWith(`.${basename(pause.target)}.`) && written.endsWith(".tmp")
+    if (written === pause.target || siblingTemp) { pause.entered(); await pause.wait }
     return fs.writeFile(...args)
   } }
 })

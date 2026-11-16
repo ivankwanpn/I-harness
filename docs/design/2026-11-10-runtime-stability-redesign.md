@@ -216,6 +216,11 @@ ative-context-output（spy 到的 ExecService.run 未被呼叫）與 mixed-reten
 #### 第二十八批：selected-results 的首次捕獲、grant 進度與 adopted 契約
 
 `7a15e67b` 的 target pins 只覆蓋正向可讀；P0-B 審查補上 recovery 契約：operation 以 durable document 保存首次 capture、grant 逐批進度與 acknowledged outcome；重試沿用首次捕獲、從未 grant 批次 resume，已確認操作回 `adopted` 且不重複效果；並把 `selection.atSeq` 傳入 passive context、缺 retention port 與 project 漂移改成明確的 not-issued。新增 `host-commit-log-selected-recovery.test.ts` 七案，連同既有三檔共 19/19 通過。
+#### 第二十九批：P1 掛起組（execution-fs-ack、resident-instruction-activation）與 fork-handoff 根因
+
+- `execution-fs-ack`：pause seam 仍以最終路徑比對 `writeFile`，但 `writeFileAtomic` 先寫同目錄隱藏 `.<name>.<hex>.tmp` 再 rename，因此 `entered` 永不觸發（表現為 60 秒逾時）。改為暫停實際 sibling temp 寫入，仍讓 revocation 與進行中的寫入 join；**2/2 通過**。
+- `resident-instruction-activation`：`prior-result` 案在回合完成後才 patch `entry.resultCapture.settle`，但現行 drive 在回合結束前就 settle 前一結果，patch 永遠不會被呼叫。改為透過 task-result-retention seam 持有原始回合的 result settlement，在 settle 進行中排入 followup、撤銷 new work，再釋放；驗證撤銷後不新增 sourceInputs／capture／generation。**22/22 通過**。
+- `fork-handoff` 第一案仍未修復：第一次 fork 成功；第二次（nested，source=child）在 header issued 之後卡在 `context-output` 的 `confirmLegacyForkTransfer`（legacy L1 transfer），15 秒 timeout。已用正常 CLI host、真實 coordinator、逐段 instrument 證實等待位置；後續需單獨處理 nested legacy transfer 的死鎖。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

@@ -125,6 +125,16 @@
 - 有 managed refs 但無 retention port 時回 `not-issued unsupported`，不建立 child；source project binding 在 prepare→begin 間變動時回 `not-issued policy`。
 
 驗證：4 個 selected-results 檔案 **19/19 通過**（fork 2、read 3、recovery 7、seed 7），gateway typecheck 0。九項控制（grant 失敗、多批部分失敗、ACK 遺失、source 變更、重啟＋archive/clear、未完成操作 resume、project 漂移、缺 port、atSeq）逐項對照見證據目錄 `p0b-report.md`；仍待處理：grant 執行中關閉 host、grant 永久失敗的 blocked token、result-reader ancestor fallback 與大型選取文件成本。
+## P1 掛起與持久化恢復（2026-11-16 進行中）
+
+### 已修復
+
+- `execution-fs-ack`：fixture 的 pause 點改為 `writeFileAtomic` 實際寫入的 hidden sibling temp（原本比對最終路徑永遠不觸發）；2/2 通過。
+- `resident-instruction-activation`：`prior-result` 案改以 task-result-retention seam 持有原始回合的 result settlement，在 settle 中排入 followup 後撤銷；22/22 通過。
+
+### 未修復但已定位
+
+- `fork-handoff` 第一案：第一次 fork 成功；nested fork（source=child）在 header 已 issued 後卡在 `context-output` `confirmLegacyForkTransfer`，15 秒 timeout。屬 nested legacy L1 transfer 的產品級等待，尚未修；證據見該檔 triage 與 `p1-*.log`。
 ## 四之一、剩餘失敗的結構化清單（215 項／125 檔，head `cf92d076` 驗證；P0-A 對帳後）
 
 | 類別 | 代表檔案／數量 | 判定 | 可接續位置 |
