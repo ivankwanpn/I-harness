@@ -257,6 +257,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - `execution-state`：`submit()` 的 admission 現在經過 async `prepareFirstParty`，第二個 submit 的 row 在 microtask 後才出現；兩個案補 `vi.waitFor(queue row)` 後再斷言。**7/7 通過**。
 - `service.test`：`queueState` 案同樣先等 row 出現；queued successor 的 race 由 2s 提高到 30s（實測需要更長的 admission）；process cleanup 案接受 assembly 包裝後的新訊息（`Assembly original producer cleanup incomplete`）。**43/43 通過**。
 - `search-code-mode`：搜尋 fixture 縮到 1 個檔案／24 行（仍足以驗證「完整 trace、JS 只投影十個 ref」）；兩案 budget 提到 60s；mounted search 的 30s 硬期限在本機 reader 啟動成本下可能與完成競賽，因此 status 接受 `completed|timed-out`，但**完整 24 筆 matches 仍逐一斷言**。**4/4 通過**。
+#### 第三十六批：canonical-path 的 pre-bind seam 與 rebind 契約
+
+- 新增關鍵 seam 認識：`createJsonlBackend(root,{wrap})` 在 canonical-path guard 捕捉 own descriptors **之前** 執行；事後改寫 `backend.appendOwnedBatch`／`read` 會被拒為 `PROCESS_READ_UNAVAILABLE`（甚至造成測試在 finally 懸置）。
+- `managed-lifecycle` 兩案（queued cancellation、Code Mode interruption receipt）與 `cold-state-inspection` 兩案（shared owned load、failed shared load retry）改用 pre-bind `wrap` 注入故障，取代 coordinator 建立後改寫 backend。分別 **7/7、16/16 通過**。
+- `rebind-budget`：第二／三案的 `vi.waitFor(started)` 預設 1 秒不足（admission＋assembly 建置較慢），提高到 15 秒；第一案的 context tool 結果現在位於 `envelope.retention.value`（`kind:'unavailable'`、pressure/dimensions 不變），斷言改 envelope 形狀。**3/3 通過**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

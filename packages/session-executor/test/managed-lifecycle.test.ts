@@ -84,20 +84,23 @@ it('saves received human input through a source-local recovery fault while refus
 
 it('acknowledges queued cancellation only after its actual receipt and keeps pending state until then', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-service-cancel-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  // The owned-batch writer must be wrapped before the canonical-path guard
+  // captures its descriptor; patching the constructed backend is refused.
+  const backend = createJsonlBackend(root, { wrap: value => {
+    const actual = value.appendOwnedBatch!
+    value.appendOwnedBatch = async (...args) => {
+      if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/cancelled')) { entered.resolve(); await release.promise }
+      return actual(...args)
+    }
+  } }), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create()
   const service = createSessionService({ workspace: root, coordinator, modelPolicy: 'test-mock', codeMode: { mode: 'off' } })
-  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   try {
     await service.assemblyFor(id)
     const inputs = await service.receivedInputFor(id)
     await inputs.admit({ inputId: 'queued', text: 'received', delivery: 'queue', intent: 'user' })
     expect(service.queue(id).map(row => row.id)).toEqual(['queued'])
-    const actual = backend.appendOwnedBatch!
-    backend.appendOwnedBatch = async (...args) => {
-      if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/cancelled')) { entered.resolve(); await release.promise }
-      return actual(...args)
-    }
     let returned = false
     const cancellation = service.cancelQueued(id, 'queued').then(result => { returned = true; return result })
     await entered.promise
@@ -113,15 +116,18 @@ it('acknowledges queued cancellation only after its actual receipt and keeps pen
 
 it('holds actual assembly readiness until its previous-process Code Mode interruption receipt commits', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-assembly-ready-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  // Pre-bind writer seam; the guarded backend cannot be patched afterwards.
+  const backend = createJsonlBackend(root, { wrap: value => {
+    const actual = value.appendOwnedBatch!
+    value.appendOwnedBatch = async (...args) => {
+      if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/cell' && event.state === 'interrupted')) { entered.resolve(); await release.promise }
+      return actual(...args)
+    }
+  } }), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   await document.code.record({ type: 'code/cell', cellId: 'previous', sessionId: id, state: 'started', source: 'text("previous")' })
   await document.close()
-  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), actual = backend.appendOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => {
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/cell' && event.state === 'interrupted')) { entered.resolve(); await release.promise }
-    return actual(...args)
-  }
   const service = createSessionService({ workspace: root, coordinator, modelPolicy: 'test-mock', codeMode: { mode: 'mixed' } })
   let ready = false
   const building = service.assemblyFor(id).then(assembly => { ready = true; return assembly })

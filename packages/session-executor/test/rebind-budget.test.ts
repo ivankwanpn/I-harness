@@ -39,7 +39,7 @@ it("switches the live output cap, compaction window and context tool together", 
     expect(summaryRequests).toHaveLength(3)
     expect(summaryRequests[0]!.messages.slice(0, -1).map(message => message.content)).toEqual(["first"])
     expect(summaryRequests.flatMap(request => request.messages).reduce((sum, message) => sum + (typeof message.content === "string" && /^x+$/.test(message.content) ? message.content.length : 0), 0)).toBe(170000)
-    expect(assembly.session.events.filter(e => e.type === "tool/result")).toContainEqual(expect.objectContaining({ output: expect.objectContaining({ kind:'unavailable', observation:expect.objectContaining({pressure:expect.objectContaining({inputBudget:44223}),dimensions:expect.arrayContaining([expect.objectContaining({dimension:'context',limit:50000})])}) }) }))
+    expect(assembly.session.events.filter(e => e.type === "tool/result")).toContainEqual(expect.objectContaining({ envelope: expect.objectContaining({ retention: expect.objectContaining({ kind: 'inline', value: expect.objectContaining({ kind: 'unavailable', observation: expect.objectContaining({ pressure: expect.objectContaining({ inputBudget: 44223 }), dimensions: expect.arrayContaining([expect.objectContaining({ dimension: 'context', limit: 50000 })]) }) }) }) }) }))
   } finally { await service.close() }
 })
 
@@ -58,7 +58,7 @@ it("rejects a rebind while a turn is running without changing the reported model
   }) })
   const run = service.submit("s", "run", new AbortController().signal)
   try {
-    await vi.waitFor(() => expect(started).toBe(true))
+    await vi.waitFor(() => expect(started).toBe(true), { timeout: 15_000 })
     expect(() => service.rebindModel("s", { model, providerId: "test", modelId: "b", label: "b", contextWindow: 50000 })).toThrow(/busy/)
     expect(await service.modelState("s")).toMatchObject({ modelId: "a" })
   } finally { release(); await run; await service.close() }
@@ -81,7 +81,7 @@ it("rejects rebinding while a manually invoked compaction is awaiting a model", 
   append(assembly.session, { type: "user/message", text: "remember the task ".repeat(100) })
   const compact = assembly.compactNow()
   try {
-    await vi.waitFor(() => expect(started).toBe(true))
+    await vi.waitFor(() => expect(started).toBe(true), { timeout: 15_000 })
     expect(() => service.rebindModel("s", { model, providerId: "test", modelId: "b", label: "b", contextWindow: 50000 })).toThrow(/busy/)
     expect(await service.modelState("s")).toMatchObject({ modelId: "a" })
   } finally { release(); await compact; await service.close() }

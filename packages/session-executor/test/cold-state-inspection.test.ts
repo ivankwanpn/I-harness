@@ -170,13 +170,17 @@ it("keeps a cold Context inspection immutable when a live writer starts during i
 })
 
 it("shares simultaneous owned loading across adapters instead of creating two live write caches", async () => {
-  const root = await mkdtemp(join(tmpdir(), "ih-owned-load-flight-")), backend = createJsonlBackend(root)
+  const root = await mkdtemp(join(tmpdir(), "ih-owned-load-flight-"))
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let first = true
+  // Use the backend factory's pre-bind seam: the canonical-path guard captures
+  // own descriptors during construction, so the fixture read is installed there.
+  const backend = createJsonlBackend(root, { wrap: value => {
+    const actualRead = value.read.bind(value)
+    value.read = async (id: string) => { if (first) { first = false; entered.resolve(); await release.promise }; return actualRead(id) }
+  } })
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: process.platform === "win32", lockRoot: root } })
   await coordinator.create({ sessionId: "owned" })
-  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  const actualRead = backend.read.bind(backend)
-  let first = true
-  backend.read = async id => { if (first) { first = false; entered.resolve(); await release.promise }; return actualRead(id) }
   const one = createDurableSessionLoader(coordinator)("owned"), two = createDurableSessionLoader(coordinator)("owned")
   try {
     await entered.promise; release.resolve()
@@ -190,12 +194,15 @@ it("shares simultaneous owned loading across adapters instead of creating two li
 })
 
 it("retries a failed shared owned load without retaining its rejected cache", async () => {
-  const root = await mkdtemp(join(tmpdir(), "ih-owned-load-retry-")), backend = createJsonlBackend(root)
+  const root = await mkdtemp(join(tmpdir(), "ih-owned-load-retry-"))
+  let fail = true
+  // Pre-bind seam: the guarded backend must never be patched after construction.
+  const backend = createJsonlBackend(root, { wrap: value => {
+    const read = value.read.bind(value)
+    value.read = async (id: string) => { if (fail) { fail = false; throw new Error("Owned read failure") }; return read(id) }
+  } })
   const coordinator = createSessionCoordinator(backend,{lock:{enabled:true}})
   await coordinator.create({ sessionId: "owned" })
-  const read = backend.read.bind(backend)
-  let fail = true
-  backend.read = async id => { if (fail) { fail = false; throw new Error("Owned read failure") }; return read(id) }
   try {
     const failures = await Promise.allSettled([createDurableSessionLoader(coordinator)("owned"), createDurableSessionLoader(coordinator)("owned")])
     expect(failures.map(result => result.status)).toEqual(["rejected", "rejected"])
