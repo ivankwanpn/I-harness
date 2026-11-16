@@ -430,6 +430,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 根因：core execution 的 `prepareWrite` 會把本批設為 `pendingWrite`；document 在 staging 後與 issuer 前各再跑一次 `assertAuthorized(entry.authorization)`。runtime-context 的 checkCurrent 會經 `execution.observe().assertCurrent()` 的 `assertFresh` 看到**自己剛開始的 write**，於是回 `FACT_RECOVERY_REQUIRED`，publication 永遠到不了 backend append。
 - 修正（`managed-document`）：僅對 core 的 `runtime/context` entry 跳過 staging 後與 issuer 前的 source re-assert（admission 當下的授權仍在）；其他 core frame 保留 post-staging source fence，metadata incarnation 變更仍必須在 native issuance 前拒絕。
 - 驗證：`managed-runtime-context` **8/8**；`session-persistence` 全套件通過；executor 回歸 6 檔 **47/47**（managed-runtime-context、managed-instruction-handoff、title-action、instruction-diagnostics、main-instruction-construction、owned-service-shell）；兩個 package typecheck 0。executor 殘餘約 **26**。
+#### 第六十八批：native-dependency-observer 與 inherited-context-budget 的入口缺口
+
+- **native-dependency-observer**：child native job 的 receipt owner 仍是 parent session；`assembly.ctx.services.get('exec/service')` 是建立時 owner（parent），child 的 additional tool 直接呼叫同一 service，因此 `runBackground` 不會用 current tool session。產品需提供依 tool invocation session 路由的 Exec 入口（或 child 專屬 service），不是測試端可修。
+- **inherited-context-budget**：把 spawn 改走 `spawnDurable`＋composed coordinator＋task host 後，admission 回 `SESSION_CONVERSATION_FORMAT: invalid conversation format: dispatch without accepted call`——main model turn 已建立 accepted-exchange 對話後，手動建立 tool/call+dispatch 會被格式驗證拒絕。fixture 需要真正的 accepted model exchange 才能手動 spawn；durable-spawn helper 需擴充為可建立 accepted batch，或測試改由模型 turn 驅動。
+- 兩者皆需產品/測試基礎設施層改動，本輪未合併；工作樹已回退乾淨。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
