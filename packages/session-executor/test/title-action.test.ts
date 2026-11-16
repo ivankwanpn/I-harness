@@ -69,6 +69,8 @@ it('keeps only the actual post-turn row cancellable and clears its phase after b
   try {
     await entered.promise
     second = service.submit(id, 'ordinary queued next turn', new AbortController().signal)
+    // The second submission is admitted asynchronously; publish its row first.
+    await vi.waitFor(() => expect(service.queue(id)).toHaveLength(2))
     const queue = service.queue(id)
     expect(queue.map(row => [row.text, row.state])).toEqual([['first real turn', 'running'], ['ordinary queued next turn', 'queued']])
     expect(await service.cancelQueued(id, queue[0]!.id)).toEqual({ cancelled: false })

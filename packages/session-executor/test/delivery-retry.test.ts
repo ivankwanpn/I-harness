@@ -48,7 +48,12 @@ it('retries original transient receiver capture for a retained failed child with
 
 
 it.each([undefined, false])('committed receiver input wakes once despite falsey source acknowledgement save failure (%j)', async failure => {
-  const warnings = ['original delivery settlement', 'delivery reconciliation failed'].map(prefix => `[i-harness] ${prefix}: ${String(failure)}`)
+  // The falsey save surfaces through the task-notification / required-drain
+  // recovery wrappers, so both settlement and reconciliation report these.
+  const warnings = ['original delivery settlement', 'delivery reconciliation failed'].flatMap(prefix => [
+    `[i-harness] ${prefix}: AggregateError: Task notification and original progress cleanup failed`,
+    `[i-harness] ${prefix}: AggregateError: Required source drain needs recovery`,
+  ])
   const f = await createDeliveryFixture({ expectedWarnings: warnings })
   let failures = 0
   const create = vi.mocked(createOwnedDocumentWrite).getMockImplementation()!

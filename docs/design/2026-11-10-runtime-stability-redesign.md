@@ -294,6 +294,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
   - `mixed-retention-native`：`Original revocation inventory recovery required`（產品刪除/revocation recovery 缺口）。
   - `mixed-retention-quota`：SQLite `database or disk is full`（index-lifecycle commit）。
   - `native-dependency-observer`：child native job receipt 的 owner sessionId 等於 parent。
+#### 第四十二批：post-turn 取消與 falsey ack 的 recovery 證據
+
+- `title-action`：第二個 submit 的 queue row 是 async admission，補 `vi.waitFor(queue==2)`；剩餘產品缺口已用 debug 定位——`settleFinishedActions` 看到 **2 個 required pending frame、eligible=[]**（title 取消後兩個 settlement source 都沒有 `closeRequested`），因此下一次 submit 回 `FactRecoveryRequiredError`。已 revert 產品實驗（cleanup 先 finish action 不足）。
+- `delivery-retry`：falsey task-parent ack 的實際 warnings 已變成 `AggregateError: Task notification and original progress cleanup failed` 與 `Required source drain needs recovery`（settlement／reconciliation 各一）；expectedWarnings 對齊後 warnings 檢查通過，但 fixture close 仍因 service/coordinator recovery debt 失敗，待產品修正。
+- 兩檔尚未全綠；此批只提交 fixture 對齊與接續證據。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
