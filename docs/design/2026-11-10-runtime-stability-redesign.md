@@ -480,6 +480,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - `ContextOutputStatus` 新增 optional `pendingResults`，由 artifact owner 的 `writers.size` 提供；service `status()` 回傳 pending result sink 數。
 - 新測試 `pending-result-status`：開啟 original sink 時 `pendingResults=1`，refuse 後回 0；`close-ownership` 15/15 仍綠。
 - 用途：cold reader 可據此偵測「讀取本身留下 pending writer」的 cleanup debt。reader 端 wiring 仍待做（目前 reader 的 lease service 與 beforeRead owner 未必同一實例，需下一批對齊 owner identity）。
+#### 第七十八批：cold reader pendingResults 偵測已生效、close join 仍待接
+
+- 以 `lease.service.status().pendingResults` 在 read 前後取樣，成功偵測 read 期間新增的 pending sink；`service.readResultPage` 已可回 `unavailable`（test 第 119 行通過）。
+- 剩餘缺口：reader 沒有把該 pending sink 的 cleanup 保留成 reader debt，故 `service.close()` 仍 resolve；test 第 120 行要求 `/cleanup/`。
+- 嘗試在 reader 內 `await service.close()` 或單純 deny 都無法讓 service.close 失敗；pending sink 所屬 owner 與 service 收尾 owner 的 identity 仍需對齊（可能需 service 把 pinned result owner 傳給 reader 或提供 retry cleanup predicate）。實驗已回退。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
