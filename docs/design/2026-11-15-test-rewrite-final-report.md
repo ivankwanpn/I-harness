@@ -134,6 +134,11 @@
 
 ### 未修復但已定位
 
+- `delivery-active-wait`：foreground handoff 被稍後的 notification save 阻擋（19.9s timeout）。
+- `delivery-lifecycle`：body 成功復原後，close 仍 join 舊的 task-save EPERM cleanup debt（Subagent settlement requires recovery）。
+- `managed-runtime-context`：admit 在 append 前以 FACT_PRECONDITION_STALE 拒絕（probe.appends=0）；guard/currentness 來源待查。
+- `service-instruction-close`：cold reader cleanup 案仍讀到 page，而非 `{kind:'unavailable'}`。
+- `title-action`：post-turn 期間 cancel 後，下一個 submit 於 settleFinishedActions 得到 FACT_RECOVERY_REQUIRED（pending frame 的 authorization action 不再 eligible）。
 - `fork-handoff` 第一案：第一次 fork 成功；nested fork（source=child）在 header 已 issued 後卡在 `context-output` `confirmLegacyForkTransfer`，15 秒 timeout。屬 nested legacy L1 transfer 的產品級等待，尚未修；證據見該檔 triage 與 `p1-*.log`。
 ## 四之一、剩餘失敗的結構化清單（215 項／125 檔，head `cf92d076` 驗證；P0-A 對帳後）
 
