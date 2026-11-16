@@ -542,6 +542,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - `retained-state-negative` 4 案仍全部 TASK_TRANSITION_FAILED；把 state 改到 `state-parent` 後仍失敗（端到端仍缺 task doc bootstrap）。
 - 需產品在 managed document 首次寫入/建立時持久化 v3 task document（或 cold reopen 可由 session file 重建 empty task doc），再談 state 驗證。
 - 工作樹已回乾淨。
+#### 第八十九批：additional tool exec caller 探測
+
+- 在 assembly 的 `additionalTools` execute 外包 `withExecCallerScope`，量到 wrapper 確實以 child session 進入（`producer=sess-...` 與 `execSess` 一致）；但 raw `exec/service.runBackground` 的 receipt owner 仍是 parent。
+- 表示 owner 在 ExecService 建立時（`ExecExecutionHost.defaultOwner`/capture 建立）已固定，`currentExecCaller()` 只在 transport-launch 使用，沒有覆蓋 job receipt owner。
+- 需在 Exec service capture/owner 解析處使用 current caller（或提供 dynamic owner provider），不是 tool wrapper 可解；實驗已回退。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
