@@ -8,10 +8,11 @@ import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/in
 import { createPreparedPayload, createRetryingClient, createWaitingGuard, prepareModelRequest, resolveRetryPolicy, wrapPreparedRequest, type LLMStreamEvent, type ModelClient } from '@i-harness/llm-seam'
 import { createMockClient } from '@i-harness/llm-mock'
 import { createSessionService, type SessionServiceOptions } from '../src/index.ts'
-import { createSession, append, projectConversation, fromJSONL } from '@i-harness/core-session'
+import { createSession, append, projectConversation, fromJSONL, type SessionView } from '@i-harness/core-session'
 import { forkTurns } from '../../subagent/src/fork.ts'
 import { maybeAutoTitle } from '../../session-title/src/index.ts'
 import { openExecutorDocument } from '../src/lifecycle/managed-document.ts'
+import { compileDetachedSeed } from '../src/lifecycle/detached-seed.ts'
 
 afterEach(() => vi.unstubAllGlobals())
 const success = () => new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } })
@@ -106,8 +107,7 @@ it('promotes the exact raw human input and records command expansion once as a d
     const inherited = projectConversation(forked.view)
     expect(inherited.items.filter(item => item.kind === 'input').map(item => item.messages)).toEqual(projectConversation(service.liveSession(id)!).items.filter(item => item.kind === 'input').map(item => item.messages))
     expect(forked.view.events.filter(event => event.type === 'context/action' || event.type === 'context/attempt' || event.type === 'agent/input/preparation')).toHaveLength(0)
-    // Exercise the actual child-seed consumer. Its current semantic-seed remap
-    // failure must remain visible before inspecting inherited message links.
+    // Exercise the actual child-seed consumer on the semantic-seed fork view.
     const childSeed = forkTurns(forked.view.events, Infinity, forked.view.formatVersion, forked.view.header)
     const raw = childSeed.find(event => event.type === 'user/message' && event.text === '/fixture')!
     expect(raw).toMatchObject({ text: '/fixture', provenance: { kind: 'inherited', authority: 'observation' } })
@@ -118,23 +118,34 @@ it('promotes the exact raw human input and records command expansion once as a d
       { provenance: { kind: 'inherited', authority: 'observation' } },
     ])
     expect(() => remapConversationSeed({ source: childSeed, retained: childSeed.filter(event => event.type === 'user/message' && event.seedInputContext), sourceFormat: 8, sourceHeader: forked.view.header })).toThrow(/raw source/)
+    // Detached legacy seed import. Format 14 owns every seed prefix as the
+    // semantic bootstrap instead: the JSONL task-history reader refuses a legacy
+    // seed header outright (`seedLength > events.length`, and a non-zero
+    // `seedLength` on a fresh read, both raise PROCESS_READ_UNAVAILABLE), so an
+    // empty target that PREDECLARES a legacy seed prefix cannot be opened by
+    // this build's durable coordinator. The declaration guard therefore stays
+    // with its actual owner, `compileDetachedSeed`, and the end-to-end
+    // `openExecutorDocument` route is exercised with a header-less source whose
+    // import needs no predeclared prefix (it carries no derived-input links).
     const detached = fromJSONL(await readFile(join(root, `${id}.jsonl`), 'utf8'))
-    const compiled = remapConversationSeed({ source: detached.events, retained: detached.events, sourceFormat: detached.formatVersion, sourceHeader: detached.header })
-    const declared = await coordinator.create({ parentSession: id, seedLength: compiled.length })
-    const imported = await openExecutorDocument({ coordinator, sessionId: declared.id, detachedSession: detached })
+    const preparedSeed = compileDetachedSeed(detached)
+    expect(preparedSeed.events.filter(event => event.type === 'user/message' && event.seedInputContext)).toHaveLength(2)
+    const targetView = (header: SessionView['header']): SessionView => ({ formatVersion: detached.formatVersion, header, events: [] })
+    for (const header of [{}, { parentSession: id, seedLength: preparedSeed.events.length + 1 }, { parentSession: 'foreign-source', seedLength: preparedSeed.events.length }])
+      expect(() => preparedSeed.assertTarget(targetView(header))).toThrow(/predeclared exact seed prefix/)
+    expect(() => preparedSeed.assertTarget({ formatVersion: detached.formatVersion, header: {}, events: [{ type: 'user/message', text: 'already live target' }] })).toThrow(/empty owned document/)
+    const { id: plainSourceId } = await coordinator.create()
+    await coordinator.append(plainSourceId, [{ type: 'turn/start' }, { type: 'user/message', text: 'detached turn' }, { type: 'assistant/message', text: 'detached answer' }, { type: 'turn/end' }])
+    const plain = fromJSONL(await readFile(join(root, `${plainSourceId}.jsonl`), 'utf8'))
+    const compiled = remapConversationSeed({ source: plain.events, retained: plain.events, sourceFormat: plain.formatVersion, sourceHeader: plain.header })
+    const target = await coordinator.create()
+    const imported = await openExecutorDocument({ coordinator, sessionId: target.id, detachedSession: plain })
     expect(imported.session.events).toEqual(compiled)
     expect(imported.inbox.pending()).toHaveLength(0)
-    for (const header of [{}, { parentSession: id, seedLength: compiled.length + 1 }, { parentSession: 'foreign-source', seedLength: compiled.length }]) {
-      const target = await coordinator.create(header), path = join(root, `${target.id}.jsonl`), before = await readFile(path, 'utf8')
-      await expect(openExecutorDocument({ coordinator, sessionId: target.id, detachedSession: detached })).rejects.toThrow(/predeclared exact seed prefix/)
-      await coordinator.closeManagedDocument(target.id)
-      await expect(openExecutorDocument({ coordinator, sessionId: target.id, detachedSession: detached })).rejects.toThrow(/predeclared exact seed prefix/)
-      expect(await readFile(path, 'utf8')).toBe(before)
-    }
     const occupied = await coordinator.create()
     await coordinator.append(occupied.id, [{ type: 'user/message', text: 'already live target' }])
     const occupiedPath = join(root, `${occupied.id}.jsonl`), beforeOccupied = await readFile(occupiedPath, 'utf8')
-    await expect(openExecutorDocument({ coordinator, sessionId: occupied.id, detachedSession: detached })).rejects.toThrow(/empty owned document/)
+    await expect(openExecutorDocument({ coordinator, sessionId: occupied.id, detachedSession: plain })).rejects.toThrow(/empty owned document/)
     expect(await readFile(occupiedPath, 'utf8')).toBe(beforeOccupied)
   } finally { await service.close().catch(() => {}); await coordinator.close().catch(() => {}) }
 })

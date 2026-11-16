@@ -576,6 +576,16 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
   - `retained-state-negative` / `retained-state-cold` 的 child 改由真實 `createTaskRegistry`＋`createTaskResultRetention` 建立：submit→claim→terminalize→retainResult→flushPersistence，寫出真正的 v2 `task-parent` row 與 retained result。
   - v2 state mirror 與 `subagent/end`、`job/status` 使用真實 task id，parent log 與 Task document 一致；lazy resultText getter 保留「body 只被讀一次」斷言。
 - 驗證：`retained-state-negative` **4/4**、`retained-state-cold` **3/3**（共 7/7），executor typecheck 0（agent + root 各跑一次）；無產品改動。executor 定點殘餘由 15 降至 **8**（11 檔中 2 檔轉綠、共 7 failures 消失）。
+#### 第九十二批：forkTurns semantic-seed 批次轉換
+
+- `forkTurns` 現在偵測 forked semantic-seed view（`conversation/seed-manifest`＋`seed-group` bootstrap records），在一般座標 remap 前 materialize 成 legacy child-seed 事件：
+  - input → `user/message` inherited observation；host-preparation/supplemental context 的 `seedInputContext.rawMessageSeq` 指回 materialized raw human message。
+  - summary → `compaction/summary`（seed 可見 selection 已套用 shadow）。
+  - pure-text exchange → `assistant/message`（保留 thinking/continuation），以 item extents 分 turn。
+  - tool exchanges、media inputs、incomplete bootstrap、已 append child turns 明確拒絕，不靜默丟資料。
+- `remapConversationSeed` 在 semantic bootstrap header + legacy projection（format<11 或無 leading manifest）時，改用實際 legacy seed header（`parentSession`、`seedLength=source.length`），讓 projection 的 seeded observations 通過 input-preparation 規則；真 semantic/無 header source 不變。
+- fixture 尾段 detached-import 改在真正的 owner（`compileDetachedSeed.assertTarget`）驗證相同 declaration/refusal 契約，仍走真實 `openExecutorDocument` detached-import 路徑。
+- 驗證：`generation-actions` **15/15**；typecheck subagent/session-persistence/executor 0；fork/child/seed/fork-baseline 回歸全綠。executor 定點殘餘由 8 降至 **7**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

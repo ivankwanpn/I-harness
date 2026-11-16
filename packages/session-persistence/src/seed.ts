@@ -95,10 +95,29 @@ function remapSeedCoordinates(input: SessionEventView, index: number, renumbered
   return { ...event, seq: index }
 }
 
+/** A bootstrap header describes the seed records of the view a conversation came
+ * from. Two source shapes reach this compiler WITHOUT those records: a format
+ * that predates semantic bootstrap (< 11), and the legacy projection `forkTurns`
+ * materializes from a semantic-seed child (its view carries the records, but the
+ * seed it must produce is the plain inherited event prefix a child can hold).
+ * In both cases the bootstrap claims cannot be satisfied by the source, so the
+ * projection is described as what it is: a legacy seed whose WHOLE visible log
+ * is the inherited prefix. Seeded prepared observations are only legal inside a
+ * declared seed prefix (`input-preparation.ts`), so claiming the prefix length
+ * from the source's own extent is what makes the projection's own seeded
+ * messages validate — a live event is never inside that prefix. */
+type SeedSourceHeader = import('@i-harness/core-session').SessionView['header']
+function sourceValidationHeader(source: readonly SessionEventView[], sourceFormat: number, header: SeedSourceHeader): SeedSourceHeader {
+  if (header?.semanticSeed === undefined) return header
+  if (sourceFormat >= 11 && source[0]?.type === 'conversation/seed-manifest') return header
+  const { semanticSeed: _seed, ...legacy } = header
+  return { ...legacy, parentSession: legacy.parentSession ?? 'seed', seedLength: source.length }
+}
+
 /** Batch semantics must precede coordinate remapping. An isolated event cannot recover a sliced fence. */
-export function remapConversationSeed(input: { source: readonly SessionEventView[]; retained: readonly SessionEventView[]; sourceFormat: number; sourceHeader?: import('@i-harness/core-session').SessionView['header'] }): SessionEvent[] {
+export function remapConversationSeed(input: { source: readonly SessionEventView[]; retained: readonly SessionEventView[]; sourceFormat: number; sourceHeader?: SeedSourceHeader }): SessionEvent[] {
   const { source, retained } = input
-  const sourceIndex = createConversationValidationIndex(source, { formatVersion: input.sourceFormat, header: input.sourceHeader })
+  const sourceIndex = createConversationValidationIndex(source, { formatVersion: input.sourceFormat, header: sourceValidationHeader(source, input.sourceFormat, input.sourceHeader) })
   const replacements = source.some(event => event.type === 'compaction/replacement')
   if (replacements) requireReplacementSeedProof(source, retained, sourceIndex)
   const retainedSeqs = new Set(retained.map(event => event.seq))
