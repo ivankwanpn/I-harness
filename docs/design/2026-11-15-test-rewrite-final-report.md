@@ -1,5 +1,11 @@
 # I-harness 測試修復與重寫：最終報告（進行中）
 
+## 2026-11-16 接手審查註記
+
+原始全庫日誌確認 `cf92d076` 的 215 項失敗。舊清單 `verify-final2-file-failures.json` 共 94 列、failed 加總 184；**P0-A 已完成對帳**：31 項差額全部來自 31 個 file-summary 使用單數 `(1 test | 1 failed)` 而被舊解析規則（要求複數 `tests`）漏掉。對帳後清單為 215 項／125 檔，另列 5 筆 hook/cleanup 同名額外條目與 7 筆 unhandled errors（獨立通道）。skipped 104 項亦已逐項完成原因分類（0 unresolved），並核對舊基線 86 項之差異（+18，含 predecessor fixture 與 pwsh PATH 的執行環境差異）。詳見「P0-A 對帳」章節與證據目錄 `p0a-report.md`。下文的逐檔清單及掛起、WIP、flake 分類仍以原始失敗與正常入口進一步核實；兩個不同 HEAD 的全庫結果差異仍需配對證據才能完成根因判定。
+
+下一輪先完成失敗清單對帳與 target pins 的部分失敗／重試驗證，再處理掛起、持久化恢復及公開 JSONL selected-results 整合。[下一階段修復決策](D:/codex-ih-development/docs/design/2026-11-16-stability-next-stage.md)
+
 本報告依 `docs/design/2026-11-15-test-rewrite-handoff.md` 的交接要求整理。最終全庫驗證結果於文末「固定版本全庫驗證」章節填入。
 
 ## 一、範圍與起點
@@ -70,11 +76,45 @@
 
 ### issue 125：公開 JSONL selected-results 入口
 
-- 現況：`host.ts` 僅在 commit-log store 安裝 `createSelectedForkController`；JSONL 缺 `createChildSession`，kernel 走 `bootstrapChildTargetWithCapture`／`resumeChildTarget`。
-- 已準備的實作計畫：在既有 `SelectedForkController` 後接 JSONL child-birth adapter（`captureSelectedResultsSeed` 已與 store 無關）、建立 bootstrap child request／payload、以 resume route 處理 cold/blocked、保留 C67 正向順序（child 結果→compaction→reset→cold resume→V2 fork→精確讀取／搜尋→clear／retire→cold qualification→再讀）；commit-log 行為不變，且須從公開 gateway 入口驗證。
+- 現況補正。`host.ts` 僅在 commit-log store 安裝 `createSelectedForkController`。JSONL 已有專用 `public-results-v1` kernel，現有 native helper 使用 `createSelectedSourceHolder`、`captureFirst`、`publishWarm`，冷恢復使用 `inspectColdSelectedTarget` 與 `beginColdSelectedFinalization`。
+- 實作方向更新。公開 JSONL selected-results controller 沿用上述 public route 與原始持有者，整合 V2 DTO、選取範圍、同 operation 重試、取消、關閉及 cold qualification。private Task child birth 的 request／admission 契約另有用途。完整 C67 正向順序及 commit-log 相容性由正常 Gateway／SDK 入口驗證，細節見 2026-11-16 決策文件。
 - 狀態：尚未實作。
 
-## 四之一、剩餘失敗的結構化清單（215 項／94 檔，head `cf92d076` 驗證）
+## P0-A 失敗清單與 skipped 對帳（2026-11-16，head `cf92d076`）
+
+依 `2026-11-16-stability-next-stage.md` 完成；原清單保留為 `verify-final2-file-failures.old.json`。
+
+### 失敗清單
+
+| 口徑 | 數量 |
+| --- | ---: |
+| Runner `Tests ... failed` 加總（82/82 packages） | **215** |
+| 舊清單 94 列 failed 加總 | 184 |
+| 對帳後逐案例清單（125 檔） | **215** |
+| 原始 FAIL 標頭列數 | 220 = 215 + 5 筆同名 hook/cleanup 條目 |
+| Unhandled errors（獨立通道） | 7（全在 session-executor） |
+
+31 項差額**單一原因**：31 個 file-summary 使用單數 `(1 test | 1 failed)`，舊解析要求複數 `tests` 而整檔漏計；apps/cli 1、context-output 1、desktop 1、desktop-gateway 13、guard-approval 1、session-executor 14。逐檔漏計清單與原始日誌行號見證據目錄 `p0a-gap-attribution.json`／`p0a-report.md`。
+
+計數口徑：`Tests X failed` 只計 test result；5 筆額外 `FAIL` 是 hook/afterEach cleanup 對同一失敗案例的重複條目（review、sandbox.e2e 各 1 筆 EBUSY；managed-instruction-handoff 3 筆 cleanup）；7 筆 `Unhandled Errors` 為獨立通道。三者皆使 suite exit 1。
+
+### skipped
+
+104 項分佈 37 檔（整檔跳過 19 檔／72 項、部分跳過 18 檔／32 項）；以 JSON reporter 對 33 檔實跑取得 100 個精確案例名，4 個重檔以日誌 item-level 詳情或原始碼條件補足，**0 unresolved**。
+
+| 原因分類 | 數量 | 例子 |
+| --- | ---: | --- |
+| 環境資格 opt-in（`IH_*` gate） | 23 | ACL 系列、WSL exit、legacy outer、conpty resize、fork electron |
+| Git Bash shim 不在審核 manifest | 22 | msys-pty-resolution（實測 SHA-256 不在 audited set） |
+| 缺 predecessor fixtures | 20 | task-transition-original13 9、entries 3、selected-cold 3、retry 3、其他 2 |
+| 缺工具／發行版 | 14 | 無 playwright 6、無 jq 1、無 Node-可辨識 pwsh 1、無 WSL distribution 6 |
+| Windows symlink 權限（EPERM） | 13 | context-output legacy/integrity、instructions applicable-proof |
+| 平台限制 | 12 | fs-lock linux-only 5、posix-execution 2、credentials POSIX mode 1、M16 bwrap 1、bwrap.e2e 3 |
+
+舊基線 86 → 104（+18，10 檔）：其中 +20 是 `IH_TASK_D_PREDECESSOR_FIXTURES` 執行環境差異（基線該檔 9 項實際執行、本次未配置）、+1 是 pwsh App Execution Alias 在 Node `existsSync` 下不可見（環境漂移），-3 是條件不再成立。逐項原因、condition、原始碼行號與日誌位置在 `p0a-skip-items.json`。
+
+證據：`p0a-failure-list.json`、`p0a-reconciliation.json`、`p0a-gap-attribution.json`、`p0a-skip-items.json`、`p0a-skip-delta-attribution.json`、`p0a-report.md`（`C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/`）。
+## 四之一、剩餘失敗的結構化清單（215 項／125 檔，head `cf92d076` 驗證；P0-A 對帳後）
 
 | 類別 | 代表檔案／數量 | 判定 | 可接續位置 |
 |---|---|---|---|
