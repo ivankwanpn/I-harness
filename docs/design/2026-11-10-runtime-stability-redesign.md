@@ -425,6 +425,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - `managed-runtime-context` 最後一案量到：`checkCurrent` guard 在 publication 前因 pending issued write 拋 `Original issued write needs reconciliation`（code `FACT_RECOVERY_REQUIRED`），runtime-context 的 catch 一律轉成 `false`，document 因此分類為 `FACT_PRECONDITION_STALE`；正確語意應保留 recovery debt。
 - 修正（`runtime-context` publish）：guard 拋 `FACT_RECOVERY_REQUIRED` 時原樣 rethrow，只有真正的 currentness 失敗才回 false。session-executor 該案因此前進到「probe 未實際注入 append」階段；runtime-context 套件 22/22、typecheck 0。
 - 後續：fixture 的 legacy/selected journal mock 未攔到實際 runtime-context 寫入（appends 仍 0），需對齊目前 coordinator 的寫入模組或改走真正注入 seam。
+#### 第六十七批：runtime-context frame 的 self-pending 授權
+
+- 根因：core execution 的 `prepareWrite` 會把本批設為 `pendingWrite`；document 在 staging 後與 issuer 前各再跑一次 `assertAuthorized(entry.authorization)`。runtime-context 的 checkCurrent 會經 `execution.observe().assertCurrent()` 的 `assertFresh` 看到**自己剛開始的 write**，於是回 `FACT_RECOVERY_REQUIRED`，publication 永遠到不了 backend append。
+- 修正（`managed-document`）：僅對 core 的 `runtime/context` entry 跳過 staging 後與 issuer 前的 source re-assert（admission 當下的授權仍在）；其他 core frame 保留 post-staging source fence，metadata incarnation 變更仍必須在 native issuance 前拒絕。
+- 驗證：`managed-runtime-context` **8/8**；`session-persistence` 全套件通過；executor 回歸 6 檔 **47/47**（managed-runtime-context、managed-instruction-handoff、title-action、instruction-diagnostics、main-instruction-construction、owned-service-shell）；兩個 package typecheck 0。executor 殘餘約 **26**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

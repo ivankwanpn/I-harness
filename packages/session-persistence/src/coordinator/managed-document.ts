@@ -383,7 +383,12 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                         if (preparing.materializationRead) await preparing.materializationRead;
                         if(executionStage)for(const rejection of executionStage.rejected){for(let index=entries.length-1;index>=0;index--)if(entries[index]!.group===rejection.group){const entry=entries.splice(index,1)[0]!;entry.ticket.release();entry.resolve({kind:'not-issued',code:'FACT_INVALID_GROUP'})}}
                         if(!entries.length){executionStage?.discardUnissued();return}
-                        for(const entry of entries)assertAuthorized(entry.authorization);
+                        // Core staging already owns the execution writer. A
+                        // runtime-context frame is its own source; re-reading that
+                        // active write in its currentness guard would classify the
+                        // frame as stale. Other core frames keep the post-staging
+                        // source fence (metadata incarnation changes must refuse).
+                        for(const entry of entries)if(!core||((entry.group as {event?:{type?:string}}|undefined)?.event?.type!=='runtime/context'))assertAuthorized(entry.authorization);
                         const staged = executionStage??state!.stage(events);
                         if(executionStage)for(const [index,entry]of entries.entries())entry.seqs=Object.freeze(executionStage.members[index]!.events.map(event=>event.seq!));
                         deliveryControl.assert(staged.events);
@@ -399,7 +404,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                             if (operation.issued)
                                 throw new FactRecoveryRequiredError();
                             for (const entry of entries)
-                                assertAuthorized(entry.authorization);
+                                if(!core||((entry.group as {event?:{type?:string}}|undefined)?.event?.type!=='runtime/context'))assertAuthorized(entry.authorization);
                             deliveryControl.assert(operation.events);
                             operation.staged?.beforeIssue(operation.batch);
                             operation.issued = true;
