@@ -455,6 +455,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 根因一（產品）：`disposeOriginals` 的 `isolated-instructions` phase 原本排在 producer/source cleanup 的 early throw 之後；一旦 `terminal`/`exec` 或 document-sources 有 cleanup debt，流程就不會走到 isolated host，held approval generation 永遠不關。現將 isolated phase 提到 phase 建立後最前面，仍保留原本後段的 retry（cleanupDone 去重），dispose() 的同步 retire/revoke 契約不變。
 - 根因二（fixture）：test 在 assembly 建立後直接替換 `backend.appendOwnedBatch`，會觸發 canonical artifact path 的 descriptor identity guard（`PROCESS_READ_UNAVAILABLE`）。改為建立 backend 時使用 `wrapOwnedBatch` pre-bind seam，以 mutable flags 注入 first close unknown。
 - 驗證：`instruction-isolated-review` **7/7**、`execution-surface-lifecycle` **10/10**；assembly disposal 回歸 9 檔 **84/84**；executor typecheck 0。executor 殘餘約 **21**。
+#### 第七十三批：mixed retention 的 reorder 契約與 clear caller
+
+- `mixed-retention-native` 的 reorder 失敗量到 batch pin `id='a'`、`batchIds=["a","b"]`、`origin={}`；resources 為 A/B/TASK-A/TASK-B，retained 為 A/TASK-A。這是 **clear/批次 caller 把已 retained 的 a 與 fresh 的 b 混在同一 batch**。
+- 嘗試移除 `borrowBundle` 的 reorder guard 後，mixed test 前進到「staged artifact body 被刪」的另一缺口；但 `session-persistence` 有 3 個契約測試明確要求拒絕 lower fresh/Task companion（canonical-ownership、ownership-native-count），證明 guard 是必要契約。
+- 正確修法在 caller：clear/revocation 批次不得混合 retained 與 fresh target；需先處理 fresh targets（或在批次前釋放 retained），再單獨處理 retained。已回退 guard 實驗，未合併。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
