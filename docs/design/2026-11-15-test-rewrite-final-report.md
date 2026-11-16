@@ -179,3 +179,15 @@
 - 接續狀態（每次批次更新）：`C:/Users/IvanKwan/AppData/Local/Temp/ih-runtime-stability-progress-latest.json`。
 - 測試收據（JSON）與日誌：`C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/`。
 - 設計／批次紀錄：`docs/design/2026-11-10-runtime-stability-redesign.md` 第十二至十九批。
+
+## 八、P1 之後 executor 套件現況（2026-11-16，head `4f1391ab`）
+
+- 指令：`node scripts/test-env.mjs pnpm --filter '@i-harness/session-executor' test --maxWorkers=1 --minWorkers=1 --testTimeout=120000 --reporter=json`（單一 worker，避免並發 flake）。
+- 結果：**231 檔、1,405 項：1,359 passed／46 failed／0 skipped**；`session-executor` typecheck **exit 0**。
+- 基線（`cf92d076` 最終全庫驗證的 executor 部分）：62 檔／101 failed → **25 檔／46 failed（-55 項）**，37 個原失敗檔已全綠。
+- 本輪已修並留存的主要群組：Task prepared-spawn 正常入口（`spawnDurable`＋task child host＋composed coordinator）、runtime-context snapshot 新形狀、Code Mode async cell／`code_wait` 觀察、pre-bind backend fault seam、背景保留 approval、service/execution-state async admission、search 期限與 fixture 縮減、native-context-output 的 artifact-set 觀察等。
+- 剩餘 46 項分佈（`p1-executor-full-fails.json`）：
+  - 4：`retained-state-negative`；3：`managed-instruction-handoff`、`project-context`；2：`delivery-retry`、`event-driven-steering`、`execution-authority`、`instruction-isolated-review`、`inherited-context-budget`、`publication-pins`。
+  - 1：`bounded-file-production`、`owned-code-service`、`owned-service-shell`、`retained-batch-continuation`、`retained-child-scope`、`retained-hook-recovery`、`retained-state-cold`、`service-instruction-close`、`owned-code-nested-shell`、`native-dependency-observer`、`managed-runtime`、`mixed-retention-native`、`title-action`、`managed-runtime-context`、`main-instruction-construction`、`instruction-diagnostics`、`generation-actions`、`fork-handoff`、`execution-source-prereq`、`exec-direct-source`、`delivery-lifecycle`、`delivery-active-wait`、`mixed-retention-quota`、`wsl-assembly`。
+- 產品級待修（已以故障注入定位、非 fixture 放寬）：title action abort 後 settlement source 未 `closeRequested`（`settleFinishedActions` 見 2 required pending／0 eligible）；delivery falsey ack 的 close recovery 未在一次 `close()` 完成；publication-pins 首次 delete pin／access 的 `Original deletion recovery required`；isolated source 在 close recovery 後未 retire；child native job receipt owner 仍記為 parent session；mixed-retention revocation inventory recovery 與 SQLite logical-full。
+- 證據：JSON `p1-executor-full.json`、失敗清單 `p1-executor-full-fails.json`、日誌 `p1-executor-full.log`（皆在 `C:/Users/IvanKwan/AppData/Local/Temp/ih-test-rewrite-handoff/`）。

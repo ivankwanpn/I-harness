@@ -299,6 +299,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - `title-action`：第二個 submit 的 queue row 是 async admission，補 `vi.waitFor(queue==2)`；剩餘產品缺口已用 debug 定位——`settleFinishedActions` 看到 **2 個 required pending frame、eligible=[]**（title 取消後兩個 settlement source 都沒有 `closeRequested`），因此下一次 submit 回 `FactRecoveryRequiredError`。已 revert 產品實驗（cleanup 先 finish action 不足）。
 - `delivery-retry`：falsey task-parent ack 的實際 warnings 已變成 `AggregateError: Task notification and original progress cleanup failed` 與 `Required source drain needs recovery`（settlement／reconciliation 各一）；expectedWarnings 對齊後 warnings 檢查通過，但 fixture close 仍因 service/coordinator recovery debt 失敗，待產品修正。
 - 兩檔尚未全綠；此批只提交 fixture 對齊與接續證據。
+#### 第四十三批：P1 之後 executor 全套件實測
+
+- 以單一 worker 跑完整 `@i-harness/session-executor`：**231 檔／1,405 項：1,359 passed、46 failed、0 skipped**；typecheck 0。
+- 對照基線 `cf92d076` 的 executor 部分（62 檔／101 failed），失敗 **101 → 46（-55）**，37 個原失敗檔已全綠。
+- 詳細剩餘清單與產品級待修已寫入最終報告「八、P1 之後 executor 套件現況」，證據 JSON／log 留存於 `ih-test-rewrite-handoff`。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
