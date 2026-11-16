@@ -4,18 +4,20 @@ import { createHash } from 'node:crypto'
 import { contextWorkspaceLocation } from '@i-harness/context-output'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createSessionAssembly } from '../src/assembly.ts'
+import { createUnmanagedTaskChildHost } from '../src/lifecycle/task-child-host.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/backend-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { controlledModel } from './controlled-model.ts'
 
 it('the actual managed child retains one1MiB terminal body while task/outbox/job/table documents contain only previews and refs', async () => {
   const root = await mkdtemp(join(tmpdir(), 'r4a-child-flow-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create()
   let sends = 0
   const full = 'x'.repeat(1_048_576)
-  const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: id, approveAll: true, model: controlledModel(async function* () {
+  const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: id, approveAll: true, prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: 'unmanaged' }), model: controlledModel(async function* () {
     const send = ++sends
     if (send === 1) yield { type: 'tool_call', call: { id: 'child-once', name: 'spawn_agent', args: { task_name: 'one', message: 'return controlled output', background: false } } }
     else if (send === 4) yield { type: 'tool_call', call: { id: 'child-followup-once', name: 'followup_task', args: { target: 'root/one', message: 'return the same text in a new real revision' } } }
@@ -30,7 +32,8 @@ it('the actual managed child retains one1MiB terminal body while task/outbox/job
       expect(current.tasks[0]?.result?.kind, JSON.stringify({ sends, status: current.tasks[0]?.status, error: current.tasks[0]?.error })).toBe('retained')
     })
     const taskDoc = await coordinator.getDocument(`task-${id}`) as any
-    expect(taskDoc.formatVersion).toBe(2)
+    // The composed task transition coordinator now persists task documents at v3.
+    expect(taskDoc.formatVersion).toBe(3)
     expect((await coordinator.profile(taskDoc.tasks[0].childSessionId)).meta).toHaveProperty('subagentProtocolVersion', 1)
     expect(taskDoc.tasks[0].result.kind).toBe('retained')
     expect(taskDoc.tasks[0].result.envelope.retention.kind).toBe('artifact')
@@ -58,7 +61,7 @@ it('the actual managed child retains one1MiB terminal body while task/outbox/job
 
 it('binds a real managed child synthetic failure to that child document and cold read owner', async () => {
   const root = await mkdtemp(join(tmpdir(), 'r4a-child-synthetic-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create()
   let sends = 0, projections = 0
   const full = 'z'.repeat(1_048_576)
@@ -69,7 +72,7 @@ it('binds a real managed child synthetic failure to that child document and cold
     else yield { type: 'text/chunk', text: 'done' }
     yield { type: 'end' }
   })
-  const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: id, approveAll: true, model })
+  const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: id, approveAll: true, prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: 'unmanaged' }), model })
   let cold: typeof assembly | undefined
   assembly.ctx.onCascade('tools/project-synthetic-result', async (dispatch, next) => {
     if ((dispatch as { name?: unknown }).name !== 'missing-child-tool') return next()
@@ -89,7 +92,7 @@ it('binds a real managed child synthetic failure to that child document and cold
     expect(operation.owner.sessionId).not.toBe(id)
     expect(operation.owner.callId).toBe('original-missing')
     await assembly.dispose()
-    cold = await createSessionAssembly({ workspace: root, coordinator, sessionId: childId, approveAll: true, model })
+    cold = await createSessionAssembly({ workspace: root, coordinator, sessionId: childId, approveAll: true, prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: 'unmanaged' }), model })
     expect(await cold.tools.get('context_output_read')!.execute({ ref }, { sessionId: childId })).toHaveProperty('data.kind', 'text')
     expect(projections).toBe(1)
     expect(sends).toBe(4)

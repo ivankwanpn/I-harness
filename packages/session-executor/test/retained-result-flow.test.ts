@@ -149,11 +149,11 @@ it('retains exact native raw tokens before actual Code Mode binary64 transfer an
   let runtime: ReturnType<typeof createCodeModeRuntime>
   runtime = createCodeModeRuntime({ tools: () => broker.definitions(), invoke: call => broker.invoke(call), onEvent(event) { if (event.type === 'started') broker.startCell(event.cellId) } })
   try {
-    expect(await runtime.exec({ code: 'const value=await tools.raw({}); text([value.number===9007199254740992,value.overflow===Infinity,value.escaped]);' }, { sessionId: 'a' })).toMatchObject({ status: 'completed', text: '[true,true,"a"]' })
+    expect(await runtime.exec({ code: 'const value=await tools.raw({}); text([value.number===9007199254740992,value.overflow===Infinity,value.escaped]);', yield_time_ms: 30000 }, { sessionId: 'a' })).toMatchObject({ status: 'completed', text: '[true,true,"a"]' })
     const first = session.events.find(event => event.type === 'code/result')
     if (first?.type !== 'code/result' || first.envelope?.retention.kind !== 'artifact') throw new Error('Expected raw result retained before guest fulfillment')
     expect((await service.readResult({ sessionId: 'a' }, { ref: first.envelope.retention.ref })).data).toEqual({ kind: 'text', text: '{"number":9007199254740993,"overflow":1e400,"escaped":"\\u0061"}' })
-    const capped = await runtime.exec({ code: 'await tools.capped({}); text("must not be fulfilled");' }, { sessionId: 'a' })
+    const capped = await runtime.exec({ code: 'await tools.capped({}); text("must not be fulfilled");', yield_time_ms: 30000 }, { sessionId: 'a' })
     expect(capped.status).toBe('failed'); expect(capped.error).toMatch(/Tool result.*limit|Tool result.*exceed/i)
     expect(capped.text).not.toContain('must not be fulfilled')
     const results = session.events.filter(event => event.type === 'code/result')

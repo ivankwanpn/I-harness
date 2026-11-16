@@ -248,6 +248,10 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 
 - `retained-background-summary`／`retained-background-summary-diagnostic`／`retained-background-exec`：shell 背景命令（`& "node" …`）現在走 approval gate，fixture 未註冊 answerer；補 `approveAll: true` 後三檔皆 1/1 通過。
 - `owned-metadata-runtime`：「competing write 未確認時拒絕 Goal completion」案的實際分類是 `FACT_PRECONDITION_STALE`（競爭寫入確實 in flight → 本次 capture stale，非 uncertain），改為期待 stale；仍驗證不寫 completion fact、釋放後 `goal-stale-ref`。**18/18 通過**。
+#### 第三十四批：retained-result-flow／retained-child-flow
+
+- `retained-result-flow`：raw-token 案的 `runtime.exec` 未帶 `yield_time_ms`，async cell 立即回 `running`；補 30000ms 後兩個 exec 都等到完成，**6/6 通過**。
+- `retained-child-flow`：改以 `composeJsonlTaskTransitionCoordinator`＋`createUnmanagedTaskChildHost` 建立 durable 任務入口；task document 現為 v3，斷言由 v2 更新為 v3；**2/2 通過**（第二案 cold child document 也通過）。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
