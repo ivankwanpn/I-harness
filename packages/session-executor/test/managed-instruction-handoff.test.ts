@@ -18,6 +18,7 @@ import { taskDocumentStorageContract } from '../../subagent/src/task/storage-con
 import { createExecutorExecutionCache } from '../src/durable-session.ts'
 import { createExecutionGenerationLifecycle } from '../src/lifecycle/generation-actions.ts'
 import { createRuntimeContextSource } from '../src/lifecycle/action-facts.ts'
+import { createRuntimeContext } from '@i-harness/runtime-context'
 import { createMainInstructionManager,isOriginalAcceptedInstructionOrigin } from '../src/context/instructions/manager.ts'
 import { createProjectInstructionEnvironment } from '../src/context/instructions/host.ts'
 import { acquireManagedExecution } from '../../session-persistence/src/execution-internal.ts'
@@ -27,9 +28,9 @@ afterEach(async()=>{vi.unstubAllGlobals();const failed:unknown[]=[];for(const cl
 async function fixture(){
  const cwd=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'managed-instruction-'));await writeFile(join(cwd,'AGENTS.md'),'original rules')
  const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(cwd,'sessions')),{lock:{enabled:true}},taskDocumentStorageContract);defer(()=>coordinator.close());await coordinator.create({sessionId:'owner'})
- const cache=createExecutorExecutionCache({coordinator}),{execution,inputs}=await cache.get('owner'),ctx=createContext(),domain=createManagedExecutionDomain(execution.identity,execution.owner,ctx),environment=createProjectInstructionEnvironment(),runtime=createRuntimeContextSource(execution.owner)
- const manager=createMainInstructionManager({domain,environment,cwd,authority:()=>({kind:'unbound',revision:'actual',workspaceRoot:cwd}),available:()=>true,async publish(_signal,retain){const pin=retain(),source=runtime();try{committedFactSeqs(await source.captureRuntimeContext({type:'runtime/context',version:1,sections:[{name:'instructions',text:manager.text()}]},()=>{domain.assertCurrent();return true}).admit())}finally{source.finish();await pin.release()}}})
- defer(()=>cache.closeAll());defer(()=>environment.close());defer(()=>manager.close())
+ const cache=createExecutorExecutionCache({coordinator}),{execution,inputs}=await cache.get('owner'),document=await coordinator.openManagedDocument('owner'),ctx=createContext(),domain=createManagedExecutionDomain(execution.identity,execution.owner,ctx),environment=createProjectInstructionEnvironment(),runtime=createRuntimeContext(document.view,createRuntimeContextSource(execution.owner))
+ const manager=createMainInstructionManager({domain,environment,cwd,authority:()=>({kind:'unbound',revision:'actual',workspaceRoot:cwd}),available:()=>true,publish:(signal,retain)=>runtime.render(signal,retain)})
+ defer(()=>runtime.close());defer(()=>cache.closeAll());defer(()=>environment.close());defer(()=>manager.close())
  await manager.reconcile();const evidence=manager.capture()!,inputSeq=await inputs.inbox.admit({inputId:'human',text:'read original',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}}),action=execution.owner.beginAction(),lifecycle=createExecutionGenerationLifecycle(execution,'owner',action),generation=await lifecycle.open('main',{kind:'input',seq:inputSeq})
  committedFactSeqs(await action.facts.agent.lifecycle({type:'conversation/semantics',version:1,mode:'accepted-exchange-v1'}))
  const finish=defer(async()=>{await generation.close('stopped');await lifecycle.drain();action.finish()})
