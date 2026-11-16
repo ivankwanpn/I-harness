@@ -411,6 +411,10 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 修正（manager.preflightCore）：看到 mutation targets 時即登記到 pending（`resolve(path)`＋target key，selection++），並 `invalidateDiagnostics()`；即使 preflight 隨後被拒絕，舊 publication 也不再被宣稱 current。refresh 會針對新 target 重新 prepare（nested AGENTS.md）。
 - 測試負載校正：diagnostics 通知改 `vi.waitFor`；cold instruction state 案在繁忙機器上會超過原 15s（實測 instrumentation 顯示各步很快，屬競態），timeout 改 60s。
 - 驗證：`instruction-diagnostics` **8/8**；instruction 回歸 5 檔 **25/25**；core-agent `instruction-batch-preflight` 7/7；typecheck 0。executor 殘餘約 **28**。
+#### 第六十四批：managed handoff 的 bootstrap/publish 入口
+
+- `managed-instruction-handoff` 的 `publish` 仍回 `not-issued/FACT_RECOVERY_REQUIRED`；已確認 `admitCore` 的 `bootstrapReady` 在 direct `cache.get` fixture 路徑為 false，但未找到由哪個 bootstrap 操作建立 entry（`coordinator.create` 本身不呼叫 `bootstrapSemanticTarget`）。
+- 嘗試把 fixture 改用 production 的 `createRuntimeContext(...).render(signal, retain)` 路徑（取代 raw `createRuntimeContextSource` 手工 capture）時，patch 未完整套用；後續應先完成此 fixture 重構，再判斷是 fixture 路徑問題或產品 bootstrap 缺口。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
