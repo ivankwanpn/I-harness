@@ -420,6 +420,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 根因（fixture 側）：direct `cache.get` 的 execution attachment 尚未 materialize `document.view`；舊 fixture 以 raw `createRuntimeContextSource(...).captureRuntimeContext()` 手工 publish，導致 `not-issued/FACT_RECOVERY_REQUIRED`。
 - 修正：`cache.get` 之後先 `coordinator.openManagedDocument('owner')` materialize view，並用 production 的 `createRuntimeContext(document.view, createRuntimeContextSource(execution.owner))`；manager 的 `publish` 改走 `runtime.render(signal, retain)`，關閉時 `runtime.close()`。沒有改產品程式碼。
 - 驗證：`managed-instruction-handoff` **3/3**（連跑兩次）；instruction 回歸 `instruction-diagnostics` 8/8、`main-instruction-construction` 10/10；`managed-runtime-context` 仍餘 1 個既有 unknown-publication 分類問題（與本修正無關）。executor 殘餘約 **27**。
+#### 第六十六批：runtime context 的 issued-write recovery 分類
+
+- `managed-runtime-context` 最後一案量到：`checkCurrent` guard 在 publication 前因 pending issued write 拋 `Original issued write needs reconciliation`（code `FACT_RECOVERY_REQUIRED`），runtime-context 的 catch 一律轉成 `false`，document 因此分類為 `FACT_PRECONDITION_STALE`；正確語意應保留 recovery debt。
+- 修正（`runtime-context` publish）：guard 拋 `FACT_RECOVERY_REQUIRED` 時原樣 rethrow，只有真正的 currentness 失敗才回 false。session-executor 該案因此前進到「probe 未實際注入 append」階段；runtime-context 套件 22/22、typecheck 0。
+- 後續：fixture 的 legacy/selected journal mock 未攔到實際 runtime-context 寫入（appends 仍 0），需對齊目前 coordinator 的寫入模組或改走真正注入 seam。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

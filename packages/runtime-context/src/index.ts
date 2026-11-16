@@ -106,7 +106,12 @@ function createRuntimeContextEngine(readCurrent:()=>{readonly semanticDigest:str
     let work: Promise<void>
     try {
       publication.lease = retain?.()
-      publication.capture = action.captureRuntimeContext(record, () => {if(closed)return false;try{guard?.();return true}catch{return false}})
+      publication.capture = action.captureRuntimeContext(record, () => {if(closed)return false;try{guard?.();return true}catch(error){
+        // An issued-but-unreconciled write is a recovery fact, not a stale
+        // precondition; surface it so the publication keeps its recovery debt.
+        if((error as {code?:string}|null)?.code==='FACT_RECOVERY_REQUIRED')throw error
+        return false
+      }})
       publication.finishNeeded = true
       work = publication.capture.admit().then(async outcome => {
         publication.outcome = outcome
