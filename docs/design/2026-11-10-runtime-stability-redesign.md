@@ -440,6 +440,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - `durable-spawn` helper 的 tool name 改為可選（`options.name`，預設 `spawn_agent`），讓 `followup_task` 等 Task 工具也能走真實 prepared caller 路徑；typecheck 0。
 - `inherited-context-budget` 進一步確認：main turn 建立 accepted-exchange 對話後，手動 tool/call+dispatch 會被 `SESSION_CONVERSATION_FORMAT` 拒絕；需要 helper 建立 accepted model exchange 或改由模型 turn 驅動 spawn。
 - `retained-hook-recovery`：`coordinator.close()` 重試 3 次（含 broker.dispose 後延遲）仍回 `Coordinator cleanup is unresolved`；是 retained Code Mode source 的真實 cleanup debt，需產品端處理，不是測試重試可解。
+#### 第七十批：bounded-file-production 走真實 child artifact paging
+
+- fixture 改為 composed task transition coordinator＋`createUnmanagedTaskChildHost`，spawn 走 `spawnDurable`；assembly 掛上 enabled `contextOutput`，讓 child 的 `read` 結果以 artifact envelope 返回時可用 `context_output_read` 逐頁還原。
+- child model 新增 envelope 偵測（`retention.ref`）與 `context_output_read` paging：累積 `data.text`，`eof` 後解析原 `read` page JSON，再按 `next_offset_bytes` 續讀；主端 read 迴圈仍直接驗證 inline pages 與 `FS_STALE_VERSION`。
+- 驗證：`bounded-file-production` **1/1**（連跑兩次），typecheck 0。executor 殘餘約 **23**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
