@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inspect } from 'node:util'
 import { decodeFactBatch, type BatchKey, type ManagedAction, type ProducerFactOutcome, type SessionView, type SettlementFacts } from '@i-harness/core-session'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/backend-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
+import { createUnmanagedTaskChildHost } from '../src/lifecycle/task-child-host.ts'
 import { createContextOutputService } from '@i-harness/context-output'
 import { registerCodeMode } from '@i-harness/code-mode'
 import type { LLMRequest } from '@i-harness/llm-seam'
@@ -14,42 +16,40 @@ import { controlledModel } from './controlled-model.ts'
 
 it('continues the original parent and child after landed output reconciles on its original handle', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-live-retained-batch-'))
-  const backend = createJsonlBackend(join(root, 'sessions'))
-  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(join(root, 'sessions'), {
+    wrapOwnedBatch: append => async (...args: Parameters<typeof append>) => {
+      const outcome = await append(...args)
+      if (!originalKey && args[0] !== 'parent' && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/output')) {
+        originalKey = args[3].key; originalOutcome = outcome; childId = args[0]
+        return { kind: 'unknown' as const, key: originalKey }
+      }
+      return outcome
+    },
+    wrapOwnedReconcile: reconcile => async (...args: Parameters<typeof reconcile>) => {
+      if (originalKey?.batchId === args[3].key.batchId) {
+        reconciles.push(args[3].key)
+        if (!allowOriginal) return { kind: 'unknown' as const, key: originalKey }
+      }
+      return reconcile(...args)
+    },
+  })
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: 'parent' })
   const parentDocument = await coordinator.openManagedDocument('parent')
   const output = createContextOutputService({ root: join(root, 'results'), workspaceId: 'fixture', config: { enabled: false } })
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
-  let originalKey: BatchKey | undefined, originalOutcome: unknown, childId: string | undefined
+  let originalKey: BatchKey | undefined, originalOutcome: unknown, childId: string | undefined, childSessionId: string | undefined
   let observerError: unknown, allowOriginal = false, producers = 0, parentRequests = 0
   let batchSource: SettlementFacts<ProducerFactOutcome> | undefined, originalView: SessionView | undefined, heldAtRejection = false, checkedLive = false
   const sourceActions = new Map<SettlementFacts<ProducerFactOutcome>, ManagedAction<ProducerFactOutcome>>()
   const closedSources = new Set<SettlementFacts<ProducerFactOutcome>>()
   const reconciles: BatchKey[] = [], childRequests: LLMRequest[] = []
-  backend.appendOwnedBatch = async (...args) => {
-    const outcome = await append(...args)
-    if (!originalKey && args[0] !== 'parent' && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/output')) {
-      originalKey = args[3].key; originalOutcome = outcome; childId = args[0]
-      return { kind: 'unknown', key: originalKey }
-    }
-    return outcome
-  }
-  // Deterministic original-handle gate: automatic refresh cannot outrun the
-  // observer's rejection. No replacement frame, receipt, input or producer.
-  backend.reconcileOwnedBatch = async (...args) => {
-    if (originalKey?.batchId === args[3].key.batchId) {
-      reconciles.push(args[3].key)
-      if (!allowOriginal) return { kind: 'unknown', key: originalKey }
-    }
-    return reconcile(...args)
-  }
   const child = controlledModel(async function* (request) {
     if (childRequests.length) {
       expect(closedSources.has(batchSource!)).toBe(true)
       sourceActions.get(batchSource!)!.assertOpen()
       expect(sourceActions.get(batchSource!)!.signal.aborted).toBe(false)
-      expect((await coordinator.openManagedDocument(childId!)).view).toBe(originalView)
-      ;(await coordinator.openManagedDocument(childId!)).assertReady()
+      expect((await coordinator.openManagedDocument((childSessionId ?? childId)!)).view).toBe(originalView)
+      ;(await coordinator.openManagedDocument((childSessionId ?? childId)!)).assertReady()
       checkedLive = true
     }
     childRequests.push(request)
@@ -63,6 +63,7 @@ it('continues the original parent and child after landed output reconciles on it
     yield { type: 'end' }
   })
   const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), contextOutput: output,
+    prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: 'unmanaged' }),
     model: parent, modelPolicy: 'test-mock', approveAll: true, sandbox: 'danger-full-access', codeMode: { mode: 'mixed' }, contextWindow: 100000,
     pluginAgents: [{ name: 'probe', description: 'owned output fixture', systemPrompt: 'Emit once', tools: ['owner_probe', 'code_exec', 'code_wait'] }],
     additionalTools: [{ name: 'owner_probe', description: 'literal fixture', inputSchema: {}, isReadOnly: true, execute: async () => { producers++; return { probe: 'once' } } }],
@@ -70,7 +71,7 @@ it('continues the original parent and child after landed output reconciles on it
     resolveRoleModel: async () => ({ status: 'ready', binding: { client: child, contextWindow: 100000 } }),
     codeModeFactory(ctx, tools, options) {
       if (options.sessionId !== 'parent') {
-        originalView = options.session
+        originalView = options.session; childSessionId = options.sessionId
         const owner = options.factOwner!, begin = owner.beginAction.bind(owner)
         owner.beginAction = signal => {
           const action = begin(signal), register = action.registerSettlementSource.bind(action)
@@ -93,7 +94,7 @@ it('continues the original parent and child after landed output reconciles on it
         return dispatch(prepared).catch(error => {
         if (options.sessionId !== 'parent' && prepared.tool.name === 'code_exec' && originalKey) {
           observerError = error
-          try { (options.factOwner as typeof parentDocument).assertReady() } catch { heldAtRejection = true }
+          try { const owner = options.factOwner as typeof parentDocument & { assertObservable?: () => void }; (owner.assertObservable ?? owner.assertReady.bind(owner))() } catch { heldAtRejection = true }
           allowOriginal = true
         }
         throw error
@@ -106,7 +107,7 @@ it('continues the original parent and child after landed output reconciles on it
   try {
     await service.submit('parent', 'run one child', new AbortController().signal)
     const parentEvents = parentDocument.view.events
-    const childDocument = await coordinator.openManagedDocument(childId!)
+    const childDocument = await coordinator.openManagedDocument((childSessionId ?? childId)!)
     const events = childDocument.view.events
     expect(originalOutcome).toHaveProperty('kind', 'committed')
     expect(observerError).toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })

@@ -497,6 +497,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - reader 在 read 前後比較 `status().pendingResults`，若讀取本身留下 pending sink 則拒絕頁面；cold lease release 因而保留可重試 cleanup debt。
 - `service-instruction-close` fixture 改以 `node:fs/promises.open` wrapper 在 sink 建立前安裝 held native close（writer 會捕獲 close delegate）。
 - 驗證：`service-instruction-close` **2/2**；context-output `close-ownership` 15/15、`managed-ownership` 6/6、`pending-result-status` 1/1；executor retention/order/prereq 4 檔 **10/10**；兩個 package typecheck 0。executor 殘餘約 **18**。
+#### 第八十一批：retained-batch-continuation fixture 現代化（尚未綠）
+
+- backend 注入改為 pre-bind `wrapOwnedBatch`/`wrapOwnedReconcile`，消除 `PROCESS_READ_UNAVAILABLE`。
+- coordinator 改為 composed task transition + `createUnmanagedTaskChildHost`，消除 `artifactPath(undefined)` transition。
+- child session id 改由 `codeModeFactory` 的 `options.sessionId` 取得（原本依賴 code/output append 時序，可能 undefined）。
+- readiness 改呼叫 `document.assertObservable()`（product 的 held-write predicate）；`heldAtRejection` 已能為 true。
+- 仍餘：`checkedLive` false——child 第二次 model request 沒有發生（`childRequests` 未到 2），child code_exec unknown 失敗後沒有進入 reconcile 後重試；需產品 child turn retry 路徑。fixture 改動已提交，檔案仍紅。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
