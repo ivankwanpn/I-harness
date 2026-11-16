@@ -41,7 +41,8 @@ function captureMethod<T extends (...args: any[]) => any>(owner: object, name: s
 const managedInstructionManagers=new WeakMap<object,{domain:ManagedExecutionDomain;current():boolean}>()
 export function isOriginalManagedInstructionManager(manager:object,domain:ManagedExecutionDomain):boolean{const owner=managedInstructionManagers.get(manager);return !!owner&&owner.domain===domain&&owner.current()&&isManagedExecutionDomain(domain)}
 
-export function createMainInstructionManager(options: { session?: SessionView; domain?: ManagedExecutionDomain; environment: InstructionEnvironment; cwd: string; authority: () => AuthorityState; available: () => boolean; publish: (signal: AbortSignal | undefined, retain: () => import('@i-harness/core-agent').RequestContextPin) => Promise<void> }) {
+export function createMainInstructionManager(options: { session?: SessionView; domain?: ManagedExecutionDomain; environment: InstructionEnvironment; cwd: string | (() => string); authority: () => AuthorityState; available: () => boolean; publish: (signal: AbortSignal | undefined, retain: () => import('@i-harness/core-agent').RequestContextPin) => Promise<void> }) {
+  const cwdNow=()=>typeof options.cwd==='function'?options.cwd():options.cwd
   if(options.domain&&(options.session||!isManagedExecutionDomain(options.domain)))throw TypeError('Original managed instruction domain required')
   type MemberPin=ReturnType<typeof retainAcknowledgedExecutionMembers>
   type ManagedEvidence={domain:ManagedExecutionDomain;action:ManagedSuccessfulInstructionHandoff['action'];accepted:import('@i-harness/core-session').SessionEventView;calls:readonly import('@i-harness/core-session').SessionEventView[];pins:MemberPin[]}
@@ -67,7 +68,7 @@ export function createMainInstructionManager(options: { session?: SessionView; d
     const state = options.authority()
     if (state.kind === 'revoked' || state.kind === 'unavailable') throw unavailable()
     const roots = state.kind === 'bound' ? state.roots : [state.workspaceRoot]
-    if (!roots.some(root => contained(root, options.cwd))) throw unavailable()
+    if (!roots.some(root => contained(root, cwdNow()))) throw unavailable()
     return { roots, revision: state.revision, identity: JSON.stringify([state.revision, roots]) }
   }
   const current = (candidate: InstructionRequestEvidence | undefined) => {
@@ -106,11 +107,11 @@ export function createMainInstructionManager(options: { session?: SessionView; d
       const nextKey = JSON.stringify([scope.identity, policy.generation, targets])
       let view = active
       if (!view || key !== nextKey) {
-        view = instructionView(options.environment.host.create({ cwd: options.cwd, roots: scope.roots, ...policy.policy }))
+        view = instructionView(options.environment.host.create({ cwd: cwdNow(), roots: scope.roots, ...policy.policy }))
         views.add(view)
       }
       try {
-        const snapshot = await view.service.prepare([{ path: options.cwd, kind: 'directory' }, ...targets])
+        const snapshot = await view.service.prepare([{ path: cwdNow(), kind: 'directory' }, ...targets])
         signal?.throwIfAborted()
         if (options.environment.policy.current().generation !== policy.generation || authority().identity !== scope.identity || !snapshot.complete || snapshot.reliability !== 'ready') throw unavailable()
         const previousText = text
@@ -132,7 +133,7 @@ export function createMainInstructionManager(options: { session?: SessionView; d
         tokens.set(token, { view, authority: scope.identity, policy: policy.generation, snapshot, selection: capturedSelection })
         published = Object.freeze({ fingerprint: snapshot.fingerprint, sourceRevision: snapshot.revision, policyGeneration: policy.generation, authorityRevision: scope.revision,
           enabled: policy.policy.enabled, maxBytes: policy.policy.maxBytes, bytes: snapshot.bytes,
-          scope: Object.freeze({ cwd: options.cwd, roots: Object.freeze([...scope.roots]) }),
+          scope: Object.freeze({ cwd: cwdNow(), roots: Object.freeze([...scope.roots]) }),
           sources: Object.freeze(snapshot.sources.map(source => Object.freeze({ ...source }))) })
         publishedAuthority = scope.identity
         publishedSelection = capturedSelection
@@ -255,7 +256,7 @@ export function createMainInstructionManager(options: { session?: SessionView; d
               const entry = selected[index]!, local = mutations.map((item, ordinal) => ({ ...item, canonical: canonical[ordinal]! })).filter(item => item.ownerIndex === index)
               if (!local.length) continue
               const scoped = local.filter(item => scopedMutations.some(scoped => scoped.target === item.target))
-              const proof = evidence.view.service.proveApplicable(snapshot, scoped.length ? scoped.map(item => ({ path: item.target.path, kind: item.target.kind })) : [{ path: options.cwd, kind: 'directory' }])
+              const proof = evidence.view.service.proveApplicable(snapshot, scoped.length ? scoped.map(item => ({ path: item.target.path, kind: item.target.kind })) : [{ path: cwdNow(), kind: 'directory' }])
               const candidatePaths = local.filter(item => candidates.includes(normalized(item.canonical))).map(item => item.canonical)
               let own: OwnedInstructionWrite | undefined
               const assertCurrent = () => { if (!admitted) throw fail('unavailable'); check(); try { evidence.view.service.assertApplicable(proof, own) } catch { throw fail('changed-dependency') } }

@@ -134,7 +134,7 @@ it.each(["legacy", "binding"] as const)("passes session-local live project gette
   const contexts = new Map<string, SessionProjectContext>([["one", { id: "p1", name: "First Project", roots: [a, b], primaryRoot: a }], ["two", { id: "p2", name: "Second Project", roots: [c], primaryRoot: c }]])
   const requests: LLMRequest[] = []
   const model: ModelClient = { async *stream(request) { requests.push(request); yield { type: "text/chunk", text: "ok" }; yield { type: "end" } } }
-  const service = createSessionService({ workspace: a, sandbox: "workspace-write", model, instructionSettingsPath: join(root, "settings.json"),
+  const service = createSessionService({ workspace: a, sandbox: "workspace-write", approveAll: true, model, instructionSettingsPath: join(root, "settings.json"),
     ...(path === "binding" ? { modelBindingFor: async () => ({ status: "ready" as const, binding: { model, providerId: "fixture", modelId: "fixture", label: "fixture" } }) } : {}),
     projectContextFor: async (id) => () => contexts.get(id),
   })
