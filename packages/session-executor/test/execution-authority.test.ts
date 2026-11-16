@@ -5,9 +5,13 @@ import type { AuthorityState } from "@i-harness/sandbox"
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { resolve } from "node:path"
 import type { ExecService } from "@i-harness/exec"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
+import { composeJsonlTaskTransitionCoordinator } from "../../session-persistence-jsonl/src/backend-factory.ts"
+import { taskDocumentStorageContract } from "../../subagent/src/task/storage-contract.ts"
+import { createUnmanagedTaskChildHost } from "../src/lifecycle/task-child-host.ts"
 import { createMockClient } from "@i-harness/llm-mock"
+import { controlledModel } from "./controlled-model.ts"
+import type { ModelClient } from "@i-harness/llm-seam"
 import type { ExecutionReceipt } from "@i-harness/sandbox"
 import { taskDocKey, type TaskProtocolDocument } from "@i-harness/subagent"
 
@@ -77,7 +81,7 @@ it("refuses unknown actual dispatch identity before the tool body", async () => 
 it("binds durable child and nested Code Mode receipts and permits only trusted parent visibility", async () => {
   const parent = resolve(".tmp"); mkdirSync(parent, { recursive: true })
   const root = mkdtempSync(resolve(parent, "sandbox-redesign-caller-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(resolve(root, "sessions")), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(resolve(root, "sessions")), { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: "main" })
   const receipts: ExecutionReceipt[] = []
   const jobIds: string[] = []
@@ -89,14 +93,25 @@ it("binds durable child and nested Code Mode receipts and permits only trusted p
       receipts.push(exec.getOutput(jobId).receipt!)
       return { jobId }
     } }
-  const model = createMockClient([
-    { role: "assistant", toolCalls: [{ name: "owner_probe", args: {} }] },
-    { role: "assistant", toolCalls: [{ name: "spawn_agent", args: { task_name: "identity", agent_type: "owner-worker", message: "probe", fork_turns: "none", background: false } }] },
-    { role: "assistant", toolCalls: [{ name: "code_exec", args: { code: "text(await tools.owner_probe({}))", yield_time_ms: 1000 } }] },
-    { role: "assistant", text: "done" },
-    { role: "assistant", text: "parent done" },
-  ])
-  const assembly = await createSessionAssembly({ sessionId: "main", coordinator, workspace: root, model, modelPolicy: "test-mock", approveAll: true,
+  let parentCalls = 0
+  const model: ModelClient = controlledModel(async function* (request) {
+    const lastUser = request.messages.filter(message => message.role === "user").at(-1)
+    // The spawned child's first input is exactly "probe"; the parent prompt is
+    // longer, so the two transcripts can share one deterministic script.
+    const child = lastUser?.content === "probe"
+    if (child) {
+      const hasTool = request.messages.some(message => message.role === "tool")
+      if (!hasTool) yield { type: "tool_call", call: { name: "code_exec", args: { code: "text(await tools.owner_probe({}))", yield_time_ms: 1000 } } }
+      else yield { type: "text/chunk", text: "done" }
+      yield { type: "end" }; return
+    }
+    const call = ++parentCalls
+    if (call === 1) yield { type: "tool_call", call: { name: "owner_probe", args: {} } }
+    else if (call === 2) yield { type: "tool_call", call: { name: "spawn_agent", args: { task_name: "identity", agent_type: "owner-worker", message: "probe", fork_turns: "none", background: false } } }
+    else yield { type: "text/chunk", text: "parent done" }
+    yield { type: "end" }
+  })
+  const assembly = await createSessionAssembly({ sessionId: "main", coordinator, workspace: root, model, modelPolicy: "test-mock", approveAll: true, prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: "unmanaged" }),
     sandbox: "danger-full-access", codeMode: { mode: "mixed" }, additionalTools: [probe],
     pluginAgents: [{ name: "owner-worker", description: "worker", systemPrompt: "work", tools: ["owner_probe", "code_exec", "code_wait"] }] })
   exec = assembly.ctx.services.get<ExecService>("exec/service")
@@ -162,24 +177,19 @@ it("binds durable child and nested Code Mode receipts and permits only trusted p
 it("keeps identity-less convenience child dispatch unsupported without a durable task artifact", async () => {
   const parent = resolve(".tmp"); mkdirSync(parent, { recursive: true })
   const root = mkdtempSync(resolve(parent, "sandbox-redesign-idless-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(resolve(root, "sessions")), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(resolve(root, "sessions")), { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: "main" })
   const assembly = await createSessionAssembly({ sessionId: "main", coordinator, workspace: root, approveAll: true,
     modelPolicy: "test-mock", model: createMockClient([{ role: "assistant", text: "done" }]),
     pluginAgents: [{ name: "owner-worker", description: "worker", systemPrompt: "work", tools: [] }] })
   try {
+    // Without its original prepared task caller the durable leaf refuses before
+    // any task record exists; there is no convenience fallback launch.
     await expect(assembly.tools.execute({ name: "spawn_agent", args: { task_name: "identity", agent_type: "owner-worker", message: "complete the controlled child", fork_turns: "none", background: false } }))
-      .rejects.toMatchObject({ code: "FACT_RECOVERY_REQUIRED", cause: expect.objectContaining({ message: "unsupported-owner" }) })
-    const document = await coordinator.getDocument(taskDocKey("main")) as TaskProtocolDocument
-    expect(document.tasks).toHaveLength(1)
-    const task = document.tasks[0]!
-    // The child really completed; the missing parent source still prevents a durable result claim.
-    expect(task).toMatchObject({ outcome: "completed", resultText: "done" })
-    expect(task.retention).not.toBe("durable")
-    expect(task.result).toMatchObject({ kind: "retained", envelope: { retention: { kind: "unavailable", reason: "unsupported-owner", observedEncodedBytes: 21 } } })
-    const childSession = (await coordinator.snapshot!(task.childSessionId!)).session
-    expect(childSession.events).toContainEqual(expect.objectContaining({ type: "assistant/message", text: "done" }))
-    writeFileSync(resolve(root, "unsupported-owner-receipt.json"), JSON.stringify({ task }, null, 2))
+      .rejects.toThrow(/Original prepared task caller unavailable/)
+    const document = await coordinator.getDocument(taskDocKey("main")).catch(() => undefined) as TaskProtocolDocument | undefined
+    expect(document?.tasks ?? []).toHaveLength(0)
+    writeFileSync(resolve(root, "unsupported-owner-receipt.json"), JSON.stringify({ tasks: document?.tasks ?? [] }, null, 2))
   } finally { try { await assembly.dispose() } finally { await coordinator.close() } }
 })
 

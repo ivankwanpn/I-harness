@@ -311,6 +311,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 
 - `wsl-assembly` 的 child Code Mode 案以 `tools.get('spawn_agent').execute(...)` 直接呼叫，被 durable Task leaf 以 `Original prepared task caller unavailable` 拒絕。改為 `spawnDurable`，coordinator 改 `composeJsonlTaskTransitionCoordinator`，service 補 `prepareTaskChild: createUnmanagedTaskChildHost`。**2/2 通過**，typecheck 0。
 - 同輪 triage：`managed-instruction-handoff` 的 publish `captureRuntimeContext().admit()` 在 fixture 直開 execution 時回 `not-issued FACT_RECOVERY_REQUIRED`；`execution.prepare()` 不足以打開 bootstrapReady，需改走 service 正常入口或等 bootstrap 啟用 seam。
+#### 第四十六批：execution-authority 的腳本路由與 identity-less 契約
+
+- 第一個案（durable child/nested Code Mode receipts）：改用 `controlledModel` 依「child 第一筆 user message 恰為 `probe`」路由 parent/child，parent 端以 counter 依序 owner_probe→spawn→final，避免共享 script 交錯；assembly 補 `prepareTaskChild`、coordinator 改 composed。receipts 恢復 2 筆、parent finalText 正確。
+- 第二個案（identity-less dispatch）：新產品在 durable leaf 先以 `Original prepared task caller unavailable` 拒絕，**不會**建立任何 task record；斷言改為拒絕訊息＋`taskDocKey('main')` 無 tasks（保留「沒有 convenience fallback」契約）。**7/7 通過**，typecheck 0。
+- triage：`managed-instruction-handoff` 改走 service managedRuntime 後 `prepareOriginalManagedRuntime` 仍回 undefined（private 相容性 gate 未進 privateEntries）；`managed-runtime-context` 的 unknown publication 實際分類為 `FACT_PRECONDITION_STALE`（非 recovery）需再確認契約。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
