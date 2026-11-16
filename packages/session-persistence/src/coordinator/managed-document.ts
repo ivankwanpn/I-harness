@@ -776,13 +776,25 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                 if (originalPending) {
                     // Only this captured frame's actual finished owners may
                     // resolve the prerequisite of their original close calls.
-                    const qualified = originalPending.entries.every(entry => !entry.bootstrap
-                        && eligible.some(([source, metadata]) => metadata.action === entry.authorization.action
-                            && (!entry.authorization.required || entry.authorization.source === source)));
+                    const qualified = originalPending.entries.every(entry => !entry.bootstrap && (
+                        // Optional frames own no source.close prerequisite: their
+                        // own capture is the only thing that needs reconciliation.
+                        !entry.authorization.required
+                        // A Stop close frame enacts its own settlement; after the
+                        // live fence was captured there is no drain left to close.
+                        || ((entry.group as { event?: { type?: string; op?: string } } | undefined)?.event?.type === 'agent/delivery-generation' && (entry.group as { event?: { op?: string } }).event?.op === 'close')
+                        || eligible.some(([source, metadata]) => metadata.action === entry.authorization.action
+                            && entry.authorization.source === source)));
                     if (!qualified || pending !== originalPending) throw new FactRecoveryRequiredError();
                     if (closing || closed) throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' });
                     const outcome = await document.reconcile(originalPending.batch.key);
-                    if (outcome.kind !== 'committed' && outcome.kind !== 'absent')
+                    // A never-issued Stop close frame has no durable effect to
+                    // recover; the live fence already blocked delivery. Dropping it
+                    // must not upgrade the retry into a permanent recovery debt.
+                    const unissuedClose = outcome.kind === 'not-issued' && outcome.code === 'FACT_RECOVERY_REQUIRED'
+                        && originalPending.entries.every(entry => (entry.group as { event?: { type?: string; op?: string } } | undefined)?.event?.type === 'agent/delivery-generation'
+                            && (entry.group as { event?: { op?: string } }).event?.op === 'close')
+                    if (outcome.kind !== 'committed' && outcome.kind !== 'absent' && !unissuedClose)
                         throw Object.assign(new FactRecoveryRequiredError(), { cause: Object.assign(new Error('Original pending frame requires recovery', originalPending.installationFailure ? { cause: originalPending.installationFailure.error } : undefined), { outcome }) });
                 }
                 for (const [source] of eligible) {

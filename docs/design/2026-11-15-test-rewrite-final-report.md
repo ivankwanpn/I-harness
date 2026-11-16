@@ -221,7 +221,7 @@
 7. **fork/retained（2）**：`fork-handoff`(1)、`retained-hook-recovery`(1)。nested legacy L1 transfer、coordinator retained cleanup debt。
 8. **other（2）**：`retained-batch-continuation`(1)、`instruction-isolated-review` 已列於 2。
 
-> 後續進展（第五十五～五十八批）：owned-service-shell(1)、delivery-lifecycle(1)、mixed-retention-quota(1)、publication-pins(2) 已修復；第 3 類 delivery recovery 只剩 delivery-active-wait(1)，context-output 類剩 2；executor 殘餘約 31。
+> 後續進展（第五十五～六十一批）：owned-service-shell(1)、delivery-lifecycle(1)、mixed-retention-quota(1)、publication-pins(2)、	itle-action(1) 已修復；第 3 類 delivery recovery 只剩 delivery-active-wait(1)，context-output 類剩 2；executor 殘餘約 29。
 
 P3 執行計畫（在固定 HEAD）：
 - `node scripts/test-env.mjs pnpm run verify:all`（上次同指令於 `cf92d076` 約 4h44m，含 suite／typecheck／e2e／reachability／boundaries／compiled gateway）。

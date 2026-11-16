@@ -392,6 +392,14 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 
 - 先把 fault injection 移進 `createJsonlBackend(..., { wrap })`（避免 canonical guard 捕捉後 patch 造成 `PROCESS_READ_UNAVAILABLE`），並把 coordinator 改為 `composeJsonlTaskTransitionCoordinator(...taskDocumentStorageContract)`＋`createUnmanagedTaskChildHost`，child spawn 不再因 task transition 缺 id 而 `artifactPath(undefined)`。
 - 但 composed coordinator 下 `options.factOwner.assertReady()` 在 unknown write 被觀察時不再 throw，`heldAtRejection` 期望失敗；此測試原設計依賴 plain coordinator 的 readiness 語意，與 service task 入口需求衝突。未合併，保留 plain 原版；後續需讓 service 可在 plain coordinator 上以 task storage 啟動 child，或提供等價 readiness wrapper。
+#### 第六十一批：post-turn cancellation 的 Stop close settlement
+
+- 根因（實測）：`title-action` 在 cancelRunning 後，下一次 submit 的 `priorDocument.settleFinishedActions()` 遇到 pending frame，其兩個 entry 都是 `agent/delivery-generation` close、`required=true`，但對應 source 已不在 eligible drains（`finished && closeRequested`）中，因此 qualification 失敗；即使放行，`document.reconcile` 對從未 issued 的 close frame 回 `not-issued/FACT_RECOVERY_REQUIRED`，被升級為永久 recovery debt。
+- 修正（`managed-document.settleFinishedActions`）：
+  1. optional frame 不再要求 source close prerequisite（其自身 capture 是唯一需 reconcile 的義務）。
+  2. Stop close frame（`agent/delivery-generation` op=close）視為自帶 settlement，可在沒有 drain 可 close 時 reconcile。
+  3. 若 reconcile 證明該 frame **從未 issued**，視為 absent：live fence 已阻擋 delivery，drop 它而非升級為永久 recovery。
+- 驗證：`title-action` 3/3；回歸批次（owned-service-shell 15、delivery-lifecycle 16、delivery-retry 3、execution-state 7、service 43、managed-lifecycle 7）**94/94**；`session-persistence` 全套件通過；兩個 package typecheck 0。executor 殘餘約 **29**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
