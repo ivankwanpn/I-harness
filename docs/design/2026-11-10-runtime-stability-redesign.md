@@ -372,6 +372,15 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - **bounded-file-production**：child read 結果為 artifact envelope（`retention.ref`）；已可偵測 envelope 並以 `context_output_read` 分頁，但 child 端仍未完成（model stream error），未合併。
 - **instruction-isolated-review**：兩個不確定案 isolated source `closes=0`；`view.close()` 實驗仍為 0，代表 holder close 路徑未執行。
 - **generation-actions**：`forkTurns` 對 forked view 的 double-fork 需 batch seed transformation，目前 `retained seed cannot preserve conversation semantics`。
+#### 第五十八批：managed release inventory 的 staged/pending 恢復
+
+- `publication-pins` 的 delete cuts（first-pin/first-access/second-*）留下 `operation.phase='staged'` 的 managed artifact 與已發佈但無 access 的 pin；舊 inventory 把任何非 committed phase 或 orphan pin 都當 recovery，導致 `deleteOwnedSession` 拒絕。
+- 修正（`context-output/src/artifact/release-inventory.ts`）：
+  1. 掃描到 `operation.json.<hash>.pending`／`manifest.json.<hash>.pending` 時，先驗證 pending bytes 的 sha 與檔名一致，再完成 rename（或刪除已落地的重複 pending），可恢復才不標記 recovery；foreign／不一致仍保守拒絕。
+  2. staged／refused operation 不再因「未 committed」本身被視為 recovery；capturing 仍保守。
+  3. committed operation 的 survivor pin 仍要求 access；requested（將被刪除）的 pending pin 允許缺 access；deletion effect 對已不存在的 access 檔案改為冪等。
+- 驗證：`publication-pins` **18/18** 全綠；context-output `cold-selected-qualification` 8/8、`selected-metadata` 13/13、`dependency-foundations` 7/7；context-output typecheck 0。
+- `mixed-retention-native` 已前進到另一個既有缺口（`Original held bundle cannot be reordered`），不再卡 revocation inventory。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

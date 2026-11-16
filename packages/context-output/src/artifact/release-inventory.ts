@@ -1,4 +1,4 @@
-import { readdir, lstat, rm } from 'node:fs/promises'
+import { readdir, lstat, rm, readFile, rename } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { canonicalJsonData, validManagedArtifactRef } from '@i-harness/core-session'
 import { boundedJson, ownedPath, atomicJson } from './io.ts'
@@ -59,7 +59,9 @@ export async function applyOriginalManagedRelease(root: string, operation: Origi
       for (const session of new Set(entry.removed.map(pin => pin.sessionId))) {
         const access = resolve(entry.directory, 'access', sha(session) + '.json'), replacement = survivors.find(pin => pin.sessionId === session)
         await step('access:' + access, async () => {
-          await ownedPath(root, access); check()
+          try { await ownedPath(root, access) }
+          catch (failure) { if (absent(failure)) return; throw failure }
+          check()
           if (replacement) await atomicJson(access, { version: 1, sessionId: session, revision: replacement.revision, pinId: sha(replacement.documentId) })
           else await rm(access, { force: true })
         })
@@ -73,7 +75,7 @@ const absent = (failure: unknown) => (failure as NodeJS.ErrnoException | null | 
 /** Metadata only. Descriptors outlive pin removal; this function never performs it. */
 export async function passiveManagedReleaseInventory(root: string, workspaceId: string, documents: readonly string[], io: ArtifactQualificationIO, check: () => void): Promise<ManagedReleaseInventory> {
   const base = resolve(root, 'managed-v1'), targets = new Set<string>(), witness: unknown[] = [], requested = new Set(documents)
-  let recoveryRequired = false
+  let recoveryRequired = false; const markRecovery = () => { recoveryRequired = true }
   const entries: ReleaseEntry[] = []
   async function names(path: string): Promise<string[]> {
     check()
@@ -85,24 +87,51 @@ export async function passiveManagedReleaseInventory(root: string, workspaceId: 
     if (!info.isFile() || info.isSymbolicLink() || !physicalIdentity(info)) throw Error('Managed authority identity unavailable')
     witness.push([path, physicalIdentity(info), value]); return value
   }
+  async function recoverPending(directory: string, child: string): Promise<boolean> {
+    const match = /^(operation|manifest)\.json\.([a-f0-9]{64})\.pending$/.exec(child)
+    if (!match) return false
+    const pending = resolve(directory, child), target = resolve(directory, match[1]!)
+    try {
+      check(); await ownedPath(root, pending)
+      const bytes = await readFile(pending)
+      if (bytes.length > 65536 || sha(bytes) !== match[2]) return false
+      let current: Buffer | undefined
+      try { check(); await ownedPath(root, target); current = await readFile(target) }
+      catch (failure) { if (!absent(failure)) throw failure }
+      if (current) {
+        // The final write already landed; this is its retained duplicate.
+        if (sha(current) !== match[2]) return false
+        await rm(pending); return true
+      }
+      // The exact complete transaction bytes survived; finish its rename.
+      await rename(pending, target); return true
+    } catch (failure) { if (absent(failure)) return true; throw failure }
+  }
   const objects = (await names(base)).sort()
   for (const id of objects) {
     if (!/^ctxv1_[a-f0-9]{64}$/.test(id)) throw Error('Managed authority object unavailable')
-    const directory = resolve(base, id), children = (await names(directory)).sort()
-    for (const child of children) {
-      if (/^(?:operation|manifest)\.json\.[a-f0-9]{64}\.pending$/.test(child)) recoveryRequired = true
+    const directory = resolve(base, id), scanned = (await names(directory)).sort(), children: string[] = []
+    for (const child of scanned) {
+      if (/^(?:operation|manifest)\.json\.[a-f0-9]{64}\.pending$/.test(child)) {
+        if (await recoverPending(directory, child)) witness.push([resolve(directory, child), 'recovered'])
+        else markRecovery()
+      }
       else if (!['operation.json', 'manifest.json', 'body', 'index', 'leaves', 'pins', 'access', 'pin-memberships'].includes(child)) throw Error('Unknown managed authority namespace')
+      else children.push(child)
     }
-    witness.push([id, children])
+    witness.push([id, scanned])
     const operation = await read(resolve(directory, 'operation.json')) as ArtifactOperation
     if (operation.version !== 1 || operation.id !== id || !validOwner(operation.owner)) throw Error('Managed original operation unavailable')
     if (id !== `ctxv1_${sha(JSON.stringify([workspaceId, operation.owner.sessionId, operation.owner.callId, operation.owner.operationId]))}`) throw Error('Managed operation identity conflict')
-    if (operation.phase !== 'committed') recoveryRequired = true
+    // A staged/refused operation published no committed ref or body authority;
+    // deletion and revocation can release its exact metadata without carrying
+    // the producer's later recovery obligation.
+    if (operation.phase !== 'committed' && operation.phase !== 'staged' && operation.phase !== 'refused') markRecovery()
     else {
       if (!validManagedArtifactRef(operation.ref) || !operation.manifest) throw Error('Managed original manifest unavailable')
       validateManifest(operation.manifest, operation.ref)
       validateManifest(await read(resolve(directory, 'manifest.json')), operation.ref)
-      if (children.includes('leaves')) recoveryRequired = true
+      if (children.includes('leaves')) markRecovery()
     }
     const pins = new Map<string, ArtifactPin>()
     for (const name of (await names(resolve(directory, 'pins'))).sort()) {
@@ -121,7 +150,7 @@ export async function passiveManagedReleaseInventory(root: string, workspaceId: 
       if (access.version !== 1 || !pin || access.sessionId !== pin.sessionId || access.revision !== pin.revision || sha(access.sessionId) + '.json' !== name) throw Error('Managed access identity unavailable')
       accessPins.add(pin.sessionId)
     }
-    if ([...pins.values()].some(pin => !accessPins.has(pin.sessionId))) recoveryRequired = true
+    if (operation.phase === 'committed' && [...pins.values()].some(pin => !accessPins.has(pin.sessionId) && !requested.has(pin.documentId))) markRecovery()
     for (const documentHash of (await names(resolve(directory, 'pin-memberships'))).sort()) {
       if (!/^[a-f0-9]{64}$/.test(documentHash)) throw Error('Managed companion namespace unavailable')
       for (const name of (await names(resolve(directory, 'pin-memberships', documentHash))).sort()) {
@@ -133,7 +162,7 @@ export async function passiveManagedReleaseInventory(root: string, workspaceId: 
         if (catalog.phase !== 'committed' || catalog.id !== member.catalogRef.id || !validOwner(catalog.owner) || catalog.owner.operationId !== member.catalogOperationId || !catalog.ref || !sameArtifactRef(catalog.ref, member.catalogRef) || !catalog.manifest) throw Error('Managed companion catalog unavailable')
         validateManifest(catalog.manifest, member.catalogRef)
         if (member.version === 2 && (member.memberOperationId !== operation.owner.operationId || canonicalJsonData(member.catalogOwner) !== canonicalJsonData(catalog.owner))) throw Error('Managed transfer original operation conflict')
-        if (!pins.has(documentHash)) recoveryRequired = true
+        if (!pins.has(documentHash)) markRecovery()
         else if (pins.get(documentHash)!.sessionId !== member.sessionId) throw Error('Managed companion pin session conflict')
         if (requested.has(member.documentId)) targets.add(member.sessionId)
       }
