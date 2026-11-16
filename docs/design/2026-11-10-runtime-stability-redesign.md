@@ -316,6 +316,10 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 第一個案（durable child/nested Code Mode receipts）：改用 `controlledModel` 依「child 第一筆 user message 恰為 `probe`」路由 parent/child，parent 端以 counter 依序 owner_probe→spawn→final，避免共享 script 交錯；assembly 補 `prepareTaskChild`、coordinator 改 composed。receipts 恢復 2 筆、parent finalText 正確。
 - 第二個案（identity-less dispatch）：新產品在 durable leaf 先以 `Original prepared task caller unavailable` 拒絕，**不會**建立任何 task record；斷言改為拒絕訊息＋`taskDocKey('main')` 無 tasks（保留「沒有 convenience fallback」契約）。**7/7 通過**，typecheck 0。
 - triage：`managed-instruction-handoff` 改走 service managedRuntime 後 `prepareOriginalManagedRuntime` 仍回 undefined（private 相容性 gate 未進 privateEntries）；`managed-runtime-context` 的 unknown publication 實際分類為 `FACT_PRECONDITION_STALE`（非 recovery）需再確認契約。
+#### 第四十七批：main-instruction-construction 的延後 environment close
+
+- 「failed initial input close」案：產品現在把失敗的 mounted environment 保留給 `retryCleanup` 的顯式重試，headless 失敗當下 `closeCalls` 為 0；改斷言 0（retry 後仍為 2，`policy.ready()` 於重試前 reject）。同檔第二案（service 建構失敗）仍由 `service.close()` 擁有 outer environment，維持 `closeCalls=1`。**10/10 通過**，typecheck 0。
+- 同輪 triage：`owned-code-service` 的 private code delivery 在 `code/end` 後 readiness 以 `FACT_CLOSED` 退役，未喚醒持續模型請求（產品 delivery 缺口）；`managed-runtime-context` unknown publication 分類為 `FACT_PRECONDITION_STALE`。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

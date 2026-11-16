@@ -205,7 +205,8 @@ it('a failed initial input close still permits safe environment cleanup and retr
     const tree = (error: unknown): unknown[] => [error, ...(error instanceof AggregateError ? error.errors.flatMap(tree) : []), ...(error instanceof Error && error.cause ? tree(error.cause) : [])]
     expect(result).toMatchObject({ name: 'HeadlessCleanupError', retryCleanup: expect.any(Function) })
     expect(tree(result)).toContain(fault); expect(tree(result)).toContain(inputFault)
-    expect(observed.created[0]!.closeCalls).toBe(1)
+    // The failing headless run retains the environment for the explicit cleanup retry.
+    expect(observed.created[0]!.closeCalls).toBe(0)
     await expect(observed.created[0]!.environment.policy.ready()).rejects.toThrow()
     const admitted = session.events.filter(event => event.type === 'agent/input/admitted').length
     const actions = session.events.filter(event => event.type === 'context/action' && event.op === 'open').length
@@ -260,6 +261,7 @@ it('service failed assembly construction retains its outer owner until the origi
     expect(observed.created).toHaveLength(1); expect(observed.created[0]!.closeCalls).toBe(0)
     await observed.created[0]!.environment.policy.ready()
     await service.close()
+    // Closing the service owns the retained outer environment exactly once.
     expect(observed.created[0]!.closeCalls).toBe(1); expect(modelCalls).toBe(0)
     await expect(observed.created[0]!.environment.policy.ready()).rejects.toThrow()
   } finally { await service.close(); for (const entry of observed.created) await entry.environment.close(); rmWorkspaceSync(root) }
