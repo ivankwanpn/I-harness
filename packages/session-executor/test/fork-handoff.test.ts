@@ -43,7 +43,7 @@ it('real CLI host transfers managed and legacy selected results and cold nested 
     expect((await coldController.execute({ operation: grandchild.operation, mode: 'retry' })).kind).toBe('adopted')
     expect(profile).not.toHaveBeenCalled()
   } finally { await lease?.release(); await c.close(); await rm(root, { recursive: true, force: true }) }
-}, 15000)
+}, 60000)
 
 it.each(['prepare','late-reader','target'] as const)('actual CLI host close joins original %s lifetime before dependency teardown',async phase=>{
   const root=await mkdtemp(join(tmpdir(),'ih-fhl-')),settings=join(root,'settings.json')

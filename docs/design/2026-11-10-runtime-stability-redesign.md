@@ -509,6 +509,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - `generation-actions`：`forkSession` 後的 view 含 `conversation/semantics` 與 `model/exchange-accepted`；`forkTurns` 的 `remapConversationSeed` 需要 batch semantic transformation，所以直接失敗。測試端先把這兩類事件濾掉仍失敗（validator 要求 accepted exchange），證明需產品提供 forkTurns 的語意批次重映射，不是 fixture 可繞過。
 - `event-driven-steering` foreground family：在 spawn foreground wait 後若 `reason=user-steer` 且 handoff route `ready`，改為回 yielded 結果而非 `source.foreground()`；此實驗未讓該 family 轉綠（父 turn 仍未進第二個 model request），已回退。
 - 兩者仍待產品層修正。
+#### 第八十三批：fork-handoff 負載校正
+
+- `fork-handoff` 第一個 CLI host 測試固定 15s timeout；在 current-node 下穩定需要 ~15s 以上（其餘 4 案各 0.4–4.3s 通過）。
+- 將該案 timeout 提高到 60s；連跑兩次皆 5/5 綠。
+- 無產品改動；executor typecheck 不涉及（test only）。executor 殘餘約 **17**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
