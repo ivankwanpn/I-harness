@@ -547,6 +547,28 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 在 assembly 的 `additionalTools` execute 外包 `withExecCallerScope`，量到 wrapper 確實以 child session 進入（`producer=sess-...` 與 `execSess` 一致）；但 raw `exec/service.runBackground` 的 receipt owner 仍是 parent。
 - 表示 owner 在 ExecService 建立時（`ExecExecutionHost.defaultOwner`/capture 建立）已固定，`currentExecCaller()` 只在 transport-launch 使用，沒有覆蓋 job receipt owner。
 - 需在 Exec service capture/owner 解析處使用 current caller（或提供 dynamic owner provider），不是 tool wrapper 可解；實驗已回退。
+#### 第九十批：executor 殘餘定點清單（P3 基準）
+
+以 `pnpm --filter @i-harness/session-executor test`（maxWorkers=1）一次跑目前 11 個殘餘檔，結果：
+
+| 檔 | fail | pass |
+|---|---:|---:|
+| delivery-active-wait | 1 | 1 |
+| event-driven-steering | 1 | 13 |
+| exec-direct-source | 1 | 37 |
+| generation-actions | 1 | 14 |
+| inherited-context-budget | 2 | 0 |
+| managed-runtime | 1 | 38 |
+| native-dependency-observer | 1 | 0 |
+| project-context | 1 | 9 |
+| retained-batch-continuation | 1 | 0 |
+| retained-state-cold | 1 | 2 |
+| retained-state-negative | 4 | 0 |
+| **合計** | **15** | **114** |
+
+- 這 15 個 failure 即 P1/P3 目前 executor 的實質殘餘（比 third full run 的 32 少 17）。
+- 其餘原失敗檔（isolated-review、bounded-file、hook-recovery、fork-handoff、service-instruction-close、execution-source-prereq、mixed-retention-native 等）已全綠。
+- 本表作為 P3 最終 `verify:all` 的對帳基準；下一步按表逐檔處理。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
