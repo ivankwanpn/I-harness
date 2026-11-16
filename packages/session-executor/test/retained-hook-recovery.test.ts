@@ -70,20 +70,20 @@ it('keeps an original Code Mode source held after its committed result receipt w
   const base = resolve(import.meta.dirname, '../../../build/r4a-hook-tests')
   await mkdir(base, { recursive: true })
   const root = await mkdtemp(resolve(base, 'original-fact-'))
-  const backend = createJsonlBackend(resolve(root, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  let bodies = 0, reads = 0, hooks = 0, facts = 0, blocked = true, key: BatchKey | undefined, fulfilled = 0
+  const backend = createJsonlBackend(resolve(root, 'sessions'), {
+    wrapOwnedBatch: append => async (...args: Parameters<typeof append>) => {
+      const outcome = await append(...args)
+      if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/result')) { facts++; key = args[3].key; return { kind: 'unknown' as const, key } }
+      return outcome
+    },
+    wrapOwnedReconcile: reconcile => async (...args: Parameters<typeof reconcile>) => blocked && key?.batchId === args[3].key.batchId ? { kind: 'unknown' as const, key } : reconcile(...args),
+  }), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const storage = createContextOutputService({ root: resolve(root, 'context'), workspaceId: 'fixture' }), ctx = createContext()
   const tools = createToolRegistry(ctx, { resultRetention: createToolResultRetention(storage, undefined, id) })
-  let bodies = 0, reads = 0, hooks = 0, facts = 0, blocked = true, key: BatchKey | undefined, fulfilled = 0
   tools.register({ name: 'actual', description: '', inputSchema: {}, async execute() { bodies++; return { get value() { reads++; return 'x'.repeat(1_048_576) } } } })
   ctx.on('tools/post-execute', () => { hooks++ })
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => {
-    const outcome = await append(...args)
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/result')) { facts++; key = args[3].key; return { kind: 'unknown', key } }
-    return outcome
-  }
-  backend.reconcileOwnedBatch = async (...args) => blocked && key?.batchId === args[3].key.batchId ? { kind: 'unknown', key } : reconcile(...args)
   const broker = createCodeModeBroker(ctx, tools, { session: document.view, sessionId: id, factOwner: document })
   broker.startCell('original')
   try {

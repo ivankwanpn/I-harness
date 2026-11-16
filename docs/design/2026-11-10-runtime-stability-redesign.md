@@ -530,6 +530,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - subagent close 量到 entry failure 來自 **chainFailure**（`Earlier owned task save requires resolution`），不是 `settleEntryResult`；在 entry loop 前 `tasks.recoverPersistence()` 仍不足，chain 仍以原 save debt 失敗。需在 spawn chain 建立/join 點保存可回收的恢復 closure，而非在 close 末端重試。
 - `retained-hook-recovery` 的注入仍是 post-bind backend replacement；改成 pre-bind wrap 時變數作用域要對齊（此檔有多個 test），未完成。其 body 已 2/3 綠，最後一案 coordinator cleanup unresolved 仍待查。
 - 本輪無產品合併；工作樹已回乾淨。
+#### 第八十七批：retained-hook-recovery pre-bind 注入
+
+- 把最後一案的 backend 注入從 post-bind assignment 改為建立 backend 時的 `wrapOwnedBatch`/`wrapOwnedReconcile`，變數（facts/key）提前宣告；不再觸發 descriptor identity 差異造成的 cleanup 路徑。
+- 驗證：`retained-hook-recovery` **3/3**（連跑兩次），executor typecheck 0。
+- 無產品改動；executor 殘餘約 **16**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
