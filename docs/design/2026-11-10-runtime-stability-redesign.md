@@ -304,6 +304,9 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 以單一 worker 跑完整 `@i-harness/session-executor`：**231 檔／1,405 項：1,359 passed、46 failed、0 skipped**；typecheck 0。
 - 對照基線 `cf92d076` 的 executor 部分（62 檔／101 failed），失敗 **101 → 46（-55）**，37 個原失敗檔已全綠。
 - 詳細剩餘清單與產品級待修已寫入最終報告「八、P1 之後 executor 套件現況」，證據 JSON／log 留存於 `ih-test-rewrite-handoff`。
+#### 第四十四批：retained-child-scope 的 pre-bind append 與 Task host
+
+- `retained-child-scope` 兩處舊入口：backend 建立後改寫 `appendOwnedBatch`（觸發 `PROCESS_READ_UNAVAILABLE`）與 assembly 缺 `prepareTaskChild`／composed coordinator。改為 `createJsonlBackend(root,{wrap})` 注入 append，coordinator 用 `composeJsonlTaskTransitionCoordinator`＋task storage contract，assembly 補 `createUnmanagedTaskChildHost`。**1/1 通過**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

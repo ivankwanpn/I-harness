@@ -5,28 +5,32 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { decodeFactBatch } from '@i-harness/core-session'
 import { contextWorkspaceLocation, contextSourceIdentity } from '@i-harness/context-output'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createSessionAssembly } from '../src/assembly.ts'
+import { createUnmanagedTaskChildHost } from '../src/lifecycle/task-child-host.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/backend-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { controlledModel } from './controlled-model.ts'
 
 it('a held real child keeps its launch source, settles original pins after project change, denies reads, and binds a fresh followup source', async () => {
   const root = await mkdtemp(join(tmpdir(), 'held-child-source-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root, { wrap: value => {
+    const append = value.appendOwnedBatch!.bind(value)
+    value.appendOwnedBatch = async (...args) => {
+      for (const event of decodeFactBatch(args[3].bytes).events) if (event.type === 'subagent/end' && event.envelope?.retention.kind === 'artifact') {
+        originalFacts++
+        expect(await readdir(join(managed, event.envelope.retention.ref.id, 'pins'))).toHaveLength(2)
+      }
+      return append(...args)
+    }
+  } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), held = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   const oldScope = { id: 'old', name: 'old', roots: [root], primaryRoot: root }, newScope = { ...oldScope, id: 'new', name: 'new' }
   let current: typeof oldScope | undefined = oldScope, sends = 0, originalFacts = 0
   const full = 'x'.repeat(1_048_576), location = await contextWorkspaceLocation(root, root)
   const managed = join(location.serviceRoot, 'context-output', createHash('sha256').update(location.workspaceKey).digest('hex'), 'managed-v1')
-  const append = backend.appendOwnedBatch!.bind(backend)
-  backend.appendOwnedBatch = async (...args) => {
-    for (const event of decodeFactBatch(args[3].bytes).events) if (event.type === 'subagent/end' && event.envelope?.retention.kind === 'artifact') {
-      originalFacts++
-      expect(await readdir(join(managed, event.envelope.retention.ref.id, 'pins'))).toHaveLength(2)
-    }
-    return append(...args)
-  }
-  const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: id, approveAll: true, projectContext: () => current, model: controlledModel(async function* () {
+  const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: id, approveAll: true, prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: 'unmanaged' }), projectContext: () => current, model: controlledModel(async function* () {
     const send = ++sends
     if (send === 1) yield { type: 'tool_call', call: { id: 'held-once', name: 'spawn_agent', args: { task_name: 'held', message: 'go', background: false } } }
     else if (send === 2) { held.resolve(); await release.promise; yield { type: 'text/chunk', text: full } }
