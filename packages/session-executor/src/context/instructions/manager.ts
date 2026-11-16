@@ -196,6 +196,17 @@ export function createMainInstructionManager(options: { session?: SessionView; d
             return { ...entry, inspection: inspect(entry.capture), install }
           })
           const mutations = selected.flatMap((entry, ownerIndex) => (entry.inspection.native?.targets ?? []).filter(target => target.mode === 'mutate').map(target => ({ ownerIndex, target })))
+          // A mutation preflight observes a newer target even when that target
+          // is then refused; diagnostics must not claim the older publication is
+          // still current.
+          if (mutations.length) {
+            if (!pending) { pending = new Map(); selection++ }
+            for (const { target } of mutations) {
+              const path = resolve(target.path), id = instructionTargetKey(target)
+              if (!pending.has(id)) { pending.set(id, consumed.get(id) ?? Object.freeze({ path, kind: target.kind })); selection++ }
+            }
+            invalidateDiagnostics()
+          }
           // Instruction discovery is scoped to the project. An external write
           // still needs the native sandbox/escalation gate, but must not cause
           // the instruction reader to inspect paths outside its authority.

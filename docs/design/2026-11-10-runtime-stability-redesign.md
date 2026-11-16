@@ -405,6 +405,12 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - **managed-runtime**：`Observed instructions unavailable` 已量到 publish 後 `afterPublication.reliability='unavailable'`、`complete=false`、fingerprint 不變、view 未 finished、policy 仍 ready；不是 publication lease 提前釋放（嘗試在 publish 前後自行 retain 仍失敗），屬 instruction host 在 managed admission 期間被工作區/政策變更標記為不可用。`createJsonlBackend` 改 sessions 子目錄亦未解。
 - **project-context**：child followup 不完成；child instruction host 的 cwd 已改為 live `projectContext().primaryRoot`（與 main manager 一致），仍未完成，代表 child 的 **filesystem/project binding** 是建立時快照，followup 需要 live project binding 注入（task host 回 `unmanaged` 無法攜帶 live roots）。
 - **retained-batch-continuation**：pre-bind wrap＋composed coordinator 可消除 `PROCESS_READ_UNAVAILABLE` 與 `artifactPath(undefined)`，但 composed `factOwner.assertReady()` 在 unknown write 觀察時不再 throw，與測試原 plain readiness 契約衝突。
+#### 第六十三批：preflight mutation 的 diagnostics invalidation
+
+- 根因：`instruction-diagnostics` 的 preflight 案在 publication 進行中對 write target 做 preflight，product 只在 `observe` 記錄 pending target；preflight 失敗（revoked）前沒有記錄，因此 notices 不變、`capture()` 仍回舊 token。
+- 修正（manager.preflightCore）：看到 mutation targets 時即登記到 pending（`resolve(path)`＋target key，selection++），並 `invalidateDiagnostics()`；即使 preflight 隨後被拒絕，舊 publication 也不再被宣稱 current。refresh 會針對新 target 重新 prepare（nested AGENTS.md）。
+- 測試負載校正：diagnostics 通知改 `vi.waitFor`；cold instruction state 案在繁忙機器上會超過原 15s（實測 instrumentation 顯示各步很快，屬競態），timeout 改 60s。
+- 驗證：`instruction-diagnostics` **8/8**；instruction 回歸 5 檔 **25/25**；core-agent `instruction-batch-preflight` 7/7；typecheck 0。executor 殘餘約 **28**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

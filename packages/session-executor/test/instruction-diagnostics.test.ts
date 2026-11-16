@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -41,7 +41,7 @@ it.each(['observe', 'preflight'] as const)('keeps a newer %s target stale across
       finally { failSecondGuard = false }
     }
     await Promise.resolve()
-    expect(notices).toBeGreaterThan(beforeNotices)
+    await vi.waitFor(() => expect(notices).toBeGreaterThan(beforeNotices))
     release.resolve(); await publishing
     expect(manager.capture()).toBeUndefined()
     expect(manager.current(evidence)).toBe(true) // Do not change accepted-evidence eligibility to fix diagnostics.
