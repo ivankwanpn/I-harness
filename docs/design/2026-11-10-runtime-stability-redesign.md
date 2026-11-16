@@ -262,6 +262,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 新增關鍵 seam 認識：`createJsonlBackend(root,{wrap})` 在 canonical-path guard 捕捉 own descriptors **之前** 執行；事後改寫 `backend.appendOwnedBatch`／`read` 會被拒為 `PROCESS_READ_UNAVAILABLE`（甚至造成測試在 finally 懸置）。
 - `managed-lifecycle` 兩案（queued cancellation、Code Mode interruption receipt）與 `cold-state-inspection` 兩案（shared owned load、failed shared load retry）改用 pre-bind `wrap` 注入故障，取代 coordinator 建立後改寫 backend。分別 **7/7、16/16 通過**。
 - `rebind-budget`：第二／三案的 `vi.waitFor(started)` 預設 1 秒不足（admission＋assembly 建置較慢），提高到 15 秒；第一案的 context tool 結果現在位於 `envelope.retention.value`（`kind:'unavailable'`、pressure/dimensions 不變），斷言改 envelope 形狀。**3/3 通過**。
+#### 第三十七批：Exec delivery retry 視窗與 durable-spawn retain
+
+- `exec-recipient-delivery`：transient original Exec admission 的重試走既有 error scheduler，實際 backoff 超過原本 3 秒；`requests` 與 `admissionAttempts`/`errors` 的 waitFor 放寬到 15 秒（重試語意不變）。**29/29 通過**。
+- `durable-spawn` helper 增加 `{retain}`：背景 child 的 launch action／settlement source 可保留到 child 結束後再 `release()`；現行呼叫端不受影響。
+- triage（未修）：
+  - `inherited-context-budget`：parent turn 結束後以 prepared spawn 建立背景 child，`dispatch` 回 `Fact admission requires recovery or was cancelled`；需釐清 turn 後 parent task admission 的 seam。
+  - `publication-pins` 的 `first-pin`／`first-access` delete cuts：child producer 在 `context-output/service.ts:858` 拋 `Original deletion recovery required` 而崩潰，屬產品刪除 recovery 缺口。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

@@ -90,7 +90,7 @@ it.each(['unknown','false','undefined'] as const)('original physically landed %s
 
 it('nominal transient original Exec admission retries through existing error scheduler without new event/input/launch',async()=>{
  const f=await createExecDeliveryFixture(backend=>{physical.backend=backend},{exitCode:9,transientAdmission:true})
- try{await f.start();f.releaseRoot();await f.terminal;await vi.waitFor(()=>expect(f.requests).toHaveLength(3),{timeout:3000});await f.consumed
+ try{await f.start();f.releaseRoot();await f.terminal;await vi.waitFor(()=>expect(f.requests).toHaveLength(3),{timeout:15000});await f.consumed
    expect(f.refusals()).toBe(4);expect(f.document.view.events.filter(e=>e.type==='agent/delivery-received')).toHaveLength(1);expect(f.document.view.events.filter(e=>e.type==='exec/end')).toHaveLength(1);expect(f.launches()).toBe(1)
  }finally{await f.close()}
 },15000)
@@ -123,7 +123,7 @@ it.each(['two-mixed','three-falsey','three-mixed','three-repeated','single-undef
    // Every pass joins the same source-owned capture; only nominal members arm
    // the existing published service drain's retry scheduler.
    const attemptsBeforeRetry=f.admissionAttempts.length
-   if(retryable)await vi.waitFor(()=>expect(f.admissionAttempts.length).toBeGreaterThan(attemptsBeforeRetry),{timeout:2000})
+   if(retryable)await vi.waitFor(()=>expect(f.admissionAttempts.length).toBeGreaterThan(attemptsBeforeRetry),{timeout:15000})
    f.releaseAdmissions();await adapter.reconcileExecCandidates()
    await vi.waitFor(()=>expect(f.document.view.events.filter(e=>e.type==='agent/delivery-received')).toHaveLength(failures.length),{timeout:2000})
    await adapter.reconcileExecCandidates()
@@ -214,7 +214,7 @@ it('cold original stopped observation action cannot be recreated from its histor
  try{await f.start();f.releaseRoot();await f.promotionPrepared;const receipt=f.document.view.events.find(e=>e.type==='agent/delivery-received')!
    const closing=f.service.close();f.releasePromotion();await closing;const priorErrors=f.errors().length;await f.reopen();const adapter=receivedInputsFor(f.document,'parent').delivery
    expect(await adapter.admitExec({kind:'exec',sourceSeq:receipt.sourceSeq,terminalSeq:receipt.terminalSeq})).toMatchObject({inputId:receipt.inputId,disposition:'pending'})
-   await vi.waitFor(()=>expect(f.errors().length).toBeGreaterThan(priorErrors),{timeout:2000})
+   await vi.waitFor(()=>expect(f.errors().length).toBeGreaterThan(priorErrors),{timeout:15000})
    const action=f.document.view.events.find(e=>e.type==='context/action'&&e.op==='open'&&e.origin.kind==='observation-input'&&e.origin.inputId===receipt.inputId)
    expect(action).toBeDefined();if(action?.type!=='context/action'||action.op!=='open')throw new Error('Missing original observation action')
    expect(f.document.view.events.filter(e=>e.type==='context/action'&&e.op==='open'&&e.origin.kind==='observation-input'&&e.origin.inputId===receipt.inputId)).toHaveLength(1)
