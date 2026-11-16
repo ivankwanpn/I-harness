@@ -362,6 +362,16 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - `mixed-retention-quota` 第三案在 fixed-budget 下，legacy 派生索引的 SQLite `COMMIT` 因 page budget 回 `database or disk is full`；`ContextStore.put` 清理後把原錯誤往外拋，capture 因此 crash，而正確語意是「這次 capture 沒有保留」（none）。
 - 修正：`legacy/capture.ts` 只在錯誤鏈匹配**原生** `database or disk is full` 時回 `undefined`（已 rollback 的合法 quota refusal）；`Context disk quota exceeded` 等 managed physical mismatch 仍照原樣拒絕，避免吞掉真正的越界。
 - 驗證：`mixed-retention-quota` **4/4**、context-output `capture-admission` 8/8、`legacy-index-lifecycle` 44/44、`legacy-funding-batch` 115/115（1 skip）；typecheck 0。executor 殘餘約 **33**。
+#### 第五十七批：剩餘族群的根因定位
+
+- **publication-pins / mixed-retention-native**：`Original deletion/revocation inventory recovery required` 來自 `passiveManagedReleaseInventory` 把任何 `operation.phase!=='committed'`（含刻意 staged 的 managed artifact）或 `operation.json.<hash>.pending` 視為 recovery。deletion/revocation 需先以同一 capture 完成 pending metadata 或安全丟棄 staged operation；直接放寬會違反 `reconcileResult` 的 recovery-required 契約，未合併。
+- **managed-runtime**：`owned original workspace write changes instructions` 的 `Observed instructions unavailable` 已定位是 publish 後 `view.service.snapshot().reliability='unavailable'`（fingerprint 未變）而非目錄變動；屬 managed runtime 首次 admission 的環境可靠性競態。
+- **title-action**：第二個 submit 的 `priorDocument.settleFinishedActions()` 對取消後 post-turn action 的 pending frame 回 `Managed facts require reconciliation`；bounded microtask 重試一次仍失敗，需真正 action settlement ownership 修正。
+- **delivery-active-wait**：foreground handoff 被之後的 `task-parent` document save 擋住；需要「handoff 先預留 session fact、再 flush task document」的排序保證。
+- **exec-direct-source**：唯一失敗 `shell manual (direct:true)` 手動 prepare 無 model Exec issuer；durable session 正確拒絕，需 fixture 走真實 model-origin。
+- **bounded-file-production**：child read 結果為 artifact envelope（`retention.ref`）；已可偵測 envelope 並以 `context_output_read` 分頁，但 child 端仍未完成（model stream error），未合併。
+- **instruction-isolated-review**：兩個不確定案 isolated source `closes=0`；`view.close()` 實驗仍為 0，代表 holder close 路徑未執行。
+- **generation-actions**：`forkTurns` 對 forked view 的 double-fork 需 batch seed transformation，目前 `retained seed cannot preserve conversation semantics`。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
