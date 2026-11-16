@@ -19,8 +19,9 @@ export async function spawnDurable(
   sessionId: string,
   args: Record<string, unknown>,
   callId = 'spawn-' + Math.random().toString(36).slice(2),
-  options: { retain?: boolean } = {},
+  options: { retain?: boolean; name?: string } = {},
 ): Promise<{ output: unknown; release?: () => Promise<void> }> {
+  const toolName = options.name ?? 'spawn_agent'
   const action = assembly.factOwner.beginAction()
   let source: ReturnType<typeof action.registerSettlementSource> | undefined
   const release = async (): Promise<void> => {
@@ -30,11 +31,11 @@ export async function spawnDurable(
   }
   let output: unknown
   try {
-    const [seq] = committedFactSeqs(await action.facts.tools.call({ type: 'tool/call', callId, name: 'spawn_agent', args }))
+    const [seq] = committedFactSeqs(await action.facts.tools.call({ type: 'tool/call', callId, name: toolName, args }))
     if (seq === undefined) throw new Error('Original spawn call fact did not commit')
     committedFactSeqs(await action.facts.tools.dispatch(callId, { kind: 'prior', seq, expectedType: 'tool/call' }))
     source = action.registerSettlementSource(async () => {})
-    const prepared = await assembly.tools.prepare({ name: 'spawn_agent', args }, action.signal, {
+    const prepared = await assembly.tools.prepare({ name: toolName, args }, action.signal, {
       session: assembly.session, sessionId, callId, callEventSeq: seq, settlementSource: source,
     })
     output = await assembly.tools.dispatch(prepared)

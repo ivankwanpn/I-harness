@@ -435,6 +435,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - **native-dependency-observer**：child native job 的 receipt owner 仍是 parent session；`assembly.ctx.services.get('exec/service')` 是建立時 owner（parent），child 的 additional tool 直接呼叫同一 service，因此 `runBackground` 不會用 current tool session。產品需提供依 tool invocation session 路由的 Exec 入口（或 child 專屬 service），不是測試端可修。
 - **inherited-context-budget**：把 spawn 改走 `spawnDurable`＋composed coordinator＋task host 後，admission 回 `SESSION_CONVERSATION_FORMAT: invalid conversation format: dispatch without accepted call`——main model turn 已建立 accepted-exchange 對話後，手動建立 tool/call+dispatch 會被格式驗證拒絕。fixture 需要真正的 accepted model exchange 才能手動 spawn；durable-spawn helper 需擴充為可建立 accepted batch，或測試改由模型 turn 驅動。
 - 兩者皆需產品/測試基礎設施層改動，本輪未合併；工作樹已回退乾淨。
+#### 第六十九批：fixture 基礎設施與 retained cleanup 限制
+
+- `durable-spawn` helper 的 tool name 改為可選（`options.name`，預設 `spawn_agent`），讓 `followup_task` 等 Task 工具也能走真實 prepared caller 路徑；typecheck 0。
+- `inherited-context-budget` 進一步確認：main turn 建立 accepted-exchange 對話後，手動 tool/call+dispatch 會被 `SESSION_CONVERSATION_FORMAT` 拒絕；需要 helper 建立 accepted model exchange 或改由模型 turn 驅動 spawn。
+- `retained-hook-recovery`：`coordinator.close()` 重試 3 次（含 broker.dispose 後延遲）仍回 `Coordinator cleanup is unresolved`；是 retained Code Mode source 的真實 cleanup debt，需產品端處理，不是測試重試可解。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
