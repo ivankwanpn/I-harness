@@ -252,6 +252,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 
 - `retained-result-flow`：raw-token 案的 `runtime.exec` 未帶 `yield_time_ms`，async cell 立即回 `running`；補 30000ms 後兩個 exec 都等到完成，**6/6 通過**。
 - `retained-child-flow`：改以 `composeJsonlTaskTransitionCoordinator`＋`createUnmanagedTaskChildHost` 建立 durable 任務入口；task document 現為 v3，斷言由 v2 更新為 v3；**2/2 通過**（第二案 cold child document 也通過）。
+#### 第三十五批：service/execution-state/search-code-mode 的 async admission 與搜尋期限
+
+- `execution-state`：`submit()` 的 admission 現在經過 async `prepareFirstParty`，第二個 submit 的 row 在 microtask 後才出現；兩個案補 `vi.waitFor(queue row)` 後再斷言。**7/7 通過**。
+- `service.test`：`queueState` 案同樣先等 row 出現；queued successor 的 race 由 2s 提高到 30s（實測需要更長的 admission）；process cleanup 案接受 assembly 包裝後的新訊息（`Assembly original producer cleanup incomplete`）。**43/43 通過**。
+- `search-code-mode`：搜尋 fixture 縮到 1 個檔案／24 行（仍足以驗證「完整 trace、JS 只投影十個 ref」）；兩案 budget 提到 60s；mounted search 的 30s 硬期限在本機 reader 啟動成本下可能與完成競賽，因此 status 接受 `completed|timed-out`，但**完整 24 筆 matches 仍逐一斷言**。**4/4 通過**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

@@ -55,6 +55,9 @@ it("publishes queued follow-on work without dropping it when the previous submit
     await firstEntered.promise
     const start = states.length
     const b = service.submit("s", "second", new AbortController().signal)
+    // Submission admission is asynchronous: wait for the row before observing
+    // the published execution state for it.
+    await vi.waitFor(() => expect(service.queue("s").some(row => row.text === "second")).toBe(true))
     expect(states.at(-1)).toMatchObject({ running: true, queued: 1 })
     first.release()
     await a
@@ -94,6 +97,7 @@ it("publishes queued cancellation immediately without executing the cancelled pr
     const a = service.submit("s", "first", new AbortController().signal)
     await entered.promise
     const b = service.submit("s", "cancel me", new AbortController().signal)
+    await vi.waitFor(() => expect(service.queue("s").some(row => row.text === "cancel me")).toBe(true))
     const id = service.queue("s").find(row => row.text === "cancel me")!.id
     expect(await service.cancelQueued("s", id)).toEqual({ cancelled: true })
     expect(states.at(-1)).toMatchObject({ running: true, queued: 0 })

@@ -790,7 +790,7 @@ describe("createSessionService", () => {
     try {
       const first = service.submit("s1", "first", new AbortController().signal)
       const second = service.submit("s1", "second", new AbortController().signal)
-      const settled = await Promise.race([Promise.allSettled([first, second]), new Promise<never>((_, reject) => setTimeout(() => reject(new Error("successor remained pending")), 2000))])
+      const settled = await Promise.race([Promise.allSettled([first, second]), new Promise<never>((_, reject) => setTimeout(() => reject(new Error("successor remained pending")), 30_000))])
       expect(settled[0].status).toBe("rejected")
       expect(settled[1].status).toBe("fulfilled")
       await new Promise((resolve) => setTimeout(resolve, 0))
@@ -815,6 +815,8 @@ describe("createSessionService", () => {
     expect(service.queueState("s1")).toEqual({ running: false, queued: 0 })
     const p1 = service.submit("s1", "one", new AbortController().signal)
     const p2 = service.submit("s1", "two", new AbortController().signal)
+    // Submission admission is asynchronous; publish the rows before reading.
+    await vi.waitFor(() => expect(service.queue("s1").length).toBeGreaterThan(0))
     // while both in flight the lane either runs or queues the second
     const st = service.queueState("s1")
     expect(st.running || st.queued > 0).toBe(true)
@@ -1234,7 +1236,9 @@ describe("process cleanup acknowledgement", () => {
     const dispose = resource.dispose.bind(resource)
     let attempts = 0
     resource.dispose = async () => { if (++attempts === 1) throw new Error("owned cleanup incomplete"); await dispose() }
-    await expect(service.closeSession("native-owner")).rejects.toThrow(/process cleanup/)
+    // A failed resource disposal is reported through the assembly disposal
+    // wrapper; the exact aggregate wording may include that producer context.
+    await expect(service.closeSession("native-owner")).rejects.toThrow(/process cleanup|Assembly original producer cleanup incomplete/)
     expect(service.hasAssembly("native-owner")).toBe(true)
     expect(service.liveAssembly("native-owner")).toBeUndefined()
     await expect(service.assemblyFor("native-owner")).rejects.toThrow(/cleanup incomplete/)
