@@ -5,7 +5,6 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { resolve } from "node:path"
 import { expect, it, vi } from "vitest"
 import { createExecutionLease, type ProcessSpec, type TransportExecutionBackend } from "@i-harness/sandbox"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 const observed = vi.hoisted(() => ({ requests: [] as { spec: ProcessSpec; options: any }[] }))
@@ -33,6 +32,10 @@ vi.mock("@i-harness/sandbox-local", () => ({
   },
 }))
 import { createDurableSessionLoader, createSessionService } from "../src/index.ts"
+import { createUnmanagedTaskChildHost } from "../src/lifecycle/task-child-host.ts"
+import { composeJsonlTaskTransitionCoordinator } from "../../session-persistence-jsonl/src/backend-factory.ts"
+import { taskDocumentStorageContract } from "../../subagent/src/task/storage-contract.ts"
+import { spawnDurable } from "./helpers/durable-spawn.ts"
 
 function directory() { mkdirSync(resolve(".tmp"), { recursive: true }); return mkdtempSync(resolve(".tmp/wsl-product-integration-assembly-")) }
 
@@ -62,7 +65,7 @@ it("runs registered Bash and Code Mode shell through captured WSL service option
 
 it("inherits the captured Linux workspace and exec owner through a real child Code Mode registry", async () => {
   const root = directory()
-  const coordinator = createSessionCoordinator(createJsonlBackend(resolve(root, "sessions")), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(resolve(root, "sessions")), { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: "parent" })
   const requests: LLMRequest[] = []
   const child: ModelClient = controlledModel(async function* (request) {
@@ -71,7 +74,7 @@ it("inherits the captured Linux workspace and exec owner through a real child Co
     else yield { type: "text/chunk", text: "child complete" }
     yield { type: "end" }
   })
-  const service = createSessionService({ workspace: root, modelPolicy: "test-mock", coordinator, sessionFor: createDurableSessionLoader(coordinator), approveAll: true,
+  const service = createSessionService({ workspace: root, modelPolicy: "test-mock", coordinator, sessionFor: createDurableSessionLoader(coordinator), approveAll: true, prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: "unmanaged" }),
     sandbox: "workspace-write", windowsSandboxBackend: "wsl", wslExecution: { distribution: "Ubuntu", networkAccess: false, workspaceDependencies: true }, codeMode: { mode: "only" },
     pluginAgents: [{ name: "linux-probe", description: "Controlled child", systemPrompt: "Use Linux Bash", tools: ["shell", "code_exec", "code_wait"] }],
     roleSelectionFor: () => ({ provider: "fixture", model: "child" }), allowSubagentModelSelection: true,
@@ -80,7 +83,7 @@ it("inherits the captured Linux workspace and exec owner through a real child Co
   observed.requests.length = 0
   try {
     const assembly = await service.assemblyFor("parent")
-    await assembly.tools.get("spawn_agent")!.execute({ task_name: "probe", agent_type: "linux-probe", message: "Run controlled fixture", fork_turns: "none", background: false }, { sessionId: "parent" })
+    await spawnDurable(assembly, "parent", { task_name: "probe", agent_type: "linux-probe", message: "Run controlled fixture", fork_turns: "none", background: false })
     await vi.waitFor(() => expect(observed.requests).toHaveLength(1))
     expect(observed.requests[0]!.spec).toMatchObject({ executionTarget: "wsl", owner: { parentSessionId: "parent" } })
     expect(requests[0]!.systemPrompt).toContain("Linux workspace: /mnt/d/fixture")

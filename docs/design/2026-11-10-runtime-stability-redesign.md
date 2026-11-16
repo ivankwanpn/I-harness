@@ -307,6 +307,10 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 #### 第四十四批：retained-child-scope 的 pre-bind append 與 Task host
 
 - `retained-child-scope` 兩處舊入口：backend 建立後改寫 `appendOwnedBatch`（觸發 `PROCESS_READ_UNAVAILABLE`）與 assembly 缺 `prepareTaskChild`／composed coordinator。改為 `createJsonlBackend(root,{wrap})` 注入 append，coordinator 用 `composeJsonlTaskTransitionCoordinator`＋task storage contract，assembly 補 `createUnmanagedTaskChildHost`。**1/1 通過**。
+#### 第四十五批：wsl-assembly 的正常 Task 入口
+
+- `wsl-assembly` 的 child Code Mode 案以 `tools.get('spawn_agent').execute(...)` 直接呼叫，被 durable Task leaf 以 `Original prepared task caller unavailable` 拒絕。改為 `spawnDurable`，coordinator 改 `composeJsonlTaskTransitionCoordinator`，service 補 `prepareTaskChild: createUnmanagedTaskChildHost`。**2/2 通過**，typecheck 0。
+- 同輪 triage：`managed-instruction-handoff` 的 publish `captureRuntimeContext().admit()` 在 fixture 直開 execution 時回 `not-issued FACT_RECOVERY_REQUIRED`；`execution.prepare()` 不足以打開 bootstrapReady，需改走 service 正常入口或等 bootstrap 啟用 seam。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
