@@ -357,6 +357,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 根因：unknown receipt 後的 typed Stop 重試會 join 到前一輪「尚未看到 allow」的 settle，第一次 reconcile 仍回 transient unknown，整個 retry 因此失敗；實測同一 reconcile 稍後即可 committed。
 - 修正（core-agent `execution-inputs.settleCapture`）：第一次 reconcile 後若仍是 unknown／recovery-required／not-issued recovery，先讓出一輪事件迴圈，再做**一次** bounded re-reconcile；仍失敗才 fail closed（不是無限重試）。
 - 結果：`owned-service-shell` **15/15**、`delivery-lifecycle` **16/16**（falsey/unclassified task save 案以 fixture `expectCleanupDebt` 記錄預期 recovery debt）、`delivery-retry` 3/3、`service` 43/43；core-agent 全套件通過；executor typecheck 0。executor 殘餘由約 36 降至 **約 34**。
+#### 第五十六批：legacy capture 的原生 SQLite 配額失敗
+
+- `mixed-retention-quota` 第三案在 fixed-budget 下，legacy 派生索引的 SQLite `COMMIT` 因 page budget 回 `database or disk is full`；`ContextStore.put` 清理後把原錯誤往外拋，capture 因此 crash，而正確語意是「這次 capture 沒有保留」（none）。
+- 修正：`legacy/capture.ts` 只在錯誤鏈匹配**原生** `database or disk is full` 時回 `undefined`（已 rollback 的合法 quota refusal）；`Context disk quota exceeded` 等 managed physical mismatch 仍照原樣拒絕，避免吞掉真正的越界。
+- 驗證：`mixed-retention-quota` **4/4**、context-output `capture-admission` 8/8、`legacy-index-lifecycle` 44/44、`legacy-funding-batch` 115/115（1 skip）；typecheck 0。executor 殘餘約 **33**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

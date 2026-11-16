@@ -4,6 +4,15 @@ import type { ContextCapture, ContextOutputConfig, ContextOutputService, Context
 import type { WorkspaceMutationTurn } from '../workspace-mutation.ts'
 import type { LegacyUseLease } from './use-gate.ts'
 
+const nativeQuotaFailure = (failure: unknown): boolean => {
+  const seen = new Set<unknown>()
+  for (let current: unknown = failure; current && !seen.has(current); current = (current as { cause?: unknown }).cause) {
+    seen.add(current)
+    const message = current instanceof Error ? current.message : String(current)
+    if (/database or disk is full/i.test(message)) return true
+  }
+  return false
+}
 /** Prepare the original producer outside both mutation lanes, then commit the
  * normalized bytes with a fresh physical quota decision in the shared turn. */
 export async function captureLegacy(
@@ -47,6 +56,10 @@ export async function captureLegacy(
       expiresAt: Date.now() + getConfig().retentionDays * 86400000,
       ...(source ? { source } : {}),
     }
-    return budget.put({ ref, ...(source ? { source } : {}) }, bytes, owned)
+    try { return await budget.put({ ref, ...(source ? { source } : {}) }, bytes, owned) }
+    // A native SQLite page budget can refuse its derived index write after the
+    // managed body was admitted. The capture is already rolled back; report the
+    // same truthful "none" disposition as every other legacy quota refusal.
+    catch (failure) { if (nativeQuotaFailure(failure)) return undefined; throw failure }
   })
 }
