@@ -470,6 +470,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 產品已改走 `registerExecWithReservation` 註冊 Exec pair，舊 test mock 只包 `registerExec`，`state.attached.exec` 永遠是 0；mock 改包 reservation 回傳的 `pair.service.subscribeJobs`。
 - `finiteSetup` 在 fake timers 下的 module-loader 零延遲回合需真實時間，原 `15_000` 上限在高負載會 timeout；提高到 `60_000`（連跑兩次都綠）。
 - 驗證：`execution-source-prereq` **1/1**（兩次），executor typecheck 0。executor 殘餘約 **19**。
+#### 第七十六批：cold reader 與 retained batch fixture 的入口阻塞
+
+- **service-instruction-close**：cold read 期間 `unfinishedResult(owner)` 建立的 pending sink 不計入 `status().activeJobs`（`jobs` 只記 native background captures），所以 reader 無法用 activeJobs 偵測「讀取本身留下 pending writer」。產品需在 status/reader 曝露 pending result sink，或由 owner 提供 pending-writer predicate；實驗已回退。
+- **retained-batch-continuation**：把 backend 注入改為 pre-bind `wrapOwnedBatch`/`wrapOwnedReconcile` 後，`PROCESS_READ_UNAVAILABLE` 消失，但下一個失敗是 `task-document-transition` 的 `beginMutation` 以 `ids=[null]` 呼叫 `artifactScope` → `artifactPath(undefined)`；child task document transition 在 child session id 尚未確定時就帶 null。屬產品 transition scope 契約，需在 transition 前確保 session id，或 transition 對 pending child 使用 placeholder。
+- 兩者皆需產品層改動，本輪未合併；工作樹已回退乾淨。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
