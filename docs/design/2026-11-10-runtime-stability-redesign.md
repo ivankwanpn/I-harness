@@ -328,6 +328,10 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 
 - `owned-code-service`／`owned-code-nested-shell` 的 wake timeout 根因不是 delivery：private drain 確實排入 `session.delivery.code` 並呼叫 `schedule`，但喚醒用的 `submitUnfenced` 以 **`prompt_too_long: prepared context cannot fit the owned window (3715 input tokens; 128 output reserve)`** 被拒絕，且在 drain 的 settle-only 包裝下不產生警告（加 debug 才看到）。
 - fixture 的 `contextWindow:4096,maxOutputTokens:128` 對喚醒請求太窄；提高到 `100000/512`（只放寬容量，不改任何 delivery 斷言）。兩檔分別 **2/2、2/2 通過**，一起跑 4/4，typecheck 0。
+#### 第五十批：private delivery wake 失敗的可觀察性
+
+- private drain 的 `schedule` 只以 `.then(settled,settled)` 收尾；喚醒用的 `submitUnfenced` 若被拒（例如 `prompt_too_long`）會被靜默吞掉，只剩「沒有 wake」的間接症狀（`owned-code-service` 就是因此卡 90 秒）。
+- 改為在非關閉狀態下以 `[i-harness] private delivery wake failed:` 記錄實際錯誤，再 `settled()`；不改變 delivery 行為，只補上診斷。executor typecheck 0；`service`（43）、`execution-state`（7）、`owned-code-*`（各 2）、`delivery-retry`（3）皆未出現非預期 warning。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
