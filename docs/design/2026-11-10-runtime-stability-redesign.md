@@ -525,6 +525,11 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - `retained-state-cold`：以 `fromJSONL` 直讀 parent session 可避開 TASK_TRANSITION，但 `restoreState` 的 `qualifiedParent` 要求 managed fact owner（`isManagedFactOwner(parent, owner)`），nondurable owner 會讓 committed 案變 recovery-required；仍需真正的 managed parent document。
 - `project-context`：direct assembly 使用 `createUnmanagedTaskChildHost`，其 project 固定 `unmanaged`（host 明確拒絕 project binding），child 工具權限仍是 workspace a，followup 寫 c 被拒；需 service 級 project host 或 unmanaged host 的 live authority 設計。
 - 三者皆產品/架構層，未合併。
+#### 第八十六批：task save recovery 位置與 hook fixture 探測
+
+- subagent close 量到 entry failure 來自 **chainFailure**（`Earlier owned task save requires resolution`），不是 `settleEntryResult`；在 entry loop 前 `tasks.recoverPersistence()` 仍不足，chain 仍以原 save debt 失敗。需在 spawn chain 建立/join 點保存可回收的恢復 closure，而非在 close 末端重試。
+- `retained-hook-recovery` 的注入仍是 post-bind backend replacement；改成 pre-bind wrap 時變數作用域要對齊（此檔有多個 test），未完成。其 body 已 2/3 綠，最後一案 coordinator cleanup unresolved 仍待查。
+- 本輪無產品合併；工作樹已回乾淨。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
