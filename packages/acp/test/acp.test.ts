@@ -13,9 +13,21 @@ import { createServer } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { createSessionService, type SessionService } from "@i-harness/session-executor"
 import { createAcpServer, ACP_SERVER_NAME, ACP_PROTOCOL_VERSION } from "../src/index.ts"
+
+/** The real CLI is spawned by absolute path so it can run in an ISOLATED
+ * workspace (the ACP client's cwd), not this monorepo. `acp` binds the session
+ * service to `process.cwd()`, and the first prompt builds the instruction
+ * snapshot, whose fs-watch baseline walks that workspace before the model call.
+ * Pointing it at the monorepo makes that baseline scan thousands of test/build
+ * directories (measured 36-41s here), while a realistic project-sized
+ * workspace readies in milliseconds. The loader must therefore resolve from
+ * this checkout, not from the spawned process's cwd. */
+const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url))
+const CLI_ENTRY = fileURLToPath(new URL("../../../apps/cli/src/index.ts", import.meta.url))
+const TSX_LOADER = pathToFileURL(join(REPO_ROOT, "node_modules", "tsx", "dist", "loader.mjs")).href
 
 async function startFixtureModel(): Promise<{ baseURL: string; close(): Promise<void> }> {
   const server = createServer((req, res) => {
@@ -605,11 +617,12 @@ describe("i-harness acp (CLI stdio)", () => {
   })
 
   it("initialize → new → prompt → list → close over stdio NDJSON", async () => {
-    const repoRoot = fileURLToPath(new URL("../../..", import.meta.url))
-    const cliEntry = fileURLToPath(new URL("../../../apps/cli/src/index.ts", import.meta.url))
     const cwd = await mkdtemp(join(tmpdir(), "ih-acp-cli-"))
-    const child = spawn(process.execPath, ["--import", "tsx", cliEntry, "acp"], {
-      cwd: repoRoot,
+    // Spawn inside the session cwd: `acp` binds its workspace to the process
+    // cwd, and this is the layout a real ACP client produces. See the
+    // REPO_ROOT comment for why the monorepo must not be the workspace.
+    const child = spawn(process.execPath, ["--import", TSX_LOADER, CLI_ENTRY, "acp"], {
+      cwd,
       env: { ...process.env, IH_CONFIG_DIR: configDir },
       stdio: ["pipe", "pipe", "pipe"],
     })
@@ -666,15 +679,15 @@ describe("i-harness acp (CLI stdio)", () => {
   }, 30000)
 
   it("restores one durable session across ACP process restarts without duplicate seqs", async () => {
-    const repoRoot = fileURLToPath(new URL("../../..", import.meta.url))
-    const cliEntry = fileURLToPath(new URL("../../../apps/cli/src/index.ts", import.meta.url))
     const cwd = await mkdtemp(join(tmpdir(), "ih-acp-resume-cwd-"))
     const sessionDir = await mkdtemp(join(tmpdir(), "ih-acp-resume-sess-"))
-    const args = ["--import", "tsx", cliEntry, "acp", "--session-dir", sessionDir]
+    const args = ["--import", TSX_LOADER, CLI_ENTRY, "acp", "--session-dir", sessionDir]
     let sessionId = ""
 
+    // Both processes run in the same temp workspace, the way an ACP client
+    // restarts its agent process for the same project. See REPO_ROOT above.
     const first = spawn(process.execPath, args, {
-      cwd: repoRoot,
+      cwd,
       env: { ...process.env, IH_CONFIG_DIR: configDir },
       stdio: ["pipe", "pipe", "pipe"],
     })
@@ -703,7 +716,7 @@ describe("i-harness acp (CLI stdio)", () => {
     }
 
     const second = spawn(process.execPath, args, {
-      cwd: repoRoot,
+      cwd,
       env: { ...process.env, IH_CONFIG_DIR: configDir },
       stdio: ["pipe", "pipe", "pipe"],
     })

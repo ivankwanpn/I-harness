@@ -668,6 +668,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 可定位 58 案（37 檔）：**19 timeout、40 非 timeout**（另 3 案未定位，含 cli 2）。
 - timeout 集中在 gateway 重負載檔（context-summary-growth、long-growth-host、native-context-child 等），多為檔內顯式 30s／5s 預算；非 timeout 集中在 desktop-gateway 的 host／fixture 語意案。
 - 下一步：把 gateway 重檔預算與非 timeout 案分組處理；再跑第三次完整 verify。
+#### 第一百零三批：ACP/CLI workspace fixture、portable 解壓、stale-section 預算
+
+- **ACP/CLI 4 案根因**：spawned CLI 以 `process.cwd()` 當 session workspace；repo root 的 instruction fs-watch baseline 實測 35–41s（15,857 dirs／37,735 files；chokidar `_addToNodeFs` 佔 CPU profile 15,320 samples），首次 prompt 卡在 watch 建置，並非 provider/ACP hang。修正（tests only）：兩個 fixture 以 isolated temp workspace 作 session cwd，tsx loader 用絕對 file URL；斷言與預算未動。
+  - `@i-harness/acp`：2 fail → **17/17**；`apps/cli` `cli.test.ts`：2 fail → **70 pass/1 skip**；CLI 全 package 401 pass/4 skip。
+- **Desktop portable archive**：Windows PowerShell 5.1 `Expand-Archive` 對 3-arg `ExtractToDirectory` overload 不可用；改用 `Add-Type System.IO.Compression.FileSystem`＋`ZipFile::ExtractToDirectory` 2-arg，`portable-archive` **1/1**。
+- **subagent-stale-section**：三個 case 的 20s 預算在 maxWorkers=2 下超時；提高到 120s，檔案 **3/3**。
+- 未改產品源碼。殘留產品觀察：大型 workspace 的首次 instruction fs-watch baseline 仍花 35–41s，後續可考慮 bounded/async readiness（本次未動）。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

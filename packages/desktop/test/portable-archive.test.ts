@@ -17,7 +17,7 @@ it.skipIf(process.platform !== "win32")("creates an Explorer-readable folder and
     expect(createPortableArchive(app, zip)).toBeGreaterThan(0)
     const output = join(root, "extracted")
     const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
-      "$ErrorActionPreference='Stop'; Expand-Archive -LiteralPath $env:IH_ARCHIVE_TEST_ZIP -DestinationPath $env:IH_ARCHIVE_TEST_OUTPUT"
+      "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory($env:IH_ARCHIVE_TEST_ZIP, $env:IH_ARCHIVE_TEST_OUTPUT)"
     ], { env: { ...process.env, IH_ARCHIVE_TEST_ZIP: zip, IH_ARCHIVE_TEST_OUTPUT: output }, windowsHide: true, encoding: "utf8", timeout: 30_000 })
     expect(result.status, result.stderr).toBe(0)
     expect(readFileSync(join(output, "I-harness", "I-harness.exe"), "utf8")).toBe("MZtest payload")

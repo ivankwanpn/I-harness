@@ -8,7 +8,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawn } from "node:child_process"
 import { createServer } from "node:http"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { runHeadless } from "../src/run.ts"
 import { main, parseModel } from "../src/index.ts"
 import { createContext } from "@i-harness/core-plugin"
@@ -32,6 +32,19 @@ let fixtureOrigin: string
 let canonicalConfigDir: string
 let closeFixtureModel: (() => Promise<void>) | undefined
 const previousConfigDir = process.env.IH_CONFIG_DIR
+
+// The spawned-CLI cases below run the real entry point in an ISOLATED temp
+// workspace (the user's project), not in this monorepo. `run` binds its
+// session workspace to `process.cwd()`, and the first prompt builds the
+// instruction snapshot: its fs-watch baseline walks the workspace before the
+// model call. With the monorepo as workspace that scan covers thousands of
+// test/build directories (measured 36-41s here) and blows the per-test budget;
+// an empty project workspace readies in milliseconds. Because the child's cwd
+// is no longer this checkout, `--import tsx` must carry the loader's absolute
+// file URL instead of a bare package specifier.
+const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url))
+const CLI_ENTRY = fileURLToPath(new URL("../src/index.ts", import.meta.url))
+const TSX_LOADER = pathToFileURL(join(REPO_ROOT, "node_modules", "tsx", "dist", "loader.mjs")).href
 
 beforeAll(async () => {
   const server = createServer((req, res) => {
@@ -518,16 +531,23 @@ describe("CLI main + entry guard", () => {
     }
   })
 
-  it("runs main when the CLI module is executed as the entry point", async () => {    // spawn a real node process so the module-level entry guard fires:
-    // `node --import tsx apps/cli/src/index.ts run "hello"` must print and exit 0.
-    const repoRoot = fileURLToPath(new URL("../../..", import.meta.url))
-    const entry = fileURLToPath(new URL("../src/index.ts", import.meta.url))
-    const res = await runNode(["--import", "tsx", entry, "run", "hello"], repoRoot)
-    expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).toBe(0)
-    expect(res.stdout).toContain("ok")
+  it("runs main when the CLI module is executed as the entry point", async () => {
+    // Spawn a real node process so the module-level entry guard fires:
+    // the absolute entry + tsx loader run from an isolated project workspace
+    // (see REPO_ROOT above) and must print and exit 0.
+    const workspace = mkdtempSync(join(tmpdir(), "i-harness-cli-entry-"))
+    try {
+      const res = await runNode(["--import", TSX_LOADER, CLI_ENTRY, "run", "hello"], workspace)
+      expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).toBe(0)
+      expect(res.stdout).toContain("ok")
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
     // M72 (load flake): this spawns `node --import tsx` for real; measured at
     // 5031ms under the full gate's parallel load (see the retry test below for
-    // the startup measurements), i.e. past vitest's 5s default. Same budget the
+    // the startup measurements), and 3.9s idle with the isolated workspace.
+    // The 30s budget keeps ~6x headroom over the loaded measurement without
+    // absorbing the monorepo-wide instruction-watch baseline. Same budget the
     // file's other process-spawning tests already declare.
   }, 30_000)
 
@@ -2207,13 +2227,18 @@ describe("M23 CLI session ownership lock wiring", () => {
 describe("M25 --telemetry (JSONL host event stream)", () => {
   // e2e: the real CLI process runs with --telemetry → JSONL lines on stdout.
   it("--telemetry writes JSONL telemetry lines to stdout", async () => {
-    const repoRoot = fileURLToPath(new URL("../../..", import.meta.url))
-    const entry = fileURLToPath(new URL("../src/index.ts", import.meta.url))
-    const res = await runNode(["--import", "tsx", entry, "run", "hello", "--telemetry"], repoRoot)
-    expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).toBe(0)
-    expect(res.stdout).toContain('"type":"session/start"') // JSONL 行
-    expect(res.stdout).toContain('"type":"turn/start"')
-    expect(res.stdout).toContain('"type":"turn/end"')
+    // Same isolated-workspace spawn as the entry-guard case above; the run must
+    // stay on the real headless pipeline and only add the JSONL sink.
+    const workspace = mkdtempSync(join(tmpdir(), "i-harness-m25-tele-ws-"))
+    try {
+      const res = await runNode(["--import", TSX_LOADER, CLI_ENTRY, "run", "hello", "--telemetry"], workspace)
+      expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).toBe(0)
+      expect(res.stdout).toContain('"type":"session/start"') // JSONL 行
+      expect(res.stdout).toContain('"type":"turn/start"')
+      expect(res.stdout).toContain('"type":"turn/end"')
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
   }, 30_000)
 
   // Full event-stream shape through runHeadless with the stdout JSONL sink.

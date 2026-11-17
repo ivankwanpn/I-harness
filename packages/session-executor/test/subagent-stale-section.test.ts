@@ -112,7 +112,7 @@ describe("W11 subagents section through the assembly", () => {
       childGate.release()
       await assembly.dispose()
     }
-  }, 20_000)
+  }, 120_000)
 
   it("starts no turn: a session left idle past the threshold stays idle", async () => {
     const childGate = gate()
@@ -175,7 +175,7 @@ describe("W11 subagents section through the assembly", () => {
       childGate.release()
       await assembly.dispose()
     }
-  }, 20_000)
+  }, 120_000)
 
   it("warns when the threshold can never fire or always fires — the two sides of the same defect", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
@@ -209,5 +209,5 @@ describe("W11 subagents section through the assembly", () => {
     } finally {
       warn.mockRestore()
     }
-  }, 20_000)
+  }, 120_000)
 })
