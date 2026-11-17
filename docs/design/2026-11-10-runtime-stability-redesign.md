@@ -658,6 +658,16 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - **expiry `authorityNamespaces` 2→4**：sweep 本身仍是 `validateLegacyAuthority`＋一次 streaming `legacyAuthorityRows`＝2；額外 2 次來自 `52171b6d` 加入的 idle-lifetime passive inventory（roots inventory＋expiry rows 各列舉一次 namespace），發生在測試撰寫之後。保留 per-ref scan 控制：先斷言 `sweep.authorityNamespaces=2`、`sweep.wholeAuthorityPreflights=1`，再斷言 total=4；`graphWalks/graphRows/slot.sync` 不變。
 - **10001 observations**：實測 fixture 13.0s、transfer 582.2s、post-deletion rejection 53.7s、close 0.01s＝649s；loaded run transfer 708.7s。per-test 預算 300s→1800000ms（比照 legacy-fork-scale 慣例，2.3× headroom），phase timings 寫入既存 counters log；未加入 qualification cache（僅省 ≤60s、且會弱化 per-observation canonical verification）。
 - 驗證：兩檔 **14/14**（performance 13/13、observation-scale 1/1），root 以 600s CLI 預算重跑 exit 0；context-output typecheck 0。產品 src 未改。
+#### 第一百零二批：verify:all 第二輪（61 failures）
+
+在 HEAD `df1aa1d6` 以新 runner（testTimeout/hookTimeout=120s）重跑 `node scripts/verify-all.mjs`（日誌：`p3-verify-all2.log`）：
+
+- suite：**16,393 passed／104 skipped／61 failed**（82/82 packages）；typecheck／e2e／reachability／boundaries／artifact 全 0。
+- 相對第一輪 112 failures：**+52 passed、−51 failed**；session-persistence 已全綠，session-executor 只剩 1。
+- 剩餘分佈：apps/cli 2、acp 2、context-output 1、desktop 1、desktop-gateway 54、session-executor 1。
+- 可定位 58 案（37 檔）：**19 timeout、40 非 timeout**（另 3 案未定位，含 cli 2）。
+- timeout 集中在 gateway 重負載檔（context-summary-growth、long-growth-host、native-context-child 等），多為檔內顯式 30s／5s 預算；非 timeout 集中在 desktop-gateway 的 host／fixture 語意案。
+- 下一步：把 gateway 重檔預算與非 timeout 案分組處理；再跑第三次完整 verify。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
