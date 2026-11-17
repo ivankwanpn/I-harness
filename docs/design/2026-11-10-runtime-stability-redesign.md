@@ -593,6 +593,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - **canonical deletion split**：`lifecycle.planTargets` 按 `hasLiveOwnership` 分組，僅 retained+fresh mix 時以同一 ordering origin 分別 plan 再 join（`combineOriginalOwnershipPlans`＋既有 `combineOriginalOwnershipBatches`）；reorder guard 對直接 mixed bundle caller 仍拒絕（canonical-ownership/ownership-native-count reserve callers 仍綠）。`ownership-native-count` 的舊 lower Task-key refusal 測試更新為 caller-split 成功契約（exactly-once effects、retained released、fresh body deleted）。
 - **native-dependency-observer fixture**：補 `prepareTaskChild`；改用 `settleFinishedActions()` 對 host-owned doc 做 reconciliation；rewind publication 移出 result-read mutation；timeout 60s→120s。
 - 驗證：`exec-direct-source` 38/38、`native-dependency-observer` 1/1（合計 39/39）；四 package typecheck 0；executor 4 檔回歸 36/36；`session-persistence` 全套件 **1249/1249**（root 重跑）。executor 定點殘餘由 15 降至 **7**。
+#### 第九十四批：live project instruction scope、bounded stale rebuild、fixture 真模型 spawn
+
+- **project-context**：child instruction host 的 `cwd` 改為 live project primary root（與 main manager 一致）；resident child 跨 project switch 後不再用 construction workspace 對 live roots 做 containment，followup write 可進新 root。`child-host.ts` cwd 型別放寬為 `string | (() => string)`。
+- **managed-runtime**：`reconcile` post-publication mismatch 分類為既有 bounded stale rebuild（`CONTEXT_INPUT_REBUILD`，受 staleRebuilds<=3 預算）當 `canReobserve` 認證，或「published text 未變、observation 失去 completeness（candidate-mapping invalidation）」時；封閉/authority/policy 失敗仍 plain stale，rebuild 耗盡仍 stalePreparedInput。`manager.ts` 亦過濾 live authority 外的 consumed/pending instruction targets（保留 queued，待 authority 再涵蓋）。
+- **inherited-context-budget**：fixture 改由真實 accepted model turn 發出兩個 spawn_agent tool calls（maxParallelToolCalls:1），使用真實 unmanaged task host；移除 synthetic tools.execute。budget 斷言不變，模型呼叫計數同步。
+- **retained-batch-continuation**：fixture seams 對齊 current product：以 real `tools.capture` 取得 accepted batch settlement source、以 first signal-bearing beginAction 捕捉 turn action；檢查 settlement source closed、same action open、same child document view/assertReady、reconciles 同 batchId；recovered code_exec outcome 依 `41fb70c7` 改為 succeeded。
+- 驗證：四檔 **52/52**（managed-runtime 39、inherited-context-budget 2、project-context 10、retained-batch-continuation 1）；session-executor/core-agent/runtime-context/subagent typecheck 0；executor 定點殘餘由 7 降至 **2**（event-driven-steering、delivery-active-wait，delivery specialist 進行中）。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

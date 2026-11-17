@@ -13,7 +13,7 @@ import {isManagedExecutionDomain,type ManagedExecutionDomain} from '@i-harness/c
 import {readToolInvocationDomain} from '../../../../core-tools/src/registry/invocation-domain.ts'
 
 export function createChildInstructionHost(options: {
-  environment: InstructionEnvironment; cwd: string; authority: () => AuthorityState; available: () => boolean
+  environment: InstructionEnvironment; cwd: string | (() => string); authority: () => AuthorityState; available: () => boolean
   root: { session: SessionView; factOwner: FactOwner; manager: ReturnType<typeof createMainInstructionManager> } | {domain:ManagedExecutionDomain;manager:ReturnType<typeof createMainInstructionManager>}
 }) {
   const { environment, cwd, authority, available: hostAvailable } = options

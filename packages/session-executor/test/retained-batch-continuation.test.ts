@@ -39,15 +39,19 @@ it('continues the original parent and child after landed output reconciles on it
   const output = createContextOutputService({ root: join(root, 'results'), workspaceId: 'fixture', config: { enabled: false } })
   let originalKey: BatchKey | undefined, originalOutcome: unknown, childId: string | undefined, childSessionId: string | undefined
   let observerError: unknown, allowOriginal = false, producers = 0, parentRequests = 0
-  let batchSource: SettlementFacts<ProducerFactOutcome> | undefined, originalView: SessionView | undefined, heldAtRejection = false, checkedLive = false
-  const sourceActions = new Map<SettlementFacts<ProducerFactOutcome>, ManagedAction<ProducerFactOutcome>>()
-  const closedSources = new Set<SettlementFacts<ProducerFactOutcome>>()
+  let batchSource: SettlementFacts<ProducerFactOutcome> | undefined, turnAction: ManagedAction<ProducerFactOutcome> | undefined
+  let originalView: SessionView | undefined, heldAtRejection = false, checkedLive = false
   const reconciles: BatchKey[] = [], childRequests: LLMRequest[] = []
   const child = controlledModel(async function* (request) {
     if (childRequests.length) {
-      expect(closedSources.has(batchSource!)).toBe(true)
-      sourceActions.get(batchSource!)!.assertOpen()
-      expect(sourceActions.get(batchSource!)!.signal.aborted).toBe(false)
+      // The first model batch's unknown output landed on its original handle and
+      // reconciled; the continuation request is served by the SAME still-open
+      // turn action, with its batch settlement source closed and the child
+      // document live and ready.
+      expect(batchSource).toBeDefined()
+      expect(() => batchSource!.assertHeld()).toThrow()
+      turnAction!.assertOpen()
+      expect(turnAction!.signal.aborted).toBe(false)
       expect((await coordinator.openManagedDocument((childSessionId ?? childId)!)).view).toBe(originalView)
       ;(await coordinator.openManagedDocument((childSessionId ?? childId)!)).assertReady()
       checkedLive = true
@@ -74,20 +78,21 @@ it('continues the original parent and child after landed output reconciles on it
         originalView = options.session; childSessionId = options.sessionId
         const owner = options.factOwner!, begin = owner.beginAction.bind(owner)
         owner.beginAction = signal => {
-          const action = begin(signal), register = action.registerSettlementSource.bind(action)
-          action.registerSettlementSource = (...args) => {
-            const source = register(...args), close = source.close.bind(source)
-            sourceActions.set(source, action)
-            source.close = async () => { await close(); closedSources.add(source) }
-            return source
-          }
+          const action = begin(signal)
+          // The turn action is the first signal-bearing action: code mode's own
+          // mount action (and its events) is created without one.
+          if (signal) turnAction ??= action
           return action
         }
       }
-      const prepare = tools.prepare.bind(tools)
-      tools.prepare = async (...args) => {
-        if (options.sessionId !== 'parent' && args[0].name === 'code_exec') batchSource = args[2]?.settlementSource
-        return prepare(...args)
+      // The accepted instruction batch is prepared through `prepareCaptured`,
+      // so the batch's settlement source is observable on the capture identity
+      // (not on the public `prepare` options the non-captured path receives).
+      const capture = tools.capture.bind(tools)
+      tools.capture = (input, identity) => {
+        const handle = capture(input, identity)
+        if (options.sessionId !== 'parent' && input.name === 'code_exec' && identity?.settlementSource) batchSource = identity.settlementSource
+        return handle
       }
       const dispatch = tools.dispatch.bind(tools)
       tools.dispatch = prepared => {
@@ -118,7 +123,7 @@ it('continues the original parent and child after landed output reconciles on it
     expect(parentEvents.filter(event => event.type === 'assistant/message').at(-1)).toMatchObject({ text: 'parent final' })
     expect([producers, childRequests.length, parentRequests]).toEqual([1, 2, 2])
     for (const type of ['agent/input/admitted', 'agent/input/promoted', 'user/message', 'code/call', 'code/dispatch', 'code/output'] as const) expect(events.filter(event => event.type === type)).toHaveLength(1)
-    expect(events.filter(event => event.type === 'tool/result' && event.callId === 'child-code')).toEqual([expect.objectContaining({ envelope: expect.objectContaining({ execution: expect.objectContaining({ outcome: 'failed' }) }) })])
+    expect(events.filter(event => event.type === 'tool/result' && event.callId === 'child-code')).toEqual([expect.objectContaining({ envelope: expect.objectContaining({ execution: expect.objectContaining({ outcome: 'succeeded' }) }) })])
     expect(events.filter(event => event.type === 'code/cell' && event.state === 'completed')).toHaveLength(1)
     expect(JSON.stringify(childRequests[1]!.messages)).toContain('once')
     childDocument.assertReady()

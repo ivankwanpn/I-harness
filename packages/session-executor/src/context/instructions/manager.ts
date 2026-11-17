@@ -102,7 +102,11 @@ export function createMainInstructionManager(options: { session?: SessionView; d
       await options.environment.policy.ready()
       const policy = options.environment.policy.current(), scope = authority()
       if (policy.kind !== 'ready' || mappingUnavailable) throw unavailable()
-      const targets = orderedInstructionTargets(pending ?? consumed)
+      // Consumed/pending observations outlive a project switch. A target that
+      // the live authority no longer contains is not an instruction source of
+      // this scope (observing it would make the whole snapshot unavailable);
+      // keep it queued so a later authority that contains it prepares it again.
+      const targets = orderedInstructionTargets(pending ?? consumed).filter(target => scope.roots.some(root => contained(root, target.path)))
       const capturedSelection = selection
       const nextKey = JSON.stringify([scope.identity, policy.generation, targets])
       let view = active
@@ -122,7 +126,18 @@ export function createMainInstructionManager(options: { session?: SessionView; d
         if (closed || !options.available() || options.environment.policy.current().generation !== policy.generation || authority().identity !== scope.identity) throw unavailable()
         const afterPublication = view.service.snapshot()
         if (afterPublication.fingerprint !== snapshot.fingerprint || afterPublication.reliability !== 'ready') {
-          if (view.service.canReobserve?.(snapshot) === true) {
+          // The projection was ready when prepared and is not model-visible yet.
+          // A certified external invalidation can be re-observed by the existing
+          // bounded stale rebuild. A candidate-mapping invalidation (for example
+          // this turn's own owned write replacing a rule file) cannot be
+          // certified from the issued witness, but the published text is still
+          // current and a fresh prepare re-establishes verified discovery
+          // coverage; classify it as the same bounded rebuild. Genuine read,
+          // policy and authority failures still refuse: preparation either
+          // returns a complete ready snapshot or throws before the next
+          // publication, and admission bounds these rebuilds.
+          const reobservable = view.service.canReobserve?.(snapshot) === true
+          if (reobservable || (afterPublication.fingerprint === snapshot.fingerprint && !afterPublication.complete)) {
             throw Object.assign(unavailable(), { code: 'CONTEXT_INPUT_REBUILD' })
           }
           throw unavailable()

@@ -1254,7 +1254,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     instructionEnvironment = opts.instructionEnvironment ?? (opts.instructionSettingsPath !== undefined ? createInstructionEnvironment({ settingsPath: opts.instructionSettingsPath }) : createProjectInstructionEnvironment())
     instructionManager = createMainInstructionManager({ session, environment: instructionEnvironment, cwd: () => opts.projectContext?.()?.primaryRoot ?? opts.workspace, authority: authorityNow,
       available: () => !disposing && opts.executionCallerAvailable?.() !== false, publish: (signal, retain) => runtimeContext.render(signal, retain) })
-    childInstructionHost = createChildInstructionHost({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow,
+    // The child instruction scope is the PROJECT's live primary root, exactly
+    // like the main manager above. A resident child outlives a project switch:
+    // pinning the construction workspace here made its next followup reconcile
+    // against a cwd outside the live roots, so every child write failed with
+    // CONTEXT_INPUT_STALE before its model turn even started.
+    childInstructionHost = createChildInstructionHost({ environment: instructionEnvironment, cwd: () => opts.projectContext?.()?.primaryRoot ?? opts.workspace, authority: authorityNow,
       available: () => !disposing && !executionSurfaceRetired && opts.executionCallerAvailable?.() !== false,
       root: { session, factOwner, manager: instructionManager } })
     isolatedInstructionHost = (await import('./context/instructions/isolated.ts')).createIsolatedInstructionHost({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow, available: () => !disposing && !executionSurfaceRetired && opts.executionCallerAvailable?.() !== false })
