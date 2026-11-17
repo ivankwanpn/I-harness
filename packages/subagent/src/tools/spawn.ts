@@ -5,6 +5,7 @@ import type { SubagentToolDeps } from "./types.ts"
 import { subagentFactOwner } from '../facts.ts'
 import { createSpawnSource, spawnObservation } from './spawn-source.ts'
 import { backgroundEventForTool, userSteerForTool, waitForObservation } from "@i-harness/core-tools"
+import { subscribe } from "@i-harness/core-session"
 import { declaredRoleModel, spawnChild, subagentModelSelectionDisabled, subagentModelSelectionGated } from "../child.ts"
 import { TaskIdentityConflictError, type TaskIdentity, type TaskOutcome, type TaskRecord } from "../task-protocol.ts"
 import { residentOwnerFor } from '../followup/resident-lifetime.ts'
@@ -290,6 +291,12 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
         // WHY: child.ts:340 spells the resolved label; task-protocol.ts:150 keeps
         // it in the task snapshot, so closing a live entry cannot erase the evidence.
         if(!originalSlot)deps.tasks.claim(task.id, executed.sessionId, executed.modelLabel, executed.jobId)
+        // A background spawn hands the caller its durable task id immediately.
+        // Settle the admission saves (including the claim prelude's required
+        // snapshot) before returning: otherwise a following spawn's parent facts
+        // become the pending writer that permanently refuses that required join.
+        const admission = deps.tasks.flushPersistenceBestEffort?.()
+        if (admission) await admission.catch(() => ({ ok: false }))
         const base = source.identity()
         if (args.background === false) {
           const reason = await waitForObservation({
@@ -313,7 +320,15 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
               const route = await source.handoffToParent()
               if (exec.abortSignal?.aborted) { source.abandonHandoff(); observationAborted = true; exec.abortSignal.throwIfAborted() }
               if (route === 'ready') return await source.foreground()
-              if (route === 'parent') { source.assertHandoff(); source.consumeHandoff() }
+              if (route === 'parent') {
+                source.assertHandoff()
+                // The yielded observation is this reservation's durable proof.
+                // Keep the original save held until the parent records the tool
+                // result: a later required Task-document save (the unrelated
+                // notification flush) otherwise acquires the parent writer first
+                // and blocks this observation indefinitely.
+                consumeHandoffAfterResult(source, exec)
+              }
               settled = deps.tasks.get(task.id)
             }
             const steered = reason === "user-steer" || reason === "background-event"
@@ -368,4 +383,30 @@ function parseForkTurns(value: string | number | undefined): "none" | "all" | nu
   const n = typeof value === "number" ? value : Number(value)
   if (Number.isInteger(n) && n > 0) return n
   throw new Error("fork_turns must be none, all, or a positive integer")
+}
+
+/** A foreground yield hands this Task to the parent notification channel. The
+ * held Task-document save is the reservation; it stays held until the parent
+ * has durably recorded the yielded observation (`tool/result` for this call).
+ * Releasing it earlier lets an unrelated required Task-document save acquire
+ * the parent writer first, which blocks the observation itself. */
+function consumeHandoffAfterResult(
+  source: Pick<ReturnType<typeof createSpawnSource>, 'consumeHandoff' | 'abandonHandoff'>,
+  exec: { session?: import('@i-harness/core-session').SessionView; callId?: string },
+): void {
+  let consumed = false, unsubscribe: (() => void) | undefined
+  const consume = () => {
+    if (consumed) return
+    consumed = true
+    try { unsubscribe?.() } catch { /* The parent view cannot retain this observation. */ }
+    unsubscribe = undefined
+    try { source.consumeHandoff() }
+    catch { try { source.abandonHandoff() } catch { /* The original save remains held for recovery. */ } }
+  }
+  const session = exec.session, callId = exec.callId
+  if (!session || callId === undefined) { consume(); return }
+  try {
+    if (session.events.some(event => event.type === 'tool/result' && event.callId === callId)) { consume(); return }
+    unsubscribe = subscribe(session, event => { if (event.type === 'tool/result' && event.callId === callId) consume() })
+  } catch { consume() }
 }
