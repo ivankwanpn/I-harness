@@ -632,6 +632,17 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 依 log 解析（`p3-fail-by-file.json`）：110 個可定位至 63 檔；其中 **58 個是 `Test timed out in 30000ms`**、52 個非 timeout。
 - timeout 主因：verify:all 的 step1 未帶 `--testTimeout`，多數 package 用 Vitest 預設 30s；重負載檔在 maxWorkers=2 下超時。非 timeout 需逐檔定向重跑，分辨 fixture/product 與前一 timeout 的 cascade。
 - session-executor 38 failures 全部是 timeout（服務/retained/instruction 類重檔），與 maxWorkers=1 的 1405/1405 形成負載敏感對照；下一步依 P3 計畫跑 1-worker vs 2-worker 比較及 perf 群組，再做最小修復。
+#### 第九十九批：P3 負載敏感比較與 verify runner 逾時預算
+
+- **P3 指名案例**（固定 HEAD `7954a470`、`--testTimeout=120000 --hookTimeout=120000`、maxWorkers=2）：
+  - `selected-native-source` 4/4、`usage-protocol-aux-host` 12/12、`interaction-resume` 2/2、`current-unfinished-catalog`（w1 19/19 批次）皆綠。
+  - 預設 5s 時，`selected-native-source` 的 nonempty inherited plan 會 timeout；加預算後綠，證實為 load-sensitive。
+  - `selected-native-source-debt` 仍 3/5：兩個 debt 案在 `coordinator.close()` 回 `AggregateError: Coordinator cleanup is unresolved`；內層為 `Observation cleanup is unresolved` 與 `Failed to persist sessions during shutdown`，皆來自 task-document-transition document lease 的 `original lock debt` 重試未收斂。此為真實 product 清理缺口，非 timeout。
+- **perf 群組**（context-output，w1 vs w2，各 132 tests）：
+  - w1：121 pass / 10 fail；w2：122 pass / 9 fail。
+  - `legacy-funding-batch` 115/115（w1 1050.9s、w2 1080.9s）、`legacy-fork-scale` 2/2（約 1795s 兩模式）、`legacy-fork-performance` 4/13→5/13（w1/w2；約 590s）、`legacy-fork-observation-scale` 0/1（300s timeout 兩模式）。
+  - 主要剩餘：`actual101` timeout、`expiry-*` 的 `authorityNamespaces` 期望 2 實測 4、10001 observations 300s 未能完成；皆非 worker 數差異造成，屬真實 native work/上限問題。
+- **runner 修正**：`scripts/verify-all.mjs` step1 的 `pnpm -r test` 加上 `--testTimeout=120000 --hookTimeout=120000`。原因是 step1 原本未帶 timeout，多數 package 用 Vitest 預設 5s／config 30s，重負載檔在 maxWorkers=2 下產生 58 個假 timeout；direct 執行加預算後 executor 1405/1405、指名案例全綠。下一步用新 runner 重跑完整 verify:all，再逐檔處理非 timeout 失敗與上述 debt/perf 缺口。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

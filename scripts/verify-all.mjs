@@ -121,7 +121,7 @@ const expected = expectedPopulation()
 // pnpm's topological scheduler skips dependents of a failed project even with
 // --no-bail. Tests consume source exports; sorting adds no prerequisite here.
 // Disable that scheduler so a failure cannot hide the remaining test suites.
-const suite = await run("pnpm", ["-r", "--no-bail", "--no-sort", "--stream", "--workspace-concurrency=1", "test", "--maxWorkers=2", "--minWorkers=1"])
+const suite = await run("pnpm", ["-r", "--no-bail", "--no-sort", "--stream", "--workspace-concurrency=1", "test", "--maxWorkers=2", "--minWorkers=1", "--testTimeout=120000", "--hookTimeout=120000"])
 const reportedDirs = [...new Set([...suite.text.matchAll(/^(\S+) test:\s+Test Files /gm)].map((m) => m[1]))].sort()
 const verdicts = [...suite.text.matchAll(/^(\S+) test: (Done|Failed)$/gm)]
 const failedProjects = verdicts.filter((m) => m[2] === "Failed").map((m) => m[1]).sort()
