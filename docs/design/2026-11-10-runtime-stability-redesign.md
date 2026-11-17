@@ -612,6 +612,10 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
   - `project-context` 的 `waitFor` 固定 5s 不足；提高到 30s。
   - `physical-crash` 的 `30_000` per-test 預算不足；提高到 60s。
 - 兩檔重跑 **15/15**；標定後重新跑 full executor 確認中。executor 定點殘餘維持 **0**。
+#### 第九十七批：project-context full-suite 負載預算再校正
+
+- 第二次完整 executor（1405 tests）仍只剩 `project-context` 一個 full-suite 失敗：`waitFor` 30s 仍超時；單檔與鄰近 5 檔序列重跑皆綠，判定為整個 worker 進程累積負載下的延遲。
+- `waitFor` 提高到 90s（仍在 per-test 120s 內）；單檔 10/10 綠。接著以 `verify:all` 作 P3 權威完整回歸。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
