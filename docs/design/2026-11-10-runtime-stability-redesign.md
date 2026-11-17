@@ -605,6 +605,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - **delivery-active-wait**：`spawn.ts` foreground yield 在 `handoffToParent()` 回 `parent` 後不再立即 `consumeHandoff()`，改由 `consumeHandoffAfterResult()` 持有 reservation 直到 parent session 對該 callId commit `tool/result`（one-shot subscribe、已存在則立即 consume、無 session/callId fallback、consume 失敗 abandon＋保留 save）。這阻止無關 notification 的 required Task-document save 搶到 parent writer 而永久阻塞 yielded observation。
 - **event-driven-steering tasks family**：background spawn 在 `claim` 後、回傳 task id 前先 `flushPersistenceBestEffort()` 等 admission saves 落定；避免下一個 spawn 的 parent facts 成為 required writer join 的 pending writer，毒化 Task save FIFO（Earlier owned task save requires resolution）。
 - 驗證：event-driven-steering **14/14**、delivery-active-wait **2/2**（各連跑多次），service-instruction-close/title-action/managed-instruction-handoff 24/24；delivery 四檔回歸 **58/58**；subagent/session-executor typecheck 0。executor 定點殘餘由 7 降至 **0**（原先 11 檔 15 failures 全數清零）。
+#### 第九十六批：full executor 1403/1405，兩個負載 flake 校正
+
+- HEAD `6f3204d1` 完整 executor 套件（231 files/1405 tests）首跑：**1403 passed / 2 failed / 0 skipped**。
+- 兩個失敗都只在 full-suite 負載下出現，單檔重跑皆綠：
+  - `project-context` 的 `waitFor` 固定 5s 不足；提高到 30s。
+  - `physical-crash` 的 `30_000` per-test 預算不足；提高到 60s。
+- 兩檔重跑 **15/15**；標定後重新跑 full executor 確認中。executor 定點殘餘維持 **0**。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

@@ -36,7 +36,7 @@ function fixture() {
 }
 const quietModel: ModelClient = { async *stream() { yield { type: "text/chunk", text: "ok" }; yield { type: "end" } } }
 async function waitFor(check: () => boolean | Promise<boolean>) {
-  const until = Date.now() + 5_000
+  const until = Date.now() + 30_000
   while (!(await check())) { if (Date.now() >= until) throw new Error("project child did not finish"); await new Promise((resolve) => setTimeout(resolve, 20)) }
 }
 

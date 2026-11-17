@@ -75,4 +75,4 @@ it.each(['before-reservation', 'reservation-before-handoff', 'handoff-before-res
     server.closeAllConnections()
     await new Promise<void>(resolve => server.close(() => resolve()))
   }
-}, 30_000)
+}, 60_000)
