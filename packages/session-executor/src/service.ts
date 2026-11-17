@@ -191,6 +191,12 @@ export interface SessionServiceOptions extends AssemblyOptions {
   beforeDispose?: () => Promise<void>
   /** Shared host event stream (also handed to each assembly). */
   telemetry?: Telemetry
+  /** Host readiness may block on outbound I/O (model/credential resolution).
+   * When set, a managed main generation action opens before that readiness so a
+   * Stop can close durable work while it is held. Off by default: an aborted
+   * construction then leaves no durable generation action and its admitted input
+   * stays retryable. */
+  earlyGenerationOpen?: boolean
   /** Metadata source for an assembly's FIRST build (the tier-1 model chain
    * input, e.g. session.meta.modelSelection). Absent → no meta. */
   loadMeta?: (sessionId: string) => Promise<SessionMeta | undefined>
@@ -1191,7 +1197,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         ...(opts.managedRuntime!.ownedCode ? { modelToolSchemas: () => {
           if (!codeSchemas) throw new Error('Original Code model schemas unavailable')
           return codeSchemas()
-        } } : {}),...filesystemPolicy?{filesystemPolicy}:{},context,execution:entry.execution,workspace:opts.workspace,...instructionBinding?{instructionBinding}:{},...(shellOutput?{resultRetention:createToolResultRetention(shellOutput.service,shellOutput.sourceFor)}:{}),retainConstructionCleanup:(cleanup:()=>Promise<void>)=>{mounted.add(cleanup)},scheduleWake:(inputId:string,text:string)=>{if(retired||closed||closing.has(sessionId)||!entry.execution.observe().inbox.isPending(inputId))return;void submitUnfenced(sessionId,text,new AbortController().signal,{admittedInputId:inputId}).catch(error=>{if(!closed&&!closing.has(sessionId))d.warn('[i-harness] scheduled input failed: '+String(error))})},
+        } } : {}),...filesystemPolicy?{filesystemPolicy}:{},context,execution:entry.execution,workspace:opts.workspace,...(currentSandbox!==undefined?{sandbox:currentSandbox}:{}),...instructionBinding?{instructionBinding}:{},...(shellOutput?{resultRetention:createToolResultRetention(shellOutput.service,shellOutput.sourceFor)}:{}),retainConstructionCleanup:(cleanup:()=>Promise<void>)=>{mounted.add(cleanup)},scheduleWake:(inputId:string,text:string)=>{if(retired||closed||closing.has(sessionId)||!entry.execution.observe().inbox.isPending(inputId))return;void submitUnfenced(sessionId,text,new AbortController().signal,{admittedInputId:inputId}).catch(error=>{if(!closed&&!closing.has(sessionId))d.warn('[i-harness] scheduled input failed: '+String(error))})},
         modelActionTimeoutMs:opts.modelActionTimeoutMs,modelActionMaxAttempts:opts.modelActionMaxAttempts,maxParallelToolCalls:opts.maxParallelToolCalls,telemetry:opts.telemetry,
         ...(opts.passiveGeneration?{passiveGeneration:opts.passiveGeneration}:{})}
       if(opts.managedRuntime!.mountRegistry||opts.managedRuntime!.ownedShell||opts.managedRuntime!.ownedCode||opts.managedRuntime!.ownedTask||opts.managedRuntime!.ownedWorkflow||opts.managedRuntime!.ownedRewind||opts.managedRuntime!.mountDefaultSurface){
@@ -1385,7 +1391,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           preparedManaged=await prepareExecutionInput({execution:entry.execution,sessionId,inputId:id,signal:controller.signal,start:managedStart,
             ready:async()=>{runtime=await getManagedRuntime(sessionId);controller.signal.throwIfAborted();assertWritableOpen(sessionId);preparationReady=true},
             retain:close=>{let entries=managedIngress.get(sessionId);if(!entries){entries=new Set();managedIngress.set(sessionId,entries)}entries.add(close);closeManaged=async()=>{try{await close()}catch(error){failedClose.add(sessionId);throw error}entries!.delete(close);if(!entries!.size)managedIngress.delete(sessionId)}},
-            cancel:inputId=>preparationReady&&!closed&&!closing.has(sessionId)?inbox.cancel(inputId,'input preparation did not reach promotion'):Promise.resolve(false),transform:async text=>runtime?.prepareInput?runtime.prepareInput(text):text,timeoutMs:opts.modelActionTimeoutMs,maxAttempts:opts.modelActionMaxAttempts,passiveGeneration:opts.passiveGeneration})
+            cancel:inputId=>preparationReady&&!closed&&!closing.has(sessionId)?inbox.cancel(inputId,'input preparation did not reach promotion'):Promise.resolve(false),transform:async text=>runtime?.prepareInput?runtime.prepareInput(text):text,openBeforeReady:opts.earlyGenerationOpen===true,timeoutMs:opts.modelActionTimeoutMs,maxAttempts:opts.modelActionMaxAttempts,passiveGeneration:opts.passiveGeneration})
           try{controller.signal.throwIfAborted();assertWritableOpen(sessionId);record.state='queued';await runtime!.lane.runAdmitted(id,controller.signal,{generation:preparedManaged.generation,preparation:preparedManaged.preparation})}
           catch(error){if(!closed&&!closing.has(sessionId))try{await inbox.cancel(id,'generation ended before promotion')}catch(saving){throw new AggregateError([error,saving],'Private input cancellation requires recovery',{cause:error})}throw error}
           const title=managedTitles.get(sessionId),policy=opts.managedRuntime?.ownedTitle

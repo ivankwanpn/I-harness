@@ -35,6 +35,9 @@ export interface ManagedAgentDeps extends Omit<AgentDeps,'session'|'factOwner'|'
  readonly execution:ManagedExecutionAttachment
  readonly domain:ManagedExecutionDomain
  readonly hooks:ExecutionHookChannel
+ /** The host's standing execution mode for this managed runtime. The first
+  *  turn action records it durably, replacing the legacy assembly producer. */
+ readonly sandboxMode?:()=>'read-only'|'workspace-write'|'danger-full-access'
  prepareModelSurface?:(signal:AbortSignal)=>Promise<void>
  modelCallOrigin:object
  generationFactory:ManagedGenerationFactory

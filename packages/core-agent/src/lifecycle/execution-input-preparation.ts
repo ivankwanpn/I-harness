@@ -57,12 +57,17 @@ export function createExecutionInputPreparationOwner(execution: ManagedExecution
 
 /** The initial queued input keeps its original action and source alive until
  * the lane and its model producers have settled. */
-export async function prepareExecutionInput(options:{execution:ManagedExecutionAttachment;sessionId:string;inputId:string;signal:AbortSignal;start:{wall:number;monotonic:number};ready():Promise<void>;retain(close:()=>Promise<void>):void;cancel(id:string):Promise<unknown>;transform?(text:string):Promise<string>;timeoutMs?:number;maxAttempts?:number;passiveGeneration?:import('@i-harness/llm-seam/internal/passive-observation').OriginalPassiveObserver}) {
+export async function prepareExecutionInput(options:{execution:ManagedExecutionAttachment;sessionId:string;inputId:string;signal:AbortSignal;start:{wall:number;monotonic:number};ready():Promise<void>;retain(close:()=>Promise<void>):void;cancel(id:string):Promise<unknown>;transform?(text:string):Promise<string>;openBeforeReady?:boolean;timeoutMs?:number;maxAttempts?:number;passiveGeneration?:import('@i-harness/llm-seam/internal/passive-observation').OriginalPassiveObserver}) {
   const action=options.execution.owner.beginAction(options.signal), decision=Promise.withResolvers<void>()
   let generation:Awaited<ReturnType<ReturnType<typeof createExecutionGenerationLifecycle>['open']>>|undefined
   let generations:ReturnType<typeof createExecutionGenerationLifecycle>|undefined
   let preparations:ReturnType<typeof createExecutionInputPreparationOwner>|undefined
   let generationClosed=false,finished=false,drained=false,preparationClosed=false
+  // Readiness is host-owned runtime construction (which may resolve a model and
+  // read credentials); it must run exactly once even though the preparation
+  // owner also joins it after this action is already open.
+  let ready:Promise<void>|undefined
+  const ensureReady=()=>ready??=options.ready()
   const close=async()=>{
     if(!generationClosed){let closing:Promise<void>|undefined;try{closing=generation?.close(options.signal.aborted?'stopped':'failed')}finally{decision.resolve()}await closing;generationClosed=true}
     if(!finished){action.finish();finished=true}
@@ -72,13 +77,19 @@ export async function prepareExecutionInput(options:{execution:ManagedExecutionA
   options.retain(close)
   try{
     generations=createExecutionGenerationLifecycle(options.execution,options.sessionId,action,undefined,{beforeDrain:()=>decision.promise,...(options.passiveGeneration?{passiveGeneration:options.passiveGeneration}:{})})
-    preparations=createExecutionInputPreparationOwner(options.execution,action,{transform:options.transform,cancel:options.cancel})
+    preparations=createExecutionInputPreparationOwner(options.execution,action,{ready:ensureReady,transform:options.transform,cancel:options.cancel})
     const input=options.execution.observe().inbox.pending().find(value=>value.inputId===options.inputId)
     if(!input)throw generationError('GENERATION_STALE')
-    await options.ready()
-    options.signal.throwIfAborted();action.assertOpen()
     const origin=input.intent==='system'?{kind:'observation-input' as const,seq:input.admittedSeq,inputId:input.inputId}:{kind:'input' as const,seq:input.admittedSeq}
-    generation=await generations.open('main',origin,{signal:options.signal,start:options.start,timeoutMs:options.timeoutMs,maxAttempts:options.maxAttempts})
+    // A host whose readiness blocks on outbound I/O (model/credential resolution
+    // behind an operator or management gate) opens the main generation action
+    // first, so a Stop can close the durable action while that I/O is held. The
+    // default keeps the original order: an aborted construction then owns no
+    // durable generation action and its admitted input stays retryable.
+    if(options.openBeforeReady)generation=await generations.open('main',origin,{signal:options.signal,start:options.start,timeoutMs:options.timeoutMs,maxAttempts:options.maxAttempts})
+    await ensureReady()
+    options.signal.throwIfAborted();action.assertOpen()
+    generation??=await generations.open('main',origin,{signal:options.signal,start:options.start,timeoutMs:options.timeoutMs,maxAttempts:options.maxAttempts})
     const preparation=await preparations.prepare(input.inputId,generation)
     return {generation,preparation,close}
   }catch(error){try{await close()}catch(saving){throw new AggregateError([error,saving],'Private input preparation requires recovery',{cause:error})}throw error}

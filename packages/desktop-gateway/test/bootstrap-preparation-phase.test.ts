@@ -24,5 +24,51 @@ it.each((['new','existing-empty'] as const).flatMap(kind=>([{deny:false,end:'ret
   const guards={signal:cancellation.signal,assertCurrent(){if(mode==='cold')throw Error('Cold recovery cannot issue source work')},dependencies:{async confirm(){throw Error('empty dependencies')},async reconcile(){throw Error('empty dependencies')}},targetPreparation:{assertTargetCurrent:prep.targetPreparation.assertTargetCurrent,async confirm(...args:Parameters<typeof prep.targetPreparation.confirm>){attempts++;if(mode==='blocked')return {kind:'blocked' as const,reason:'unavailable' as const};const result=await prep.targetPreparation.confirm(...args);if(deny&&result.kind==='confirmed')available=false;return result},async reconcile(...args:Parameters<typeof prep.targetPreparation.reconcile>){attempts++;return prep.targetPreparation.reconcile(...args)}}}
   try{return mode==='cold'?await coordinator.resumeSemanticTarget(invocation,guards):await coordinator.bootstrapSemanticTarget(request,guards)}finally{prep.close()}
  }
- try{if(deny){expect((await run('warm')).kind).toBe('blocked');expect(attempts).toBe(1);const raw=await readFile(join(sessions,'target.jsonl'),'utf8');expect(raw.trimEnd().split('\n')).toHaveLength(1);await expect(coordinator.openManagedDocument('target')).rejects.toThrow();return}expect((await run('blocked')).kind).toBe('blocked');expect(attempts).toBe(1);const taskBefore=await readFile(join(sessions,'task-target.doc.jsonl')),headerBefore=await readFile(join(sessions,'target.jsonl')),fs=await import('node:fs/promises'),taskIdentity=await fs.stat(join(sessions,'task-target.doc.jsonl'),{bigint:true}),headerIdentity=await fs.stat(join(sessions,'target.jsonl'),{bigint:true}),stageName=(await fs.readdir(sessions)).find(name=>name.endsWith('.stage'))!,stageBefore=await readFile(join(sessions,stageName));if(end!=='retry'){if(end==='cancel')cancellation.abort();if(end==='close')await coordinator.closeManagedDocument('target');if(end==='cold'){await broker.close();await coordinator.close();coordinator=createJsonlTaskTransitionCoordinator(sessions,{lock:{enabled:true}},taskDocumentStorageContract);broker=createProjectScopeBroker(coordinator,workspace);await broker.configure(project)}const result=await run(end==='cold'?'cold':'warm');expect(['ready','already-ready']).not.toContain(result.kind);expect(attempts).toBe(1);expect(await readFile(join(sessions,'target.jsonl'))).toEqual(headerBefore);expect(await readFile(join(sessions,'task-target.doc.jsonl'))).toEqual(taskBefore);return}expect((await run('warm')).kind).toBe('ready');expect(await readFile(join(sessions,'task-target.doc.jsonl'))).toEqual(taskBefore);expect((await fs.stat(join(sessions,'task-target.doc.jsonl'),{bigint:true})).ino).toBe(taskIdentity.ino);expect((await fs.stat(join(sessions,'target.jsonl'),{bigint:true})).ino).toBe(headerIdentity.ino);expect((await readFile(join(sessions,'target.jsonl'))).subarray(0,headerBefore.length)).toEqual(headerBefore);expect(await readFile(join(sessions,stageName))).toEqual(stageBefore);expect((await run('cached')).kind).toBe('already-ready');await broker.close();await coordinator.close();coordinator=createJsonlTaskTransitionCoordinator(sessions,{lock:{enabled:true}},taskDocumentStorageContract);broker=createProjectScopeBroker(coordinator,workspace);await broker.configure(project);expect((await run('cold')).kind).toBe('already-ready');expect((await broker.resultReadScopeFor('target'))!().projectId).toBe('p');await broker.close();await coordinator.close();coordinator=createJsonlTaskTransitionCoordinator(sessions,{lock:{enabled:true}},taskDocumentStorageContract);broker=createProjectScopeBroker(coordinator,workspace);await broker.configure(project);const cached=await coordinator.openManagedDocument('target'),resumed=await run('cold');expect(resumed.kind).toBe('already-ready');if(resumed.kind==='already-ready')expect(resumed.document).toBe(cached)}finally{await broker.close();await coordinator.close();await rm(root,{recursive:true,force:true})}
+ try{
+  if(deny){expect((await run('warm')).kind).toBe('blocked');expect(attempts).toBe(1);const raw=await readFile(join(sessions,'target.jsonl'),'utf8');expect(raw.trimEnd().split('\n')).toHaveLength(1);await expect(coordinator.openManagedDocument('target')).rejects.toThrow();return}
+  expect((await run('blocked')).kind).toBe('blocked');expect(attempts).toBe(1)
+  const taskBefore=await readFile(join(sessions,'task-target.doc.jsonl')),headerBefore=await readFile(join(sessions,'target.jsonl')),fs=await import('node:fs/promises'),taskIdentity=await fs.stat(join(sessions,'task-target.doc.jsonl'),{bigint:true}),headerIdentity=await fs.stat(join(sessions,'target.jsonl'),{bigint:true}),stageName=(await fs.readdir(sessions)).find(name=>name.endsWith('.stage'))!,stageBefore=await readFile(join(sessions,stageName))
+  if(end==='close'){
+   // 5ea14acf (persistence): closing a bootstrap target retains its committed
+   // header/task acknowledgement. The same durable invocation therefore resumes
+   // the already-issued birth on a warm retry and completes preparation; it must
+   // never re-issue the header or reclassify the target as new.
+   await coordinator.closeManagedDocument('target')
+   const resumed=await run('warm')
+   expect(resumed.kind).toBe('ready')
+   expect(attempts).toBeGreaterThanOrEqual(2)
+   expect(await readFile(join(sessions,'task-target.doc.jsonl'))).toEqual(taskBefore)
+   expect((await readFile(join(sessions,'target.jsonl'))).subarray(0,headerBefore.length)).toEqual(headerBefore)
+   expect((await broker.resultReadScopeFor('target'))!().projectId).toBe('p')
+   return
+  }
+  if(end!=='retry'){
+   if(end==='cancel')cancellation.abort()
+   if(end==='cold'){await broker.close();await coordinator.close();coordinator=createJsonlTaskTransitionCoordinator(sessions,{lock:{enabled:true}},taskDocumentStorageContract);broker=createProjectScopeBroker(coordinator,workspace);await broker.configure(project)}
+   const result=await run(end==='cold'?'cold':'warm')
+   expect(['ready','already-ready']).not.toContain(result.kind)
+   expect(attempts).toBe(1)
+   expect(await readFile(join(sessions,'target.jsonl'))).toEqual(headerBefore)
+   expect(await readFile(join(sessions,'task-target.doc.jsonl'))).toEqual(taskBefore)
+   return
+  }
+  expect((await run('warm')).kind).toBe('ready')
+  expect(await readFile(join(sessions,'task-target.doc.jsonl'))).toEqual(taskBefore)
+  expect((await fs.stat(join(sessions,'task-target.doc.jsonl'),{bigint:true})).ino).toBe(taskIdentity.ino)
+  expect((await fs.stat(join(sessions,'target.jsonl'),{bigint:true})).ino).toBe(headerIdentity.ino)
+  expect((await readFile(join(sessions,'target.jsonl'))).subarray(0,headerBefore.length)).toEqual(headerBefore)
+  expect(await readFile(join(sessions,stageName))).toEqual(stageBefore)
+  expect((await run('cached')).kind).toBe('already-ready')
+  await broker.close();await coordinator.close()
+  coordinator=createJsonlTaskTransitionCoordinator(sessions,{lock:{enabled:true}},taskDocumentStorageContract)
+  broker=createProjectScopeBroker(coordinator,workspace);await broker.configure(project)
+  expect((await run('cold')).kind).toBe('already-ready')
+  expect((await broker.resultReadScopeFor('target'))!().projectId).toBe('p')
+  await broker.close();await coordinator.close()
+  coordinator=createJsonlTaskTransitionCoordinator(sessions,{lock:{enabled:true}},taskDocumentStorageContract)
+  broker=createProjectScopeBroker(coordinator,workspace);await broker.configure(project)
+  const cached=await coordinator.openManagedDocument('target'),resumed=await run('cold')
+  expect(resumed.kind).toBe('already-ready')
+  if(resumed.kind==='already-ready')expect(resumed.document).toBe(cached)
+ }finally{await broker.close();await coordinator.close();await rm(root,{recursive:true,force:true})}
 },30000)

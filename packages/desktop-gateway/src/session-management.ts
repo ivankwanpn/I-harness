@@ -61,7 +61,13 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
     let inTurn = false
     for (const event of snapshot.events) { if (event.type === "turn/start") inTurn = true; if (event.type === "turn/end") inTurn = false }
     if (inTurn && !allowPending) throw new Error("Session has an unfinished durable turn")
-    const state = await coordinator.getDocument(id) as ManagedAgentState | undefined
+    // A live assembly's registries ARE the current durable projection; its
+    // snapshot document is write-behind and may still be an older in-flight
+    // write (a just-killed job can be persisted as "running" for a moment).
+    // Decide on the authoritative live state when this session has one, and
+    // read the document only for a cold session whose registries are gone.
+    const liveState = assembly?.subagentState?.()
+    const state = (liveState ?? await coordinator.getDocument(id)) as ManagedAgentState | undefined
     const idleChildren = new Set<string>()
     async function inspectAgents(state: ManagedAgentState | undefined) {
       if (state === undefined) return

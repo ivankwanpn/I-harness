@@ -36,7 +36,7 @@ type Call = {
 };
 const lifetime = (): TurnLifecycle => ({ turnOpen: false, stepOpen: false, providerCompleted: false, stepFailed: false });
 export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentHost, context: ReturnType<typeof createManagedAgentContext>, maxParallel: number) {
-    let steps = 0, callOrdinal = 0;
+    let steps = 0, callOrdinal = 0, sandboxRecorded = false;
     const inputOwner = receivedExecutionInputsFor(host.execution), closed = new WeakSet<object>(), reasoning: string[] = [];
     const prepareRequest = createStepInput({ sessionId: host.domain.sessionId, get telemetry() { return host.telemetry; }, rewriteObservation: () => ({ ...host.execution.observe().rewrite() }) });
     const assertGeneration = (run: ManagedRun) => {
@@ -117,6 +117,16 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
             if (admission.provenance && options?.provenance && (['kind', 'authority', 'scope', 'producer', 'originSessionId'] as const).some(key => admission.provenance![key] !== options.provenance[key]))
                 throw Error('Input provenance conflicts with original admission');
             let origin: GenerationOrigin = admission.intent === 'system' ? { kind: 'observation-input', seq: admission.admittedSeq, inputId } : admission.provenance?.kind === 'inherited' ? { kind: 'delegated-input', ref: 'admitted', seq: admission.admittedSeq, inputId } : { kind: 'input', seq: admission.admittedSeq };
+            // The managed runtime replaces the legacy assembly's construction-time
+            // `sandbox/mode` producer. Record the host's standing mode once, inside
+            // the original turn action before its first generation opens (metadata
+            // facts belong to action setup, like the manual-compaction command/run).
+            if (!sandboxRecorded) {
+                sandboxRecorded = true;
+                const mode = host.sandboxMode?.();
+                if (mode !== undefined)
+                    await run.admit(action.captureMetadata!({ type: 'sandbox/mode', mode }));
+            }
             run.generation = options?.generation ?? await run.lifecycle.open('main', origin, { signal, start, timeoutMs: host.modelActionTimeoutMs, maxAttempts: host.modelActionMaxAttempts });
             assertGeneration(run);
             if (options?.generation) {

@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, expect, it } from "vitest"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createForkOperation, createSessionCoordinator, type ForkOutcome, type ForkPrepareResult } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { isRpcSuccess, type RpcMessage } from "@i-harness/sdk"
 import { createDesktopHost } from "../src/host.ts"
@@ -43,16 +43,23 @@ it.each([false, true])("reports the completed-turn fork precondition and lists a
     // Durable session rows carry the profile's updatedAt (4004bc54); the row
     // must still identify the original session, its title and its turn count.
     expect(await success("session/list")).toEqual({ sessions: [{ id: "source", title: "Source", turnCount: completed ? 1 : 0, updatedAt: expect.any(Number) }] })
-    const fork = await call("desktop/session/manage", { sessionId: "source", action: "fork" })
+    // 5c4e5e72 retired the `desktop/session/manage` fork action and moved the
+    // product path to session/fork/prepare + session/fork/begin; the completed-
+    // turn precondition is the core-session `no-completed-boundary` refusal
+    // (see session-management.test.ts:199-225, packages/core-session/src/conversation/seed-selection.ts:50).
+    const prepared = await success("session/fork/prepare", { version: 1, sourceSessionId: "source" }) as ForkPrepareResult
+    expect(prepared.kind).toBe("prepared")
+    if (prepared.kind !== "prepared") throw new Error("fork preparation refused")
+    const operation = createForkOperation(prepared.prepared, { operationId: "project-fork", targetSessionId: "child", createdAt: new Date().toISOString() })
+    const fork = await success("session/fork/begin", { operation }) as ForkOutcome
     if (!completed) {
-      expect(isRpcSuccess(fork)).toBe(false)
-      expect(JSON.stringify(fork)).toMatch(/completed turn/)
+      expect(fork).toMatchObject({ kind: "refused", reason: "no-completed-boundary" })
       expect((await success("session/list") as { sessions: unknown[] }).sessions).toHaveLength(1)
       return
     }
-    expect(isRpcSuccess(fork)).toBe(true)
-    if (!isRpcSuccess(fork)) throw new Error("fork failed")
-    const childId = (fork.result as { sessionId: string }).sessionId
+    expect(fork.kind).toBe("ready")
+    if (fork.kind !== "ready" && fork.kind !== "adopted") throw new Error("fork refused")
+    const childId = fork.sessionId
     expect((await success("session/list") as { sessions: { id: string }[] }).sessions.map((row) => row.id)).toContain(childId)
     expect((await success("session/dashboard") as { sessions: { id: string }[] }).sessions).toHaveLength(2)
     expect(await success("desktop/session/project/state", { sessionId: childId })).toEqual({ sessionId: childId, projectId: "p1" })

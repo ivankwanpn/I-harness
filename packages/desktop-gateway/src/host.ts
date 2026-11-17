@@ -398,6 +398,11 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     approvalMode: () => approvalMode,
     guardian: { policy: DESKTOP_GUARDIAN_POLICY, enabled: () => approvalMode === "delegate", fallbackToHumanOnFailure: true, allowModelSelection: true, execution: "isolated", isolated: isolatedGuardianFor },
     modelPolicy: "required",
+    // Desktop readiness resolves the model/credential through the settings and
+    // management planes. Open the main generation action before that work so a
+    // Stop can close durable managed work while the resolver is held (the
+    // ordering the cold manual-compaction path already has).
+    earlyGenerationOpen: true,
     modelBindingFor,
     modelMetadataFor: (_sessionId, meta) => runtime.describeModelBindingMetadata?.(meta?.modelSelection ? { sessionSelection: meta.modelSelection } : {}),
     afterSuccessfulSubmit: async (sessionId, assembly, limits, action) => {

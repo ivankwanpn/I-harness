@@ -75,8 +75,10 @@ it('live enabling lets a real explore child capture and search native refs throu
   await f.projects.configure({id:'native-child',name:'Native child',roots:[root],primaryRoot:root});await f.projects.bind('parent','native-child')
   let calls=0;const requests:LLMRequest[]=[]
   const model:ModelClient=controlledModel(request => ({async *stream(request){requests.push(request);calls++
-    if(calls===1)yield{type:'tool_call',call:{name:'code_exec',args:{code:'text(ALL_TOOLS.map(t=>t.name));text("a".repeat(20000)+"CHILD_RETAINED"+"b".repeat(20000));',max_output_tokens:16}}}
-    else if(calls===2)yield{type:'tool_call',call:{name:'code_exec',args:{code:'const found=await tools.context_output_search({query:"CHILD_RETAINED"});text(await tools.context_output_read({refId:found.hits[0].ref.id,offset:found.hits[0].offset,maxBytes:1024}));'}}}
+    // The marker leads the retained body: managed search reads a bounded prefix
+    // of each artifact, so a marker after the padding could not be found.
+    if(calls===1)yield{type:'tool_call',call:{name:'code_exec',args:{code:'text(ALL_TOOLS.map(t=>t.name));text("CHILD_RETAINED"+"a".repeat(20000)+"b".repeat(20000));',max_output_tokens:16}}}
+    else if(calls===2)yield{type:'tool_call',call:{name:'code_exec',args:{code:'const found=await tools.context_output_search({query:"CHILD_RETAINED"});text(JSON.stringify(found.hits.map(hit=>({id:hit.ref.id,offset:hit.offset}))));text(await tools.context_output_read({refId:found.hits[0].ref.id,offset:found.hits[0].offset,maxBytes:1024}));'}}}
     else yield{type:'text/chunk',text:'Child finished.'}
     yield{type:'end'}
   }} as import('@i-harness/llm-seam').ModelClient).stream(request))
@@ -94,16 +96,30 @@ it('live enabling lets a real explore child capture and search native refs throu
     const childSession=(await coordinator.snapshot!(child.sessionId)).session
     const catalog=JSON.stringify(childSession.events.find(event=>event.type==='code/output'))
     expect(catalog).toContain('context_output_read');expect(catalog).not.toContain('code_context_index')
-    const refs=childSession.events.flatMap(event=>event.type==='context/result-ref'?[event.ref]:[])
-    expect(refs).toHaveLength(1)
+    // A3 cutover: emitted Code Mode text is a managed artifact in the child's own
+    // scope, never a legacy context/result-ref or a parent grant.
+    const emitted=childSession.events.flatMap(event=>event.type==='code/output'&&event.envelope?.retention.kind==='artifact'?[event.envelope.retention.ref]:[])
+    expect(emitted.length).toBeGreaterThanOrEqual(2)
+    const captured=childSession.events.flatMap(managedResultRefs)
+    const search=childSession.events.find(event=>event.type==='code/result'&&event.name==='context_output_search')
+    if(search?.type!=='code/result'||search.envelope?.retention.kind!=='inline')throw Error('Child search result unavailable')
+    const hits=(search.envelope.retention.value as {hits:{ref:{id:string};offset:number}[]}).hits
+    expect(hits).toHaveLength(1)
+    const hit=hits[0]!
+    expect(emitted.map(ref=>ref.id)).toContain(hit.ref.id)
+    expect(captured.map(ref=>ref.id)).toContain(hit.ref.id)
     expect(JSON.stringify(childSession.events.filter(event=>event.type==='code/result'&&event.name==='context_output_read'))).toContain('CHILD_RETAINED')
-    expect((await runtime.contextOutput.search({sessionId:'parent'},{query:'CHILD_RETAINED'})).hits[0]!.ref.id).toBe(refs[0]!.id)
-    await runtime.contextOutput.clear(child.sessionId)
-    expect((await runtime.contextOutput.search({sessionId:'parent'},{query:'CHILD_RETAINED'})).hits).toHaveLength(1)
+    // The child's captured result is its own authority; the parent may not read
+    // the child's private artifact without an explicit retained transfer.
+    const artifact=emitted.find(ref=>ref.id===hit.ref.id)!
+    await expect(runtime.contextOutput.readResult({sessionId:'parent'},{ref:artifact})).rejects.toThrow()
+    // Clearing the parent's own scope releases nothing the child captured.
+    await runtime.contextOutput.clear('parent')
+    expect((await runtime.contextOutput.search({sessionId:child.sessionId},{query:'CHILD_RETAINED'})).hits.map(value=>value.ref.id)).toContain(hit.ref.id)
   } finally {await service.close();await runtime.close();await f.projects.close();await coordinator.close();await rm(root,{recursive:true,force:true})}
 },60000)
 
-it.each(['release','reject'] as const)('persists the trusted fork seed before granting refs or entering the child model (%s)',async outcome=>{
+it.each(['release','reject'] as const)('persists the trusted fork seed before entering the child model (%s)',async outcome=>{
   const base=resolve('build/native-child-tests');await mkdir(base,{recursive:true});const root=await mkdtemp(join(base,'barrier-'))
   // Fault injection goes through the constructor seam: the canonical-path guard
   // snapshots backend descriptors at construction, so a later assignment would
@@ -115,20 +131,24 @@ it.each(['release','reject'] as const)('persists the trusted fork seed before gr
   }}),coordinator=composeJsonlTaskTransitionCoordinator(backend,{maxDelayMs:60000,lock:{enabled:true}},taskDocumentStorageContract);await coordinator.create({sessionId:'parent'})
   const owners=await createChildOwners(coordinator,root),runtime=owners.runtime
   await owners.projects.configure({id:'native-child',name:'Native child',roots:[root],primaryRoot:root});await owners.projects.bind('parent','native-child')
-  let transports=0
+  let transports=0,childId=''
   const model:ModelClient=controlledModel(request => ({async *stream(){transports++;yield{type:'text/chunk',text:'child complete'};yield{type:'end'}}} as import('@i-harness/llm-seam').ModelClient).stream(request))
   const service=owners.serviceFor({model,sandbox:'danger-full-access',approveAll:true,contextOutput:runtime.contextOutput,contextOutputSourceFor:runtime.sourceFor})
   const dependency=vi.spyOn(runtime.contextOutput,'confirmSeedDependencies')
   let release!:()=>void,entered!:()=>void
   const held=new Promise<void>(resolve=>{release=resolve}),started=new Promise<void>(resolve=>{entered=resolve})
-  let childId='',owned:{prepared:import('@i-harness/core-tools').PreparedCall;close():Promise<void>}|undefined
+  let owned:{prepared:import('@i-harness/core-tools').PreparedCall;close():Promise<void>}|undefined
   try{
     await runtime.contextOutput.configure({enabled:true})
     const assembly=await service.assemblyFor('parent')
     const ref=await recordManagedSeed(runtime,assembly,'TRUSTED_SEED','barrier')
     await recordSeedTurn(assembly,ref,'seed')
+    await coordinator.flush('parent')
     injectedAppend=async(...args)=>{
-      if(String(args[0]).startsWith('child-')&&args[3].key.firstSeq===0&&decodeFactBatch(args[3].bytes).events.length>0){
+      // Hold only the child's managed seed frame, whose manifest names the
+      // trusted parent artifact this Task inherits.
+      const events=decodeFactBatch(args[3].bytes).events
+      if(String(args[0]).startsWith('child-')&&events.some(event=>event.type==='conversation/seed-manifest')){
         childId=args[0];entered();await held
         if(outcome==='reject')return{kind:'not-issued',code:'FACT_RECOVERY_REQUIRED'}
       }
@@ -138,13 +158,19 @@ it.each(['release','reject'] as const)('persists the trusted fork seed before gr
     const spawned=assembly.tools.dispatch(owned.prepared)
     await Promise.race([started,spawned.then(()=>{throw new Error('spawn completed before seed barrier')})])
     await new Promise<void>(resolve=>setImmediate(resolve))
-    expect(transports).toBe(0);expect(dependency).not.toHaveBeenCalled()
-    expect((await coordinator.openManagedDocument(childId)).view.events).toEqual([])
+    // The seed closure is validated before the child's seed bytes are issued, so
+    // the confirmation exists but no child model, seed event or readable child
+    // view exists while that exact write is held.
+    expect(dependency).toHaveBeenCalledTimes(1)
+    expect(transports).toBe(0)
+    await expect(coordinator.openManagedDocument(childId)).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
     await expect(coordinator.snapshot!(childId)).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
     release()
     if(outcome==='reject'){
       await expect(spawned).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
-      expect(transports).toBe(0);expect(dependency).not.toHaveBeenCalled()
+      // The refused native write is resumed once, which re-validates the same
+      // closure before the refusal is final; no child model ever enters.
+      expect(transports).toBe(0);expect(dependency).toHaveBeenCalled()
     }else{
       const result=await spawned
       expect(JSON.stringify(result)).toContain('child complete')
@@ -158,9 +184,12 @@ it.each([false,true])('a real child owns its inherited native references before 
   const base=resolve('build/native-child-tests');await mkdir(base,{recursive:true});const root=await mkdtemp(join(base,'seed-'))
   const f=await createChildFixture(root),{coordinator,runtime}=f;await coordinator.create({sessionId:'parent'})
   await f.projects.configure({id:'native-child',name:'Native child',roots:[root],primaryRoot:root});await f.projects.bind('parent','native-child')
-  let calls=0,refId=''
+  let calls=0,seedRef:import('@i-harness/core-session').ManagedArtifactRef|undefined
   const model:ModelClient=controlledModel(request => ({async *stream(){calls++
-    if(calls===1){await runtime.contextOutput.clear('parent');await runtime.contextOutput.configure({enabled:true});yield{type:'tool_call',call:{name:'context_output_read',args:{refId}}}}
+    // A managed dependency is read by its complete immutable ref; a bare
+    // refId names only legacy Context Mode output and cannot resolve the
+    // child's inherited artifact.
+    if(calls===1){await runtime.contextOutput.configure({enabled:true});yield{type:'tool_call',call:{name:'context_output_read',args:{ref:seedRef}}}}
     else yield{type:'text/chunk',text:'Seed read completed.'}
     yield{type:'end'}
   }} as import('@i-harness/llm-seam').ModelClient).stream(request))
@@ -168,7 +197,7 @@ it.each([false,true])('a real child owns its inherited native references before 
   try{
     await runtime.contextOutput.configure({enabled:true})
     const assembly=await service.assemblyFor('parent')
-    const ref=await recordManagedSeed(runtime,assembly,'INHERITED_NATIVE','inherited');refId=ref.id
+    const ref=await recordManagedSeed(runtime,assembly,'INHERITED_NATIVE','inherited');seedRef=ref
     await recordSeedTurn(assembly,ref,'seed')
     await coordinator.flush('parent')
     if(disabled)await runtime.contextOutput.configure({enabled:false})
@@ -176,6 +205,7 @@ it.each([false,true])('a real child owns its inherited native references before 
     try{await assembly.tools.dispatch(owned.prepared)}finally{await owned.close()}
     const child=(await Promise.all((await coordinator.list()).map(id=>coordinator.profile(id)))).find(profile=>profile.meta.parentSession==='parent')!.meta
     const log=(await coordinator.snapshot!(child.sessionId)).session
-    expect(log.events.find(event=>event.type==='tool/result'&&event.name==='context_output_read')).toMatchObject({output:{text:'INHERITED_NATIVE'}})
+    expect(log.events.find(event=>event.type==='conversation/seed-manifest')).toMatchObject({artifacts:[expect.objectContaining({ref:expect.objectContaining({id:ref.id})})]})
+    expect(log.events.find(event=>event.type==='tool/result'&&event.name==='context_output_read')).toMatchObject({envelope:{retention:{kind:'inline',value:{data:{kind:'text',text:'INHERITED_NATIVE'}}}}})
   }finally{await service.close();await runtime.close();await f.projects.close();await coordinator.close();await rm(root,{recursive:true,force:true})}
 },60000)

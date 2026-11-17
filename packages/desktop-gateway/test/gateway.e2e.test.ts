@@ -76,14 +76,26 @@ describe("desktop-gateway subprocess keeps SDK v3 compatible", () => {
       expect(listed.sessions.find((row) => row.id === first.sessionId)?.title).toBe("fixture answer")
       const history = await f.client.history(first.sessionId)
       expect(history.events.filter((event) => event.type === "session/title")).toHaveLength(1)
-      const firstHeader = JSON.parse(readFileSync(join(f.sessionDir, `${first.sessionId}.jsonl`), "utf8").split("\n")[0]!)
-      expect(firstHeader.title).toBe("fixture answer")
+      // The managed JSONL header is the immutable birth line of the fact journal:
+      // rewriting it (coordinator.updateMeta) makes the next managed read report
+      // FACT_RECOVERY_REQUIRED, so the title is not mirrored there. Durable title
+      // state is the committed `session/title` fact plus the producer's
+      // `session-title/<id>` mirror document (packages/session-executor/src/
+      // service/owned-post-turn.ts:42; same mirror asserted for the commit-log
+      // store in host-commit-log-title.test.ts).
+      const titleMirror = JSON.parse(readFileSync(join(f.sessionDir, "session-title", `${first.sessionId}.doc.jsonl`), "utf8"))
+      expect(titleMirror).toMatchObject({ formatVersion: 1, title: "fixture answer", source: "provider" })
 
       const second = await f.client.createSession()
       await f.client.request("desktop/session/manage", { sessionId: second.sessionId, action: "rename", title: "My title" })
       await f.client.request("session/prompt", { sessionId: second.sessionId, prompt: "Another workbench" }, 30_000)
       expect((await f.client.listSessions()).sessions.find((row) => row.id === second.sessionId)?.title).toBe("My title")
-      expect((await f.client.history(second.sessionId)).events.filter((event) => event.type === "session/title")).toHaveLength(0)
+      // Rename is a committed user title fact now
+      // (packages/desktop-gateway/src/session-management.ts:200), and the managed
+      // post-turn title producer only runs while no title exists, so the prompt
+      // must not add a second automatic title fact.
+      const secondTitles = (await f.client.history(second.sessionId)).events.filter((event) => event.type === "session/title")
+      expect(secondTitles).toEqual([expect.objectContaining({ title: "My title", source: "user" })])
     } finally { await f.close() }
   }, 50_000)
 

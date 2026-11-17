@@ -21,6 +21,7 @@ export const executionOptionMode = Object.freeze({
  resolveRoleModel:'complete',roleSelectionFor:'complete',roleToolsFor:'complete',allowSubagentModelSelection:'complete',subagentStaleAfterMs:'complete',
  managedRuntime:'forward',resultReadScopeFor:'forward',modelMetadataFor:'forward',sessionOperation:'forward',projectContextFor:'complete',executionAuthorityFor:'complete',windowsSandboxBackendFor:'complete',wslExecutionFor:'complete',webSearchModeFor:'complete',
  transformPrompt:'complete',afterSuccessfulSubmit:'complete',extensionsFor:'complete',beforeDispose:'forward',loadMeta:'forward',modelBuilder:'forward',modelBindingFor:'forward',sessionFor:'complete',contextWindowFor:'forward',reasoningEffortFor:'forward',
+ earlyGenerationOpen:'forward',
 } satisfies Record<keyof SessionServiceOptions,'forward'|'complete'|'policy'>)
 
 export function supportsManagedServiceOptions(options:SessionServiceOptions):boolean{

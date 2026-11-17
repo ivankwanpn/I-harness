@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
-import { createSessionService } from '@i-harness/session-executor'
+import { createSessionService, createUnmanagedTaskChildHost } from '@i-harness/session-executor'
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
 import { createLoopbackProvider } from '../../core-agent/test/helpers/provider-loopback.ts'
 import { createInstructionViews } from '../src/instructions/views.ts'
@@ -111,7 +111,12 @@ it('authorizes only the actual live child lineage before exposing child publicat
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }), { id } = await coordinator.create(), { id: foreign } = await coordinator.create()
   const emit = (delta: object, finish: string) => async (response: import('node:http').ServerResponse) => { response.end(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: finish }] })}\n\ndata: [DONE]\n\n`) }
   const server = await createLoopbackProvider('/v1/chat/completions', [emit({ tool_calls: [{ index: 0, id: 'spawn-i6', type: 'function', function: { name: 'spawn_agent', arguments: JSON.stringify({ task_name: 'child-i6', message: 'inspect', agent_type: 'general', background: false }) } }] }, 'tool_calls'), emit({ content: 'child done' }, 'stop'), emit({ content: 'parent done' }, 'stop')])
-  const model = createOpenAICompatibleClient({ apiKey: 'fixture', model: 'fixture', baseUrl: server.baseUrl }), service = createSessionService({ workspace, coordinator, model, codeMode: { mode: 'off' }, approveAll: true })
+  const model = createOpenAICompatibleClient({ apiKey: 'fixture', model: 'fixture', baseUrl: server.baseUrl }), service = createSessionService({ workspace, coordinator, model, codeMode: { mode: 'off' }, approveAll: true,
+    // A spawn needs the original task-child host; without it every spawn_agent
+    // fails 'Original task child host unavailable' (packages/subagent/src/index.ts:359)
+    // and no child row is ever registered. The host and every other gateway
+    // child fixture compose the same unmanaged child owner.
+    prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: 'unmanaged' }) })
   const views = createInstructionViews(coordinator, service, async scope => { if (scope.sessionId !== id && scope.sessionId !== foreign) throw new Error('foreign'); return 'same-project' }, () => {})
   try {
     await service.submit(id, 'spawn child', new AbortController().signal)

@@ -18,6 +18,10 @@ const observed = vi.hoisted(() => ({
 vi.mock("@i-harness/settings", async importOriginal => {
   const actual = await importOriginal<typeof import("@i-harness/settings")>()
   return { ...actual, watchSettings(paths: string | string[], callback: () => void | Promise<void>) {
+    // Only the trust watcher is this test's observed/held boundary. The
+    // instruction-policy watcher shares watchSettings but owns independent
+    // reload leases, so wrapping it in the same hold would strand its close.
+    if (!Array.isArray(paths)) return actual.watchSettings(paths, callback)
     observed.trigger = callback
     const watcher = actual.watchSettings(paths, callback)
     observed.watcher = { ...watcher,
@@ -70,6 +74,8 @@ it("returns the trust refresh promise, fences early, and joins after dependent c
     await vi.waitFor(() => expect(observed.refreshStarted).toBe(true))
     observed.holdClose = true; closing = host.close()
     await vi.waitFor(() => expect(observed.releaseClose).toBeTypeOf("function"))
+    // Fence the trust watcher early, release the dependent service refresh only
+    // at service.close, and join the trust watcher itself last.
     expect(observed.events).toEqual(["fence", "service", "join"])
     let done = false; void closing.then(() => { done = true }); await Promise.resolve(); expect(done).toBe(false)
     observed.releaseClose!(); await closing; await refresh

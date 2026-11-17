@@ -7,6 +7,7 @@ import { createSessionManagementFence } from '../src/session-management-fence.ts
 import { withExecCallerScope, type NativeExecService } from '@i-harness/exec'
 import { acquireAssemblyResultStore } from '../../session-executor/src/lifecycle/result-store.ts'
 import { committedFactSeqs } from '@i-harness/core-session'
+import { declareToolResultOutcome } from '@i-harness/core-tools'
 import { createHash } from 'node:crypto'
 import { expect, it, vi } from "vitest"
 import { mkdtemp, rm, writeFile, readFile, readdir } from "node:fs/promises"
@@ -43,6 +44,11 @@ it.each(["tool", "code"] as const)("restores actual registered job_output snapsh
       committedFactSeqs(await action.facts.tools.call({ type: 'tool/call', callId, name, args }))
       const prepared = await target.tools.prepare({ name, args }, undefined, { sessionId, session: target.session, callId, settlementSource: source })
       const output = await target.tools.dispatch(prepared)
+      // A trusted manual dispatch is still a genuine dispatcher: declare the
+      // outcome the model execution loop declares for the same call, so the
+      // durable envelope records the actual execution outcome. Without it the
+      // saved result is recorded as unknown and cannot attribute a job.
+      declareToolResultOutcome(prepared.exec, 'succeeded')
       const result = await target.tools.finalize(prepared, output)
       committedFactSeqs(await source.tools.captureResult({ type: 'tool/result', callId, name, ...(result.envelope ? { envelope: result.envelope } : { output: result.output }) }).admit())
       complete = true
@@ -149,7 +155,7 @@ it.each(["tool", "code"] as const)("restores actual registered job_output snapsh
     await recordFixture(assembly.factOwner, { type: "tool/call", callId: "failed-output", name: "job_output", args: { job_id: smallId } })
     await recordFixture(assembly.factOwner, { type: "tool/result", callId: "failed-output", name: "job_output", output: { ...snapshot, text: "failed output" }, isError: true })
     await coordinator.flush("s"); await live.close(); await coordinator.close()
-    coordinator = createCoordinator(sessionDir); coldBroker = createProjectScopeBroker(coordinator, root, undefined, { async assertIdle() { if (cold?.hasAssembly("s")) throw new Error("Fixture owner is live") } }); cold = createSessionService({ workspace: root, modelPolicy: "required", coordinator, resultReadScopeFor: id => coldBroker!.resultReadScopeFor(id) })
+    coordinator = createCoordinator(sessionDir); coldBroker = createProjectScopeBroker(coordinator, root, undefined, { async assertIdle() { if (cold?.hasAssembly("s")) throw new Error("Fixture owner is live") } }); cold = createSessionService({ workspace: root, modelPolicy: "required", coordinator, sessionFor: createDurableSessionLoader(coordinator), resultReadScopeFor: id => coldBroker!.resultReadScopeFor(id) })
     const before = await readFile(join(sessionDir, "s.jsonl"), "utf8"), processes = createAgentProcesses(coordinator, cold)
     expect(await processes.jobOutput("s", smallId)).toEqual({ text: snapshot.text, truncated: false, ownerSessionId: "s", live: false })
     expect(await processes.jobOutput("s", largeId)).toEqual({ text: String(largeSnapshot.text), truncated: true, ownerSessionId: "s", live: false })
@@ -240,7 +246,10 @@ it.each(["tool", "code"] as const)("restores actual registered job_output snapsh
     expect(pages).toBe(beforeFailedResolver)
     expect(cold.hasAssembly("s")).toBe(false); expect(await readFile(join(sessionDir, "s.jsonl"), "utf8")).toBe(before)
   } finally { await coldBroker?.close(); await cold?.close(); await live.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
-}, 30000)
+  // Measured 27s for the tool variant and 33-45s for the Code Mode variant on
+  // this host (frame-by-frame verification dominates), so keep headroom over
+  // the old 30s budget for a loaded full-file run.
+}, 90000)
 
 it("projects saved tool/code PTYs and partial output after restart without an assembly or log writes", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-saved-pty-")), sessionDir = join(root, "sessions")

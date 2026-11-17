@@ -114,7 +114,7 @@ export function createManagedReduction(host: ManagedAgentHost, context: ReturnTy
                     // same evidence before the summary checks its source again.
                     if (!await context.refresh(action, selected) || !selection.current())
                         throw Object.assign(Error('CONTEXT_INPUT_STALE'), { code: 'CONTEXT_INPUT_STALE' });
-                }, contextMetadata: selected.metadata, budgetBinding: surface.budgetBinding, maxOutputTokens: surface.maxOutputTokens, reasoningEffort: surface.reasoningEffort, flush: host.flush, telemetry: host.telemetry })(selection);
+                }, contextMetadata: selected.metadata, budgetBinding: surface.budgetBinding, maxOutputTokens: surface.maxOutputTokens, reasoningEffort: surface.reasoningEffort, flush: host.flush, telemetry: host.telemetry ? { close() {}, emit(event) { host.telemetry!.emit({ ...event, data: { ...event.data, sessionId: host.domain.sessionId } }) } } : undefined })(selection);
                 return result;
             } : undefined;
             let result: ReductionResult;

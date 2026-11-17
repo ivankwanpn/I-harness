@@ -688,6 +688,25 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
   - project-scope-host：fork precondition 文案與 completed-turn fork 契約。
   - timeout 群組：context-summary-growth（30s/180s watchdog 只完成 15–16/60 reads、wire receiver 拒絕）、long-growth-host（24 turns >300s）、approval-rules/host-fixture-model 真 hang、bootstrap close→retry、gateway title header、usage sessionId、instruction-views agentTable、manual main context action、revoked instruction classification、r6 obsolete premise、sandbox mode fact、settings refresh 等。
 - 已量測並調整 6 檔 timeout 預算（code-mode 15s→90s、compaction 30s→120s、env-report 15s→120s 等），其餘不屬 timeout 者未動預算。
+#### 第一百零五批：gateway native-child 與語意群組（14 檔全綠）
+
+- **native-context-child 5/5**：child code 產物本就是 managed `code/output` envelope（非 legacy `context/result-ref`）；seed barrier 改注入真正的 `conversation/seed-manifest`；held 期間 `confirmSeedDependencies=1`、0 model transports、open/snapshot child 皆 `FACT_RECOVERY_REQUIRED`；inherited managed dependency 以完整 immutable ref 讀取。
+- **execution-surfaces 10/10**：manual dispatch 需 `declareToolResultOutcome(prepared.exec,'succeeded')` 才不會被 `decodeSavedCalls` 丟棄；cold reader 補 `sessionFor: createDurableSessionLoader(coordinator)`；預算 30s→90s（實測 27–53s）。
+- **native-context-jobs 5/5**：產品修正在 gateway 端：`session-management.ts assertIdle` 有 live assembly 時改用 `subagentState()` 作權威，cold session 才 fallback document；test 未改。
+- **subagent-host 1/1**：由 session-executor close-ordering 修正自然轉綠。
+- **語意群組 10 檔**：
+  - project-scope-host：fork 改走 `session/fork/prepare`+`begin`；empty source→`no-completed-boundary`、completed→ready child。
+  - bootstrap-preparation-phase：`end='close'` 後 warm retry 依 `5ea14acf` 保留 header/task ack，已改為 ready 契約。
+  - gateway.e2e：managed JSONL header 不可改寫；自動 title 改驗 durable mirror `session-title/<id>.doc.jsonl`，manual rename 仍是一筆 `session/title source:user`。
+  - usage-host：managed summary telemetry 由 core-agent 包上 `sessionId: host.domain.sessionId`。
+  - instruction-views：fixture 補 `createUnmanagedTaskChildHost`。
+  - manual-generation：desktop host 新增 opt-in `earlyGenerationOpen`，可在 credential resolver 前開 main action；預設關閉保留 failed-construction retry 語意。
+  - revoked-prompt-cleanup：對齊 `5e5db2de` 的 `CONTEXT_INPUT_STALE` 契約與 live-only `executions`。
+  - r6-private-input-cutover：private supplemental context 已支援，改驗 accepted/pending retained/0 model work。
+  - sandbox.e2e：managed runtime 第一次 turn action 建構時提交 `sandbox/mode`。
+  - settings-watch-close：只 hold trust/mcp watcher，instruction-policy watcher 改 pass-through。
+- 產品檔：core-agent managed telemetry/mode producer/generation ordering、session-executor service/managed-assembly/execution-mode、desktop host/session-management。
+- 驗證：14 檔 **57/57**；desktop-gateway/core-agent/session-executor/subagent typecheck 0；selected-native-source/debt＋session-management＋current-unfinished-catalog 回歸 56/56。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

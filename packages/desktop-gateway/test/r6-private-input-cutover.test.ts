@@ -33,12 +33,22 @@ it('Gateway refuses old start:false admission reply after original native ACK an
  }finally{release.resolve();await outcome;await input.close();await service.close();await coordinator.close()}
 },30000)
 
-it('Gateway unsupported private context refuses before token persistence, private acquisition or model work',async()=>{
+it('Gateway accepts private supplemental context into the original preparation before any model work',async()=>{
  const {root,coordinator}=await fixture();let models=0
  const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'original',tools:[]},modelBuilder:async()=>{models++;throw Error('Unreachable')}}),input=createDesktopInput(coordinator,service)
- const put=vi.spyOn(coordinator,'putDocument'),acquire=vi.spyOn(privateExecution,'acquireManagedExecution')
- try{await expect(input.admit('main',{text:'raw',context:'must not disappear',delivery:'queue',clientToken:'unsupported-context',start:false})).rejects.toThrow('original owned preparation');expect(put).not.toHaveBeenCalled();expect(acquire).not.toHaveBeenCalled();expect(models).toBe(0)}
- finally{await input.close();await service.close();put.mockRestore();acquire.mockRestore();await coordinator.close()}
+ // a14fdbe4 moved supplemental context into the original private preparation
+ // observation (core-agent/src/lifecycle/execution-input-preparation.ts:41;
+ // session-executor/src/lifecycle/input-preparation-owner.ts:54). Admission
+ // therefore persists the context instead of refusing it, and still performs
+ // no model work and acquires no public entry.
+ const opened=vi.spyOn(coordinator,'openManagedDocument')
+ try{
+  const admitted=await input.admit('main',{text:'raw',context:'must not disappear',delivery:'queue',clientToken:'supported-context',start:false})
+  expect(admitted).toMatchObject({accepted:true})
+  const owner=await service.managedInputFor!('main'),observation=owner!.observe()
+  expect(observation.inbox.pending()).toEqual([expect.objectContaining({text:'raw',supplementalContext:'must not disappear'})])
+  expect(models).toBe(0);expect(opened).not.toHaveBeenCalled()
+ }finally{await input.close();await service.close();opened.mockRestore();await coordinator.close()}
 },30000)
 
 it('Gateway custom preparation selects genuine complete owner before private acquisition and keeps original callback',async()=>{
