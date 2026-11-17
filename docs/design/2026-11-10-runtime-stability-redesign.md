@@ -675,6 +675,19 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - **Desktop portable archive**：Windows PowerShell 5.1 `Expand-Archive` 對 3-arg `ExtractToDirectory` overload 不可用；改用 `Add-Type System.IO.Compression.FileSystem`＋`ZipFile::ExtractToDirectory` 2-arg，`portable-archive` **1/1**。
 - **subagent-stale-section**：三個 case 的 20s 預算在 maxWorkers=2 下超時；提高到 120s，檔案 **3/3**。
 - 未改產品源碼。殘留產品觀察：大型 workspace 的首次 instruction fs-watch baseline 仍花 35–41s，後續可考慮 bounded/async readiness（本次未動）。
+#### 第一百零四批：gateway 任務／來源／逾時群組（部分收斂）
+
+- **已轉綠（13 檔）**：official-plugin-authority 2/2、retained-catalog-io 1/1、task-child-delivery-generation 8/8、task-child-managed-transfer 8/8、selected-source-lifecycle-regression 3/3、selected-foreign-plan 1/1、owned-gateway-selection-live 1/1、nested-fork-retention 1/1、native-job-output-reuse 1/1、execution-host-exec-source 1/1、private-schedule-ui 1/1、backend-integration 4/4、code-mode-host 9/9、compaction-host 2/2、env-report-context-jobs-host 1/1、sandbox-roundtrip.e2e 3/3（subset 45 tests 中 42 pass；project-scope-host 與 code-mode cleanup 案仍紅）。
+- **產品修正**：`desktop-gateway/src/context-runtime.ts`：selected-source guard 分 holder-lifetime 與 handoff-lifetime；legacy transfer 只看 document currentness；blocked legacy confirm 直接回 refusal 不再 post-assert 已撤銷 reader。
+- **fixture 修正（保留真實入口）**：synthetic prepared spawn 改走真 model-batch dispatch；Task transfer 期望對齊 B2-receipt 契約；manual dispatch 不再冒稱 model Exec position；execution-host 以真正 `registerExecWithReservation` 服務觀察；private schedule 從 legacy coordinator 捕捉。
+- **剩餘紅（已分類）**：
+  - native-context-child：5 案已走 production composition，殘留 child ref capture=0、seed barrier recovery、inherited bytes 缺失。
+  - execution-surfaces：需把 background shell 改由真 model turn 驅動（model Exec issuer）。
+  - native-context-jobs：durable subagent projection 仍 `running` 而 live `killed`；需修 `packages/subagent/src/persist.ts` 投影。
+  - subagent-host：body 通過後 host close 的 managed recovery 清理失敗。
+  - project-scope-host：fork precondition 文案與 completed-turn fork 契約。
+  - timeout 群組：context-summary-growth（30s/180s watchdog 只完成 15–16/60 reads、wire receiver 拒絕）、long-growth-host（24 turns >300s）、approval-rules/host-fixture-model 真 hang、bootstrap close→retry、gateway title header、usage sessionId、instruction-views agentTable、manual main context action、revoked instruction classification、r6 obsolete premise、sandbox mode fact、settings refresh 等。
+- 已量測並調整 6 檔 timeout 預算（code-mode 15s→90s、compaction 30s→120s、env-report 15s→120s 等），其餘不屬 timeout 者未動預算。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

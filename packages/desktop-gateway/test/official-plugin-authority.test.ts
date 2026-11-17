@@ -6,14 +6,17 @@ import { fileURLToPath } from "node:url"
 import { expect, it, vi } from "vitest"
 import { PluginRegistry } from "@i-harness/plugin-registry"
 import { createHookTrustStore, sha256ClaudePluginTreeSync } from "@i-harness/hooks"
-import { createSessionService } from "@i-harness/session-executor"
+import { createSessionService, createUnmanagedTaskChildHost } from "@i-harness/session-executor"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import type { LLMRequest, ModelClient } from "../../llm-seam/src/index.ts"
 import { createApprovalRulesAdapter } from "../src/approval-rules.ts"
 import { approvalPolicyIdentity } from "../src/approval-policy-identity.ts"
 import { mountedHookAuthority, pluginExtensions } from "../src/plugin-mount.ts"
+import { dispatchOwned } from "./helpers/native-consumer-fixture.ts"
 
+// Real installed plugin hooks plus a model-driven child turn: measured ~15s on
+// this host, so the budget keeps headroom for a loaded full-suite run.
 it.each(["code-reviewer", "explore"] as const)("installs official plugin snapshots and runs their canonical startup hook and real %s child under Desktop authority", async role => {
   const root = await mkdtemp(join(tmpdir(), "ih-official-plugin-authority-"))
   const configDir = join(root, "config"), pluginsRoot = join(configDir, "plugins")
@@ -44,6 +47,7 @@ it.each(["code-reviewer", "explore"] as const)("installs official plugin snapsho
     yield { type: "end" }
   } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   const service = createSessionService({ workspace: root, model: parent, coordinator, sandbox: "read-only", approveAll: true,
+    prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: "unmanaged" }),
     extensionsFor: async id => pluginExtensions(inputs, configDir, id, rows => { diagnostics.push(...rows) }),
     roleSelectionFor: name => name === role ? { provider: "local", model: "scripted-reviewer" } : undefined,
     allowSubagentModelSelection: true, resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }),
@@ -55,21 +59,28 @@ it.each(["code-reviewer", "explore"] as const)("installs official plugin snapsho
     expect(policy()).toBeDefined()
     createApprovalRulesAdapter({ filePath: join(root, "rules.json"), policyIdentity: policy }).attach(assembly)
     expect(assembly.tools.schemas().some(tool => tool.name === "glob" || tool.name === "grep")).toBe(false)
-    const prepared = await assembly.tools.prepare({ name: "spawn_agent", args: { task_name: "official-reviewer", agent_type: role, message: "Read fixture.txt" } }, undefined, { sessionId: "lead" })
-    await assembly.tools.dispatch(prepared)
+    // The Task leaf only accepts its original prepared body; run the real
+    // model-batch entry with its committed call fact and settlement source.
+    await dispatchOwned(assembly, "spawn_agent", { task_name: "official-reviewer", agent_type: role, message: "Read fixture.txt", background: false })
     await vi.waitFor(() => expect(assembly.subagentState().jobs.every(job => job.status !== "running")).toBe(true), { timeout: 5_000 })
     expect(requests).toHaveLength(4)
     expect(requests[0]!.systemPrompt).toContain(role === "code-reviewer" ? "You are an expert code reviewer" : "You are an exploration agent")
     expect(requests[0]!.systemPrompt, diagnostics.join("\n")).toContain("explanatory' output style mode")
-    expect(requests[0]!.tools.map(tool => tool.name).sort()).toEqual(["glob", "grep", "list_dir", "read"])
+    // The explore role carries the native context tools; the code reviewer's
+    // role catalog deliberately does not.
+    expect(requests[0]!.tools.map(tool => tool.name).sort()).toEqual(role === "explore"
+      ? ["context_output_read", "context_output_search", "context_output_status", "glob", "grep", "list_dir", "read"]
+      : ["glob", "grep", "list_dir", "read"])
     const entry = assembly.subagentState().agentTable[0]!
     const cold = await coordinator.snapshot!(entry.sessionId!)
-    expect(cold.session.events.find(event => event.type === "tool/result" && event.callId === "official-read")).toMatchObject({ output: { content: "Official reviewer read fixture" } })
+    // Bounded results are recorded as the real inline retention envelope.
+    const inline = (value: unknown) => ({ envelope: { retention: { kind: "inline", value } } })
+    expect(cold.session.events.find(event => event.type === "tool/result" && event.callId === "official-read")).toMatchObject(inline({ content: "Official reviewer read fixture" }))
     const glob = cold.session.events.find(event => event.type === "tool/result" && event.callId === "official-glob")
-    expect(glob).toMatchObject({ output: { matches: ["fixture.txt"] } })
+    expect(glob).toMatchObject(inline({ matches: ["fixture.txt"] }))
     const grep = cold.session.events.find(event => event.type === "tool/result" && event.callId === "official-grep")
-    expect(grep).toMatchObject({ output: { matches: [expect.objectContaining({ path: "fixture.txt", text: "Official reviewer read fixture" })] } })
+    expect(grep).toMatchObject(inline({ matches: [expect.objectContaining({ path: "fixture.txt", text: "Official reviewer read fixture" })] }))
     expect(assembly.tools.schemas().some(tool => tool.name === "glob" || tool.name === "grep")).toBe(false)
     expect(entry.modelLabel).toBe("local:scripted-reviewer")
   } finally { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
-}, 15_000)
+}, 60_000)

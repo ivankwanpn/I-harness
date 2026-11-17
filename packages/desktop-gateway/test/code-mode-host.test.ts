@@ -11,6 +11,13 @@ import { createSessionService } from "@i-harness/session-executor"
 import { approvalPolicyIdentity } from "../src/approval-policy-identity.ts"
 import { createApprovalRulesAdapter } from "../src/approval-rules.ts"
 
+/** `code/result` and `tool/result` facts use the ResultFactPayload union: either
+ *  a raw `output` or a managed envelope whose inline retention holds the value
+ *  (core-session/results/types.ts). */
+function resultOutput(event: { output?: unknown; envelope?: { retention?: { kind?: string; value?: unknown } } }) {
+  return event.envelope?.retention?.kind === "inline" ? event.envelope.retention.value : event.output
+}
+
 it.each(["sandbox", "approval", "project"] as const)("still refuses actual %s authority changes during an awaited execution hook", async change => {
   const root = await mkdtemp(join(tmpdir(), "ih-code-policy-change-"))
   const service = createSessionService({ workspace: root, modelPolicy: "test-mock", codeMode: { mode: "mixed" }, sandbox: "read-only" })
@@ -69,6 +76,8 @@ it.each(["mixed", "only"] as const)("takes a coherent approval authority snapsho
   } finally { await service.close(); await rm(root, { recursive: true, force: true }) }
 })
 
+// The mixed/only Code Mode cell + wait + tool cycles measured 19.5s/20.4s at
+// maxWorkers=1 and 21.8s/24.1s at maxWorkers=2; 15s cut a bounded workload.
 it.each(["off", "mixed", "only"] as const)("forwards saved %s Code Mode and normalized limits through the Desktop host", async (mode) => {
   const trace = createHostFixtureTrace(`code-mode-host:${mode}`)
   const bodies: Array<{ tools?: Array<{ function: { name: string } }>; messages: Array<{ role: string; content: string }> }> = []
@@ -114,13 +123,13 @@ it.each(["off", "mixed", "only"] as const)("forwards saved %s Code Mode and norm
     const names = bodies[0]!.tools!.map(tool => tool.function.name)
     if (mode === "only") expect(names).toEqual(["code_exec", "code_status", "code_wait"])
     else { expect(names).toContain("list_dir"); expect(names.includes("code_exec")).toBe(mode === "mixed") }
-    const { events } = await call("session/history", { sessionId, afterSeq: 0, limit: 200 }) as { events: Array<{ type: string; name?: string; state?: string; error?: string; isError?: boolean; output?: unknown }> }
+    const { events } = await call("session/history", { sessionId, afterSeq: 0, limit: 200 }) as { events: Array<{ type: string; name?: string; state?: string; error?: string; isError?: boolean; output?: unknown; envelope?: { retention?: { kind?: string; value?: unknown } } }> }
     if (mode !== "off") {
       expect(events.filter(event => event.type === "code/cell" && event.state === "failed")).toEqual([])
       expect(events.some(event => event.type === "code/dispatch")).toBe(true)
-      expect(events.find(event => event.type === "code/result" && event.name === "list_dir")).toMatchObject({ output: { entries: [] } })
+      expect(resultOutput(events.find(event => event.type === "code/result" && event.name === "list_dir")!)).toMatchObject({ entries: [] })
       expect(events.some(event => event.type === "code/cell" && event.state === "completed")).toBe(true)
-      expect(events.find(event => event.type === "tool/result" && (event.output as { text?: string } | undefined)?.text === "long")).toMatchObject({ output: { text: "long", truncated: true } })
+      expect(resultOutput(events.find(event => event.type === "tool/result" && (resultOutput(event) as { text?: string } | undefined)?.text === "long")!)).toMatchObject({ text: "long", truncated: true })
     } else expect(events.some(event => event.type.startsWith("code/"))).toBe(false)
   } finally {
     try { await trace.run('host/close', async () => { await host?.close() }) }
@@ -129,4 +138,4 @@ it.each(["off", "mixed", "only"] as const)("forwards saved %s Code Mode and norm
     }
     await rm(root, { recursive: true, force: true })
   }
-}, 15_000)
+}, 90_000)

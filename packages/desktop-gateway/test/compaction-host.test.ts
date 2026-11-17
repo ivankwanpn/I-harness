@@ -7,6 +7,8 @@ import { join } from "node:path"
 import { createDesktopHost } from "../src/host.ts"
 import { isRpcSuccess, type RpcMessage } from "@i-harness/sdk"
 
+// Three prompts on a 100k window plus compaction measured 36.1s under
+// maxWorkers=2 (34.4s/36.1s for the two modes); the old 30s cap cut a bounded run.
 it.each([true, false])("honors Desktop auto-compaction setting %s with the configured model window", async (auto) => {
   const root = await mkdtemp(join(tmpdir(), "ih-context-host-"))
   let calls = 0
@@ -71,4 +73,4 @@ it.each([true, false])("honors Desktop auto-compaction setting %s with the confi
     await new Promise<void>(resolve => server.close(() => resolve()))
     await rm(root, { recursive: true, force: true })
   }
-}, 30000)
+}, 120000)

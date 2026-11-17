@@ -2,10 +2,14 @@ import { it, expect, vi } from 'vitest'
 const state = vi.hoisted(() => ({ exec: undefined as any, workflow: undefined as any, attached: { exec: 0, workflow: 0 }, detached: { exec: 0, workflow: 0 }, launches: 0, controls: [] as { root: PromiseWithResolvers<{ exitCode: number }>; tree: PromiseWithResolvers<void> }[] }))
 vi.mock('../../exec/src/index.ts', async original => {
   const actual = await original<any>()
-  return { ...actual, registerExec(...args: any[]) {
-    const service = actual.registerExec(...args), subscribe = service.subscribeJobs.bind(service)
+  // The assembly registers its owner through `registerExecWithReservation`, not
+  // through the convenience `registerExec` alias (which calls the local binding).
+  // Intercept the export the product actually imports so the real service the
+  // assembly uses is the one whose subscription surface is observed.
+  return { ...actual, registerExecWithReservation(...args: any[]) {
+    const pair = actual.registerExecWithReservation(...args), service = pair.service, subscribe = service.subscribeJobs.bind(service)
     service.subscribeJobs = (listener: () => void) => { state.attached.exec++; const off = subscribe(listener); return () => { state.detached.exec++; off() } }
-    state.exec = service; return service
+    state.exec = service; return pair
   } }
 })
 vi.mock('../../workflow/src/index.ts', async original => {

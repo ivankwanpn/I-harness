@@ -244,7 +244,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       const useCurrent=()=>{if(!uses.getStore()?.active)throw Error('Selected source use expired');current();retained.assertCurrent()}
       const inherited=Object.freeze({assertCurrent:useCurrent,legacy(){useCurrent();const iterator=retained.reader.legacy()[Symbol.asyncIterator]();return {[Symbol.asyncIterator](){return this},async next(){useCurrent();const value=await iterator.next();useCurrent();return value},async return(){return iterator.return?iterator.return():{done:true as const,value:undefined}}}}})
       const projectId=project.sourceGetter().projectId
-      const source=Object.freeze({document,view:witness.view,inherited,projectId,assertCurrent(){current();project.assertCurrent();result.assertCurrent();retained.assertCurrent()},use<T>(work:()=>Promise<T>){const entry={active:true};return selectedWork(()=>project.use(()=>result.use(()=>uses.run(entry,async()=>{try{return await work()}finally{entry.active=false}}))))},revoke(){binding!.revoke()},async close(){await project.close();selectedSources.delete(source)}})
+      const source=Object.freeze({document,view:witness.view,inherited,projectId,assertCurrent(){current();project.assertCurrent();result.assertCurrent();retained.assertCurrent()},assertDocumentCurrent:current,use<T>(work:()=>Promise<T>){const entry={active:true};return selectedWork(()=>project.use(()=>result.use(()=>uses.run(entry,async()=>{try{return await work()}finally{entry.active=false}}))))},revoke(){binding!.revoke()},async close(){await project.close();selectedSources.delete(source)}})
       selectedSources.add(source);return source
     }catch(error){
       binding?.revoke();let failure=error
@@ -267,10 +267,16 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     const sourceHandoff=async<T>(source:NonNullable<typeof original>,work:(handoff:{source:{sourceSessionId:string;document:typeof source.document;view:typeof source.view;events:typeof source.view.events;eventCount:number;inherited:typeof source.inherited};assertCurrent():void})=>Promise<T>,signal?:AbortSignal)=>{
       available();if(selectedAborted(signal))throw Error('Selected handoff cancelled');source.assertCurrent();const expected=operation.prepared.requestIntent.project;if(expected.kind==='project'&&source.projectId!==expected.projectId||expected.kind!=='project'&&source.projectId!==undefined)throw Error('Selected project mismatch')
       const entry={active:true},guard=()=>{available();if(!entry.active||selectedAborted(signal))throw Error('Selected handoff expired');source.assertCurrent()}
+      // Persistence retains the guard given to `work` for its own transition
+      // records. Those records are re-checked by later holder operations
+      // (reconcile, confirm, publish, release), so their guard must stay valid
+      // for the HOLDER's lifetime while the transient handoff guard above only
+      // covers the current handoff.
+      const retainedGuard=()=>{available();source.assertCurrent()}
       const held=Object.freeze({sourceSessionId:operation.prepared.core.sourceSessionId,document:source.document,view:source.view,events:source.view.events,eventCount:source.view.events.length,inherited:source.inherited})
       // One immutable handle is retained across all handoffs.
       const stable=holderSource??(holderSource=held)
-      return source.use(()=>handoffs.run(entry,async()=>{try{guard();captureSlot={source,assertCurrent:guard};const value=await work({source:stable,assertCurrent:guard});guard();return value}finally{captureSlot=undefined;entry.active=false}}))
+      const afterWork=()=>{available();if(!entry.active||selectedAborted(signal))throw Error('Selected handoff expired')};return source.use(()=>handoffs.run(entry,async()=>{try{guard();captureSlot={source,assertCurrent:guard};const value=await work({source:stable,assertCurrent:retainedGuard});afterWork();return value}finally{captureSlot=undefined;entry.active=false}}))
     }
     let projectPreparation:ReturnType<NonNullable<NativeContextOptions['prepareSelectedInheritance']>>|undefined,managedScope:SeedDependencyTransferScope|undefined,legacyTransfer:ReturnType<typeof bridge.acquireSelectedLegacyTransfer>|undefined
     let holderSource:Parameters<Parameters<typeof sourceHandoff>[1]>[0]['source']|undefined
@@ -304,7 +310,10 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
         const slot=captureSlot;if(!slot||!projectPreparation)throw Error('Selected target preparation unavailable');slot.assertCurrent()
         const inspection=inspectSelectedTarget(options.coordinator as SessionCoordinator,target)
         projectPreparation.assertTargetCurrent()
-        const assertSourceCurrent=()=>{if(!captureSlot||captureSlot.source!==slot.source)throw Error('Original selected source unavailable');captureSlot.assertCurrent()}
+        // The legacy transfer only reads the original session view and fact
+        // ownership; the selected metadata reader is not part of its authority
+        // and is revoked when this transfer detects a conflict.
+        const assertSourceCurrent=()=>{if(!captureSlot||captureSlot.source!==slot.source)throw Error('Original selected source unavailable');slot.source.assertDocumentCurrent()}
         const assertTargetCurrent=()=>{available();inspectSelectedTarget(options.coordinator as SessionCoordinator,target);projectPreparation!.assertTargetCurrent()}
         if(!legacyTransfer){
           const targetView=freezeJsonData({formatVersion:inspection.stage.headerBase.formatVersion,header:JSON.parse(inspection.stage.headerBytes),events:inspection.seed.records}) as import('@i-harness/core-session').SessionView
@@ -312,7 +321,12 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
             target:{available:()=>{try{assertTargetCurrent();return true}catch{return false}},assertCurrent:assertTargetCurrent,sourceId:()=>{assertTargetCurrent();return contextSourceIdentity(workspaceKey,canonical,projectPreparation!.targetScope().scope)}},
             source:{view:slot.source.view,assertCurrent:assertSourceCurrent,read(){assertSourceCurrent();const observation=observations.current(operation.prepared.core.sourceSessionId);if(!observation||observation.kind!=='public'||observation.view!==slot.source.view)throw Error('Original result observation unavailable');const read=legacyObservationFor(observation);originalLegacyReads.set(read,{document:slot.source.document,view:observation.view});return read}}})
         }
-        const result=await legacyTransfer.confirm();slot.assertCurrent();assertTargetCurrent();return result
+        const result=await legacyTransfer.confirm()
+        // A foreign/conflicting transfer revokes the in-memory reader as part of
+        // refusing it, so its refusal is the outcome; only a confirmed transfer
+        // continues to require the source to be current.
+        if(result.kind!=='confirmed')return result
+        slot.assertCurrent();assertTargetCurrent();return result
       },
       async reconcileLegacyDependencies(){if(!legacyTransfer)return undefined;if(!projectPreparation)throw Error('Selected target preparation unavailable');available();inspectSelectedTarget(options.coordinator as SessionCoordinator,target);projectPreparation.assertTargetCurrent();return legacyTransfer.reconcile()},
       assertTargetCurrent(){if(!projectPreparation||!legacyTransfer)throw Error('Selected target preparation unavailable');available();inspectSelectedTarget(options.coordinator as SessionCoordinator,target);projectPreparation.assertTargetCurrent();legacyTransfer.assertCurrent()},

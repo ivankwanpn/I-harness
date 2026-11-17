@@ -93,13 +93,18 @@ async function runWrite(mode: Mode, target: "inside" | "outside") {
       })
     }
     await prompt
+    // A tool/result fact carries either the raw `output` or a managed envelope
+    // (`ResultFactPayload` in core-session/results/types.ts); small results are
+    // retained inline, the same extraction context-summary-growth uses.
     const result = f.frames.find((frame) => "method" in frame && frame.method === "session/event"
       && (frame.params as { event?: { type?: string } })?.event?.type === "tool/result") as {
-        params: { event: { output: unknown } }
+        params: { event: { output?: unknown; envelope?: { retention?: { kind?: string; value?: unknown } } } }
       } | undefined
     expect(result).toBeDefined()
     expect(f.providerCalls()).toBeGreaterThanOrEqual(2)
-    return { output: result!.params.event.output, exists: existsSync(target === "inside" ? join(f.workspace, f.targetPath) : f.targetPath) }
+    const event = result!.params.event
+    const output = event.envelope?.retention?.kind === "inline" ? event.envelope.retention.value : event.output
+    return { output, exists: existsSync(target === "inside" ? join(f.workspace, f.targetPath) : f.targetPath) }
   } finally { await f.close() }
 }
 

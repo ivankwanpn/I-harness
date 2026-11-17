@@ -7,6 +7,8 @@ import { createDesktopHost } from '../src/host.ts'
 import { createHostFixtureTrace } from './host-fixture-trace.ts'
 import { createHostFixtureModel } from './host-fixture-model.ts'
 
+// Code index job registration measured 41.3s under maxWorkers=2 (the whole
+// prompt + four job tool calls + state read); 15s was a failure detector only.
 it('registers Desktop code index job IDs in the actual session job tools', async () => {
   const trace = createHostFixtureTrace('env-report-context-jobs-host')
   const observations = new Map<string, any>()
@@ -66,4 +68,4 @@ it('registers Desktop code index job IDs in the actual session job tools', async
     }
     await rm(root, { recursive: true, force: true })
   }
-}, 15000)
+}, 120000)

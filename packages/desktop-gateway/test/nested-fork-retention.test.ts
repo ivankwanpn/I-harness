@@ -8,6 +8,9 @@ import { resolveShell } from '@i-harness/shell'
 import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { createGatewayForkFixture } from './helpers/fork-fixture.ts'
 
+// Four model turns, two real native executions and a cold restart with nested
+// retained catalogs: measured 94.7s standalone on this host, so the budget keeps
+// headroom for a loaded full-suite run instead of ending the case early.
 it('actual routed nested Gateway forks retain native catalog/member, managed and typed legacy bytes after cold source release', async () => {
   let modelCalls = 0, textEffects = 0, legacyId = '', command = ''
   const managedText = 'MANAGED_START' + 'x'.repeat(40000) + 'MANAGED_MIDDLE' + 'y'.repeat(40000)
@@ -144,4 +147,4 @@ it('actual routed nested Gateway forks retain native catalog/member, managed and
     await writeFile(join(root, 'nested-receipts.json'), JSON.stringify({ root, first, second, captures, modelCalls, textEffects, reentries, snapshots, coldSourceProfiles, nativeBytes: { stdout: Buffer.byteLength(native.stdout), stderr: Buffer.byteLength(native.stderr) }, legacyResults: f.runtime.contextOutput.status().results }, null, 2))
     console.info(JSON.stringify({ control: 'actual Gateway nested retained results', root, captures, modelCalls, textEffects, reentries, snapshots, coldSourceProfiles, nativeBytes: { stdout: 80013, stderr: 80013 } }))
   } finally { await f.close() }
-}, 30000)
+}, 180000)

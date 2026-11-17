@@ -8,6 +8,9 @@ import { createDesktopHost } from "../src/host.ts"
 import { createHostFixtureTrace } from "./host-fixture-trace.ts"
 import { createHostFixtureModel } from "./host-fixture-model.ts"
 
+// Two Desktop prompts, two real provider-driven child spawns and a full host
+// shutdown: the measured body on this host is ~81s, so the budget keeps headroom
+// for a loaded full-suite run rather than ending the case early.
 it("uses the changed role model for a new child in the same Desktop session", async () => {
   const trace = createHostFixtureTrace('subagent-host')
   const models: string[] = []
@@ -32,7 +35,10 @@ it("uses the changed role model for a new child in the same Desktop session", as
   const root = await mkdtemp(join(tmpdir(), "ih-role-host-"))
   const workspace = join(root, "workspace"); await mkdir(workspace)
   const settingsPath = join(root, "settings.json")
-  await writeFile(settingsPath, JSON.stringify({ plugins: { subagentModel: true }, sandboxMode: "read-only", llm: { providers: { fixture: { protocol: "openai-completions", baseURL: `http://127.0.0.1:${address.port}/v1`, models: [{ id: "parent", contextWindow: 272000 }] } }, defaultModel: { provider: "fixture", model: "parent" } } }))
+  // Auto-title would issue an extra provider request whose usage row is not a
+  // role/child attribution row, so it is turned off just as in the sibling host
+  // fixtures; this case counts the parent/child model requests only.
+  await writeFile(settingsPath, JSON.stringify({ autoTitle: false, plugins: { subagentModel: true }, sandboxMode: "read-only", llm: { providers: { fixture: { protocol: "openai-completions", baseURL: `http://127.0.0.1:${address.port}/v1`, models: [{ id: "parent", contextWindow: 272000 }] } }, defaultModel: { provider: "fixture", model: "parent" } } }))
   const frames: RpcMessage[] = []
   let push!: (params: unknown) => void
   const childChanged = new Promise<unknown>(resolve => { push = resolve })
@@ -85,4 +91,4 @@ it("uses the changed role model for a new child in the same Desktop session", as
     }
     await rm(root, { recursive: true, force: true })
   }
-}, 15000)
+}, 180000)

@@ -40,7 +40,9 @@ it.each([false, true])("reports the completed-turn fork precondition and lists a
     await success("initialize")
     await success("desktop/project/sync", { projects: [{ id: "p1", name: "Both folders", roots: [workspace, second], primaryRoot: workspace }] })
     await success("desktop/session/project/bind", { sessionId: "source", projectId: "p1" })
-    expect(await success("session/list")).toEqual({ sessions: [{ id: "source", title: "Source", turnCount: completed ? 1 : 0 }] })
+    // Durable session rows carry the profile's updatedAt (4004bc54); the row
+    // must still identify the original session, its title and its turn count.
+    expect(await success("session/list")).toEqual({ sessions: [{ id: "source", title: "Source", turnCount: completed ? 1 : 0, updatedAt: expect.any(Number) }] })
     const fork = await call("desktop/session/manage", { sessionId: "source", action: "fork" })
     if (!completed) {
       expect(isRpcSuccess(fork)).toBe(false)

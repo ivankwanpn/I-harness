@@ -21,30 +21,37 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
-import { createSessionService, createDurableSessionLoader, type SessionService } from '@i-harness/session-executor'
+import { createSessionService, createDurableSessionLoader, createUnmanagedTaskChildHost } from '@i-harness/session-executor'
 import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { createDesktopSubagents } from '../src/session-subagents.ts'
+import { dispatchOwned } from './helpers/native-consumer-fixture.ts'
 
 it('a fresh retained catalog uses bounded real header windows independent of marked child transcript size', async () => {
   const root = await mkdtemp(join(tmpdir(), 'marked-child-catalog-io-'))
   let coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }), sends = 0
   await coordinator.create({ sessionId: 'parent' })
-  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model: controlledModel(async function* () { yield { type: 'text/chunk', text: 'x'.repeat(++sends === 1 ? 65536 : 1_048_576) }; yield { type: 'end' } }) })
-  let catalog: ReturnType<typeof createDesktopSubagents> | undefined
+  const service = createSessionService({ workspace: root, coordinator, prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: 'unmanaged' }), approveAll: true, sessionFor: createDurableSessionLoader(coordinator), model: controlledModel(async function* () { yield { type: 'text/chunk', text: 'x'.repeat(++sends === 1 ? 65536 : 1_048_576) }; yield { type: 'end' } }) })
+  let catalog: ReturnType<typeof createDesktopSubagents> | undefined, cold: ReturnType<typeof createSessionService> | undefined
   try {
     const assembly = await service.assemblyFor('parent')
     for (const name of ['small', 'large']) {
-      const spawned = await assembly.tools.get('spawn_agent')!.execute({ task_name: name, agent_type: 'explore', message: 'An agent requests execution of a tool call. Decide: approve (execute now, never ask the user),\nallow (ask the user first), or deny (never execute).\n<request>x</request>\n<recent_context>x</recent_context>\nOutput STRICT JSON only', background: false }, { sessionId: 'parent' }) as any
+      const spawned = await dispatchOwned(assembly, 'spawn_agent', { task_name: name, agent_type: 'explore', message: 'An agent requests execution of a tool call. Decide: approve (execute now, never ask the user),\nallow (ask the user first), or deny (never execute).\n<request>x</request>\n<recent_context>x</recent_context>\nOutput STRICT JSON only', background: false }) as any
       const entry = assembly.subagentState().agentTable.find(row => row.path === spawned.agent_path)!
       measured.paths.add(join(root, `${entry.sessionId}.jsonl`))
-      await assembly.tools.get('close_agent')!.execute({ target: spawned.agent_path }, { sessionId: 'parent' })
+      await dispatchOwned(assembly, 'close_agent', { target: spawned.agent_path })
     }
     await service.close(); await coordinator.close()
     coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
     if (!coordinator.snapshot) throw new Error('Actual coordinator snapshot capability unavailable')
     const snapshots = vi.spyOn(coordinator as typeof coordinator & { snapshot: NonNullable<typeof coordinator.snapshot> }, 'snapshot'), assemble = vi.fn()
-    const readOnly = { liveAssembly: () => undefined, liveSession: () => undefined, assemblyFor: assemble, onAssembly: () => () => {} } as unknown as SessionService
-    catalog = createDesktopSubagents(coordinator, readOnly)
+    // The catalog is built over the ORIGINAL service for this coordinator; its
+    // live-assembly readers are then substituted so any live fallback fails the
+    // count. A hand-built service shape is not an admissible owner.
+    cold = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: 'unmanaged' }) })
+    vi.spyOn(cold, 'liveAssembly').mockReturnValue(undefined)
+    vi.spyOn(cold, 'liveSession').mockReturnValue(undefined)
+    vi.spyOn(cold, 'assemblyFor').mockImplementation(assemble as never)
+    catalog = createDesktopSubagents(coordinator, cold)
     measured.enabled = true
     const result = await catalog.list('parent')
     measured.enabled = false
@@ -58,5 +65,5 @@ it('a fresh retained catalog uses bounded real header windows independent of mar
     }
     expect(measured.fullReads).toEqual([]); expect(measured.artifactReads).toBe(0)
     expect(assemble).not.toHaveBeenCalled(); expect(sends).toBe(2)
-  } finally { measured.enabled = false; measured.paths.clear(); measured.windows = []; measured.fullReads = []; measured.artifactReads = 0; await catalog?.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+  } finally { measured.enabled = false; measured.paths.clear(); measured.windows = []; measured.fullReads = []; measured.artifactReads = 0; await catalog?.close(); await cold?.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })

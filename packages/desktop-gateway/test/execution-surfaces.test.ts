@@ -37,8 +37,11 @@ it.each(["tool", "code"] as const)("restores actual registered job_output snapsh
     let complete = false
     const source = action.registerSettlementSource(async () => { if (!complete) throw new Error('Fixture result requires recovery') })
     try {
-      const seq = committedFactSeqs(await action.facts.tools.call({ type: 'tool/call', callId, name, args }))[0]
-      const prepared = await target.tools.prepare({ name, args }, undefined, { sessionId, session: target.session, callId, callEventSeq: seq, settlementSource: source })
+      // This is the host's trusted manual dispatch, not a model-issued call:
+      // the tool/call fact is committed, but no model call position is claimed,
+      // so the Shell's model-only Exec delivery issuer is not required.
+      committedFactSeqs(await action.facts.tools.call({ type: 'tool/call', callId, name, args }))
+      const prepared = await target.tools.prepare({ name, args }, undefined, { sessionId, session: target.session, callId, settlementSource: source })
       const output = await target.tools.dispatch(prepared)
       const result = await target.tools.finalize(prepared, output)
       committedFactSeqs(await source.tools.captureResult({ type: 'tool/result', callId, name, ...(result.envelope ? { envelope: result.envelope } : { output: result.output }) }).admit())

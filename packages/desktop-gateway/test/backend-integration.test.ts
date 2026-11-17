@@ -26,9 +26,12 @@ it("cold execution/process inspection refuses a recovering-only backend and leav
   const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), modelPolicy: "test-mock" })
   try {
     const execution = createDesktopExecution(recoveringOnly, service), processes = createAgentProcesses(recoveringOnly, service)
-    const results = await Promise.allSettled([execution.read("interrupted"), processes.read("interrupted"), processes.jobOutput("interrupted", "saved-shell"), processes.terminalOutput("interrupted", "saved-pty")])
+    const [executionRead, processRead, jobOutput, terminalOutput] = await Promise.allSettled([execution.read("interrupted"), processes.read("interrupted"), processes.jobOutput("interrupted", "saved-shell"), processes.terminalOutput("interrupted", "saved-pty")])
     expect(await readFile(file, "utf8")).toBe(before)
-    for (const result of results) { expect(result.status).toBe("rejected"); if (result.status === "rejected") expect(String(result.reason)).toMatch(/read.only snapshot/i) }
+    for (const result of [executionRead, processRead, terminalOutput]) { expect(result.status).toBe("rejected"); if (result.status === "rejected") expect(String(result.reason)).toMatch(/read.only snapshot/i) }
+    // jobOutput classifies every refusal as owner-unavailable (ef4987c6); the
+    // snapshot refusal is its wrapped cause rather than the surfaced message.
+    expect(jobOutput.status).toBe("rejected"); if (jobOutput.status === "rejected") expect(String(jobOutput.reason)).toMatch(/Job output unavailable for this owner/i)
     expect(service.hasAssembly("interrupted")).toBe(false)
   } finally { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
@@ -101,7 +104,9 @@ it("derives policy evidence from actual Plan, registry, roles, membership, Hook 
     const script = identity()!
     createHookTrustStore(grantPath).revoke(scriptHash); expect(identity()?.revision).not.toBe(script.revision)
     const grants = identity()!
-    assembly.tools.unregister("read"); expect(identity()?.revision).not.toBe(grants.revision)
+    // The live tool surface is not hashed into policy identity (D-05, 018ed36d):
+    // the prepared call's original binding validates registration instead.
+    assembly.tools.unregister("read"); expect(identity()?.revision).toBe(grants.revision)
     await rm(scriptPath); expect(identity()).toBeUndefined()
   } finally { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })

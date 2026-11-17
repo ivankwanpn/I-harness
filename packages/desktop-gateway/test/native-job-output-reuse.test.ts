@@ -20,8 +20,11 @@ it('binds native continuation to the original service instance even when ids, so
     let complete = false
     const source = action.registerSettlementSource(async () => { if (!complete) throw new Error('Original fixture result requires recovery') })
     try {
-      const callEventSeq = committedFactSeqs(await action.facts.tools.call({ type: 'tool/call', callId, name, args }))[0]
-      const prepared = await assembly.tools.prepare({ name, args }, undefined, { sessionId: 's', session: assembly.session, callId, callEventSeq, settlementSource: source })
+      // Trusted manual host dispatch: the tool/call fact is recorded but no
+      // model call position is claimed, so the Shell's model-only Exec delivery
+      // issuer is not required (a model-issued call would carry callEventSeq).
+      committedFactSeqs(await action.facts.tools.call({ type: 'tool/call', callId, name, args }))
+      const prepared = await assembly.tools.prepare({ name, args }, undefined, { sessionId: 's', session: assembly.session, callId, settlementSource: source })
       const output = await assembly.tools.dispatch(prepared), result = await assembly.tools.finalize(prepared, output)
       if (!result.envelope || result.program?.kind !== 'value') throw new Error('Expected genuine finalized tool value')
       committedFactSeqs(await source.tools.captureResult({ type: 'tool/result', callId, name, envelope: result.envelope }).admit())
