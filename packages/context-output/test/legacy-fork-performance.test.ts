@@ -203,7 +203,13 @@ it.each([
     try { await probe.run('teardown', 'close', () => f.close()) }
     finally { await receipt(name, { distinct, observations: distinct * observations, assertionMs }) }
   }
-}, 120000)
+}, 300000)
+// Measured actual101 at HEAD: fixture 8.9s, transfer owner 148.5s (funding
+// 110.5s across 146,716 original-source current witnesses, owner application
+// 21.3s, final proof 7.8s, graph publication 4.9s), reopen 5.3s, expiry path
+// 19.3s, close 0.001s = 173.6s under the full-suite load; the previous 120s
+// budget interrupted the test mid-transfer and let its late I/O corrupt the
+// next case's probes. 300s keeps 1.7x headroom over the measured allocation.
 
 // A per-ref full scan breaks these controls when E grows at fixed R. Clock
 // boundaries use genuine captures and commitments; no ref metadata is rewritten.
@@ -279,7 +285,18 @@ it.each([
     expect.soft(total('wholeAuthorityPreflights')).toBe(1)
     expect.soft(total('graphWalks')).toBe(2 * roots)
     expect.soft(total('graphRows')).toBe(2 * distinct * observations * roots)
-    expect(total('authorityNamespaces')).toBe(2)
+    // The expiry sweep itself streams the original authority once after one
+    // preflight: two namespace enumerations in the 'expiry-sweep' phase for the
+    // capture-triggered variants. The capture that triggers the sweep is one
+    // service operation, and its idle cleanup retains the complete passive
+    // original authority identity (one passive inventory): that inventory
+    // enumerates the namespace for roots inventory and again for its expiry
+    // rows, so the total is a constant 4 at every E/R/roots combination below.
+    // A per-reference full scan would instead scale with E: the preflight stays
+    // 1, graphWalks/graphRows stay fixed, and slot.sync stays exactly expired.
+    const sweep = measured.counts['streamed-expiry/expiry-sweep']
+    if (!name.includes('full-budget')) { expect(sweep).toBeDefined(); expect(sweep!.authorityNamespaces).toBe(2); expect(sweep!.wholeAuthorityPreflights).toBe(1) }
+    expect(total('authorityNamespaces')).toBe(4)
     expect(total('slot.sync')).toBe(expired)
     expect(Object.entries(measured.counts).filter(([phase]) => phase.endsWith('/expiry-sweep')).every(([, counts]) => !counts.inventories && !counts.sqlitePageAdmissions)).toBe(true)
     expect(f.sourceCalls()).toBe(sourceCalls)

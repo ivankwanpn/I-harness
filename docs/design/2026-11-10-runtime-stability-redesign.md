@@ -651,6 +651,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
   - `desktop-gateway/src/context-runtime.ts`：新增 `openSelectedDocument()`，對 completed-transition cleanup debt 先 retry 一次並從已結算記錄重開一次；持續失敗則把 exact cleanup owner 存入 `selectedCleanupDebt`，由 `runtime.close()` 在 coordinator close 前 drain。新增 `retainSelectedCleanup()`；既有 binding debt 語意不變。
 - 測試：新增「reopens the selected source after retrying its transient original Task lease debt」回歸（覆蓋 retry→reopen 分支），原有 5 案斷言未動。
 - 驗證：selected-native-source **4/4**、selected-native-source-debt **6/6**（合計 10/10）；desktop-gateway/session-persistence typecheck 0；session-persistence 相關回歸 203/203、jsonl task-transition 127（112 pass/15 env skip）、current-unfinished-catalog 19/19。
+#### 第一百零一批：perf 群組上限與 authority namespace 基線
+
+- **actual101**：P3 的 STACK_TRACE_ERROR 實為 120s test timeout，不是 native probe 斷言。實測 173.6s＝fixture 8.9s＋transfer owner 148.5s（funding 110.5s over 146,716 original-source current witnesses、owner application 21.3s、final proof 7.8s、graph publication 4.9s）＋reopen 5.3s＋expiry 19.3s＋close 0.001s；成本隨 distinct ref 線性（~1.5s/ref）。per-test 預算 120s→300s，測量寫入檔內註解。
+- **repeated101** 的 `activeIO -1` 是 actual101 超時後仍在背景 transfer 造成的 probe 汙染；預算修正後兩案 receipts 皆 `activeIO=0 activeHandles=0`。
+- **expiry `authorityNamespaces` 2→4**：sweep 本身仍是 `validateLegacyAuthority`＋一次 streaming `legacyAuthorityRows`＝2；額外 2 次來自 `52171b6d` 加入的 idle-lifetime passive inventory（roots inventory＋expiry rows 各列舉一次 namespace），發生在測試撰寫之後。保留 per-ref scan 控制：先斷言 `sweep.authorityNamespaces=2`、`sweep.wholeAuthorityPreflights=1`，再斷言 total=4；`graphWalks/graphRows/slot.sync` 不變。
+- **10001 observations**：實測 fixture 13.0s、transfer 582.2s、post-deletion rejection 53.7s、close 0.01s＝649s；loaded run transfer 708.7s。per-test 預算 300s→1800000ms（比照 legacy-fork-scale 慣例，2.3× headroom），phase timings 寫入既存 counters log；未加入 qualification cache（僅省 ≤60s、且會弱化 per-observation canonical verification）。
+- 驗證：兩檔 **14/14**（performance 13/13、observation-scale 1/1），root 以 600s CLI 預算重跑 exit 0；context-output typecheck 0。產品 src 未改。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
