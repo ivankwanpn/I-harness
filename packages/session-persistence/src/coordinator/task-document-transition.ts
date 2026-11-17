@@ -93,8 +93,9 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
     if (Reflect.ownKeys(document).length !== 3 || document.formatVersion !== 2 || !Array.isArray(document.tasks) || document.tasks.length || !Array.isArray(document.notifications) || document.notifications.length) throw new TypeError('Invalid empty task document')
     return { value, bytes: Buffer.from(JSON.stringify(value) + '\n') }
   }
+  type TransitionCleanupOwner = { retry(): Promise<'committed' | 'not-committed'>; retryCleanup?(): Promise<void> }
   const records = new Map<string, { execute(): Promise<void>; close(): Promise<void>; retryClose(): Promise<void>; finite(): Promise<void> }>()
-  const failures = new WeakMap<object, { retry(): Promise<'committed' | 'not-committed'> }>()
+  const failures = new WeakMap<object, TransitionCleanupOwner>()
   const conflict = () => { throw new Error('TASK_TRANSITION_CONFLICT') }
   function begin<T>(id: string, meta: SessionMeta | undefined, recover?: (beforeRepair: (version:number, events:readonly SessionEventView[], seedLength:number) => Promise<void>, markRepair: () => void) => Promise<T>, beforeQueue?: () => Promise<void>, finalize?: (proof: HistoryProof) => Promise<T>, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>): Promise<T | void> {
     if (records.has(id)) return Promise.reject(new Error('TASK_TRANSITION_RETRY_REQUIRED'))
@@ -248,11 +249,24 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
         : (cause as { name?: unknown } | null | undefined)?.name === 'SessionFormatUnsupportedError' ? 'SESSION_FORMAT_UNSUPPORTED' : undefined
       if (code !== undefined) Object.assign(failure, { code })
       if (cleanupFailed) Object.assign(failure, { cleanupCause })
-      const handle = Object.freeze({ async retry() {
-        if (this !== handle) throw new TypeError('Invalid transition retry receiver')
-        if (!closed) { if (revoked) await retryClose(); else { await execute(); await close() } }
-        return (recover ? (!header || headerResult?.kind === 'committed') && (!after || postDone) && (confirmed || result?.kind === 'committed') : headerResult?.kind === 'committed') ? 'committed' as const : 'not-committed' as const
-      } })
+      // A cleanup-phase failure is retained after the operation itself
+      // completed. Its owner can retry that same original cleanup without
+      // reissuing the operation, so a caller which only needs the debt settled
+      // (for example before a coordinator close) never repeats execute work.
+      const cleanupOwner: { retry(): Promise<'committed' | 'not-committed'>; retryCleanup?(): Promise<void> } = {
+        async retry() {
+          if (this !== handle) throw new TypeError('Invalid transition retry receiver')
+          if (!closed) { if (revoked) await retryClose(); else { await execute(); await close() } }
+          return (recover ? (!header || headerResult?.kind === 'committed') && (!after || postDone) && (confirmed || result?.kind === 'committed') : headerResult?.kind === 'committed') ? 'committed' as const : 'not-committed' as const
+        },
+        ...(beforeCleanup ? {} : {
+          async retryCleanup() {
+            if (this !== handle) throw new TypeError('Invalid transition cleanup receiver')
+            if (!closed) await retryClose()
+          },
+        }),
+      }
+      const handle = Object.freeze(cleanupOwner)
       failures.set(failure, handle); throw failure
     }
     const outcome = (async () => {

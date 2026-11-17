@@ -15,6 +15,13 @@ it('retains failed original binding cleanup from a partial native acquisition un
  try{await expect(runtime.acquireSelectedSourceObservation('source')).rejects.toThrow();expect(failures).toBe(0);expect(()=>runtime.acquireSelectedSourceObservation('source')).toThrow('cleanup unresolved');await runtime.close();expect(attempts).toBeGreaterThanOrEqual(3)}finally{vi.mocked(acquireSessionLock).mockImplementation(native.acquireSessionLock);await runtime.close();await projects.close();await coordinator.close()}
 })
 
+it('reopens the selected source after retrying its transient original Task lease debt',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'native-source-transient-')),workspace=join(root,'w');await mkdir(workspace);const coordinator=createSessionCoordinator(createJsonlBackend(join(root,'sessions')),{lock:{enabled:true}});await coordinator.create({sessionId:'source'});const projects=createProjectScopeBroker(coordinator,workspace,async()=>{throw Error('source denied')}),runtime=await createNativeContextRuntime({workspace,storageRoot:join(root,'storage'),coordinator,projectFor:projects.nativeScopeFor,resultReadScopeFor:projects.resultReadScopeFor,withBindingObservation:projects.withBindingObservation,retainSelectedProjectRead:projects.retainSelectedBindingRead,contextConfig:{enabled:true}})
+ const native=await vi.importActual<typeof import('@i-harness/fs-lock')>('@i-harness/fs-lock');let failures=1,attempts=0
+ vi.mocked(acquireSessionLock).mockImplementation(async options=>{const lock=await native.acquireSessionLock(options);return {get held(){return lock.held},async release(){attempts++;if(failures){failures--;throw Error('original lock debt')}await lock.release()}}})
+ try{await expect(runtime.acquireSelectedSourceObservation('source')).rejects.toThrow('source denied');expect(failures).toBe(0);await runtime.close();expect(attempts).toBeGreaterThanOrEqual(3)}finally{vi.mocked(acquireSessionLock).mockImplementation(native.acquireSessionLock);await runtime.close();await projects.close();await coordinator.close()}
+})
+
 it('refuses native self-close from real visibility before poisoning acquisition or later uses',async()=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'native-self-close-')),workspace=join(root,'w');await mkdir(workspace);const coordinator=createSessionCoordinator(createJsonlBackend(join(root,'sessions')),{lock:{enabled:true}});await coordinator.create({sessionId:'source'})
  let runtime!:Awaited<ReturnType<typeof createNativeContextRuntime>>,first=true,self:unknown

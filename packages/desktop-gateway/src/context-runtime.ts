@@ -11,6 +11,7 @@ import {createProcessAwareResultService} from '@i-harness/session-executor/inter
 import {lookupProcessReadContext} from '@i-harness/session-persistence/internal/process-read-context'
 import {originalResultOrderingFor} from '@i-harness/session-persistence/internal/result-ordering'
 import {originalDeletionPreparationAvailable} from '@i-harness/session-persistence/internal/deletion-preparation'
+import {taskDocumentTransitionCleanupFor} from '@i-harness/session-persistence/internal/task-document-operations'
 import {createNativeCodeSourceReader,type NativeReferenceSource} from './context-source-reader.ts'
 import {captureBootstrapProject,type BootstrapProjectCapture,type BootstrapProjectPreparation} from './bootstrap-project.ts'
 import {captureTaskChildProject,type TaskChildProjectCapture} from './bootstrap-project.ts'
@@ -181,7 +182,38 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
   const contextOutput=bridge.service
   const selectedSources=new Set<{close():Promise<void>;revoke():void}>()
   const selectedAcquisitions=new Set<Promise<unknown>>()
-  const selectedCleanupDebt=new Set<{retry():Promise<void>}>()
+  const selectedCleanupDebt=new Set<{retry():Promise<unknown>}>()
+  // One retained cleanup owner per unresolved acquisition resource. Close
+  // retries the exact original cleanup (never a synthetic close) and only
+  // drops the debt after that retry succeeds.
+  function retainSelectedCleanup<T extends {retry():Promise<unknown>}>(cleanup:T,after?:()=>void){
+    const debt={async retry(){await cleanup.retry();after?.();selectedCleanupDebt.delete(debt)}}
+    selectedCleanupDebt.add(debt);return debt
+  }
+  async function openSelectedDocument(sessionId:string){
+    const coordinator=options.coordinator as SessionCoordinator
+    try{return await coordinator.openManagedDocument(sessionId)}
+    catch(error){
+      // A Task transition which already completed its load can still owe only
+      // its original Task document lease release. Its retained cleanup owner
+      // retries that cleanup without reissuing the operation; when the retry
+      // still fails, the debt stays retained for runtime close, which settles
+      // it before the coordinator's own close.
+      const cleanup=taskDocumentTransitionCleanupFor(coordinator,error)
+      if(!cleanup?.retryCleanup)throw error
+      try{await cleanup.retryCleanup()}
+      catch{retainSelectedCleanup(cleanup);throw error}
+      // The transition record is settled now, so the open may be reissued once
+      // from a fresh record instead of reporting the settled cleanup as the
+      // acquisition's failure.
+      try{return await coordinator.openManagedDocument(sessionId)}
+      catch(reopened){
+        const reopenedCleanup=taskDocumentTransitionCleanupFor(coordinator,reopened)
+        if(reopenedCleanup?.retryCleanup)retainSelectedCleanup(reopenedCleanup)
+        throw reopened
+      }
+    }
+  }
   const selectedContext=new AsyncLocalStorage<readonly {active:boolean}[]>()
   async function selectedWork<T>(work:()=>Promise<T>):Promise<T>{const entry={active:true};try{return await selectedContext.run([...(selectedContext.getStore()??[]),entry],work)}finally{entry.active=false}}
   let closeFlight:Promise<void>|undefined,disposed=false,cancelled=false,coreClosed=false,codeClosed=false
@@ -194,7 +226,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     const coordinator=options.coordinator as SessionCoordinator
     if(!hasSelectedSource(coordinator))throw Object.assign(new Error('Selected results are unavailable on this session store'),{code:'SELECTED_RESULTS_UNSUPPORTED'})
     const original=selectedSourceFor(coordinator)
-    await coordinator.flush(sessionId);assertAvailable();if(selectedCleanupDebt.size)throw Error('Selected source cleanup unresolved');const document=await coordinator.openManagedDocument(sessionId);assertAvailable();if(selectedCleanupDebt.size)throw Error('Selected source cleanup unresolved')
+    await coordinator.flush(sessionId);assertAvailable();if(selectedCleanupDebt.size)throw Error('Selected source cleanup unresolved');const document=await openSelectedDocument(sessionId);assertAvailable();if(selectedCleanupDebt.size)throw Error('Selected source cleanup unresolved')
     let binding:Awaited<ReturnType<typeof original.acquire>>|undefined,revoked=false
     const witness=original.retain(document,()=>{revoked=true;binding?.revoke()})
     const current=()=>{assertAvailable();if(selectedCleanupDebt.size)throw Error('Selected source cleanup unresolved');if(revoked)throw Error('Selected source revoked');witness.assertCurrent();binding?.assertCurrent()}
@@ -218,7 +250,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       binding?.revoke();let failure=error
       if(binding)try{await binding.release()}catch(cleanup){failure=cleanup}
       const originalCleanup=original.cleanupForError(failure)
-      if(originalCleanup){const debt={async retry(){await originalCleanup.retry();witness.unsubscribe();selectedCleanupDebt.delete(debt)}};selectedCleanupDebt.add(debt)}
+      if(originalCleanup)retainSelectedCleanup(originalCleanup,()=>witness.unsubscribe())
       else witness.unsubscribe()
       throw failure
     }

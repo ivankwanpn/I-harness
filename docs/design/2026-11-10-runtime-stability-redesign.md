@@ -643,6 +643,14 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
   - `legacy-funding-batch` 115/115（w1 1050.9s、w2 1080.9s）、`legacy-fork-scale` 2/2（約 1795s 兩模式）、`legacy-fork-performance` 4/13→5/13（w1/w2；約 590s）、`legacy-fork-observation-scale` 0/1（300s timeout 兩模式）。
   - 主要剩餘：`actual101` timeout、`expiry-*` 的 `authorityNamespaces` 期望 2 實測 4、10001 observations 300s 未能完成；皆非 worker 數差異造成，屬真實 native work/上限問題。
 - **runner 修正**：`scripts/verify-all.mjs` step1 的 `pnpm -r test` 加上 `--testTimeout=120000 --hookTimeout=120000`。原因是 step1 原本未帶 timeout，多數 package 用 Vitest 預設 5s／config 30s，重負載檔在 maxWorkers=2 下產生 58 個假 timeout；direct 執行加預算後 executor 1405/1405、指名案例全綠。下一步用新 runner 重跑完整 verify:all，再逐檔處理非 timeout 失敗與上述 debt/perf 缺口。
+#### 第一百批：selected source Task lease debt 重試
+
+- 根因：`coordinator.openManagedDocument()` 會取得真正 `task-<id>` task-document-transition lease（loadOwned→transitions.existing）；mock 注入的兩次 lock release 失敗被此 lease 的 cleanup phase 吃掉。transition 的 memoized rejected cleanup 被 `coordinator.close()` 永久 re-await，open 失敗後 selected binding 路徑從未走到，故 `failures` 只消耗 1 次，coordinator close 永遠 unresolved。
+- 產品修正：
+  - `task-document-transition.ts`：cleanup-phase 失敗的 retained owner 新增 `retryCleanup()`，只重試同一 cleanup（`retryClose()`），不重發 `execute()`；execute-phase 語意不變。
+  - `desktop-gateway/src/context-runtime.ts`：新增 `openSelectedDocument()`，對 completed-transition cleanup debt 先 retry 一次並從已結算記錄重開一次；持續失敗則把 exact cleanup owner 存入 `selectedCleanupDebt`，由 `runtime.close()` 在 coordinator close 前 drain。新增 `retainSelectedCleanup()`；既有 binding debt 語意不變。
+- 測試：新增「reopens the selected source after retrying its transient original Task lease debt」回歸（覆蓋 retry→reopen 分支），原有 5 案斷言未動。
+- 驗證：selected-native-source **4/4**、selected-native-source-debt **6/6**（合計 10/10）；desktop-gateway/session-persistence typecheck 0；session-persistence 相關回歸 203/203、jsonl task-transition 127（112 pass/15 env skip）、current-unfinished-catalog 19/19。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
