@@ -616,6 +616,22 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 
 - 第二次完整 executor（1405 tests）仍只剩 `project-context` 一個 full-suite 失敗：`waitFor` 30s 仍超時；單檔與鄰近 5 檔序列重跑皆綠，判定為整個 worker 進程累積負載下的延遲。
 - `waitFor` 提高到 90s（仍在 per-test 120s 內）；單檔 10/10 綠。接著以 `verify:all` 作 P3 權威完整回歸。
+#### 第九十八批：fixed-HEAD verify:all 基線（112 failures）
+
+在 HEAD `7954a470` 執行 `node scripts/verify-all.mjs`（完整日誌：`%TEMP%\ih-test-rewrite-handoff\p3-verify-all1.log`）：
+
+- 1/7 suite：82／82 projects reported；**16,341 passed／104 skipped／112 failed**；exit 1。
+- 2/7 population：82/82。
+- 3/7 typecheck：exit 0。
+- 4/7 e2e：exit 0（10 files）。
+- 5/7 reachability gate：exit 0（374 rows vs baseline 337）。
+- 6/7 boundaries：exit 0。
+- 7/7 compiled gateway／native runner：exit 0。
+- 相對上一個完整基線 cf92d076（16,220 passed／215 failed）：**+121 passed、−103 failed**；executor 61 個歷史失敗已全清。
+- 112 個 failure 的分佈：apps/cli 2、acp 2、context-output 10、desktop 1、desktop-gateway 57、session-executor 38、session-persistence 2。
+- 依 log 解析（`p3-fail-by-file.json`）：110 個可定位至 63 檔；其中 **58 個是 `Test timed out in 30000ms`**、52 個非 timeout。
+- timeout 主因：verify:all 的 step1 未帶 `--testTimeout`，多數 package 用 Vitest 預設 30s；重負載檔在 maxWorkers=2 下超時。非 timeout 需逐檔定向重跑，分辨 fixture/product 與前一 timeout 的 cascade。
+- session-executor 38 failures 全部是 timeout（服務/retained/instruction 類重檔），與 maxWorkers=1 的 1405/1405 形成負載敏感對照；下一步依 P3 計畫跑 1-worker vs 2-worker 比較及 perf 群組，再做最小修復。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
