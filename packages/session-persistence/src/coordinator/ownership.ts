@@ -3,7 +3,7 @@ import { acquireSessionLock, lockPathFor, type SessionLock } from "@i-harness/fs
 import { originalHeldStateFor } from '@i-harness/fs-lock/internal/held-state'
 import { createArtifactPathOwner } from '@i-harness/fs-lock/internal/artifact-path'
 import { basename, dirname, resolve } from 'node:path'
-import { assertArtifactCurrent, artifactPathsFor, artifactScope, createArtifactCurrentGuard, isOriginalCanonicalExclusion, withArtifactCurrentChecks, withImmediateArtifactCurrentChecks, type ArtifactCapture, type OriginalArtifactExclusion } from './artifact-path-association.ts'
+import { assertArtifactCurrent, artifactPathsFor, artifactScope, createArtifactCurrentGuard, invalidateArtifactCurrentnessVerification, isOriginalCanonicalExclusion, withArtifactCurrentChecks, withArtifactCurrentnessOperation, withImmediateArtifactCurrentChecks, type ArtifactCapture, type OriginalArtifactExclusion } from './artifact-path-association.ts'
 import type { CoordinatorOptions, PersistenceBackend } from "./types.ts"
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { types as utilTypes } from 'node:util'
@@ -349,12 +349,15 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     sessionOperations.set(operationKey, gate.promise)
     await previous
     const context: SessionContext = { id: sessionId, active: true, parent: sessionContext.getStore() }
-    try { return await sessionContext.run(context, operation) }
+    try { return await withArtifactCurrentnessOperation(operationKey, () => sessionContext.run(context, operation)) }
     finally { context.active = false; gate.resolve(); if (sessionOperations.get(operationKey) === gate.promise) sessionOperations.delete(operationKey) }
   }
   async function dispose(id: string, slot: Slot): Promise<void> {
     if (slot.live.size || slot.claims.size) return
     if (slot.releasing) return slot.releasing
+    // Releasing native ownership is a close boundary: retained proof cannot
+    // survive it.
+    invalidateArtifactCurrentnessVerification()
     const flight = (async () => {
       if (slot.acquiring) await slot.acquiring
       if (slot.live.size || slot.claims.size) return
@@ -508,6 +511,9 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     documentLeaseDebt.delete(record)
   }
   async function acquireDocumentLease(key: string, retain?: (cleanup: OwnershipCleanup) => void) {
+    // Acquiring the document write capability is a mutation boundary: the next
+    // accessor re-verifies the original paths before it may rely on them.
+    invalidateArtifactCurrentnessVerification()
     if (!artifacts) return acquireLease('doc:' + key, retain)
     const record: DocumentLeaseDebt = { acquisitions: [] }, done = Promise.withResolvers<void>()
     let finished = false

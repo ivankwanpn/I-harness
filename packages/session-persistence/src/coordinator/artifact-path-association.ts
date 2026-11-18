@@ -1,6 +1,6 @@
 import { types } from 'node:util'
 import type { PersistenceBackend } from './types.ts'
-import {createArtifactPathOwner,checkOriginalArtifactPaths,type ArtifactPathCapture} from '@i-harness/fs-lock/internal/artifact-path'
+import {createArtifactPathOwner,checkOriginalArtifactPaths,withOriginalArtifactVerificationScope,invalidateOriginalArtifactVerification,type ArtifactPathCapture} from '@i-harness/fs-lock/internal/artifact-path'
 import {isOriginalCanonicalPathOwner} from './canonical-path-resolution.ts'
 import {associateOriginalCurrentnessGuard,associateOriginalCurrentnessReader,associateOriginalCurrentnessFactory,type OriginalCurrentnessExecutor,type OriginalCurrentnessDescriptorRecipe} from '../../../core-session/src/managed/currentness-guards.ts'
 export interface OriginalArtifactPaths {root():string;session(id:string):string;document(key:string):string;taskForParent(id:string):string;prepareRoot():Promise<void>;prepareDocumentParents(key:string):Promise<void>;assertOriginal():void}
@@ -56,18 +56,32 @@ export function assertHeldWithArtifactGuard(held: () => void, guard: Function, r
   if (pureGuards.has(guard)) withArtifactCurrentChecks(run)
   else withImmediateArtifactCurrentChecks(run)
 }
+// A guarded coordinator operation may reuse an already proven original identity
+// for the same target and expected evidence. Only the ownership layer opens such
+// a scope; every opaque callback boundary, failed verification, write-capability
+// acquisition and close invalidates it, and the fs-lock owner still compares the
+// capture's frozen expected evidence before returning.
+export function withArtifactCurrentnessOperation<T>(key: string, operation: () => T): T { return withOriginalArtifactVerificationScope(key, operation) }
+export function invalidateArtifactCurrentnessVerification(): void { invalidateOriginalArtifactVerification() }
 function flushArtifactChecks(work: Map<ArtifactPathCapture, ArtifactAssertion>): void {
-  for (const {capture, method} of work.values()) {
-    if(immutableCaptureMethods.get(capture)!==method){const descriptor = Object.getOwnPropertyDescriptor(capture, 'assertCurrent')
-    if (!descriptor || !('value' in descriptor) || descriptor.value !== method) throw new TypeError('Changed original artifact assertion')}
+  try {
+    for (const {capture, method} of work.values()) {
+      if(immutableCaptureMethods.get(capture)!==method){const descriptor = Object.getOwnPropertyDescriptor(capture, 'assertCurrent')
+      if (!descriptor || !('value' in descriptor) || descriptor.value !== method) throw new TypeError('Changed original artifact assertion')}
+    }
+    checkOriginalArtifactPaths([...work.values()])
+  } catch (failure) {
+    // An observed change retires every operation-scoped proof.
+    invalidateOriginalArtifactVerification()
+    throw failure
   }
-  checkOriginalArtifactPaths([...work.values()])
 }
 export function withImmediateArtifactCurrentChecks(check: () => void): void {
+  invalidateOriginalArtifactVerification()
   const outer = assertionWork
   assertionWork = undefined
   try { if (outer) { flushArtifactChecks(outer); outer.clear() }; check() }
-  finally { assertionWork = outer }
+  finally { assertionWork = outer; invalidateOriginalArtifactVerification() }
 }
 export function assertArtifactCurrent(capture: ArtifactPathCapture): void {
   const immutable=immutableCaptureMethods.get(capture),descriptor=immutable?undefined:Object.getOwnPropertyDescriptor(capture, 'assertCurrent')
@@ -130,3 +144,5 @@ export function artifactScope(original: OriginalArtifactExclusion | undefined, i
     },
   }
 }
+
+

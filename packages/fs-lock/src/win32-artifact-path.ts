@@ -1,5 +1,6 @@
 import { win32 as path } from 'node:path'
 import { types } from 'node:util'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { win32ArtifactApi, type Win32ArtifactApi } from './win32-artifact-api.ts'
 
 type Directory = Readonly<{ volume: string; id: string; sensitive: boolean; final: string }>
@@ -12,6 +13,31 @@ const nativeChecks = new WeakMap<object, { method: () => void; retire(): void }>
 type Sample = { value: Directory; verify(): void }
 type Samples = [Map<string, Sample>, Map<string, Sample>]
 let validationSamples: Map<Win32ArtifactApi, Samples> | undefined
+/**
+ * Verification cache lifetime. A guarded coordinator operation is the only
+ * interval in which an already proven directory identity may be reused: the
+ * operation is serialized per session and the ownership layer that enters this
+ * scope holds the session's exclusive claim. Every accessor still checks the
+ * generation counter and the capture's own frozen expected evidence; entering
+ * an opaque callback, settling resources, a failed verification or ending the
+ * operation invalidates all entries. Nothing is retained outside the scope.
+ */
+const verificationScopes = new AsyncLocalStorage<Readonly<{ key: string; token: object }>>()
+let verificationGeneration = 0
+export function withOriginalArtifactVerificationScope<T>(key: string, operation: () => T): T {
+  const current = verificationScopes.getStore()
+  if (current && current.key === key) return operation()
+  return verificationScopes.run(Object.freeze({ key, token: Object.freeze({}) }), operation)
+}
+export function invalidateOriginalArtifactVerification(): void { verificationGeneration++ }
+function currentVerificationScope(): Readonly<{ key: string; token: object }> | undefined { return verificationScopes.getStore() }
+function verificationSignature(target: string, snapshot: Snapshot): string {
+  let evidence = ''
+  for (const item of snapshot.evidence) {
+    evidence += `${item.path.length}:${item.path}${item.directory.volume.length}:${item.directory.volume}${item.directory.id.length}:${item.directory.id}${item.directory.sensitive ? 'S' : 'I'}${item.directory.final.length}:${item.directory.final};`
+  }
+  return `${target.length}:${target}|${snapshot.kind}|${snapshot.kind === 'ready' ? snapshot.key : ''}|${evidence}`
+}
 /** Called only by the existing synchronous original-guard flush. Unknown
  * callbacks divide intervals; neither directory samples nor success escape it. */
 export function checkWin32ArtifactPaths(checks: readonly CurrentCheck[]): void {
@@ -82,6 +108,17 @@ function createOwner(root: string, input: Win32ArtifactApi, native: boolean) {
   const api = Object.fromEntries(names.map(name => [name, input[name].bind(input)])) as unknown as Win32ArtifactApi
   const handles = new Set<Handle>()
   let busy = false, boundRoot: Directory | undefined
+  // One owner never reuses another owner's proof. Entries are keyed by the
+  // operation scope token and expire with its generation.
+  const verifiedInScope = new WeakMap<object, Map<string, number>>()
+  function rememberVerification(scope: Readonly<{ key: string; token: object }>, signature: string): void {
+    let cache = verifiedInScope.get(scope.token)
+    if (!cache) { cache = new Map(); verifiedInScope.set(scope.token, cache) }
+    cache.set(signature, verificationGeneration)
+  }
+  function verificationIsCurrent(scope: Readonly<{ key: string; token: object }>, signature: string): boolean {
+    return verifiedInScope.get(scope.token)?.get(signature) === verificationGeneration
+  }
   const nativeError = (operation: string) => new NativeIdentityError(operation, api.getLastError())
   const bool = (result: number, operation: string) => {
     if (!Number.isInteger(result) || result < -0x80000000 || result > 0x7fffffff) throw new Error(`${operation} returned invalid BOOL`)
@@ -269,13 +306,22 @@ function createOwner(root: string, input: Win32ArtifactApi, native: boolean) {
       if (this !== owner) throw new TypeError('Invalid artifact path owner receiver')
       target = absolute(target)
       const original = captureSnapshot(target)
+      const capturedScope = currentVerificationScope()
+      const capturedSignature = capturedScope ? verificationSignature(target, original) : undefined
+      if (capturedScope && capturedSignature !== undefined) rememberVerification(capturedScope, capturedSignature)
       let retired = false
       let result: Win32ArtifactPathCapture
       function assertCurrent(this: Win32ArtifactPathCapture) {
         if (this !== result || retired) throw new Error('Artifact path capture unavailable')
+        // An operation-scoped proof for this exact original identity is still
+        // valid while no invalidation boundary was crossed.
+        const scope = currentVerificationScope()
+        const signature = scope ? verificationSignature(target, original) : undefined
+        if (scope && signature !== undefined && verificationIsCurrent(scope, signature)) return
         try {
           const current = captureSnapshot(target, native && original.kind === 'ready' ? original.key : undefined)
           if (current.kind !== original.kind || !sameEvidence(current.evidence, original.evidence) || original.kind === 'ready' && (current.kind !== 'ready' || original.key !== current.key)) throw new Error('Original artifact path changed')
+          if (scope && signature !== undefined) rememberVerification(scope, signature)
         } catch (cause) { retired = true; throw cause }
       }
       result = original.kind === 'ready'
@@ -289,7 +335,7 @@ function createOwner(root: string, input: Win32ArtifactApi, native: boolean) {
     settleResources() {
       if (this !== owner || busy) throw new TypeError('Artifact identity cleanup reentry')
       busy = true
-      try { settle() } finally { busy = false }
+      try { invalidateOriginalArtifactVerification(); settle() } finally { busy = false }
     },
   })
   return owner

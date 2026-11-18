@@ -720,6 +720,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 真實 recovery defect：`managed-document.finish()` 對每個 reconciled `absent` 都呼叫 staged writer `settleAbsent()`；若 frame 從未發出（backend 回 conflict/unknown，如 JournalPrefixConflict/stale prefix），`settleAbsent` 會拋 `Original verified absence required`，reconcile 永久拒絕、writer 卡在 pending/quarantine。修正：只在 `current.issued` 時 settle absent；未發出者直接丟棄 reservation（`resolveUnissuedConflict` 已證明 absence）。issued-absent 仍 settle；issued-unknown 仍要求再次 reconcile（不靜默丟資料）。
 - 新增 `managed-unknown-write-recovery.test.ts` 4 真實測試（issued-unknown→committed blocked→explicit reconcile、issued-unknown→absent、never-issued failure retry、unissued-conflict staged trap）。
 - 驗證：host-fixture **2/2**；session-persistence 全套件 **1256/1256**（141 files）；typecheck session-persistence/jsonl/desktop-gateway 0。
+#### 第一百零八批：operation-scoped artifact currentness proof
+
+- 根因（實測）：legacy JSONL managed-execution 的每個 guarded accessor 都重驗所有 ancestor 目錄身分；單一 no-tool prompt 7,699 batches／19,946 native assertions、8–9.2s；2 reads 19,071／48,617、~600k Win32 calls。CPU-bound，不是 idle。
+- 修正：`withSessionOperation` 內開啟 operation-scoped verification scope（AsyncLocalStorage token；同 session 巢狀共用、不同 session 分離）。第一次完整 native `captureSnapshot` 的 target+expected evidence proof 可在同一 operation 內重用；key 含 owner、target、完整 frozen expected evidence（kind/ready key/所有 ancestor path/volume/file-id/case-policy/final path）。所有 opaque callback 邊界、write-capability 取得、close/release、failed verification、resource settlement 都 bump generation 使 proof 失效；operation 結束即丟棄，不跨呼叫保留。read/list 的 inode-bound 語意與 fail-closed 不變。
+- 效果（真實 legacy host 量測）：no-tool turn native CreateFileW 29,518→16,342（−45%）、info calls 88,782→49,254、capture 2.52s→1.33–1.42s，wall 6.15/6.32s→5.30/4.61s（A/B −19%）；2-read wall −16%。其餘 8,133 assertions（managed-document observe/JSONL archive read/binding-observation）仍每次 native 驗證。
+- 新測試：`fs-lock/test/artifact-verification-scope.test.ts` 5、`session-persistence/test/artifact-verification-operation.test.ts` 3，覆蓋 scope 重用、跨 operation 不重用、generation invalidation、不同 expected evidence 不得互用。
+- 驗證：session-persistence **1256/1256**、core-session **947/947**、fs-lock 141（6 skip）、typecheck 三 package 0。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
