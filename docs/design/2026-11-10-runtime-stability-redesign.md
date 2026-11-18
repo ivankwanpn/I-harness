@@ -742,6 +742,12 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - **selected-source-holder 15/15**：`7b2b7611` 把 holder work guard 改為 holder-lifetime 後，逃逸的 guard 在 handoff 結束後仍可用，失去 fail-closed。修正：`retainedGuard` 額外要求 `handoffs.getStore()?.active`，合法 holder operation 仍跨 handoff 有效，ambient code 呼叫即 `Selected handoff expired`。20 個 selected-* 測試 115/115。
 - **load 預算**：`apps/cli/fork-bootstrap-wire` 第一案 30s→120s（verify 共享 worker 下 timeout、isolated 綠）；`retained-physical-crash` setup deadline 30s→90s（verify 下 SETUP/cut deadline、isolated 12/12 綠）。
 - 驗證：gateway 60/60、session-persistence 相關 156/156、jsonl 9/9、executor 32/32、typecheck 四 package 0。
+#### 第一百一十一批：repeated60 的 instruction re-observe settle 與 watchdog
+
+- 第二次 recheck 在 42 reads 遇到 `Model-visible input remained unstable during prepared admission`：admission stale budget 耗盡。第三次 recheck 在 58 reads 只因 18 分鐘 watchdog 被截斷（不是 stale）。
+- 修正：instructions manager 的 same-view incomplete snapshot 改為 bounded settle loop：最多 5 次、每次 25ms 後重 prepare 同一 view（不是新 authority），仍不接受 incomplete authority；耗盡才報 admission 的 bounded rebuild。反覆 abort 整個 admission 的來源被移除。
+- `context-summary-growth` repeated60：watchdog 180s→1800s、outer 210s→1950s（實測 58/60 at ~18min；完整 bounded 1250.9s）。
+- 驗證：repeated60 **60/60、9 replacements、cold follow-up complete、1,250.9s**；session-executor typecheck 0。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

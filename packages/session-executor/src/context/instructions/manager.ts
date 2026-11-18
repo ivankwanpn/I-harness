@@ -117,12 +117,16 @@ export function createMainInstructionManager(options: { session?: SessionView; d
       try {
         const values = [{ path: cwdNow(), kind: 'directory' as const }, ...targets]
         let snapshot = await view.service.prepare(values)
-        if (!snapshot.complete || snapshot.reliability !== 'ready') {
-            // A freshly subscribed view can publish an incomplete snapshot while
-            // its own observation subscription settles. Re-observing the same
-            // view (not a new one) rebuilds from the settled watch state; this is
-            // a bounded re-read of the same authority, never an acceptance of
-            // incomplete evidence.
+        // A freshly subscribed view can publish an incomplete snapshot while
+        // its own fs-watch observation settles. Re-observe the SAME view after a
+        // short bounded settle window (not a new view/authority): under load the
+        // observation can need more than one turn to settle, and repeatedly
+        // aborting the whole admission here exhausts the stale budget. Never
+        // accepts an incomplete snapshot as authority; an exhausted window still
+        // reports the admission's bounded rebuild.
+        for (let attempt = 0; (!snapshot.complete || snapshot.reliability !== 'ready') && attempt < 5; attempt++) {
+            signal?.throwIfAborted()
+            await new Promise<void>(resolve => setTimeout(resolve, 25))
             snapshot = await view.service.prepare(values)
         }
         signal?.throwIfAborted()

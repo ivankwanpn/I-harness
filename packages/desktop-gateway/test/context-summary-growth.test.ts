@@ -191,11 +191,12 @@ async function probe(mode: 'repeated60' | 'parallel24', middleFacts = false) {
     try {
       await Promise.race([host!.handleLine(JSON.stringify({ jsonrpc: '2.0', id, method, params })), new Promise<never>((_, reject) => {
         // The 60-read workload is CPU/native-bound on the legacy JSONL store's
-      // artifact-currentness verification: measured 13/60 reads at 183.4s
-      // (~14s/read) after the in-scope coalescing, so the complete bounded turn
-      // needs ~840s. The watchdog stays finite at 1080s and the outer budget at
-      // 1200s (measured extrapolation + setup headroom); it does not hide a hang.
-      timer = setTimeout(() => { watchdog = true; reject(Error(`watchdog: ${method}; wire=${wire.length}; phase=${phase}`)) }, 1_080_000)
+      // artifact-currentness verification: measured 58/60 reads and 9
+      // replacements at the 18-minute mark (~1150s of transfer work) after the
+      // in-scope coalescing and bounded instruction re-observation. The watchdog
+      // stays finite at 1800s and the outer budget at 1950s (measured work +
+      // setup headroom); it does not hide a hang.
+      timer = setTimeout(() => { watchdog = true; reject(Error(`watchdog: ${method}; wire=${wire.length}; phase=${phase}`)) }, 1_800_000)
       })])
     } finally { clearTimeout(timer) }
     const response = frames.find(frame => 'id' in frame && frame.id === id)
@@ -281,6 +282,6 @@ async function probe(mode: 'repeated60' | 'parallel24', middleFacts = false) {
   }
 }
 
-it('continues sixty actual file reads through three committed compactions and a cold follow-up', () => probe('repeated60'), 1_200_000)
+it('continues sixty actual file reads through three committed compactions and a cold follow-up', () => probe('repeated60'), 1_950_000)
 it('completes the original parallel24 shape and a cold follow-up', () => probe('parallel24'), 300000)
 it('preserves all middle facts through the same parallel24 shape and cold follow-up', () => probe('parallel24', true), 300000)
