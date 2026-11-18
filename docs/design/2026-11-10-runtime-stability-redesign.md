@@ -755,6 +755,27 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 驗證：code-mode-model-admission **3/3**、delivery-active-wait＋delivery-receiver **19/19**、required-task-settlement **15/15**；session-persistence 全套件 **1256/1256**。
 - desktop-gateway 新增 `vitest.config.ts`：`fileParallelism:false`（真實 host process/terminal/loopback model/多分鐘 compaction 在同一 package 併跑時讓有限預算與 instruction settle 互競；workspace 已是 concurrency=1）。
 - `legacy-fork-scale` per-test 1,800,000→2,400,000ms（1001-ref 實測 ~1795s，~1.34x headroom）。
+#### 第一百一十三批：P3 完成 — fixed-HEAD verify:all 全綠
+
+在 HEAD `52cf62ff` 執行 `node scripts/verify-all.mjs`（完整日誌：`%TEMP%\ih-test-rewrite-handoff\p3-verify-all5.log`，3.3MB）：
+
+**VERIFY:ALL PASSED**
+
+| 步驟 | 結果 |
+|---|---|
+| 1/7 workspace suite | exit 0 · **16,472 passed / 104 skipped / 0 failed** |
+| 2/7 population | **82 of 82 projects reported** |
+| 3/7 typecheck | exit 0 |
+| 4/7 e2e | exit 0 · 10 files |
+| 5/7 reachability gate | exit 0 · 374 rows（baseline 337） |
+| 6/7 boundaries | exit 0 |
+| 7/7 compiled gateway / native runner | exit 0 |
+
+- 與原始基線 cf92d076（82/82、16,220 passed、104 skipped、**215 failed**、verify:all exit 1）相比：**+252 passed、−215 failed**；最終 0 failed。
+- 與中途基線：112 → 61 → 7 → 0 failures；每次都由 fixed-HEAD 完整 verify:all 量測，非抽樣。
+- P3 指名案例與 perf 群組都已在最終 HEAD 的完整套件中通過：selected-native-source、usage-protocol-aux-host、interaction-resume、current-unfinished-catalog、retention-grants；legacy-funding-batch、legacy-fork-scale（2,400s 預算）、legacy-fork-performance、10,001 observations（1,800s 預算）。
+- 最後一輪修正：dependency archive 競態改 bounded read retry（保留 concurrent-append refusal）；desktop-gateway `fileParallelism:false` 讓真實 host/native/loopback 長測不再互競；context-summary repeated60 以 bounded instruction re-observe + 1,800s watchdog 穩定 60/60。
+- 證據：`p3-verify-all5.log`；最終 commit `52cf62ff`；工作樹乾淨。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
