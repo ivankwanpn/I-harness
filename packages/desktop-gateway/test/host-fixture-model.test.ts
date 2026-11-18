@@ -65,7 +65,7 @@ it('keeps actual owned host terminals on registered loopback origins through a f
     finally { await Promise.all(servers.map(server => { server.closeAllConnections(); return new Promise<void>(resolve => server.close(() => resolve())) })) }
     await rm(root, { recursive: true, force: true })
   }
-}, 15000)
+}, 180000)
 
 it('refuses redirects to another fixture origin before sending a model request there', async () => {
   let redirectedRequests = 0

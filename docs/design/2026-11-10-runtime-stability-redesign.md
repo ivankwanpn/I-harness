@@ -707,6 +707,19 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
   - settings-watch-close：只 hold trust/mcp watcher，instruction-policy watcher 改 pass-through。
 - 產品檔：core-agent managed telemetry/mode producer/generation ordering、session-executor service/managed-assembly/execution-mode、desktop host/session-management。
 - 驗證：14 檔 **57/57**；desktop-gateway/core-agent/session-executor/subagent typecheck 0；selected-native-source/debt＋session-management＋current-unfinished-catalog 回歸 56/56。
+#### 第一百零六批：mutation approval 的 leaf identity（path+type）
+
+- 根因：`filesystemApprovalIdentity` 把 leaf 的 lstat dev/ino 納入 binding；`writeFileAtomic`（temp+rename）每次成功寫入都換 inode（實測 ino 改變、ancestors 不變），所以 approved rule 在重啟後永不匹配，第二次 prepare 等一張不會出現的卡而 hang。
+- 修正：binding 加 scheme `version`：read/list_dir 保持 v1（leaf dev+ino，與 HEAD 逐 byte 相同）；write/edit 為 v2，ancestors 仍 `path+dev+ino+type`，leaf 改 `path+type`（file，write 允許 missing）。refusal 全保留：symlink/junction/hardlink（nlink>1 或 ino=0）/directory/special leaf、`..`、ADS、越界、missing parent、type 改變皆撤銷 identity。read/list 仍 inode-bound（外部替換仍撤銷）。安全性：mutation 本體是 path-based，舊 leaf inode 本來就無授權；reuse 仍要求完全相同 argsDigest/operation/policy/workspace。
+- 測試：新增 `fs/test/approval-identity.test.ts` 6 測試（真實 fs+registry，atomic write 換 inode 後 binding 相等、restart 重評、symlink/hardlink/type refusal、read/list 仍 v1）；`desktop-gateway/approval-rules` 重啟後實際 dispatch 再 prepare；`desktop/trusted-human-integration` 改為新契約（第二次同 submit 無 prompt、撤銷後第三次出現新 pending、deny 拒絕且檔案不變）。
+- 驗證：gateway approval-rules **3/3**、desktop trusted-human **1/1**、fs **119/119**（16 files）；typecheck fs/desktop-gateway/desktop 0。
+
+#### 第一百零七批：未發出 staged conflict 的 recovery 與 host-fixture timeout
+
+- `host-fixture-model` 的「hang」實為測試硬編碼 15s timeout：真實失敗 prompt 後 retry 在 7.8s 內抵達 transport 並 commit，沒有永久 writer wedge。預算改 180s（body 23.6–37.8s，5–7× headroom）。
+- 真實 recovery defect：`managed-document.finish()` 對每個 reconciled `absent` 都呼叫 staged writer `settleAbsent()`；若 frame 從未發出（backend 回 conflict/unknown，如 JournalPrefixConflict/stale prefix），`settleAbsent` 會拋 `Original verified absence required`，reconcile 永久拒絕、writer 卡在 pending/quarantine。修正：只在 `current.issued` 時 settle absent；未發出者直接丟棄 reservation（`resolveUnissuedConflict` 已證明 absence）。issued-absent 仍 settle；issued-unknown 仍要求再次 reconcile（不靜默丟資料）。
+- 新增 `managed-unknown-write-recovery.test.ts` 4 真實測試（issued-unknown→committed blocked→explicit reconcile、issued-unknown→absent、never-issued failure retry、unissued-conflict staged trap）。
+- 驗證：host-fixture **2/2**；session-persistence 全套件 **1256/1256**（141 files）；typecheck session-persistence/jsonl/desktop-gateway 0。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

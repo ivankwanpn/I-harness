@@ -315,7 +315,13 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
         if (outcome.kind === 'unknown' || outcome.kind === 'conflict')
             failQueued();
         else {
-            if(current.staged){if(outcome.kind==='absent')current.staged.settleAbsent({kind:'absent',key:outcome.key});else if(!current.issued)current.staged.discardUnissued()}
+            // A verified absent frame settles its issued staged write. A frame that
+            // was never issued owns no issued reservation: reconciliation of its
+            // unresolved conflict/unknown (resolveUnissuedConflict) proves absence,
+            // so discard the staged reservation instead of requiring an issued
+            // batch. Leaving it would throw here and trap the writer in quarantine
+            // with no explicit recovery path.
+            if(current.staged){if(outcome.kind==='absent'&&current.issued)current.staged.settleAbsent({kind:'absent',key:outcome.key});else if(!current.issued)current.staged.discardUnissued()}
             if(outcome.kind==='absent')current.resolved='absent';
             pending = undefined;
             for (const entry of current.entries) {

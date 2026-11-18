@@ -71,8 +71,13 @@ it("actively reuses an actual write tool across restart, then asks after revocat
     ctx.on("tools/pre-execute", () => ({ kind: "ask", reason: "ask-all fixture" }))
     bridge.attach({ sessionId: "s", ctx } as SessionAssembly)
     const reused = await registry.prepare(call, undefined, { sessionId: "s" }); expect(bridge.pending()).toEqual([])
+    // The remembered rule actually authorizes the restarted call: the atomic
+    // write replaces the target inode again and a fresh re-evaluation still
+    // matches the stored evidence (leaf identity is path+type for mutations).
+    expect(await registry.dispatch(reused)).toMatchObject({ ok: true }); expect(readFileSync(target, "utf8")).toBe("new")
+    const reusedAgain = await registry.prepare(call, undefined, { sessionId: "s" }); expect(bridge.pending()).toEqual([])
     confined = false
-    expect(await registry.dispatch(reused)).toMatchObject({ code: "FS_SANDBOX_DENIED" })
+    expect(await registry.dispatch(reusedAgain)).toMatchObject({ code: "FS_SANDBOX_DENIED" })
     confined = true
     rules.revoke("w", rules.list("w")[0]!.id)
     const waiting = registry.prepare(call, undefined, { sessionId: "s" }); const denied = expect(waiting).rejects.toThrow(/denied/)

@@ -59,18 +59,30 @@ it("preserves explicit native human remember through the real router into actual
     const { readFile } = await import("node:fs/promises")
     expect(await readFile(join(root, "notes.txt"), "utf8")).toBe("human-approved")
     expect(await native({ kind: "desktop/approval-rules/state", workspaceId: entry.id })).toMatchObject({ rules: [{ scope: { kind: "session", sessionId: "human-owner" } }] })
+    // A content-only external change (same canonical path and regular-file
+    // type) is outside mutation evidence; the sentinel also proves the reused
+    // rule actually executes the write rather than skipping the tool body.
     await writeFile(join(root, 'notes.txt'), 'after-first-sentinel')
     issued = false
     const second = service.submit('human-owner', 'write again', AbortSignal.timeout(20000)); void second.catch(() => {})
-    // Atomic write replaced the protected inode. The old rule must not grant
-    // authority over this new file binding, even for identical arguments.
-    while (!bridge.pending().length) await Promise.race([second.then(() => { throw new Error('Replacement write completed without fresh approval') }), new Promise<void>(resolve => setImmediate(resolve))])
+    // Reuse under the current mutation contract: the tool's own atomic write
+    // replaced the leaf inode, but approval evidence binds the mutation leaf by
+    // canonical path+type, so the identical remembered call is authorized with
+    // no fresh human decision.
+    await second
+    expect(bridge.pending()).toEqual([])
+    expect(await readFile(join(root, 'notes.txt'), 'utf8')).toBe('human-approved')
+    // Revocation is still authoritative for the replaced leaf: with the rule
+    // revoked, the next identical call must raise a fresh approval request.
+    await native({ kind: 'desktop/approval-rules/revoke', workspaceId: entry.id, ruleId: rules.list(root)[0]!.id })
+    issued = false
+    const third = service.submit('human-owner', 'write once more', AbortSignal.timeout(20000)); void third.catch(() => {})
+    while (!bridge.pending().length) await Promise.race([third.then(() => { throw new Error('Revoked rule authorized a write') }), new Promise<void>(resolve => setImmediate(resolve))])
     const replacement = bridge.pending()[0]!
     expect(replacement.payload).toMatchObject({ name: 'write', remember: { available: true } })
-    await native({ kind: 'desktop/approval-rules/revoke', workspaceId: entry.id, ruleId: rules.list(root)[0]!.id })
     await native({ kind: 'desktop/interaction/reply', workspaceId: entry.id, sessionId: 'human-owner', requestId: replacement.requestId, decision: { kind: 'approval', approved: false } })
-    await expect(second).rejects.toThrow(/denied by user/)
-    expect(await readFile(join(root, 'notes.txt'), 'utf8')).toBe('after-first-sentinel')
+    await expect(third).rejects.toThrow(/denied by user/)
+    expect(await readFile(join(root, 'notes.txt'), 'utf8')).toBe('human-approved')
     expect(service.liveAssembly("human-owner")).toBe(assembly)
   } finally { bridge.close(); off(); await router.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 }, 30_000)
