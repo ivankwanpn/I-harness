@@ -736,6 +736,12 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 另含 `core-agent/context-reduction/managed.ts` auto-reduction fast path：同一 retained evidence 且 admission 已評估 `softNeeded=false` 時跳過重複 capture/prepare/probe（311ms/231 batches→89ms/65 batches；由 current-representability 測試守住）。
 - 預算：repeated60 watchdog 180s→1080s、outer 210s→1200s（實測 13/60 at 183s，完整 bounded ~1122s）。
 - 驗證：growth 兩檔 **7/7**（repeated60 1121.8s、parallel24 91.0s、middle24 91.9s、100k turns 254.8s、150k 416.7s、autonomous 103.3s）；typecheck core-agent/session-executor/compaction/runtime-context/desktop-gateway 0。
+#### 第一百一十批：dependency archive append/read exclusion、holder guard fail-closed、load 預算
+
+- **code-mode-model-admission 3/3**：根因是同一 writer 的合法 append 被 archive reader 誤判。turn finalization 的 token estimate 走 `host.execution.prepare()`→hydrate preparation，讀取 writer-held dependency reader；reader 在 open 時 pin archive extent，append 後 size 改變被當成 `Owned dependency archive changed`（trace：expectedCount=44/expectedBytes=31958、code/end append、size 31958→34022）。修正：`managed-document` 加 per-document append/read exclusion（`withDependencyRead`/`beginAppendWindow`），`managed-documents.ManagedExecutionAttachment.prepare()` 在 `exact.withDependencyRead` 下 prepare；已知 pre-issuance writer cleanup 不算 append window，保留 committed-prefix 讀取；jsonl reader 的 extent/inode/prefix 驗證與 concurrent-append refusal 不變。
+- **selected-source-holder 15/15**：`7b2b7611` 把 holder work guard 改為 holder-lifetime 後，逃逸的 guard 在 handoff 結束後仍可用，失去 fail-closed。修正：`retainedGuard` 額外要求 `handoffs.getStore()?.active`，合法 holder operation 仍跨 handoff 有效，ambient code 呼叫即 `Selected handoff expired`。20 個 selected-* 測試 115/115。
+- **load 預算**：`apps/cli/fork-bootstrap-wire` 第一案 30s→120s（verify 共享 worker 下 timeout、isolated 綠）；`retained-physical-crash` setup deadline 30s→90s（verify 下 SETUP/cut deadline、isolated 12/12 綠）。
+- 驗證：gateway 60/60、session-persistence 相關 156/156、jsonl 9/9、executor 32/32、typecheck 四 package 0。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

@@ -269,10 +269,12 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       const entry={active:true},guard=()=>{available();if(!entry.active||selectedAborted(signal))throw Error('Selected handoff expired');source.assertCurrent()}
       // Persistence retains the guard given to `work` for its own transition
       // records. Those records are re-checked by later holder operations
-      // (reconcile, confirm, publish, release), so their guard must stay valid
-      // for the HOLDER's lifetime while the transient handoff guard above only
-      // covers the current handoff.
-      const retainedGuard=()=>{available();source.assertCurrent()}
+      // (reconcile, confirm, publish), so their guard must stay valid across
+      // handoffs instead of expiring with the one that produced it. It is
+      // still fail-closed outside every holder operation: no handoff window is
+      // open, so the retained source must not be read (or a captured guard
+      // invoked) from ambient code.
+      const retainedGuard=()=>{available();if(!handoffs.getStore()?.active)throw Error('Selected handoff expired');source.assertCurrent()}
       const held=Object.freeze({sourceSessionId:operation.prepared.core.sourceSessionId,document:source.document,view:source.view,events:source.view.events,eventCount:source.view.events.length,inherited:source.inherited})
       // One immutable handle is retained across all handoffs.
       const stable=holderSource??(holderSource=held)

@@ -61,7 +61,10 @@ it('actual stdio prepares, forks, nests and cold retries one original operation 
     await processOwner?.close();await writeFile(join(root,'stdio-receipts.json'),JSON.stringify(receipts,null,2));console.info(JSON.stringify({control:'actual CLI public fork wire',evidence:root}))
     if(!process.env.IH_LEGACY_FORK_EVIDENCE_ROOT)await rm(root,{recursive:true,force:true})
   }
-},30000)
+  // Verified verify:all load: this case timed out at 30s only when sharing the
+  // workspace with the surrounding suite; the isolated workload completes well
+  // inside the 90s second case, so 120s is a load budget, not a hang.
+},120000)
 
 // Three SDK processes, two actual forks and cold reads; measured full workload 76.24s.
 it('actual stdio retains a genuine catalog/member and selected legacy results through nested cold recovery',async()=>{

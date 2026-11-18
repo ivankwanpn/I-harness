@@ -94,7 +94,7 @@ type ProcessUpdate = { kind: 'unchanged'; highWater: number } | { kind: 'suffix'
 type ManagedProcessCapture = { readonly initial: SessionView; take(): ProcessUpdate; assertHealthy(): void; assertDrained(): void; markVerified(): void; close(): void };
 const executionStatuses = new WeakMap<ManagedDocument, () => 'available' | 'unavailable' | 'retired'>();
 type ExecutionState=Awaited<ReturnType<typeof restoreManagedExecutionState>>;
-const privateExecutionOwners=new WeakMap<object,{core:ExecutionState;held:HeldFactOwner;ownership:Ownership;assertCurrent():void;retainTask(domain:ManagedExecutionDomain,history:object,onRevoke:()=>void):ManagedTaskSourceRead;materialize(events:readonly import('@i-harness/core-session').SessionEventView[]):ManagedDocument&{assertObservable():void};materializeDuringPreparation(read:()=>Promise<ManagedDocument & {assertObservable():void}>):Promise<ManagedDocument & {assertObservable():void}>|undefined;invalidateMetadata(revision:object):void;beginTaskMetadata():TaskMetadataUpdate;captureTaskParent():Omit<TaskParentReadiness,'view'>;captureRequiredParent(source:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>):RequiredTaskParentReadiness;parent():{assertOriginal():void;assertCurrent():void;assertTask14Ready():void}}>();
+const privateExecutionOwners=new WeakMap<object,{core:ExecutionState;held:HeldFactOwner;ownership:Ownership;assertCurrent():void;withDependencyRead<T>(read:()=>Promise<T>):Promise<T>;retainTask(domain:ManagedExecutionDomain,history:object,onRevoke:()=>void):ManagedTaskSourceRead;materialize(events:readonly import('@i-harness/core-session').SessionEventView[]):ManagedDocument&{assertObservable():void};materializeDuringPreparation(read:()=>Promise<ManagedDocument & {assertObservable():void}>):Promise<ManagedDocument & {assertObservable():void}>|undefined;invalidateMetadata(revision:object):void;beginTaskMetadata():TaskMetadataUpdate;captureTaskParent():Omit<TaskParentReadiness,'view'>;captureRequiredParent(source:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>):RequiredTaskParentReadiness;parent():{assertOriginal():void;assertCurrent():void;assertTask14Ready():void}}>();
 export function originalManagedExecution(document:ManagedDocument,ownership:Ownership){const original=privateExecutionOwners.get(document);if(!original||original.ownership!==ownership)throw TypeError('Original private execution owner required');return original}
 export function managedExecutionStatus(document: ManagedDocument): 'available' | 'unavailable' | 'retired' {
     return executionStatuses.get(document)?.() ?? 'unavailable';
@@ -203,6 +203,41 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
     const releaseRecoveryWitness = (source: object) => { const token = recoveryWitnesses.get(source); if (token) { recoveryWitnesses.delete(source); token.end('settled'); } };
     let prefix = initialPrefix, pending: Pending | undefined, closing = false, closed = false, scheduled = false, quarantined = false, sourceFault = false;
     let preparingWrite: PreparingWrite | undefined;
+    // The original writer-held dependency reader pins one archive extent when
+    // its scope opens and refuses any append between that point and its final
+    // size observation. A committed-history read and the native append it does
+    // not depend on must therefore not overlap: reads that begin first are
+    // joined by the writer before issuance, while reads that begin after the
+    // append window opens wait for that append to settle. A known pre-issuance
+    // writer (dependency cleanup, staging) is not an append window, so readers
+    // keep observing the already committed prefix.
+    type DependencyReadLease = { readonly done: Promise<void>; release(): void };
+    let appendWindow: { readonly done: Promise<void>; release(): void } | undefined;
+    const dependencyReads = new Set<DependencyReadLease>();
+    async function withDependencyRead<T>(read: () => Promise<T>): Promise<T> {
+        // Register before waiting: the writer currently appending is already
+        // past its snapshot and settles first, while every later writer joins
+        // this lease before it may open its own append window.
+        const settled = Promise.withResolvers<void>();
+        const lease: DependencyReadLease = { done: settled.promise, release() { dependencyReads.delete(lease); settled.resolve(); } };
+        dependencyReads.add(lease);
+        try {
+            for (let window = appendWindow; window; window = appendWindow) await window.done;
+            return await read();
+        }
+        finally { lease.release(); }
+    }
+    async function beginAppendWindow(): Promise<() => void> {
+        const settled = Promise.withResolvers<void>();
+        const window = { done: settled.promise, release: () => { if (appendWindow !== window) return; appendWindow = undefined; settled.resolve(); } };
+        // Only reads that registered before this synchronous transition must be
+        // joined here; a later read observes the window and waits for it.
+        const prior = [...dependencyReads];
+        appendWindow = window;
+        try { if (prior.length) await Promise.allSettled(prior.map(lease => lease.done)); }
+        catch (error) { window.release(); throw error; }
+        return window.release;
+    }
     let metadataRevision:object={},metadataStale=false;
     let taskRevision:object={},taskMetadataPending=0,taskMetadataStale=false;
     const selectedListeners=new Set<()=>void>();
@@ -421,12 +456,19 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                         if(bootstrap?.selected)selectedIOStarted=true;
                         const cleanup = settleManagedJournalCleanup(journalScopes);
                         if (cleanup) await cleanup;
-                        const writing = bootstrap?.selected ? selectedJournal!.appendOwnedBatch(id,issuer,selectedLane!,prefix,batch) : backend.appendOwnedBatch!(id,issuer,prefix,batch);
-                        // Wake early waiters only after the actual backend has entered.
-                        // They must still qualify its original Pending/native prewrite.
-                        preparing.notified = true;
-                        preparing.ready.resolve();
-                        const outcome = await writing;
+                        // The append window excludes every held dependency
+                        // reader; reads that began earlier are joined here.
+                        const endAppendWindow = await beginAppendWindow();
+                        let outcome: BackendFactOutcome;
+                        try {
+                            const writing = bootstrap?.selected ? selectedJournal!.appendOwnedBatch(id,issuer,selectedLane!,prefix,batch) : backend.appendOwnedBatch!(id,issuer,prefix,batch);
+                            // Wake early waiters only after the actual backend has entered.
+                            // They must still qualify its original Pending/native prewrite.
+                            preparing.notified = true;
+                            preparing.ready.resolve();
+                            outcome = await writing;
+                        }
+                        finally { endAppendWindow(); }
                         completed = finish(current, outcome);
                     }
                     catch (error) {
@@ -1063,7 +1105,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
     executionStatuses.set(document, executionStatus);
     if(core){
       const originalReady=document.assertReady;
-      core.bindOwner(document);privateExecutionOwners.set(document,{core,held,ownership,assertCurrent:execution!.assertCurrent,retainTask(domain,history,onRevoke){
+      core.bindOwner(document);privateExecutionOwners.set(document,{core,held,ownership,assertCurrent:execution!.assertCurrent,withDependencyRead,retainTask(domain,history,onRevoke){
         if(selectedAdmissions||queue.length||scheduled)throw new FactRecoveryRequiredError();
         const revision=metadataRevision, capturedPrefix=prefix, header=core.header, artifacts=assertOriginalManagedTaskHistory(domain,history);let revoked=false
         const listener=()=>{if(revoked)return;revoked=true;onRevoke()}

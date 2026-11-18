@@ -72,7 +72,10 @@ async function launch(mode: Mode, cut: Cut) {
     child!.once('error', reject); child!.once('close', (code, signal) => { closed = true; resolve({ code, signal }); for (const notify of waiters) notify() })
   })
   async function message(kind: string) {
-    const deadline = Date.now() + 30000
+    // The 30s setup deadline was a load budget: verify:all's shared worker reached
+  // "SETUP/cut deadline before setup" while the isolated file passes 12/12. 90s
+  // keeps the cut finite while tolerating the suite's native-subprocess load.
+  const deadline = Date.now() + 90000
     while (true) {
       const found = messages.find(message => message.kind === kind)
       if (found) return found
