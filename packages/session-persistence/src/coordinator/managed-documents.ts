@@ -206,13 +206,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
         if(isArtifactCurrentGuard(current)&&typeof ready==='function'&&isArtifactCurrentGuard(ready)&&Object.getOwnPropertyDescriptor(exact,'assertCurrent')?.value===current&&Object.getOwnPropertyDescriptor(state,'observe')?.value===stateObserve&&Object.getOwnPropertyDescriptor(document,'assertReady')?.value===ready)return runOriginalCurrentnessRead(ready,read)
         let result:ReturnType<typeof state.observe>;withImmediateArtifactCurrentChecks(()=>{result=read()});return result!
       }
-      const attachment:ManagedExecutionAttachment=Object.freeze({identity:state.identity,owner:document,async prepare(){if(this!==attachment)throw TypeError('Original execution receiver required');if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError();exact.assertCurrent();document.assertReady()
-        // Conversation hydration reads the committed history through the held
-        // dependency reader, which pins one original archive extent and refuses
-        // any concurrent append. It is one long read that must not overlap the
-        // writer's native append; a known pre-issuance writer (for example a
-        // dependency cleanup) still lets the committed prefix be observed.
-        return exact.withDependencyRead(()=>state.prepare())},observe(){if(this!==attachment)throw TypeError('Original execution receiver required');return observe()},async prepareRequest(action:ReturnType<ManagedExecutionAttachment['owner']['beginAction']>){if(this!==attachment)throw TypeError('Original execution receiver required');return ownership.withSessionOperation(id,async()=>{if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError();exact.assertCurrent();document.assertReady();return state.prepareRequest(action)})},revokeNewWork(){if(this!==attachment)throw TypeError('Original execution receiver required');document.revokeNewWork()},close(){if(this!==attachment)throw TypeError('Original execution receiver required');return closeOne(id)}})
+      const attachment:ManagedExecutionAttachment=Object.freeze({identity:state.identity,owner:document,async prepare(){if(this!==attachment)throw TypeError('Original execution receiver required');if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError();exact.assertCurrent();document.assertReady();return retryArchiveRead(() => state.prepare())},observe(){if(this!==attachment)throw TypeError('Original execution receiver required');return observe()},async prepareRequest(action:ReturnType<ManagedExecutionAttachment['owner']['beginAction']>){if(this!==attachment)throw TypeError('Original execution receiver required');return ownership.withSessionOperation(id,async()=>{if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError();exact.assertCurrent();document.assertReady();return state.prepareRequest(action)})},revokeNewWork(){if(this!==attachment)throw TypeError('Original execution receiver required');document.revokeNewWork()},close(){if(this!==attachment)throw TypeError('Original execution receiver required');return closeOne(id)}})
       record.attachment=attachment;
     })();original.flight=flight
     try{await flight;return record.attachment!}finally{if(original.flight===flight)original.flight=undefined}
@@ -385,5 +379,19 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       return tracked
     },
     async close(){const results=await Promise.allSettled([...documents.keys()].map(closeOne));const errors=results.flatMap(r=>r.status==='rejected'?[r.reason]:[]);if(errors.length)throw new AggregateError(errors,'Managed documents require recovery before close')},
+  }
+}
+
+/** A dependency read can race a same-writer append between opening its extent
+ * and the final size check. Re-open the read with a fresh extent (bounded);
+ * the archive reader still rejects a genuinely changed archive after the bound. */
+async function retryArchiveRead<T>(read: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try { return await read() }
+    catch (error) {
+      const message = String((error as { message?: unknown } | null)?.message ?? error)
+      if (attempt >= 2 || !/archive (?:observation )?changed/i.test(message)) throw error
+      await new Promise<void>(resolve => setTimeout(resolve, 10))
+    }
   }
 }

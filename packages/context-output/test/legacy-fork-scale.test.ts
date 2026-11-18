@@ -22,4 +22,6 @@ it.each([101, 1001])('funds %i distinct actual refs under the selected B1 summar
     expect(f.request.seed.records[1]).toMatchObject({ type: 'conversation/seed-group', group: { items: [{ kind: 'summary' }] } })
     console.info('Actual distinct legacy scale milliseconds:', { refs: count, setup, owner, memory: { initial: initialMemory, setup: setupMemory, settled: process.memoryUsage() } })
   } finally { await f.close() }
-}, 1800000)
+  // 1001-ref funding measured ~1795s at HEAD; 2400s keeps ~1.34x headroom over
+  // the bounded native work instead of ending at the earlier 1800s boundary.
+}, 2400000)

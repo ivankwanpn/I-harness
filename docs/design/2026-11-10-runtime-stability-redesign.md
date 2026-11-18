@@ -748,6 +748,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 修正：instructions manager 的 same-view incomplete snapshot 改為 bounded settle loop：最多 5 次、每次 25ms 後重 prepare 同一 view（不是新 authority），仍不接受 incomplete authority；耗盡才報 admission 的 bounded rebuild。反覆 abort 整個 admission 的來源被移除。
 - `context-summary-growth` repeated60：watchdog 180s→1800s、outer 210s→1950s（實測 58/60 at ~18min；完整 bounded 1250.9s）。
 - 驗證：repeated60 **60/60、9 replacements、cold follow-up complete、1,250.9s**；session-executor typecheck 0。
+#### 第一百一十二批：dependency archive 競態改為 bounded read retry
+
+- 105 批的 append/read exclusion 在 delivery 測試造成 recovery debt（progress.close「Required source drain needs recovery」），即使加入 nested-read/closing/timeout 例外仍無法消除；因此**回退** managed-document/managed-documents 的 append window（保留 context-runtime holder guard）。
+- 改為在真正需要 archive 的 read 上做 bounded retry：`ManagedExecutionAttachment.prepare()` 與 managed-context 的 `prepareRequest` 遇到 `Owned dependency archive changed`/`Archive observation changed` 時，以 fresh extent 重開 read（最多 3 次、間隔 10ms）；真正的 archive 變更在耗盡後仍拒絕。這保留 jsonl reader 的 concurrent-append refusal 契約，且不會因讀取自身觸發寫入而死鎖。
+- 驗證：code-mode-model-admission **3/3**、delivery-active-wait＋delivery-receiver **19/19**、required-task-settlement **15/15**；session-persistence 全套件 **1256/1256**。
+- desktop-gateway 新增 `vitest.config.ts`：`fileParallelism:false`（真實 host process/terminal/loopback model/多分鐘 compaction 在同一 package 併跑時讓有限預算與 instruction settle 互競；workspace 已是 concurrency=1）。
+- `legacy-fork-scale` per-test 1,800,000→2,400,000ms（1001-ref 實測 ~1795s，~1.34x headroom）。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

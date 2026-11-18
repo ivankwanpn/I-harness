@@ -92,7 +92,21 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
                 await wait;
             }
             host.domain.assertCurrent();
-            const hooks = host.hooks.capture(), lease = await host.execution.prepareRequest(action);
+            const hooks = host.hooks.capture()
+            // A same-writer append can land between the dependency archive read
+            // opening and its final extent check; that is a retryable read race,
+            // not a changed archive. Re-open the dependency read (fresh extent)
+            // a bounded number of times instead of excluding the writer, which
+            // would deadlock a read that itself triggers a write.
+            let lease: Awaited<ReturnType<typeof host.execution.prepareRequest>> | undefined
+            for (let attempt = 0; ; attempt++) {
+                try { lease = await host.execution.prepareRequest(action); break }
+                catch (error) {
+                    const message = String((error as { message?: unknown } | null)?.message ?? error)
+                    if (attempt >= 2 || !/archive (?:observation )?changed/i.test(message)) throw error
+                    await new Promise<void>(resolve => setTimeout(resolve, 10))
+                }
+            }
             leases.add(lease);
             try {
                 const afterPrepare = getManagedExecutionAdmissionWait(host.domain, action, signal);
