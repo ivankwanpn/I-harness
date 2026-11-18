@@ -83,6 +83,7 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
         bindAction(originalFacts: FactPorts<FactOutcome>, originalSource: SettlementFacts<FactOutcome>) { facts = originalFacts; source = originalSource; },
         acknowledge(event: ExchangeAcceptedEventV2) { accepted.add(event); },
         async capture(action: ManagedAction<FactOutcome>, signal: AbortSignal = action.signal) {
+          let staleRebuilds = 0;
           for (;;) {
             for (;;) {
                 signal.throwIfAborted();
@@ -118,8 +119,27 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
                     await prior.lease.settle();
                     leases.delete(prior.lease);
                 }
-                if (!current(evidence))
+                if (!current(evidence)) {
+                    // The evidence stopped being current while it was being
+                    // prepared: an observation it depends on was invalidated and
+                    // only a fresh observation preparation can make the new
+                    // state current again. Rebuild that observation and retry the
+                    // capture within the same bounded stale budget admission
+                    // already applies; a genuinely failed or still-unstable
+                    // state remains terminal after the bound.
+                    if (staleRebuilds++ < 3) {
+                        try { await host.requestContext?.reconcile(signal); }
+                        catch (error) {
+                            const code = (error as {
+                                code?: string;
+                            } | null)?.code;
+                            if (code !== 'CONTEXT_INPUT_STALE' && code !== 'CONTEXT_INPUT_REBUILD')
+                                throw error;
+                        }
+                        continue;
+                    }
                     throw Object.assign(Error('CONTEXT_INPUT_STALE'), { code: 'CONTEXT_INPUT_STALE' });
+                }
                 return evidence;
             }
             catch (primary) {
@@ -139,7 +159,23 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
                 throw TypeError('Original request evidence required');
             if (host.requestContext && !host.requestContext.current(expected.instructions))
                 return undefined;
-            const next = await this.capture(action, signal);
+            let next: RequestEvidence;
+            try {
+                next = await this.capture(action, signal);
+            }
+            catch (error) {
+                // A capture that lost its own currentness while it was being
+                // prepared is the same bounded rebuild signal as the non-current
+                // evidence cases below: the admission re-reconciles and
+                // re-captures up to its stale budget, then fails closed. Do not
+                // let an observation replaced mid-capture abort the turn.
+                const code = (error as {
+                    code?: string;
+                } | null)?.code;
+                if (code === 'CONTEXT_INPUT_STALE' || code === 'CONTEXT_INPUT_REBUILD')
+                    return undefined;
+                throw error;
+            }
             if (!sameRequestCandidate(expected, next) || expected.neutralFingerprint !== next.neutralFingerprint || host.requestContext && !host.requestContext.current(expected.instructions))
                 return undefined;
             const retained = { ...next, instructions: expected.instructions };

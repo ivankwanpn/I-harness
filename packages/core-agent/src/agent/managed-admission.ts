@@ -33,7 +33,17 @@ export function createManagedAdmission(host: ManagedAgentHost, context: ReturnTy
                     stale();
                     continue;
                 }
-                let captured = await context.capture(action, signal);
+                let captured: import('./request-snapshot.ts').RequestEvidence;
+                try { captured = await context.capture(action, signal); }
+                catch (error) {
+                    const code = (error as {
+                        code?: string;
+                    } | null)?.code;
+                    if (code !== 'CONTEXT_INPUT_STALE' && code !== 'CONTEXT_INPUT_REBUILD')
+                        throw error;
+                    stale();
+                    continue;
+                }
                 if (host.requestContext && !host.requestContext.current(captured.instructions)) {
                     stale();
                     continue;
@@ -59,7 +69,17 @@ export function createManagedAdmission(host: ManagedAgentHost, context: ReturnTy
                     continue;
                 }
                 captured = refreshed;
-                const admission = await recovery.admit(assessed.prepared.measurement, state, signal);
+                let admission;
+                try { admission = await recovery.admit(assessed.prepared.measurement, state, signal); }
+                catch (error) {
+                    const code = (error as {
+                        code?: string;
+                    } | null)?.code;
+                    if (code !== 'CONTEXT_INPUT_STALE' && code !== 'CONTEXT_INPUT_REBUILD')
+                        throw error;
+                    stale();
+                    continue;
+                }
                 if (admission === 'rebuild')
                     continue;
                 refreshed = await context.refresh(action, captured, signal);
@@ -86,7 +106,17 @@ export function createManagedAdmission(host: ManagedAgentHost, context: ReturnTy
                 }
                 captured = refreshed;
                 if (context.compactConfig && admission !== 'authorized') {
-                    const result = await reduction({ signal, attempts, reason: needsReduction ? 'manual' : 'auto' }, undefined, scope);
+                    let result;
+                    try { result = await reduction({ signal, attempts, reason: needsReduction ? 'manual' : 'auto' }, undefined, scope); }
+                    catch (error) {
+                        const code = (error as {
+                            code?: string;
+                        } | null)?.code;
+                        if (code !== 'CONTEXT_INPUT_STALE' && code !== 'CONTEXT_INPUT_REBUILD')
+                            throw error;
+                        stale();
+                        continue;
+                    }
                     if (result.publication === 'recovery-required')
                         throw Object.assign(Error('Context reduction requires reconciliation'), { code: 'FACT_RECOVERY_REQUIRED' });
                     if (result.compacted)

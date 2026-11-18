@@ -727,6 +727,15 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 效果（真實 legacy host 量測）：no-tool turn native CreateFileW 29,518→16,342（−45%）、info calls 88,782→49,254、capture 2.52s→1.33–1.42s，wall 6.15/6.32s→5.30/4.61s（A/B −19%）；2-read wall −16%。其餘 8,133 assertions（managed-document observe/JSONL archive read/binding-observation）仍每次 native 驗證。
 - 新測試：`fs-lock/test/artifact-verification-scope.test.ts` 5、`session-persistence/test/artifact-verification-operation.test.ts` 3，覆蓋 scope 重用、跨 operation 不重用、generation invalidation、不同 expected evidence 不得互用。
 - 驗證：session-persistence **1256/1256**、core-session **947/947**、fs-lock 141（6 skip）、typecheck 三 package 0。
+#### 第一百零九批：long-growth 語意契約與 transient instruction stale 的 bounded rebuild
+
+- **long-growth-host 4/4**：`ResultFactPayload` envelope 讀取修正；line90 的 `summaries>1` 証為從未被驗證的過時預測（100k：inputBudget 70000、trigger 56000、target 49000，14th admission ~61.7k 只跨一次；150k trigger 92000 只在最後請求達到），改以算術記錄的 expectedSummaries=1；150k 的 joint projection/calibration 斷言拆成兩個獨立產品事實。預算 420s→600s（150k 實測 444.2s，1.35× headroom）。
+- **context-summary-growth 3/3（含 repeated60 60/60、9 replacements、cold follow-up、1,121.8s）**：
+  - 根因：main instruction manager 的 live snapshot 在 fs-watch observation 重結算時暫時 `complete:false/reliability:'unavailable'`（text/fingerprint/bytes 不變）；`managed-context.capture()` stale gate 把它當終態，且 auto-reduction `ports.prepare` 路徑的 throw 繞過所有 bounded stale handler。
+  - 修正（bounded rebuild、不接受 incomplete authority）：`managed-context.capture` 對 stale evidence 呼叫 `requestContext.reconcile` 後重 capture，上限 3；`refresh` 把 capture STALE/REBUILD 轉 `undefined`；`managed-admission` 的 initial capture/recovery.admit/reduction 都接既有 stale() 預算（≤3）並在耗盡時 `stalePreparedInput()` fail closed；instructions manager 對同一 view 重 prepare 一次，仍不完整則丟 `CONTEXT_INPUT_REBUILD`（非終態 unavailable），policy/authority 錯誤仍終態。
+- 另含 `core-agent/context-reduction/managed.ts` auto-reduction fast path：同一 retained evidence 且 admission 已評估 `softNeeded=false` 時跳過重複 capture/prepare/probe（311ms/231 batches→89ms/65 batches；由 current-representability 測試守住）。
+- 預算：repeated60 watchdog 180s→1080s、outer 210s→1200s（實測 13/60 at 183s，完整 bounded ~1122s）。
+- 驗證：growth 兩檔 **7/7**（repeated60 1121.8s、parallel24 91.0s、middle24 91.9s、100k turns 254.8s、150k 416.7s、autonomous 103.3s）；typecheck core-agent/session-executor/compaction/runtime-context/desktop-gateway 0。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

@@ -115,9 +115,26 @@ export function createMainInstructionManager(options: { session?: SessionView; d
         views.add(view)
       }
       try {
-        const snapshot = await view.service.prepare([{ path: cwdNow(), kind: 'directory' }, ...targets])
+        const values = [{ path: cwdNow(), kind: 'directory' as const }, ...targets]
+        let snapshot = await view.service.prepare(values)
+        if (!snapshot.complete || snapshot.reliability !== 'ready') {
+            // A freshly subscribed view can publish an incomplete snapshot while
+            // its own observation subscription settles. Re-observing the same
+            // view (not a new one) rebuilds from the settled watch state; this is
+            // a bounded re-read of the same authority, never an acceptance of
+            // incomplete evidence.
+            snapshot = await view.service.prepare(values)
+        }
         signal?.throwIfAborted()
-        if (options.environment.policy.current().generation !== policy.generation || authority().identity !== scope.identity || !snapshot.complete || snapshot.reliability !== 'ready') throw unavailable()
+        if (options.environment.policy.current().generation !== policy.generation || authority().identity !== scope.identity) throw unavailable()
+        if (!snapshot.complete || snapshot.reliability !== 'ready') {
+            // Never accept incomplete instructions as authority. Report the
+            // incomplete observation as the admission's existing bounded stale
+            // rebuild instead of a terminal refusal, so one transient failed
+            // re-observation cannot abort the turn; an exhausted budget still
+            // fails closed in stalePreparedInput.
+            throw Object.assign(unavailable(), { code: 'CONTEXT_INPUT_REBUILD' })
+        }
         const previousText = text
         text = snapshot.text
         const preparedView = view

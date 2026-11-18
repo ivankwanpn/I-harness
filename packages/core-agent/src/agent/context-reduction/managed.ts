@@ -27,6 +27,23 @@ export function createManagedReduction(host: ManagedAgentHost, context: ReturnTy
         const config = context.compactConfig;
         if (!config)
             return unchanged();
+        // The admission that requested this auto attempt has just prepared and
+        // assessed the same candidate through this owned budget. When that
+        // assessment proves the soft threshold is not reached, a second
+        // capture + request preparation + probe cannot change the answer; skip
+        // them instead of paying another full context materialization on every
+        // step. The retained evidence must still be the current one and unknown
+        // / unpriced pressure keeps the ordinary probe path below.
+        if (options.reason === 'auto') {
+            const pressure = context.budget.decision()?.pressure;
+            if (pressure?.kind === 'known' && !pressure.softNeeded) {
+                let current = false;
+                try { current = context.capturedCurrent(context.retainedCandidate()); }
+                catch { current = false; }
+                if (current && (host.autoCompactionEnabled?.() ?? config.auto ?? true))
+                    return { ...unchanged(), outcome: pressure.targetReady ? 'ready' as const : 'unchanged' as const };
+            }
+        }
         return withInstructionRun({ requestContext: host.requestContext, registerFactSource: register }, options.signal, async (retain) => {
             assertManagedActionCurrent(host.domain, action);
             let initial = await context.capture(action);
