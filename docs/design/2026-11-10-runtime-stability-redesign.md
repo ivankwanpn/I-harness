@@ -796,8 +796,8 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 
 - **P1 #1 JSONL selected fork 續接**（`91f604a0`）：暖路徑 release ready target 的 birth document（`executeSelectedForkSession` 對 JSONL target closeManagedDocument）；restart adopted 時 `managed-documents.acquireExecution` 從 v3 selected birth 重新 `bindSelected()`＋`ready()`，讓 child 第一次 turn 走 selected lane。新 `host-jsonl-fork-continue.test.ts` 覆蓋暖／重啟 adopted child turn＋clean close（2/2）。
 - **P1 #2 commit-log selected fork 保留順序**（`8afdaae3`）：`selected-fork.ts` 改為先 `retainSelectedManagedResults`（逐 batch 持久化 granted），再 `createChildSession`；grant 失敗時 target 未建立、`session/list` 不可見，retry 續接後才建立並公開。`host-commit-log-selected-recovery` 新增「失敗後、retry 前 list 不得含 target」斷言（7/7）。
-- **整合驗證**：8 個 fork/host 檔 **33/33**；session-persistence-jsonl 全 package **969 pass／17 skip**；session-persistence 全 package 1255/1256（唯一 `commit-coordinator` EPERM rename 為既有 Windows 瞬時 flake，單檔重跑 30/30）；session-persistence/jsonl/executor/desktop-gateway typecheck 全 0。
-- **CI 期限實測**：以 workflow_dispatch 在 HEAD `8afdaae3` 觸發完整 verify（run 44435339998）。`typecheck` 11m9s success、`compiled gateway` 1m15s success；`verify:all`（windows-latest、timeout-minutes:180）於 01:14:14Z 開始，**04:14:19Z 被取消**（180m5s）。本機同 HEAD 完整 verify:all 約 **4h48**；差距已由實際 CI 結果確認。後續需提高 job 上限（GitHub hosted 單 job 上限 360 分鐘）或拆分／快取／縮減 Windows 長測，非本次兩個 P1 的 release blocker。
+- **整合驗證**：8 個 fork/host 檔 **33/33**；session-persistence-jsonl 全 package **952 pass／17 skip／0 fail（969 總數）**；session-persistence 全 package 1255/1256（唯一 `commit-coordinator` EPERM rename 為既有 Windows 瞬時 flake，單檔重跑 30/30）；session-persistence/jsonl/executor/desktop-gateway typecheck 全 0。
+- **CI 期限實測**：以 workflow_dispatch 在 HEAD `8afdaae3` 觸發完整 verify（run 44435339998）。`typecheck` 11m9s success、`compiled gateway` 1m15s success；`verify:all`（windows-latest、timeout-minutes:180）於 01:14:14Z 開始，**04:14:19Z 被取消**（180m5s）。本機完整 verify:all 約 **4h48–4h49** 是對較早 HEAD `52cf62ff` 的量測（`8afdaae3` 未在本機重跑完整 verify）；差距已由實際 CI 結果確認。後續需提高 job 上限（GitHub hosted 單 job 上限 360 分鐘）或拆分／快取／縮減 Windows 長測，非本次兩個 P1 的 release blocker。
 - **review 其他註記**：公開 Gateway 已支援 V2 fork，但 typed SDK 仍 V1；C67 compaction/reset/冷凍流程仍由內部 helper 驗證；列為 issue 125 關閉後的後續工作。
 #### 第一百一十七批：fork 重播只釋放 birth document（Codex review round 2 P1 #1）
 
@@ -819,6 +819,17 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
   5. 最後 `updateMeta(target,{archived:false})` 公開，再寫 `published:true`；adopted retry 若見 `published:false` 會完成公開後才回傳，已公開者不覆蓋使用者後續 archive。
 - 新故障注入 `host-commit-log-selected-recovery`：先建立衝突 target 身分，fork birth/restore 必須失敗且 `control.grants` 必須為空；原有 grant 失敗測試仍驗證 retry 前 list 不可見。
 - 驗證：fork/host 8 檔 **35/35**；四 package typecheck 0。
+#### 第一百一十九批：Codex review round 2 收尾與驗證數字校正
+
+- **P1 #1**（`cad7036d`）：fork 重播只釋放未掛載的 birth document；`closeManagedBirthDocument` 依 `executions` entry 判定，child 已跑回合後重播原操作不再關閉 execution document。新 replay 案：兩輪 → retry adopted → 第三輪成功（3 committed turn/end）。
+- **P1 #2**（`c3f5a6e6`）：commit-log selected fork 先建 archived target 確認身分，再寫 retention，最後 unarchive＋published marker；grant 失敗 target 不可見、birth 失敗 grants 為空；adopted retry 完成未竟 publication。
+- **驗證（現行 HEAD）**：
+  - fork/host 8 檔 **35/35**。
+  - session-persistence-jsonl 全 package **952 pass／17 skip／0 fail（969 總數）**（更正先前誤寫的 969 pass）。
+  - session-persistence 全 package **1256/1256**（本輪無先前 commit-coordinator EPERM flake）。
+  - session-persistence/jsonl/executor/desktop-gateway typecheck 全 0。
+- **CI/本機數字校正**：`8afdaae3` workflow_dispatch run `44435339998` 的 verify:all 於 180m5s 被 180 分鐘 job timeout 取消；typecheck（11m9s）與 compiled gateway（1m15s）成功。可核查的本機約 4h48–4h49 全程記錄對應較早 HEAD `52cf62ff`，不是 `8afdaae3`。CI 成本差距仍待後續排程（提高上限至 360 分、拆分或快取）。
+- 三筆新提交與推送身分均為 `ivankwanpn <213307026+ivankwanpn@users.noreply.github.com>`；工作目錄乾淨。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
