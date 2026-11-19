@@ -854,7 +854,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - **固定回歸**：
   - 真實 Gateway＋commit-log＋受控模型：grant 失敗後 pending 目標不在一般/封存列表，restore 被拒、磁碟維持 pending；同一原操作 retry 成功發布。第二案用前一版 controller（vendored fixture，blob `209f5bc6`）產生已完成並被使用者封存的舊資料，新版冷啟動 replay 回 adopted、原 receipt、archived 保持 true、semanticSeed 不變。
   - 故障注入：publication metadata 失敗→target 仍 pending、retry 成功；publication 已提交但 outcome 保存失敗→使用者 archive 後 retry 保留 archived；舊 `published:false`+archived 歧義→adopted 且 archived 不變；同操作並行 begin/retry→共用一個 flight、一次 grant、一次 publication。
-- **驗證**：直接命令 5 檔 **51/51**；完整 desktop-gateway package **1309/1309**（330 files）；core-session **947/947**；session-persistence 全 package 1254/1256（兩筆 Windows commit-log `rename EPERM` 既有 flake，兩檔隔離重跑 31/31）；desktop-gateway/session-persistence typecheck 0；package boundaries 128=baseline；`git diff --check` 0。
+- **驗證**：直接命令 5 檔 **51/51**；完整 desktop-gateway package **1309/1309**（報表 298 個 test files／330 suites）；core-session **947/947**；session-persistence 全 package 1254/1256（兩筆 Windows commit-log `rename EPERM` 既有 flake，兩檔隔離重跑 31/31）；desktop-gateway/session-persistence typecheck 0；package boundaries 128=baseline；`git diff --check` 0。
+#### 第一百二十二批：coordinator 同目標發布的真正序列化（Codex review round 4 P2）
+
+- 問題：`publishForkTarget` 原以 `withWrite` 執行；`withWrite` 只把 flight 記入集合，並不序列化。兩個同目標並行呼叫都在 append 前讀到 pending，因此各自 append 一次發布，兩次都回 `published`，磁碟留下兩筆 `forkPublication:'published'` metadata。
+- 修正：在 commit coordinator 增加 per-target publication queue；`publishForkTarget` 先排入該 target 的佇列，再進入 `withWrite`，在取得 log 後才重讀 identity/pending 並決定 append。第一個回 `published`，第二個看到已 published 回 `already-published`，只寫一筆發布紀錄。一般 Gateway 同操作 flight 合併保留，coordinator 本身不再依賴上層。
+- 固定回歸：`selected-fork-publication-recovery.test.ts` 在真實 commit coordinator 注入同一 target 的兩個並行 `publishForkTarget`，斷言結果集合為 `{published, already-published}` 且 journal 只有 1 筆 published metadata；另保留「publication 成功但 receipt 寫入失敗→來源 archive/clear→冷重啟取得完全相同 receipt、result 仍可讀」的案例。
+- 驗證：directed 6 檔 **53/53**；session-persistence 全 package **1256/1256**；desktop-gateway/session-persistence typecheck 0；package boundaries 0；`git diff --check` 0。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

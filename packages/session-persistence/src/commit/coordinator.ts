@@ -322,6 +322,18 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     try { return await work(log) } finally { await log.close() }
   })
 
+  // Publication needs a real per-target queue: `withWrite` tracks flights but
+  // does not serialize them, so two concurrent callers could both read pending
+  // and each append a published record. Queue the read-inside-write transition.
+  const publicationQueues = new Map<string, Promise<unknown>>()
+  const serializePublication = <T>(sessionId: string, work: () => Promise<T>): Promise<T> => {
+    const previous = publicationQueues.get(sessionId) ?? Promise.resolve()
+    const next = previous.catch(() => undefined).then(work)
+    publicationQueues.set(sessionId, next)
+    void next.finally(() => { if (publicationQueues.get(sessionId) === next) publicationQueues.delete(sessionId) }).catch(() => {})
+    return next
+  }
+
   const documentLog = async (): Promise<CommitLog> => {
     try { return await open(DOCUMENT_SESSION, 'write') }
     catch (error) {
@@ -669,7 +681,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       // Identity and pending state are re-read INSIDE the serialized metadata
       // write. A concurrent retry therefore either publishes once or observes
       // already-published, and a mismatched/replaced target is never modified.
-      return withWrite(target.targetSessionId, async (log) => {
+      return serializePublication(target.targetSessionId, () => withWrite(target.targetSessionId, async (log) => {
         const meta = metaOf(log)
         const seed = meta.semanticSeed as { operationId?: string; requestDigest?: string } | undefined
         if (meta.sessionId !== target.targetSessionId || meta.createdAt !== target.createdAt
@@ -680,7 +692,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
         if (publication !== 'pending') return 'mismatch' as const
         await log.append({ ops: [{ kind: 'meta', patch: { archived: false, forkPublication: 'published' } }] })
         return 'published' as const
-      })
+      }))
     },
     putDocument: putDocumentOf,
     putDocumentStrict: putDocumentOf,
