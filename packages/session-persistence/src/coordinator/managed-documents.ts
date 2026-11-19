@@ -67,10 +67,10 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     original.finished = true
     entry.journalMutation = undefined
   }
-  function attach(id:string,entry:ManagedEntry,session:Session|undefined,prefix:JournalPrefix,execution?:Parameters<typeof createManagedDocument>[11]) {
+  function attach(id:string,entry:ManagedEntry,session:Session|undefined,prefix:JournalPrefix,execution?:Parameters<typeof createManagedDocument>[11],selectedOperationId?:string) {
     if(entry.document)return entry.document
     const document=createManagedDocument(id,session,prefix,backend,ownership,options,report,
-      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : entry.selected ? {operationId:entry.selected.route.request.invocation.operationId,selected:true,bind(control){entry.control=control}} : undefined, processLatches, () => assertTaskOutside(id), executionChanges,execution,entry.journalCleanup ??= new Map())
+      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : entry.selected ? {operationId:entry.selected.route.request.invocation.operationId,selected:true,bind(control){entry.control=control}} : selectedOperationId!==undefined ? {operationId:selectedOperationId,selected:true,bind(control){entry.control=control}} : undefined, processLatches, () => assertTaskOutside(id), executionChanges,execution,entry.journalCleanup ??= new Map())
     entry.document=document
     if(!execution)bindRestored(entry,document)
     documentEntries.set(document,{id,entry})
@@ -109,6 +109,13 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     if(entry.revoked)document.revokeNewWork()
     if(!entry.bootstrap&&!entry.selected)resolved.set(id,document)
     return document
+  }
+  /** A selected-results (v3) durable birth owns a dedicated journal lane. Any
+   * later execution attachment must re-bind that original lane before its first
+   * fact admission; the ordinary journal writer refuses a v3 birth. */
+  function selectedExecutionOperationId(state:{readonly header?:{readonly semanticSeed?:{readonly version?:number;readonly operationId?:string}}|undefined}):string|undefined {
+    const seed=state.header?.semanticSeed
+    return seed?.version===3&&typeof seed.operationId==='string'&&seed.operationId.length>0?seed.operationId:undefined
   }
   function assertEntry(entry:ManagedEntry|undefined) {
     if((entry?.bootstrap||entry?.selected) && !entry.ready)throw new FactRecoveryRequiredError()
@@ -197,7 +204,19 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     const flight=(async()=>{
       const state=await record.source.initialize();
       if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError()
-      const document=attach(id,original,undefined,{...record.source.prefix},{state,held:record.source.held,assertCurrent:record.source.assertCurrent})
+      const selectedOperationId=selectedExecutionOperationId(state)
+      const document=attach(id,original,undefined,{...record.source.prefix},{state,held:record.source.held,assertCurrent:record.source.assertCurrent},selectedOperationId)
+      if(selectedOperationId!==undefined){
+        // A selected-results (v3) birth is written only through the selected
+        // journal lane, exactly like the fork's own capture. A fresh execution
+        // attachment must bind that lane before it may admit any fact, or the
+        // ordinary journal writer would refuse/absent its first batch.
+        if(!original.control?.bindSelected)throw new FactRecoveryRequiredError()
+        await original.control.bindSelected()
+        if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError()
+        original.control.ready()
+        document.assertReady()
+      }
       const exact=originalManagedExecution(document,ownership)
       const ready=Object.getOwnPropertyDescriptor(document,'assertReady')?.value
       const stateObserve=Object.getOwnPropertyDescriptor(state,'observe')?.value,current=exact.assertCurrent

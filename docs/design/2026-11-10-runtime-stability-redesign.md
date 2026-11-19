@@ -776,6 +776,15 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - P3 指名案例與 perf 群組都已在最終 HEAD 的完整套件中通過：selected-native-source、usage-protocol-aux-host、interaction-resume、current-unfinished-catalog、retention-grants；legacy-funding-batch、legacy-fork-scale（2,400s 預算）、legacy-fork-performance、10,001 observations（1,800s 預算）。
 - 最後一輪修正：dependency archive 競態改 bounded read retry（保留 concurrent-append refusal）；desktop-gateway `fileParallelism:false` 讓真實 host/native/loopback 長測不再互競；context-summary repeated60 以 bounded instruction re-observe + 1,800s watchdog 穩定 60/60。
 - 證據：`p3-verify-all5.log`；最終 commit `52cf62ff`；工作樹乾淨。
+#### 第一百一十四批：JSONL selected fork 子會話續接（Codex review P1 #1）
+
+- 根因 1（暖路徑）：V2 JSONL selected fork 的 ready target 出生 document 從未釋放；`releaseReadyTarget` 只接在 legacy fork host（`!commitLogStore`）。child 第一次 `session/prompt` 的 `acquireManagedExecution` 命中既有 `entry.document`，拋 `Original execution attachment requires its original entry construction`，失敗回合讓 close 報 `Desktop host cleanup incomplete: session service`。
+- 根因 2（重啟 adopted）：v3 selected birth 只能透過 dedicated selected lane 寫入；restart 後 fresh `acquireExecution` 接到 ordinary 非-selected document，`header()` 找不到 selected birth stage，append 變成 absent，`inbox.admit` 拋 `Fact admission requires recovery or was cancelled`。
+- 修正：
+  - `session-persistence/coordinator/managed-documents.ts`：`acquireExecution` 從 restored header 偵測 v3 selected birth（`selectedExecutionOperationId`），以 selected bootstrap control（`selected:true`、operationId）attach，`bindSelected()`＋`ready()` 後才回傳；非 v3 與 commit-log coordinator 不變。
+  - `desktop-gateway/src/host.ts`：`executeSelectedForkSession` 在 durable `ready`/`adopted` 後對 JSONL target 呼叫 `coordinator.closeManagedDocument(targetSessionId)`（commit-log 不保留此 document）。
+- 新回歸 `host-jsonl-fork-continue.test.ts`：暖路徑 child turn＋clean close；重啟 retry adopted＋child turn＋clean close；斷言真實 model call 與 child store 的 committed `turn/end`。
+- 驗證：新檔 **2/2**；整合 fork 8 檔 **33/33**（host-jsonl/commit-log selected、fork-session、legacy/restart 等）；四 package typecheck 0。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

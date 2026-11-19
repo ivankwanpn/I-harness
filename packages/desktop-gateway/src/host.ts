@@ -637,8 +637,18 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     coordinator,
     prepareForkSession:request=>forkController.prepare(request),
     executeForkSession:(command,control)=>forkController.execute(command,control),
+    // The legacy (JSONL) coordinator retains the selected fork target's birth
+    // document in its managed registry. A child's first turn must acquire its
+    // own execution attachment, so release the committed ready target once the
+    // fork outcome is durable (the selected counterpart of `releaseReadyTarget`
+    // above). The commit-log store's child birth is an ordinary journal and
+    // keeps no such document.
+    executeSelectedForkSession: async (command, control) => {
+      const outcome = await selectedFork.execute(command, control)
+      if (!commitLogStore && (outcome.kind === 'ready' || outcome.kind === 'adopted')) await coordinator.closeManagedDocument?.(command.operation.invocation.targetSessionId)
+      return outcome
+    },
     prepareSelectedForkSession: request => selectedFork.prepare(request),
-    executeSelectedForkSession: (command, control) => selectedFork.execute(command, control),
     modelState: async (sessionId) => {
       await coordinator.profile(sessionId)
       return service.modelState(sessionId)
