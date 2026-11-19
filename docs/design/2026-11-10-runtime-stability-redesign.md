@@ -785,6 +785,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
   - `desktop-gateway/src/host.ts`：`executeSelectedForkSession` 在 durable `ready`/`adopted` 後對 JSONL target 呼叫 `coordinator.closeManagedDocument(targetSessionId)`（commit-log 不保留此 document）。
 - 新回歸 `host-jsonl-fork-continue.test.ts`：暖路徑 child turn＋clean close；重啟 retry adopted＋child turn＋clean close；斷言真實 model call 與 child store 的 committed `turn/end`。
 - 驗證：新檔 **2/2**；整合 fork 8 檔 **33/33**（host-jsonl/commit-log selected、fork-session、legacy/restart 等）；四 package typecheck 0。
+#### 第一百一十五批：commit-log selected fork 保留先行、child 後建（Codex review P1 #2）
+
+- 重現：在 `host-commit-log-selected-recovery` 的既有 grant 故障注入中，第一次 `session/fork/begin` 因 `injected retention grant failure` 被拒後，立即查 `session/list` 已看到 `grant-failure-child`；現有測試只在 retry 成功後才查列表，掩蓋中間狀態。
+- 根因：commit-log selected controller 先 `createChildSession`（child log 立即可被 list）再 `retainSelectedManagedResults`；grant 失敗時留下已公開但未完成保留的 target。
+- 修正：`desktop-gateway/src/selected-fork.ts` 改為先確認 retention（`retainSelectedManagedResults` 以 operation targetSessionId 為 target，逐 batch 持久化 `granted`），再 `createChildSession`；grant 失敗時 child 尚未建立、list 不可見，retry 從已持久化的 grant 進度續接並建立/reuse target。若 child birth 失敗，grant 進度仍保留，retry 可續。
+- 測試：`host-commit-log-selected-recovery.test.ts` 在首次失敗與 retry 之間新增 `session/list` 不得含 target 的斷言；retry 後才驗證可見與 exact bytes。
+- 驗證：recovery 檔 **7/7**；整合 fork 8 檔 **33/33**；四 package typecheck 0。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

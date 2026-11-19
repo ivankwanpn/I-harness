@@ -64,6 +64,11 @@ it('does not acknowledge a failed retention grant and resumes the same operation
     expect(control.grants[0]!.targetSessionId).toBe('grant-failure-child')
     expect(control.grants[0]!.ids).toEqual([ref.id])
 
+    // Before the retry publishes the missing retention, the unfinished target
+    // must not be visible through the ordinary session routes.
+    const pendingList = await client.call('session/list')
+    expect(JSON.stringify(pendingList)).not.toContain('grant-failure-child')
+
     // The same operation resumes on the durable capture: the target birth is
     // idempotent and the missing grant is published before the retry is
     // acknowledged.

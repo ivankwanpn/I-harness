@@ -191,16 +191,22 @@ export function createSelectedForkController(options: {
       }
       const createChildSession = (coordinator as unknown as { createChildSession?: (request: never, options: { closure: string }) => Promise<{ id: string; receipt: { manifestDigest: string; seedLength: number; dependencyClosureDigest: string } }> }).createChildSession
       if (!createChildSession) return { version: 2 as const, kind: 'not-issued' as const, operation, capture: state?.capture ? 'captured' as const : 'uncaptured' as const, reason: 'unsupported' as const }
+      // Confirm the target's inherited retention BEFORE the child becomes a
+      // publicly listable session: a failed grant must not leave an unfinished
+      // fork visible through the ordinary session routes. Grant progress is
+      // persisted per batch, so a retry resumes at the first ungranted batch on
+      // the same capture and only then creates/reuses the durable target.
+      options.assertAvailable?.()
+      if (options.contextOutput) await retainSelectedManagedResults(options.contextOutput, ids, operation.prepared.core.sourceSessionId, operation.invocation.targetSessionId, state!, persist)
+      options.assertAvailable?.()
       const created = await createChildSession.call(coordinator, {
         invocation: operation.invocation, target: { kind: 'new' }, metadata: operation.prepared.core.metadata,
         lineage: { origin: 'fork', parentSession: operation.prepared.core.sourceSessionId }, seed: capture,
       } as never, { closure: capture.dependencyDigest })
+      if (created.id !== operation.invocation.targetSessionId) throw new Error('Selected fork target identity mismatch')
       // Retain after the child exists: a failed birth must not leave pins for a
       // document that was never created. Grant progress is persisted per batch,
       // so a retry resumes at the first ungranted batch on the same capture.
-      options.assertAvailable?.()
-      if (options.contextOutput) await retainSelectedManagedResults(options.contextOutput, ids, operation.prepared.core.sourceSessionId, created.id, state!, persist)
-      options.assertAvailable?.()
       state = storedSelectedForkState(await coordinator.getDocument(key)) ?? state
       if (options.taskDocumentEmpty && await coordinator.getDocument('task-' + created.id) === undefined) await coordinator.putDocument('task-' + created.id, options.taskDocumentEmpty())
       const project = operation.prepared.requestIntent.project
