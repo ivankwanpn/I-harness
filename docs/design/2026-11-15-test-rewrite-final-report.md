@@ -221,7 +221,7 @@
 7. **fork/retained（2）**：`fork-handoff`(1)、`retained-hook-recovery`(1)。nested legacy L1 transfer、coordinator retained cleanup debt。
 8. **other（2）**：`retained-batch-continuation`(1)、`instruction-isolated-review` 已列於 2。
 
-> 後續進展（第五十五～六十七批）：owned-service-shell(1)、delivery-lifecycle(1)、mixed-retention-quota(1)、publication-pins(2)、	itle-action(1)、instruction-diagnostics(1)、managed-instruction-handoff(3)、managed-runtime-context(1) 已修復；第 3 類 delivery recovery 只剩 delivery-active-wait(1)，context-output 類剩 0；executor 定點殘餘 **0**；最終 fixed-HEAD verify:all **PASSED**：16,472 passed／104 skipped／**0 failed**（82/82 projects；typecheck/e2e/reachability/boundaries/artifact 全 exit 0）。原始基線 215 failures 全數清零。。
+> 後續進展（第五十五～六十七批）：owned-service-shell(1)、delivery-lifecycle(1)、mixed-retention-quota(1)、publication-pins(2)、	itle-action(1)、instruction-diagnostics(1)、managed-instruction-handoff(3)、managed-runtime-context(1) 已修復；第 3 類 delivery recovery 只剩 delivery-active-wait(1)，context-output 類剩 0；executor 定點殘餘 **0**；最終 fixed-HEAD verify:all **PASSED**：16,472 passed／104 skipped／**0 failed**（82/82 projects；typecheck/e2e/reachability/boundaries/artifact 全 exit 0）。原始基線 215 failures 全數清零。Codex review 的兩個 P1（JSONL fork 續接、commit-log 保留可見性）已修復並以定向／完整 package 回歸驗證；CI 全量 job 實測 180 分鐘被取消 vs 本機 ~4h48，列後續 CI 成本工作。。
 
 P3 執行計畫（在固定 HEAD）：
 - `node scripts/test-env.mjs pnpm run verify:all`（上次同指令於 `cf92d076` 約 4h44m，含 suite／typecheck／e2e／reachability／boundaries／compiled gateway）。
