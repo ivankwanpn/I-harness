@@ -10,6 +10,9 @@ export type SessionSearchFallback = (sessionId: string, text: string, limit: num
 const LEGACY_REVIEW_PREFIX = "An agent requests execution of a tool call. Decide: approve (execute now, never ask the user),\nallow (ask the user first), or deny (never execute)."
 
 export function isConversationMetadata(meta: Readonly<SessionMeta>): boolean {
+  // A pending selected-fork target is not a normal conversation yet even if a
+  // crash left archived:false: only the original fork operation may publish it.
+  if ((meta as SessionMeta & { forkPublication?: string }).forkPublication === 'pending') return false
   return meta.origin !== 'subagent' && meta.origin !== 'approval-review' && !(meta.origin === 'team' && meta.parentSession)
 }
 
@@ -40,7 +43,10 @@ export function createSubagentVisibility(coordinator: SessionCoordinator) {
  * those children have their own parent-scoped navigation surface. */
 export function createSessionRuntimeVisibility(coordinator: SessionCoordinator) {
   const child = createSubagentVisibility(coordinator)
-  return async (id: string, meta: SessionMeta): Promise<boolean> => meta.origin === "approval-review" ? false : meta.origin === "subagent" ? child(id, meta) : true
+  return async (id: string, meta: SessionMeta): Promise<boolean> => {
+    if ((meta as SessionMeta & { forkPublication?: string }).forkPublication === 'pending') return false
+    return meta.origin === "approval-review" ? false : meta.origin === "subagent" ? child(id, meta) : true
+  }
 }
 
 /** UI search excludes child sessions before applying its result limit, so a

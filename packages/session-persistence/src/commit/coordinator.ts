@@ -83,6 +83,7 @@ export type CommitCoordinator = {
   list(): Promise<string[]>
   profile(sessionId: string): Promise<{ meta: SessionMeta; blank: boolean; updatedAt?: number }>
   updateMeta(sessionId: string, patch: Partial<SessionMeta>): Promise<SessionMeta>
+  publishForkTarget(target: { targetSessionId: string; sourceSessionId: string; operationId: string; requestDigest: string; createdAt: string }): Promise<'published' | 'already-published' | 'mismatch'>
   putDocument(key: string, data: unknown): Promise<void>
   putDocumentStrict(key: string, data: unknown): Promise<void>
   getDocument(key: string): Promise<unknown | undefined>
@@ -662,6 +663,23 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       return withWrite(sessionId, async (log) => {
         await log.append({ ops: [{ kind: 'meta', patch: captured as Readonly<Record<string, unknown>> }] })
         return metaOf(log)
+      })
+    },
+    publishForkTarget(target) {
+      // Identity and pending state are re-read INSIDE the serialized metadata
+      // write. A concurrent retry therefore either publishes once or observes
+      // already-published, and a mismatched/replaced target is never modified.
+      return withWrite(target.targetSessionId, async (log) => {
+        const meta = metaOf(log)
+        const seed = meta.semanticSeed as { operationId?: string; requestDigest?: string } | undefined
+        if (meta.sessionId !== target.targetSessionId || meta.createdAt !== target.createdAt
+          || meta.parentSession !== target.sourceSessionId || meta.origin !== 'fork'
+          || seed?.operationId !== target.operationId || seed.requestDigest !== target.requestDigest) return 'mismatch' as const
+        const publication = (meta as SessionMeta & { forkPublication?: 'pending' | 'published' }).forkPublication
+        if (publication === 'published') return 'already-published' as const
+        if (publication !== 'pending') return 'mismatch' as const
+        await log.append({ ops: [{ kind: 'meta', patch: { archived: false, forkPublication: 'published' } }] })
+        return 'published' as const
       })
     },
     putDocument: putDocumentOf,

@@ -6,6 +6,7 @@ import { codecRef } from '../../core-session/test/fixtures/selected-results.ts'
 import { createCommitCoordinator } from '../../session-persistence/src/commit/coordinator.ts'
 import { asSessionCoordinator } from '../../session-persistence/src/commit/facade.ts'
 import { captureSelectedResultsSeed, createSelectedForkController } from '../src/selected-fork.ts'
+import { createSelectedForkController as createLegacySelectedForkController } from './helpers/legacy-selected-fork-controller.ts'
 
 // This file owns the codec/controller level: it proves the exact seed metadata
 // the fork hands to a child and the controller's own write path. Body reads,
@@ -123,10 +124,10 @@ it('keeps a user archive when the same fork operation is replayed', async () => 
   try {
     const wrapped = new Proxy(fixture.session, {
       get(target, property) {
-        if (property === 'updateMeta') {
-          return async (id: string, patch: Record<string, unknown>) => {
-            if (failPublication && patch.forkPublication === 'published') { failPublication = false; throw new Error('injected publication failure') }
-            return target.updateMeta(id, patch)
+        if (property === 'publishForkTarget') {
+          return async (target: Parameters<NonNullable<typeof fixture.session.publishForkTarget>>[0]) => {
+            if (failPublication) { failPublication = false; throw new Error('injected publication failure') }
+            return fixture.session.publishForkTarget!(target)
           }
         }
         const value = Reflect.get(target, property, target)
@@ -278,4 +279,103 @@ it('resumes a partially granted multi-batch retention at the first ungranted bat
       .flatMap(event => (event.page?.rows ?? []).filter(row => row.protocol === 'managed'))
     expect(managed).toHaveLength(101)
   } finally { await coordinator.close().catch(() => {}); await rm(root, { recursive: true, force: true }) }
+}, 60000)
+
+it('keeps a published target archived when the outcome write fails and the user archives it', async () => {
+  const fixture = await savedResultFixture()
+  let failOutcomeWrite = true
+  try {
+    const wrapped = new Proxy(fixture.session, {
+      get(target, property) {
+        if (property === 'putDocument') {
+          return async (key: string, value: unknown) => {
+            if (failOutcomeWrite && value && typeof value === 'object' && 'outcome' in value) {
+              failOutcomeWrite = false
+              throw new Error('injected outcome save failure')
+            }
+            return target.putDocument(key, value)
+          }
+        }
+        const value = Reflect.get(target, property, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    }) as typeof fixture.session
+    const controller = createSelectedForkController({ coordinator: wrapped, contextOutput: { async grant() {} } })
+    const prepared = await controller.prepare({ version: 2, sourceSessionId: 's1', results: 'selected-results-v1' } as never)
+    if (prepared.kind !== 'prepared') throw new Error(JSON.stringify(prepared))
+    const operation = { version: 2, kind: 'session-fork-operation', prepared: prepared.prepared,
+      invocation: { version: 1, operationId: 'outcome-failure', targetSessionId: 'child', createdAt: '2026-11-06T00:00:00.000Z', requestDigest: prepared.prepared.requestDigest } }
+    // Publication is committed before the outcome save; the failure leaves a
+    // published target whose completed outcome document is missing.
+    await expect(controller.execute({ operation, mode: 'begin' } as never)).rejects.toThrow('injected outcome save failure')
+    const published = (await fixture.session.load('child')).session.header as { archived?: boolean; forkPublication?: string }
+    expect(published).toMatchObject({ archived: false, forkPublication: 'published' })
+    // A user archive after publication must survive the cold retry.
+    await fixture.session.updateMeta('child', { archived: true })
+    const retried = await controller.execute({ operation, mode: 'retry' } as never)
+    expect(retried).toMatchObject({ kind: 'ready', sessionId: 'child' })
+    const archived = (await fixture.session.load('child')).session.header as { archived?: boolean; forkPublication?: string }
+    expect(archived).toMatchObject({ archived: true, forkPublication: 'published' })
+  } finally { await fixture.close() }
+}, 60000)
+
+it('deduplicates concurrent retries of the same fork operation', async () => {
+  const fixture = await savedResultFixture()
+  const grantCalls: string[] = []
+  try {
+    const controller = createSelectedForkController({ coordinator: fixture.session,
+      contextOutput: { async grant(_access, _ids, target) { grantCalls.push(target) } } })
+    const prepared = await controller.prepare({ version: 2, sourceSessionId: 's1', results: 'selected-results-v1' } as never)
+    if (prepared.kind !== 'prepared') throw new Error(JSON.stringify(prepared))
+    const operation = { version: 2, kind: 'session-fork-operation', prepared: prepared.prepared,
+      invocation: { version: 1, operationId: 'concurrent-retry', targetSessionId: 'child', createdAt: '2026-11-06T00:00:00.000Z', requestDigest: prepared.prepared.requestDigest } }
+    const [first, second] = await Promise.all([
+      controller.execute({ operation, mode: 'begin' } as never),
+      controller.execute({ operation, mode: 'retry' } as never),
+    ])
+    expect(first).toMatchObject({ kind: 'ready', sessionId: 'child' })
+    expect(second).toMatchObject({ kind: 'ready', sessionId: 'child' })
+    expect('receipt' in first && 'receipt' in second ? first.receipt : undefined).toEqual('receipt' in second ? second.receipt : undefined)
+    // One seed/grant/publication effect for both concurrent callers.
+    expect(grantCalls).toEqual(['child'])
+    const header = (await fixture.session.load('child')).session.header as { archived?: boolean; forkPublication?: string }
+    expect(header).toMatchObject({ archived: false, forkPublication: 'published' })
+  } finally { await fixture.close() }
+}, 60000)
+
+it('keeps a legacy published:false target archived when the old unarchive failed', async () => {
+  const fixture = await savedResultFixture()
+  let failUnarchive = true
+  try {
+    const oldCoordinator = new Proxy(fixture.session, {
+      get(target, property) {
+        if (property === 'updateMeta') {
+          return async (id: string, patch: Record<string, unknown>) => {
+            if (failUnarchive && patch.archived === false) { failUnarchive = false; throw new Error('injected old unarchive failure') }
+            return target.updateMeta(id, patch)
+          }
+        }
+        const value = Reflect.get(target, property, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    }) as typeof fixture.session
+    // The preceding controller writes outcome{published:false}, then hides the
+    // target, then fails its archived:false write. The new controller cannot
+    // distinguish that from a later user archive, so it keeps the archive.
+    const previous = createLegacySelectedForkController({ coordinator: oldCoordinator, contextOutput: { async grant() {} } })
+    const prepared = await previous.prepare({ version: 2, sourceSessionId: 's1', results: 'selected-results-v1' } as never)
+    if (prepared.kind !== 'prepared') throw new Error(JSON.stringify(prepared))
+    const operation = { version: 2, kind: 'session-fork-operation', prepared: prepared.prepared,
+      invocation: { version: 1, operationId: 'legacy-ambiguous', targetSessionId: 'child', createdAt: '2026-11-06T00:00:00.000Z', requestDigest: prepared.prepared.requestDigest } }
+    await expect(previous.execute({ operation, mode: 'begin' } as never)).rejects.toThrow('injected old unarchive failure')
+    const before = (await fixture.session.load('child')).session.header as { archived?: boolean; forkPublication?: string }
+    expect(before).toMatchObject({ archived: true })
+    expect(before).not.toHaveProperty('forkPublication')
+    const current = createSelectedForkController({ coordinator: fixture.session, contextOutput: { async grant() {} } })
+    const retried = await current.execute({ operation, mode: 'retry' } as never)
+    expect(retried).toMatchObject({ kind: 'adopted', sessionId: 'child' })
+    const after = (await fixture.session.load('child')).session.header as { archived?: boolean; forkPublication?: string }
+    expect(after).toMatchObject({ archived: true })
+    expect(after).not.toHaveProperty('forkPublication')
+  } finally { await fixture.close() }
 }, 60000)

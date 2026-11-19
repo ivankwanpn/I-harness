@@ -144,6 +144,10 @@ export interface SessionCoordinator {
   closeManagedDocument(sessionId: string): Promise<void>
   /** Close only an unmounted birth document; an execution attachment keeps it. */
   closeManagedBirthDocument?(sessionId: string): Promise<void>
+  /** Publish exactly this fork target inside one controlled metadata write.
+   *  Verifies immutable birth identity and a pending publication marker; a
+   *  mismatch or a non-pending target leaves metadata and grants untouched. */
+  publishForkTarget?(target: { targetSessionId: string; sourceSessionId: string; operationId: string; requestDigest: string; createdAt: string }): Promise<'published' | 'already-published' | 'mismatch'>
   ensureWritableFormat?(sessionId: string): Promise<{ formatVersion: number }>
   /** Drain producers before calling. Holds write ownership until the store commits its tombstone. */
   deleteOwnedSession?(sessionId: string, manifest: SessionArtifactManifest): Promise<void>

@@ -1,5 +1,5 @@
 import { canonicalJsonData, createManagedSessionState } from '@i-harness/core-session'
-import { captureSelectedResultsRoute, type ForkExecutionControl, type SelectedResultsRoute, type SessionCoordinator } from '@i-harness/session-persistence'
+import { captureSelectedResultsRoute, type ForkExecutionControl, type SelectedResultsRoute, type SessionCoordinator, type SessionMeta } from '@i-harness/session-persistence'
 import { beginColdSelectedFinalization, inspectColdSelectedTarget } from '@i-harness/session-persistence/internal/selected-source-owner'
 import { createCompletedPassiveContext } from '@i-harness/core-session/internal/conversation-passive-context'
 import { exportSelectedResultsConversationSeed } from '../../core-session/src/conversation/seed-export.ts'
@@ -71,6 +71,9 @@ type StoredSelectedForkState = {
   capture?: CompiledSelectedResultsSemanticSeed
   granted?: number
   outcome?: SelectedForkSuccess
+  /** Legacy marker: written only by the preceding controller. Never written by
+   *  the current one; its `false` value is ambiguous across a crash. */
+  published?: boolean
 }
 const GRANT_BATCH = 100
 function storedSelectedForkState(value: unknown): StoredSelectedForkState | undefined {
@@ -86,6 +89,7 @@ function storedSelectedForkState(value: unknown): StoredSelectedForkState | unde
     const outcome = state.outcome as { kind?: unknown }
     if (!outcome || typeof outcome !== 'object' || (outcome.kind !== 'ready' && outcome.kind !== 'adopted')) return undefined
   }
+  if (state.published !== undefined && typeof state.published !== 'boolean') return undefined
   return state as StoredSelectedForkState
 }
 async function selectedOperationKey(operation: ForkCommandV2['operation']): Promise<string> {
@@ -111,13 +115,49 @@ function sameProjectIntent(current: { kind: string; projectId?: string }, prepar
   if (current.kind !== prepared.kind) return false
   return current.kind !== 'project' || current.projectId === prepared.projectId
 }
-/** Publish a selected fork target in ONE metadata write: archived:false and
- *  forkPublication:'published' together. Retries inspect forkPublication, so a
- *  later user archive is never undone by replaying the fork operation. */
-async function publishSelectedForkTarget(coordinator: SessionCoordinator, targetSessionId: string): Promise<void> {
-  const { meta } = await coordinator.profile(targetSessionId)
-  if ((meta as { forkPublication?: string }).forkPublication === 'published') return
-  await coordinator.updateMeta(targetSessionId, { archived: false, forkPublication: 'published' })
+/** Publication outcome for one selected fork target. Legacy targets have no
+ *  forkPublication marker: their outcome/archived evidence decides whether the
+ *  preceding controller already published them. */
+type SelectedPublication = 'published' | 'mismatch' | 'legacy-ambiguous'
+function sameSelectedTarget(meta: { sessionId?: string; createdAt?: string; parentSession?: string; origin?: string; semanticSeed?: { operationId?: string; requestDigest?: string } }, operation: ForkCommandV2['operation']): boolean {
+  return meta.sessionId === operation.invocation.targetSessionId && meta.createdAt === operation.invocation.createdAt
+    && meta.parentSession === operation.prepared.core.sourceSessionId && meta.origin === 'fork'
+    && meta.semanticSeed?.operationId === operation.invocation.operationId
+    && meta.semanticSeed?.requestDigest === operation.invocation.requestDigest
+}
+/** Publish only a still-pending target of exactly this operation through the
+ *  coordinator's controlled metadata write. A legacy target (no marker) keeps
+ *  its archive: an outcome with `published:false` and archived=true is an
+ *  unresolvable cross-write ambiguity and stays archived. */
+async function publishSelectedForkTarget(coordinator: SessionCoordinator, operation: ForkCommandV2['operation'], state: StoredSelectedForkState | undefined): Promise<SelectedPublication> {
+  const id = operation.invocation.targetSessionId
+  const { meta } = await coordinator.profile(id)
+  const marker = (meta as SessionMeta & { forkPublication?: 'pending' | 'published' }).forkPublication
+  if (!sameSelectedTarget(meta as never, operation)) return 'mismatch'
+  if (marker === 'pending') {
+    const result = await coordinator.publishForkTarget?.({ targetSessionId: id, sourceSessionId: operation.prepared.core.sourceSessionId,
+      operationId: operation.invocation.operationId, requestDigest: operation.invocation.requestDigest, createdAt: operation.invocation.createdAt })
+    if (!result) return 'mismatch'
+    return result === 'mismatch' ? 'mismatch' : 'published'
+  }
+  if (marker === 'published') {
+    const result = await coordinator.publishForkTarget?.({ targetSessionId: id, sourceSessionId: operation.prepared.core.sourceSessionId,
+      operationId: operation.invocation.operationId, requestDigest: operation.invocation.requestDigest, createdAt: operation.invocation.createdAt })
+    return result === 'mismatch' ? 'mismatch' : 'published'
+  }
+  // Legacy record from the preceding controller (or older): no publication
+  // marker was ever written.
+  if (state?.outcome !== undefined) {
+    // published:false means the crash fell between "outcome durable" and
+    // "published marker durable". archived=true may be either the birth hide or
+    // a user archive after a successful publication; that is not decidable, so
+    // the fail-closed answer keeps the archive. archived=false proves publication.
+    if (state.published === false && meta.archived === true) return 'legacy-ambiguous'
+    return 'published'
+  }
+  // A legacy target with no completed outcome has no publication evidence. An
+  // archived one stays archived; an already-visible one was clearly published.
+  return meta.archived === true ? 'legacy-ambiguous' : 'published'
 }
 
 /** Grant one batch at a time and persist the acknowledged batch count so a
@@ -147,20 +187,8 @@ export function createSelectedForkController(options: {
   contextOutput?: { grant(access: { sessionId: string }, refIds: string[], targetSessionId: string): Promise<void> }
 }): SelectedForkController {
   const { coordinator } = options
-  return {
-    async prepare(request) {
-      options.assertAvailable?.()
-      const selection = request.selection ?? { kind: 'completed' as const }
-      const captured = await captureSelectedResultsSeed(coordinator, request.sourceSessionId, options.assertAvailable, selection)
-      if (captured.kind !== 'compiled') return { kind: 'unavailable', reason: captured.reason === 'source-changed' ? 'source-unavailable' : 'unsupported' }
-      const project = (await options.projectOf?.(request.sourceSessionId)) ?? { kind: 'unmanaged' as const }
-      const core = { version: 2 as const, kind: 'session-fork-core' as const, sourceSessionId: request.sourceSessionId,
-        selection, sourceCapture: 'first-authorized-capture' as const,
-        metadata: request.metadata ?? {}, results: 'selected-results-v1' as const }
-      const { intent, requestDigest } = createSelectedResultsIntent(core, project)
-      return { kind: 'prepared', prepared: { version: 2, kind: 'session-fork-prepared', core: readSelectedResultsCore(core), requestIntent: intent, requestDigest } }
-    },
-    async execute(command) {
+  const selectedFlights = new Map<string, Promise<ForkOutcomeV2>>()
+  const executeSelected = async (command: ForkCommandV2): Promise<ForkOutcomeV2> => {
       options.assertAvailable?.()
       const operation = command.operation
       const key = await selectedOperationKey(operation)
@@ -171,7 +199,12 @@ export function createSelectedForkController(options: {
       // or cleared. No capture, grant or seed write is repeated.
       if (state?.outcome) {
         const completed = state.outcome
-        await publishSelectedForkTarget(coordinator, operation.invocation.targetSessionId)
+        const publication = await publishSelectedForkTarget(coordinator, operation, state)
+        if (publication === 'mismatch') return { version: 2 as const, kind: 'refused' as const, operation, capture: 'captured' as const, reason: 'conflict' as const }
+        // Legacy `published:false` + archived has no durable way to distinguish
+        // the birth hide from a later user archive; keep the archive and still
+        // return the original receipt as an adopted operation.
+        if (publication === 'legacy-ambiguous') return { ...completed, kind: 'adopted' as const }
         const status = await selectedTargetStatus(coordinator, operation, { ignoreArchive: true })
         if (status === 'ready') return { ...completed, kind: 'adopted' as const }
         if (status === 'policy') return { version: 2 as const, kind: 'refused' as const, operation, capture: 'captured' as const, reason: 'target-policy' as const }
@@ -211,6 +244,12 @@ export function createSelectedForkController(options: {
       } as never, { closure: capture.dependencyDigest,
         header: { archived: true, forkPublication: 'pending' }, mutableVisibility: true })
       if (created.id !== operation.invocation.targetSessionId) throw new Error('Selected fork target identity mismatch')
+      // A legacy target with no outcome and an archived header has no durable
+      // evidence of whether it was ever published. Keep it and its retention
+      // untouched instead of resuming grant writes for an undecidable record.
+      const createdMeta = (await coordinator.profile(created.id)).meta as SessionMeta & { forkPublication?: string }
+      if (createdMeta.forkPublication === undefined && state?.outcome === undefined && createdMeta.archived === true)
+        return selectedBlockedOutcome(operation, 'captured')
       // Retain after the confirmed identity: a failed grant leaves an archived,
       // non-public target whose retry resumes at the first ungranted batch.
       options.assertAvailable?.()
@@ -232,12 +271,38 @@ export function createSelectedForkController(options: {
           sourceObservation: { kind: 'semantic' as const, digest: (capture.sourceObservation as { digest: string }).digest },
           results: manifest.results ?? { version: 1 as const, rows: 0, pages: 0, digest: '0'.repeat(64) } } }
       // Publish only after identity, retention, documents and the receipt are
-      // ready. The single metadata write flips archived and forkPublication
-      // together; an adopted retry inspects forkPublication and therefore never
-      // overrides a user archive performed after publication.
-      await publishSelectedForkTarget(coordinator, created.id)
+      // ready. The coordinator re-checks the exact birth identity and pending
+      // marker inside the same serialized metadata write; concurrent retries
+      // therefore publish once and a replaced target keeps its metadata/grants.
+      const publication = await publishSelectedForkTarget(coordinator, operation, state)
+      if (publication === 'mismatch') return selectedRefusedOutcome(operation, 'captured', 'conflict')
+      if (publication === 'legacy-ambiguous') return selectedBlockedOutcome(operation, 'captured')
       await persist({ ...(state ?? { version: 1, capture }), capture, outcome })
       return outcome
+  }
+  return {
+    async prepare(request) {
+      options.assertAvailable?.()
+      const selection = request.selection ?? { kind: 'completed' as const }
+      const captured = await captureSelectedResultsSeed(coordinator, request.sourceSessionId, options.assertAvailable, selection)
+      if (captured.kind !== 'compiled') return { kind: 'unavailable', reason: captured.reason === 'source-changed' ? 'source-unavailable' : 'unsupported' }
+      const project = (await options.projectOf?.(request.sourceSessionId)) ?? { kind: 'unmanaged' as const }
+      const core = { version: 2 as const, kind: 'session-fork-core' as const, sourceSessionId: request.sourceSessionId,
+        selection, sourceCapture: 'first-authorized-capture' as const,
+        metadata: request.metadata ?? {}, results: 'selected-results-v1' as const }
+      const { intent, requestDigest } = createSelectedResultsIntent(core, project)
+      return { kind: 'prepared', prepared: { version: 2, kind: 'session-fork-prepared', core: readSelectedResultsCore(core), requestIntent: intent, requestDigest } }
+    },
+    execute(command: ForkCommandV2) {
+      const operation = command.operation
+      return (async () => {
+        const key = await selectedOperationKey(operation)
+        const prior = selectedFlights.get(key)
+        if (prior) return prior
+        const flight = executeSelected(command)
+        selectedFlights.set(key, flight)
+        try { return await flight } finally { if (selectedFlights.get(key) === flight) selectedFlights.delete(key) }
+      })()
     },
   }
 }

@@ -838,6 +838,23 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
   - retention 失敗後 child header 必須 `{archived:true,forkPublication:'pending'}`（target 不可見、無 orphan grant）。
   - 注入 publication metadata 寫入失敗一次：begin reject、target 仍 pending；retry 成功 ready/published；使用者 archive 後再次 retry adopted，header 仍 `{archived:true,forkPublication:'published'}`。
 - **驗證**：fork 相關 9 檔 **43/43**；core-session **947/947**；session-persistence **1256/1256**；session-persistence-jsonl **952 pass／17 skip／969 total／0 fail**；core-session/session-persistence/desktop-gateway typecheck 0。
+#### 第一百二十一批：待發布會話的可見性與受控發布（2026-11-19 handoff）
+
+- **可見性契約**：`forkPublication:'pending'` 現在是正常會話可見性判定之一。`isConversationMetadata` 與 `createSessionRuntimeVisibility` 對 pending 回 false，因此一般 `session/list`、`desktop/session/archived`、`restore/archive/manage`、開啟／續作、search/result/process read 等入口都不能把待發布目標當一般會話使用，即使 header 已出現 `archived:false`。內部 selected fork controller 仍透過 coordinator 直接定位目標做恢復／清理。
+- **受控發布**：`commit/coordinator.publishForkTarget` 在 **同一個序列化 metadata 寫入**內重讀目標，核對 `sessionId/createdAt/parentSession/origin/semanticSeed.operationId/requestDigest` 與 `forkPublication:'pending'`，才一次寫入 `{archived:false,forkPublication:'published'}`；第二次並行呼叫得到 `already-published`，身分不符或非 pending 完全不改 metadata。controller 以 operation key 對同操作 in-flight 去重，並行 retry 共用結果。
+- **舊資料契約**：
+  | 舊持久化證據 | 判定 |
+  |---|---|
+  | outcome + `published:true`（或無 marker） | 視為已完成／已發布；保留 archived（含使用者封存），回 adopted/receipt |
+  | outcome + `published:false` + archived:false | unarchive 已落地，視為已發布；保留目前 archived |
+  | outcome + `published:false` + archived:true | 跨寫入歧義（birth hide 或使用者封存不可辨）；保留 archived、回 adopted/receipt，不寫 metadata/retention |
+  | 無 outcome + 無 marker + archived:false | 舊目標已公開；續補授權並保存 outcome |
+  | 無 outcome + 無 marker + archived:true | 無發布證據；保留 archived、回 blocked，且在 grant 前就停止，不新增保留資料 |
+  | 新目標 `pending` | 只有同一原始操作經受控 `publishForkTarget` 可發布 |
+- **固定回歸**：
+  - 真實 Gateway＋commit-log＋受控模型：grant 失敗後 pending 目標不在一般/封存列表，restore 被拒、磁碟維持 pending；同一原操作 retry 成功發布。第二案用前一版 controller（vendored fixture，blob `209f5bc6`）產生已完成並被使用者封存的舊資料，新版冷啟動 replay 回 adopted、原 receipt、archived 保持 true、semanticSeed 不變。
+  - 故障注入：publication metadata 失敗→target 仍 pending、retry 成功；publication 已提交但 outcome 保存失敗→使用者 archive 後 retry 保留 archived；舊 `published:false`+archived 歧義→adopted 且 archived 不變；同操作並行 begin/retry→共用一個 flight、一次 grant、一次 publication。
+- **驗證**：直接命令 5 檔 **51/51**；完整 desktop-gateway package **1309/1309**（330 files）；core-session **947/947**；session-persistence 全 package 1254/1256（兩筆 Windows commit-log `rename EPERM` 既有 flake，兩檔隔離重跑 31/31）；desktop-gateway/session-persistence typecheck 0；package boundaries 128=baseline；`git diff --check` 0。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
