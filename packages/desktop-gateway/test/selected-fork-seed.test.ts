@@ -110,8 +110,55 @@ it('reports no ready target when managed retention cannot be published', async (
     // A failed grant must not be acknowledged as a ready selection: callers
     // retry the same operation instead of trusting a target without retention.
     await expect(controller.execute({ operation, mode: 'begin' } as never)).rejects.toThrow('target retention refused')
+    // The target was born hidden in a single birth write, so a failed grant
+    // cannot expose it and cannot leave an orphan grant for an unconfirmed target.
+    const pending = await fixture.session.load('child')
+    expect(pending.session.header as { archived?: boolean; forkPublication?: string }).toMatchObject({ archived: true, forkPublication: 'pending' })
   } finally { await fixture.close() }
 }, 30000)
+
+it('keeps a user archive when the same fork operation is replayed', async () => {
+  const fixture = await savedResultFixture()
+  let failPublication = true
+  try {
+    const wrapped = new Proxy(fixture.session, {
+      get(target, property) {
+        if (property === 'updateMeta') {
+          return async (id: string, patch: Record<string, unknown>) => {
+            if (failPublication && patch.forkPublication === 'published') { failPublication = false; throw new Error('injected publication failure') }
+            return target.updateMeta(id, patch)
+          }
+        }
+        const value = Reflect.get(target, property, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    }) as typeof fixture.session
+    const controller = createSelectedForkController({ coordinator: wrapped, contextOutput: { async grant() {} } })
+    const prepared = await controller.prepare({ version: 2, sourceSessionId: 's1', results: 'selected-results-v1' } as never)
+    if (prepared.kind !== 'prepared') throw new Error(JSON.stringify(prepared))
+    const operation = {
+      version: 2, kind: 'session-fork-operation', prepared: prepared.prepared,
+      invocation: { version: 1, operationId: 'publication-failure', targetSessionId: 'child', createdAt: '2026-11-06T00:00:00.000Z', requestDigest: prepared.prepared.requestDigest },
+    }
+    // The publication write is the only visibility transition. Its failure
+    // leaves the target archived/pending, not publicly visible.
+    await expect(controller.execute({ operation, mode: 'begin' } as never)).rejects.toThrow('injected publication failure')
+    const pending = (await fixture.session.load('child')).session.header as { archived?: boolean; forkPublication?: string }
+    expect(pending).toMatchObject({ archived: true, forkPublication: 'pending' })
+    // Retrying the same operation publishes once and returns the ready target.
+    const ready = await controller.execute({ operation, mode: 'retry' } as never)
+    expect(ready).toMatchObject({ kind: 'ready', sessionId: 'child' })
+    const published = (await fixture.session.load('child')).session.header as { archived?: boolean; forkPublication?: string }
+    expect(published).toMatchObject({ archived: false, forkPublication: 'published' })
+    // A later user archive must survive replaying the original operation: the
+    // fork publication state is already committed, so it is not re-published.
+    await fixture.session.updateMeta('child', { archived: true })
+    const adopted = await controller.execute({ operation, mode: 'retry' } as never)
+    expect(adopted).toMatchObject({ kind: 'adopted', sessionId: 'child' })
+    const archived = (await fixture.session.load('child')).session.header as { archived?: boolean; forkPublication?: string }
+    expect(archived).toMatchObject({ archived: true, forkPublication: 'published' })
+  } finally { await fixture.close() }
+}, 60000)
 
 it('captures a declared legacy reference as metadata only', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-gw-selected-legacy-'))

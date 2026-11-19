@@ -251,6 +251,11 @@ export interface SessionHeader {
   subagentTaskId?: string
   subagentAgentPath?: string
   origin?: string
+  /** Internal selected-fork publication gate: born `pending` and archived by
+   *  the fork birth, promoted to `published` in the same metadata write that
+   *  makes the target visible. Retries inspect this instead of treating
+   *  `archived:false` as proof the fork already published. */
+  forkPublication?: 'pending' | 'published'
 }
 
 export interface Session {

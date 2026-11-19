@@ -58,7 +58,7 @@ export type CommitCoordinator = {
   readonly storageRoot: string
   create(meta?: Partial<SessionMeta>, initialTaskDocument?: unknown): Promise<{ id: string }>
   inspectBirth(invocation: import('../coordinator/bootstrap-types.ts').BootstrapInvocation): Promise<import('../coordinator/bootstrap-types.ts').BootstrapInspection>
-  createChildSession(request: BootstrapRequest, options: { closure: string; initialTaskDocument?: unknown }): Promise<{ id: string; document: ManagedDocument; receipt: import('../coordinator/bootstrap-types.ts').BootstrapReceipt }>
+  createChildSession(request: BootstrapRequest, options: { closure: string; initialTaskDocument?: unknown; header?: Partial<SessionMeta>; mutableVisibility?: boolean }): Promise<{ id: string; document: ManagedDocument; receipt: import('../coordinator/bootstrap-types.ts').BootstrapReceipt }>
   bootstrapChildTargetWithCapture(request: import('../coordinator/child-bootstrap-intent.ts').ChildBootstrapCaptureRequest, guards: import('../coordinator/bootstrap-types.ts').BootstrapGuards, capture: () => Promise<BootstrapRequest>): Promise<import('../coordinator/bootstrap-types.ts').BootstrapOutcome>
   resumeChildTarget(request: import('../coordinator/child-bootstrap-intent.ts').ChildBootstrapCaptureRequest, guards: import('../coordinator/bootstrap-types.ts').BootstrapGuards, payload?: BootstrapRequest): Promise<import('../coordinator/bootstrap-types.ts').BootstrapOutcome>
   fork(parentId: string, options?: ForkOptions): Promise<{ id: string }>
@@ -462,7 +462,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
         const captured = captureBootstrapRequest(request)
         const { stage, initial } = buildBootstrapHeader(captured)
         const id = captured.invocation.targetSessionId
-        const header = JSON.parse(Buffer.from(stage.headerBytes).toString('utf8')) as Record<string, unknown>
+        const header = { ...JSON.parse(Buffer.from(stage.headerBytes).toString('utf8')) as Record<string, unknown>, ...(options.header ?? {}) }
         const entries = birthEntries(captured, stage, options.closure, initial)
         return inLegacyNamespace(id, async source => {
           const existing = await open(id, 'read').then(async log => {
@@ -478,7 +478,14 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
           if (existing) {
             // Operation ids alone cannot certify replay: the original immutable
             // header and acknowledged birth prefix must match the entire payload.
-            if (canonicalJsonData(existing.header) !== canonicalJsonData(header)
+            // A visibility-managed target may legitimately differ only in its
+            // archived/forkPublication metadata after a publication attempt.
+            const comparable = (value: Record<string, unknown>) => {
+              if (!options.mutableVisibility) return value
+              const { archived: _archived, forkPublication: _publication, ...rest } = value
+              return rest
+            }
+            if (canonicalJsonData(comparable(existing.header)) !== canonicalJsonData(comparable(header))
               || canonicalJsonData(existing.entries.slice(0, entries.length)) !== canonicalJsonData(entries)) {
               if (captured.target.kind === 'existing-empty' && existing.entries.length === 0) {
                 throw Object.assign(new Error('Commit bootstrap cannot replace an existing empty header; use a new target'), { code: 'COMMIT_EXISTING_EMPTY_UNSUPPORTED' })

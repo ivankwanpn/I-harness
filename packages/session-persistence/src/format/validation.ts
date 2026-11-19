@@ -74,7 +74,8 @@ export function buildSession(meta: SessionMeta | undefined, events: SessionEvent
   validateSubagentHeader(meta)
   const session: Session = { formatVersion: CURRENT_FORMAT_VERSION, events }
   if (meta && (meta.parentSession !== undefined || meta.seedLength !== undefined || meta.semanticSeed !== undefined
-    || meta.delegationDepth !== undefined || meta.subagentTaskId !== undefined || meta.subagentAgentPath !== undefined || meta.origin !== undefined)) {
+    || meta.delegationDepth !== undefined || meta.subagentTaskId !== undefined || meta.subagentAgentPath !== undefined || meta.origin !== undefined
+    || meta.archived !== undefined || meta.forkPublication !== undefined)) {
     session.header = {
       ...(meta.parentSession !== undefined ? { parentSession: meta.parentSession } : {}),
       ...(meta.seedLength !== undefined ? { seedLength: meta.seedLength } : {}),
@@ -84,6 +85,8 @@ export function buildSession(meta: SessionMeta | undefined, events: SessionEvent
       ...(meta.subagentAgentPath !== undefined ? { subagentAgentPath: meta.subagentAgentPath } : {}),
       ...(meta.delegationDepth !== undefined ? { delegationDepth: meta.delegationDepth } : {}),
       ...(meta.origin !== undefined ? { origin: meta.origin } : {}),
+      ...(meta.archived !== undefined ? { archived: meta.archived } : {}),
+      ...(meta.forkPublication !== undefined ? { forkPublication: meta.forkPublication } : {}),
     }
   }
   return session

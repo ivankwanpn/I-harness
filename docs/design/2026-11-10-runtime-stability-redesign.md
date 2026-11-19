@@ -830,6 +830,14 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
   - session-persistence/jsonl/executor/desktop-gateway typecheck 全 0。
 - **CI/本機數字校正**：`8afdaae3` workflow_dispatch run `44435339998` 的 verify:all 於 180m5s 被 180 分鐘 job timeout 取消；typecheck（11m9s）與 compiled gateway（1m15s）成功。可核查的本機約 4h48–4h49 全程記錄對應較早 HEAD `52cf62ff`，不是 `8afdaae3`。CI 成本差距仍待後續排程（提高上限至 360 分、拆分或快取）。
 - 三筆新提交與推送身分均為 `ivankwanpn <213307026+ivankwanpn@users.noreply.github.com>`；工作目錄乾淨。
+#### 第一百二十批：commit-log selected fork 待發布狀態與使用者封存分離（Codex review round 3）
+
+- **P1 #1 建立與隱藏兩次寫入的中間公開**：目標現在在 birth header 一次寫入 `archived:true` 與 `forkPublication:'pending'`；`createChildSession` 接受 `header`/`mutableVisibility` 選項，重播比對 header 時忽略這兩個可見性欄位。`SessionHeader`/`buildSession`/task-parent metadata allowlist 同步暴露並驗證 `forkPublication`。因此 archived 寫入失敗的窗口消失，grant 失敗時 target 天生不可見。
+- **P1 #2 重試撤銷使用者封存**：發布改為單一 `updateMeta(target,{archived:false,forkPublication:'published'})`；retry 先讀 `forkPublication`，已 published 就不再動 archived；completed outcome 的 adopted 狀態以 identity 為準（`ignoreArchive`），因此使用者後續 archive 會保留、原 receipt 仍可取回。移除舊的 `published` state-document marker，避免「published:false 一律當未發布」。
+- **固定故障注入**：
+  - retention 失敗後 child header 必須 `{archived:true,forkPublication:'pending'}`（target 不可見、無 orphan grant）。
+  - 注入 publication metadata 寫入失敗一次：begin reject、target 仍 pending；retry 成功 ready/published；使用者 archive 後再次 retry adopted，header 仍 `{archived:true,forkPublication:'published'}`。
+- **驗證**：fork 相關 9 檔 **43/43**；core-session **947/947**；session-persistence **1256/1256**；session-persistence-jsonl **952 pass／17 skip／969 total／0 fail**；core-session/session-persistence/desktop-gateway typecheck 0。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

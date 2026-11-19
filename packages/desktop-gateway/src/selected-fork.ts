@@ -71,7 +71,6 @@ type StoredSelectedForkState = {
   capture?: CompiledSelectedResultsSemanticSeed
   granted?: number
   outcome?: SelectedForkSuccess
-  published?: boolean
 }
 const GRANT_BATCH = 100
 function storedSelectedForkState(value: unknown): StoredSelectedForkState | undefined {
@@ -87,14 +86,13 @@ function storedSelectedForkState(value: unknown): StoredSelectedForkState | unde
     const outcome = state.outcome as { kind?: unknown }
     if (!outcome || typeof outcome !== 'object' || (outcome.kind !== 'ready' && outcome.kind !== 'adopted')) return undefined
   }
-  if (state.published !== undefined && typeof state.published !== 'boolean') return undefined
   return state as StoredSelectedForkState
 }
 async function selectedOperationKey(operation: ForkCommandV2['operation']): Promise<string> {
   const { createHash } = await import('node:crypto')
   return 'selected-fork-' + createHash('sha256').update(canonicalJsonData(operation)).digest('hex')
 }
-async function selectedTargetStatus(coordinator: SessionCoordinator, operation: ForkCommandV2['operation']): Promise<'ready' | 'absent' | 'conflict' | 'policy'> {
+async function selectedTargetStatus(coordinator: SessionCoordinator, operation: ForkCommandV2['operation'], options: { ignoreArchive?: boolean } = {}): Promise<'ready' | 'absent' | 'conflict' | 'policy'> {
   const id = operation.invocation.targetSessionId
   try {
     // The durable target identity is the session profile, not the reduced
@@ -106,12 +104,20 @@ async function selectedTargetStatus(coordinator: SessionCoordinator, operation: 
       || meta.createdAt !== operation.invocation.createdAt
       || meta.semanticSeed?.operationId !== operation.invocation.operationId
       || meta.semanticSeed?.requestDigest !== operation.invocation.requestDigest) return 'conflict'
-    return meta.archived ? 'policy' : 'ready'
+    return meta.archived && !options.ignoreArchive ? 'policy' : 'ready'
   } catch { return 'absent' }
 }
 function sameProjectIntent(current: { kind: string; projectId?: string }, prepared: { kind: string; projectId?: string }): boolean {
   if (current.kind !== prepared.kind) return false
   return current.kind !== 'project' || current.projectId === prepared.projectId
+}
+/** Publish a selected fork target in ONE metadata write: archived:false and
+ *  forkPublication:'published' together. Retries inspect forkPublication, so a
+ *  later user archive is never undone by replaying the fork operation. */
+async function publishSelectedForkTarget(coordinator: SessionCoordinator, targetSessionId: string): Promise<void> {
+  const { meta } = await coordinator.profile(targetSessionId)
+  if ((meta as { forkPublication?: string }).forkPublication === 'published') return
+  await coordinator.updateMeta(targetSessionId, { archived: false, forkPublication: 'published' })
 }
 
 /** Grant one batch at a time and persist the acknowledged batch count so a
@@ -165,12 +171,8 @@ export function createSelectedForkController(options: {
       // or cleared. No capture, grant or seed write is repeated.
       if (state?.outcome) {
         const completed = state.outcome
-        if (state.published === false) {
-          await coordinator.updateMeta(operation.invocation.targetSessionId, { archived: false })
-          state = { ...state, published: true }
-          await persist(state)
-        }
-        const status = await selectedTargetStatus(coordinator, operation)
+        await publishSelectedForkTarget(coordinator, operation.invocation.targetSessionId)
+        const status = await selectedTargetStatus(coordinator, operation, { ignoreArchive: true })
         if (status === 'ready') return { ...completed, kind: 'adopted' as const }
         if (status === 'policy') return { version: 2 as const, kind: 'refused' as const, operation, capture: 'captured' as const, reason: 'target-policy' as const }
         if (status === 'conflict') return { version: 2 as const, kind: 'refused' as const, operation, capture: 'captured' as const, reason: 'conflict' as const }
@@ -199,16 +201,16 @@ export function createSelectedForkController(options: {
       }
       const createChildSession = (coordinator as unknown as { createChildSession?: (request: never, options: { closure: string }) => Promise<{ id: string; receipt: { manifestDigest: string; seedLength: number; dependencyClosureDigest: string } }> }).createChildSession
       if (!createChildSession) return { version: 2 as const, kind: 'not-issued' as const, operation, capture: state?.capture ? 'captured' as const : 'uncaptured' as const, reason: 'unsupported' as const }
-      // Reserve and confirm the durable target identity FIRST, but keep it
-      // archived until both its retention and outcome are durable. A failed
-      // birth therefore cannot leave an orphan grant, and a failed grant cannot
-      // expose an unfinished target through the ordinary session routes.
+      // Reserve and confirm the durable target identity FIRST, hidden at birth:
+      // the birth header itself carries archived:true/forkPublication:'pending',
+      // so target creation and hiding are one durable write. A failed birth
+      // cannot leave an orphan grant, and a failed hide-write window does not exist.
       const created = await createChildSession.call(coordinator, {
         invocation: operation.invocation, target: { kind: 'new' }, metadata: operation.prepared.core.metadata,
         lineage: { origin: 'fork', parentSession: operation.prepared.core.sourceSessionId }, seed: capture,
-      } as never, { closure: capture.dependencyDigest })
+      } as never, { closure: capture.dependencyDigest,
+        header: { archived: true, forkPublication: 'pending' }, mutableVisibility: true })
       if (created.id !== operation.invocation.targetSessionId) throw new Error('Selected fork target identity mismatch')
-      await coordinator.updateMeta(created.id, { archived: true })
       // Retain after the confirmed identity: a failed grant leaves an archived,
       // non-public target whose retry resumes at the first ungranted batch.
       options.assertAvailable?.()
@@ -229,12 +231,12 @@ export function createSelectedForkController(options: {
           dependencyClosureDigest: created.receipt.dependencyClosureDigest, seedDigest: capture.digest,
           sourceObservation: { kind: 'semantic' as const, digest: (capture.sourceObservation as { digest: string }).digest },
           results: manifest.results ?? { version: 1 as const, rows: 0, pages: 0, digest: '0'.repeat(64) } } }
-      await persist({ ...(state ?? { version: 1, capture }), capture, outcome, published: false })
-      // Publish only after the target identity, retention and outcome are all
-      // durable. The final marker lets an adopted retry finish this publication
-      // without overriding a later legitimate user archive.
-      await coordinator.updateMeta(created.id, { archived: false })
-      await persist({ ...(state ?? { version: 1, capture }), capture, outcome, published: true })
+      // Publish only after identity, retention, documents and the receipt are
+      // ready. The single metadata write flips archived and forkPublication
+      // together; an adopted retry inspects forkPublication and therefore never
+      // overrides a user archive performed after publication.
+      await publishSelectedForkTarget(coordinator, created.id)
+      await persist({ ...(state ?? { version: 1, capture }), capture, outcome })
       return outcome
     },
   }

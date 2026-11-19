@@ -1,6 +1,6 @@
 import {canonicalJsonData,isStrictFactData,CURRENT_FORMAT_VERSION} from '@i-harness/core-session'
 
-const keys=['formatVersion','sessionId','createdAt','workspaceId','title','archived','modelSelection','semanticSeed','journal','parentSession','seedLength','delegationDepth','subagentProtocolVersion','subagentTaskId','subagentAgentPath','origin']
+const keys=['formatVersion','sessionId','createdAt','workspaceId','title','archived','modelSelection','semanticSeed','journal','parentSession','seedLength','delegationDepth','subagentProtocolVersion','subagentTaskId','subagentAgentPath','origin','forkPublication']
 const record=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v)
 const text=(v:unknown)=>typeof v==='string'&&v.length>0
 const integer=(v:unknown)=>Number.isSafeInteger(v)&&(v as number)>=0
@@ -13,6 +13,7 @@ export function taskParentMetadataProjection(value:unknown):string {
  if(!Number.isSafeInteger(value.formatVersion)||(value.formatVersion as number)<1||(value.formatVersion as number)>CURRENT_FORMAT_VERSION||!text(value.sessionId)||!text(value.createdAt))return fail()
  for(const key of ['workspaceId','parentSession','origin','subagentTaskId','subagentAgentPath'])if(Object.hasOwn(value,key)&&!text(value[key]))return fail()
  if(Object.hasOwn(value,'title')&&typeof value.title!=='string'||Object.hasOwn(value,'archived')&&typeof value.archived!=='boolean')return fail()
+ if(Object.hasOwn(value,'forkPublication')&&!['pending','published'].includes(value.forkPublication as string))return fail()
  for(const key of ['seedLength','delegationDepth'])if(Object.hasOwn(value,key)&&!integer(value[key]))return fail()
  if(Object.hasOwn(value,'subagentProtocolVersion')&&value.subagentProtocolVersion!==1)return fail()
  if(Object.hasOwn(value,'modelSelection')){const model=value.modelSelection;if(!closed(model,['provider','model'],['protocol','reasoningEffort'])||!Object.values(model).every(text))return fail()}
