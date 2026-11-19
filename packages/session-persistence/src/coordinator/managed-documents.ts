@@ -232,6 +232,11 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
   }
   return {
     acquireExecution,
+    async closeBirthDocument(id: string) {
+      const entry = documents.get(id)
+      if (!entry || executions.has(entry)) return
+      await closeOne(id)
+    },
     ...bootstrap,
     captureColdObservation(observation: ColdSelectedObservation) {
       const entry = captureColdObservationEntry(observation), association = entry.document && documentEntries.get(entry.document)

@@ -645,7 +645,12 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     // keeps no such document.
     executeSelectedForkSession: async (command, control) => {
       const outcome = await selectedFork.execute(command, control)
-      if (!commitLogStore && (outcome.kind === 'ready' || outcome.kind === 'adopted')) await coordinator.closeManagedDocument?.(command.operation.invocation.targetSessionId)
+      if (!commitLogStore && (outcome.kind === 'ready' || outcome.kind === 'adopted')) {
+        // Release only the fork's BIRTH document. Once a child turn has bound an
+        // execution attachment, closing it by id would retire that live
+        // execution document and the next turn would require reconciliation.
+        await coordinator.closeManagedBirthDocument?.(command.operation.invocation.targetSessionId)
+      }
       return outcome
     },
     prepareSelectedForkSession: request => selectedFork.prepare(request),

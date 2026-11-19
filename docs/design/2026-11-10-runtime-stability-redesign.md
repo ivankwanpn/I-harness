@@ -799,6 +799,15 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - **整合驗證**：8 個 fork/host 檔 **33/33**；session-persistence-jsonl 全 package **969 pass／17 skip**；session-persistence 全 package 1255/1256（唯一 `commit-coordinator` EPERM rename 為既有 Windows 瞬時 flake，單檔重跑 30/30）；session-persistence/jsonl/executor/desktop-gateway typecheck 全 0。
 - **CI 期限實測**：以 workflow_dispatch 在 HEAD `8afdaae3` 觸發完整 verify（run 44435339998）。`typecheck` 11m9s success、`compiled gateway` 1m15s success；`verify:all`（windows-latest、timeout-minutes:180）於 01:14:14Z 開始，**04:14:19Z 被取消**（180m5s）。本機同 HEAD 完整 verify:all 約 **4h48**；差距已由實際 CI 結果確認。後續需提高 job 上限（GitHub hosted 單 job 上限 360 分鐘）或拆分／快取／縮減 Windows 長測，非本次兩個 P1 的 release blocker。
 - **review 其他註記**：公開 Gateway 已支援 V2 fork，但 typed SDK 仍 V1；C67 compaction/reset/冷凍流程仍由內部 helper 驗證；列為 issue 125 關閉後的後續工作。
+#### 第一百一十七批：fork 重播只釋放 birth document（Codex review round 2 P1 #1）
+
+- 重現：JSONL fork child 先連續完成兩輪，再重送原 fork 操作得到 adopted 與相同 receipt，第三輪在模型呼叫前 `Managed facts require reconciliation`。原因：`executeSelectedForkSession` 每次 ready/adopted 都用 `closeManagedDocument(targetId)` 按 id 關閉，連已掛載 execution attachment 的 document 也關。
+- 修正：
+  - `managed-documents` 新增 `closeBirthDocument(id)`：只關閉沒有 `executions` entry 的 birth document；已綁 execution attachment 的 document 不動。
+  - coordinator types/factory 暴露 `closeManagedBirthDocument`（admission allowlist 同步）。
+  - `desktop-gateway/host.ts` 改用 `closeManagedBirthDocument`（JSONL 路徑；commit-log 不受影響）。
+- 回歸 `host-jsonl-fork-continue.test.ts` 新增第三案：child 完成兩輪 → retry 原操作 adopted → 第三輪成功 → 3 個 committed `turn/end`，clean close。
+- 驗證：fork/host 8 檔 **35/35**（含新 replay 案）；四 package typecheck 0。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

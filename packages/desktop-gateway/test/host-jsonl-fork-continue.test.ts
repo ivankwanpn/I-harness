@@ -72,3 +72,24 @@ it('continues an adopted selected-results fork child after a JSONL host restart'
     await fixture.dispose()
   }
 }, 180000)
+
+it('replays the original fork operation after the child has run turns', async () => {
+  const fixture = await createSelectedResultsHostFixture({ store: 'jsonl' })
+  const client = await fixture.open()
+  try {
+    await client.call('initialize')
+    const created = await client.call('session/create') as { sessionId: string }
+    await client.call('session/prompt', { sessionId: created.sessionId, prompt: 'read big' })
+    const { operation } = await forkSelected(client, created.sessionId, 'child', 'replay-continue')
+    await expect(client.call('session/prompt', { sessionId: 'child', prompt: 'child turn 1' })).resolves.toMatchObject({ ok: true })
+    await expect(client.call('session/prompt', { sessionId: 'child', prompt: 'child turn 2' })).resolves.toMatchObject({ ok: true })
+    // Replaying the original operation must adopt the same target without
+    // retiring the execution document the completed turns already mounted.
+    const adopted = await client.call('session/fork/retry', { operation }) as { kind: string; sessionId: string }
+    expect(adopted).toMatchObject({ kind: 'adopted', sessionId: 'child' })
+    await expect(client.call('session/prompt', { sessionId: 'child', prompt: 'child turn 3' })).resolves.toMatchObject({ ok: true })
+    const child = await storedSession(fixture.sessionDir, 'child', 'jsonl')
+    expect(turnEnds(child.events)).toBe(3)
+    await client.close()
+  } finally { await client.close().catch(() => {}); await fixture.dispose() }
+}, 180000)

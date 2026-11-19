@@ -138,6 +138,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     hasManagedDocument(sessionId) { return managed.has(sessionId) },
     revokeManagedDocumentNewWork: managed.revoke,
     closeManagedDocument(sessionId) { return retire(sessionId, () => managed.closeOne(sessionId)) },
+    closeManagedBirthDocument(sessionId) { return retire(sessionId, () => managed.closeBirthDocument(sessionId)) },
     ...(backend.deletionReceipt ? { deletionReceipt: (sessionId: string) => backend.deletionReceipt!(sessionId) } : {}),
     ...(backend.deleteOwnedSession ? {
       async deleteOwnedSession(sessionId:string,manifest:import('./coordinator/types.ts').SessionArtifactManifest){
@@ -228,7 +229,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
         throw new AggregateError(errors, 'Coordinator cleanup is unresolved')
       }
   }
-  admission.expose(coordinator, new Set(['ownerOf', 'hasLiveOwnership', 'revokeManagedDocumentNewWork', 'closeManagedDocument', 'releaseOwnership', 'flush', 'close']), new Set(['enqueue', 'onDocumentDeleted']))
+  admission.expose(coordinator, new Set(['ownerOf', 'hasLiveOwnership', 'revokeManagedDocumentNewWork', 'closeManagedDocument', 'closeManagedBirthDocument', 'releaseOwnership', 'flush', 'close']), new Set(['enqueue', 'onDocumentDeleted']))
   associateRestoredContextAcquisition(coordinator,{acquire:id=>admission.track(publicWork,()=>managed.acquireRestoredContext(id)),assertAdmission(id){admission.assertAdmission();assertDurableTransition();managed.assertOutsideCapture(id);observations.assertOutsideObservedSession(id);observations.assertManagedSessionAdmission(id);archiveReads?.assertPublicReadAdmission()}})
   associateManagedExecution(coordinator,{acquire:id=>admission.track(publicWork,()=>managed.acquireExecution(id)),assertAdmission(id){admission.assertAdmission();assertDurableTransition();managed.assertOutsideCapture(id);observations.assertOutsideObservedSession(id);observations.assertManagedSessionAdmission(id);archiveReads?.assertPublicReadAdmission()}})
   associateRetainedCoordinatorClose(coordinator, operation => admission.retire(() => closeWithRetained(operation), preflightClose))

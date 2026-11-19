@@ -142,6 +142,8 @@ export interface SessionCoordinator {
   hasManagedDocument?(sessionId: string): boolean
   revokeManagedDocumentNewWork(sessionId: string): void
   closeManagedDocument(sessionId: string): Promise<void>
+  /** Close only an unmounted birth document; an execution attachment keeps it. */
+  closeManagedBirthDocument?(sessionId: string): Promise<void>
   ensureWritableFormat?(sessionId: string): Promise<{ formatVersion: number }>
   /** Drain producers before calling. Holds write ownership until the store commits its tombstone. */
   deleteOwnedSession?(sessionId: string, manifest: SessionArtifactManifest): Promise<void>
