@@ -1,4 +1,6 @@
 import { expect, it, vi } from 'vitest'
+import { createJsonlCommitCoordinator } from '../../session-persistence-jsonl/src/commit-coordinator.ts'
+import { asSessionCoordinator } from '@i-harness/session-persistence/internal/commit-facade'
 import {
   bindProject, createSelectedResultsHostFixture, executeSelected, prepareSelected, seedManagedRows, storedSession,
 } from './helpers/selected-results-host.ts'
@@ -289,6 +291,32 @@ it('refuses a project binding that changed between prepare and begin', async () 
     const begun = await executeSelected(client, operation)
     expect(begun).toMatchObject({ kind: 'ready', sessionId: 'policy-child' })
     expect(await client.call('desktop/session/project/state', { sessionId: 'policy-child' })).toMatchObject({ projectId: fixture.project.id })
+  } finally {
+    await client.close().catch(() => {})
+    await fixture.dispose()
+  }
+}, 120000)
+
+it('does not write retention when the target identity cannot be confirmed', async () => {
+  const fixture = await createSelectedResultsHostFixture()
+  // Reserve a conflicting target identity before the fork: birth/restore must
+  // fail, and no retention may have been written for the unconfirmed target.
+  const seed = asSessionCoordinator(createJsonlCommitCoordinator(fixture.sessionDir, { lock: { enabled: true, lockRoot: fixture.sessionDir } }))
+  try {
+    await seed.create({ sessionId: 'identity-conflict-child' })
+    await seed.append('identity-conflict-child', [{ type: 'turn/start' }, { type: 'user/message', text: 'pre-existing target' }, { type: 'turn/end' }])
+  } finally { await seed.close() }
+  const client = await fixture.open()
+  try {
+    await client.call('initialize')
+    const created = await client.call('session/create') as { sessionId: string }
+    await client.call('session/prompt', { sessionId: created.sessionId, prompt: 'read big' })
+    control.grants = []
+    const { operation } = await prepareSelected(client, created.sessionId, 'identity-conflict-child', 'identity-conflict')
+    let outcome: unknown
+    try { outcome = await executeSelected(client, operation) } catch (error) { outcome = String(error) }
+    expect(JSON.stringify(outcome)).not.toContain('"kind":"ready"')
+    expect(control.grants).toEqual([])
   } finally {
     await client.close().catch(() => {})
     await fixture.dispose()

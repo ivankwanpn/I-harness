@@ -808,6 +808,17 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
   - `desktop-gateway/host.ts` 改用 `closeManagedBirthDocument`（JSONL 路徑；commit-log 不受影響）。
 - 回歸 `host-jsonl-fork-continue.test.ts` 新增第三案：child 完成兩輪 → retry 原操作 adopted → 第三輪成功 → 3 個 committed `turn/end`，clean close。
 - 驗證：fork/host 8 檔 **35/35**（含新 replay 案）；四 package typecheck 0。
+#### 第一百一十八批：commit-log selected fork 目標身分先確認、retention 後寫、最後公開（Codex review round 2 P1 #2）
+
+- 問題：上一批把 retention 移到 child 建立前，grant 失敗不再提前公開，但 target 身分建立/恢復失敗時已寫入的 grant 缺少清理路徑。
+- 修正（`desktop-gateway/src/selected-fork.ts`）：
+  1. 先 `createChildSession` 保留並確認目標身分；id 不符即拒絕。
+  2. 立即 `updateMeta(target,{archived:true})` 隱藏未完成 target。
+  3. 寫入 retention（逐 batch 持久化 granted）；此階段失敗時 target 仍 archived、不可由 `session/list` 看見，retry 可從 grant 進度續接。
+  4. 寫 task/project documents 與 outcome（`published:false`）。
+  5. 最後 `updateMeta(target,{archived:false})` 公開，再寫 `published:true`；adopted retry 若見 `published:false` 會完成公開後才回傳，已公開者不覆蓋使用者後續 archive。
+- 新故障注入 `host-commit-log-selected-recovery`：先建立衝突 target 身分，fork birth/restore 必須失敗且 `control.grants` 必須為空；原有 grant 失敗測試仍驗證 retry 前 list 不可見。
+- 驗證：fork/host 8 檔 **35/35**；四 package typecheck 0。
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

@@ -71,6 +71,7 @@ type StoredSelectedForkState = {
   capture?: CompiledSelectedResultsSemanticSeed
   granted?: number
   outcome?: SelectedForkSuccess
+  published?: boolean
 }
 const GRANT_BATCH = 100
 function storedSelectedForkState(value: unknown): StoredSelectedForkState | undefined {
@@ -86,6 +87,7 @@ function storedSelectedForkState(value: unknown): StoredSelectedForkState | unde
     const outcome = state.outcome as { kind?: unknown }
     if (!outcome || typeof outcome !== 'object' || (outcome.kind !== 'ready' && outcome.kind !== 'adopted')) return undefined
   }
+  if (state.published !== undefined && typeof state.published !== 'boolean') return undefined
   return state as StoredSelectedForkState
 }
 async function selectedOperationKey(operation: ForkCommandV2['operation']): Promise<string> {
@@ -162,8 +164,14 @@ export function createSelectedForkController(options: {
       // and exact receipt even if the source has since changed, been archived
       // or cleared. No capture, grant or seed write is repeated.
       if (state?.outcome) {
+        const completed = state.outcome
+        if (state.published === false) {
+          await coordinator.updateMeta(operation.invocation.targetSessionId, { archived: false })
+          state = { ...state, published: true }
+          await persist(state)
+        }
         const status = await selectedTargetStatus(coordinator, operation)
-        if (status === 'ready') return { ...state.outcome, kind: 'adopted' as const }
+        if (status === 'ready') return { ...completed, kind: 'adopted' as const }
         if (status === 'policy') return { version: 2 as const, kind: 'refused' as const, operation, capture: 'captured' as const, reason: 'target-policy' as const }
         if (status === 'conflict') return { version: 2 as const, kind: 'refused' as const, operation, capture: 'captured' as const, reason: 'conflict' as const }
         return { version: 2 as const, kind: 'not-issued' as const, operation, capture: 'captured' as const, reason: 'unavailable' as const }
@@ -191,22 +199,21 @@ export function createSelectedForkController(options: {
       }
       const createChildSession = (coordinator as unknown as { createChildSession?: (request: never, options: { closure: string }) => Promise<{ id: string; receipt: { manifestDigest: string; seedLength: number; dependencyClosureDigest: string } }> }).createChildSession
       if (!createChildSession) return { version: 2 as const, kind: 'not-issued' as const, operation, capture: state?.capture ? 'captured' as const : 'uncaptured' as const, reason: 'unsupported' as const }
-      // Confirm the target's inherited retention BEFORE the child becomes a
-      // publicly listable session: a failed grant must not leave an unfinished
-      // fork visible through the ordinary session routes. Grant progress is
-      // persisted per batch, so a retry resumes at the first ungranted batch on
-      // the same capture and only then creates/reuses the durable target.
-      options.assertAvailable?.()
-      if (options.contextOutput) await retainSelectedManagedResults(options.contextOutput, ids, operation.prepared.core.sourceSessionId, operation.invocation.targetSessionId, state!, persist)
-      options.assertAvailable?.()
+      // Reserve and confirm the durable target identity FIRST, but keep it
+      // archived until both its retention and outcome are durable. A failed
+      // birth therefore cannot leave an orphan grant, and a failed grant cannot
+      // expose an unfinished target through the ordinary session routes.
       const created = await createChildSession.call(coordinator, {
         invocation: operation.invocation, target: { kind: 'new' }, metadata: operation.prepared.core.metadata,
         lineage: { origin: 'fork', parentSession: operation.prepared.core.sourceSessionId }, seed: capture,
       } as never, { closure: capture.dependencyDigest })
       if (created.id !== operation.invocation.targetSessionId) throw new Error('Selected fork target identity mismatch')
-      // Retain after the child exists: a failed birth must not leave pins for a
-      // document that was never created. Grant progress is persisted per batch,
-      // so a retry resumes at the first ungranted batch on the same capture.
+      await coordinator.updateMeta(created.id, { archived: true })
+      // Retain after the confirmed identity: a failed grant leaves an archived,
+      // non-public target whose retry resumes at the first ungranted batch.
+      options.assertAvailable?.()
+      if (options.contextOutput) await retainSelectedManagedResults(options.contextOutput, ids, operation.prepared.core.sourceSessionId, created.id, state!, persist)
+      options.assertAvailable?.()
       state = storedSelectedForkState(await coordinator.getDocument(key)) ?? state
       if (options.taskDocumentEmpty && await coordinator.getDocument('task-' + created.id) === undefined) await coordinator.putDocument('task-' + created.id, options.taskDocumentEmpty())
       const project = operation.prepared.requestIntent.project
@@ -222,7 +229,12 @@ export function createSelectedForkController(options: {
           dependencyClosureDigest: created.receipt.dependencyClosureDigest, seedDigest: capture.digest,
           sourceObservation: { kind: 'semantic' as const, digest: (capture.sourceObservation as { digest: string }).digest },
           results: manifest.results ?? { version: 1 as const, rows: 0, pages: 0, digest: '0'.repeat(64) } } }
-      await persist({ ...(state ?? { version: 1, capture }), capture, outcome })
+      await persist({ ...(state ?? { version: 1, capture }), capture, outcome, published: false })
+      // Publish only after the target identity, retention and outcome are all
+      // durable. The final marker lets an adopted retry finish this publication
+      // without overriding a later legitimate user archive.
+      await coordinator.updateMeta(created.id, { archived: false })
+      await persist({ ...(state ?? { version: 1, capture }), capture, outcome, published: true })
       return outcome
     },
   }
