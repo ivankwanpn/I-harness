@@ -84,7 +84,11 @@ export function validatePayload(input) {
     const dependency = manifestAt(appDir, `resources/gateway/node_modules/${name}/package.json`)
     if (dependency.name !== name) throw new Error(`gateway dependency manifest mismatch: ${name}`)
   }
-  return { appDir, appName, ...releaseVersion, electronVersion, files, directories, fileCount: files.length, payloadBytes: files.reduce((sum, file) => sum + file.bytes, 0) }
+  // Reserve a separator and the relative path under the destination. Win32
+  // limits include the terminator for files and reserve room for 8.3 names in directories.
+  const maxDestinationLength = files.reduce((limit, file) => Math.min(limit, 258 - file.path.length, 247 - dirname(file.path).length), 248)
+  if (maxDestinationLength < appName.length + 3) throw new Error("payload paths are too long for a Windows installation")
+  return { appDir, appName, ...releaseVersion, electronVersion, files, directories, fileCount: files.length, payloadBytes: files.reduce((sum, file) => sum + file.bytes, 0), maxDestinationLength }
 }
 
 export function validateTestRoot(input) {
@@ -150,6 +154,7 @@ export function buildInstaller(options, run = spawnSync) {
     APP_NAME: appName, APP_VERSION: payload.version, WINDOWS_VERSION: payload.windowsVersion, PAYLOAD_ID: payloadId, OUTPUT_FILE: output, PAYLOAD_INSTALL: installInclude,
     PAYLOAD_REMOVE: removeInclude, PAYLOAD_DIRECTORIES: directoryInclude, PAYLOAD_CONFLICTS: conflictInclude,
     ESTIMATED_SIZE: Math.ceil(payload.payloadBytes / 1024),
+    MAX_INSTALL_DIR_LENGTH: payload.maxDestinationLength,
     ...(isolated ? { TEST_ROOT: isolated.testRoot, TEST_TOKEN: isolated.token, TEST_HOOKS: join(packageRoot, "test", "installer-fixture-hooks.nsh") } : {}),
   }
   const args = ["/NOCONFIG", "/WX", "/V3", "/INPUTCHARSET", "UTF8", ...Object.entries(definitions).map(([key, value]) => `/D${key}=${key === "TEST_ROOT" ? nsisString(String(value)) : value}`), join(packageRoot, "installer", "desktop.nsi")]
@@ -160,6 +165,7 @@ export function buildInstaller(options, run = spawnSync) {
     schemaVersion: 1, product: appName, version: payload.version, windowsVersion: payload.windowsVersion, electronVersion: payload.electronVersion,
     appDir: payload.appDir, output, bytes: statSync(output).size, sha256: hashFile(output),
     payloadFiles: payload.fileCount, payloadBytes: payload.payloadBytes,
+    maxDestinationLength: payload.maxDestinationLength,
     payloadId,
     payloadExeSha256: hashFile(join(payload.appDir, `${appName}.exe`)),
     nsis: compiler, isolatedTest: Boolean(isolated), staging, builtAt: new Date().toISOString(),

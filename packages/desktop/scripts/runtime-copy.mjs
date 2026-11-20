@@ -26,11 +26,13 @@ export function copyRuntimePackage(source, target) {
   const manifest = JSON.parse(readFileSync(join(source, "package.json"), "utf8"))
   const workspace = manifest.name?.startsWith("@i-harness/")
   const declared = workspace && Array.isArray(manifest.files) ? manifest.files : undefined
+  const separateDeclarations = typeof manifest.types === "string" && /^(?:\.\/)?dist-types\//.test(manifest.types)
   cpSync(source, target, {
     recursive: true, dereference: true,
     filter(path) {
       const parts = relative(source, path).split(sep)
       if (parts.some((part) => ["node_modules", ".git", ".vite", ".tmp", "target", "test", "tests", "__pycache__"].includes(part))) return false
+      if (separateDeclarations && parts[0] === "dist-types" && /\.d\.[cm]?ts(?:\.map)?$/i.test(parts.at(-1))) return false
       // Workspace build folders contain local integration-test state. An actual
       // build runtime must opt in through files; third-party native addons keep theirs.
       if (workspace && (parts[0] === ".superpowers" || parts[0] === "build" && !declared?.includes("build"))) return false

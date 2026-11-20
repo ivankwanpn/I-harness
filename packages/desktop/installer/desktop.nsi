@@ -80,6 +80,7 @@ Var MachineWideProbe
 Var InstallDirIsMachineWide
 
 !define DESTINATION_PERMISSION_MESSAGE "The installation folder is not writable with the current permissions (Windows error $DestinationError). Use the default LocalAppData folder: $LOCALAPPDATA\Programs\${APP_NAME}, or grant administrator permission to install under Program Files."
+!define DESTINATION_LENGTH_MESSAGE "The installation folder path is too long for the application files. Choose a path of ${MAX_INSTALL_DIR_LENGTH} characters or fewer."
 
 !macro Fail MESSAGE CODE
   StrCpy $FailureMessage "${MESSAGE}"
@@ -228,6 +229,11 @@ FunctionEnd
 
 Function ValidateDirectoryPage
   Call ValidateLocation
+  StrLen $0 "$INSTDIR"
+  ${If} $0 > ${MAX_INSTALL_DIR_LENGTH}
+    MessageBox MB_OK|MB_ICONSTOP "${DESTINATION_LENGTH_MESSAGE}"
+    Abort
+  ${EndIf}
   Call CheckDestinationAccess
   ${If} $DestinationWritable != 1
     MessageBox MB_OK|MB_ICONSTOP "${DESTINATION_PERMISSION_MESSAGE}"
@@ -415,6 +421,10 @@ FunctionEnd
 
 Section "${APP_NAME}" Install
   Call ValidateLocation
+  StrLen $0 "$INSTDIR"
+  ${If} $0 > ${MAX_INSTALL_DIR_LENGTH}
+    !insertmacro Fail "${DESTINATION_LENGTH_MESSAGE}" 2
+  ${EndIf}
   Call CheckDestinationAccess
   ${If} $DestinationWritable != 1
     !insertmacro Fail "${DESTINATION_PERMISSION_MESSAGE}" 5

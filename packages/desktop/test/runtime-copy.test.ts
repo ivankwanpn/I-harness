@@ -23,6 +23,28 @@ it("ships native packages exposing only a package subpath and native binary", ()
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
+it("excludes separate declaration distributions while preserving runtime and compiler assets", () => {
+  const root = mkdtempSync(join(tmpdir(), "ih-runtime-declarations-"))
+  const source = join(root, "source"), target = join(root, "shipped")
+  try {
+    mkdirSync(join(source, "dist"), { recursive: true })
+    mkdirSync(join(source, "dist-types"))
+    mkdirSync(join(source, "lib"))
+    writeFileSync(join(source, "package.json"), JSON.stringify({ name: "fixture", types: "./dist-types/index.d.ts" }))
+    writeFileSync(join(source, "dist/index.js"), "runtime")
+    writeFileSync(join(source, "lib/lib.es5.d.ts"), "compiler asset")
+    for (const file of ["index.d.ts", "index.d.cts", "index.d.mts.map"]) {
+      writeFileSync(join(source, "dist-types", file), "fixture")
+    }
+    copyRuntimePackage(source, target)
+    expect(readFileSync(join(target, "dist/index.js"), "utf8")).toBe("runtime")
+    expect(readFileSync(join(target, "lib/lib.es5.d.ts"), "utf8")).toBe("compiler asset")
+    for (const file of ["index.d.ts", "index.d.cts", "index.d.mts.map"]) {
+      expect(existsSync(join(target, "dist-types", file))).toBe(false)
+    }
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
 it("uses the gateway release manifest to omit local test state from the payload", () => {
   const root = mkdtempSync(join(tmpdir(), "ih-gateway-payload-"))
   try {

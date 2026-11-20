@@ -40,6 +40,15 @@ assert(readFileSync(production.output).includes(Buffer.from('level="highestAvail
 const blocked=join(root,'blocked-parent'),target=join(blocked,'I-harness Desktop')
 owned(blocked);mkdirSync(blocked)
 const evidence={root,installer:metadata.output,checks:['production manifest requests highestAvailable; file-only fixture remains asInvoker']}
+const longParent=join(root,'x'.repeat(metadata.maxDestinationLength-root.length-appName.length-1))
+const longTarget=join(longParent,appName)
+owned(longTarget)
+assert.equal(longTarget.length,metadata.maxDestinationLength+1)
+const tooLong=run(metadata.output,['/S',`/D=${longTarget}`],{windowsVerbatimArguments:true})
+assert.equal(tooLong.status,2)
+assert.match(readFileSync(join(root,'last-failure.txt'),'utf8'),/installation folder path is too long/i)
+assert(!existsSync(longParent),'path-length preflight must precede destination writes')
+evidence.checks.push('destination beyond the payload path limit is refused before creating files')
 let denied=false
 try{
   const acl=run('icacls.exe',[blocked,'/deny',`*${sid}:(OI)(CI)(W)`])

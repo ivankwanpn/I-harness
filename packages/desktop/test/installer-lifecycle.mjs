@@ -3,7 +3,7 @@
 // and never creates the current user's shortcuts or uninstall registry entry.
 import assert from "node:assert/strict"
 import { randomUUID, createHash } from "node:crypto"
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { spawn, spawnSync } from "node:child_process"
@@ -36,7 +36,7 @@ function run(executable, args, extra = {}) {
   if (result.error) throw result.error
   return result
 }
-function install(setup, target) { return run(setup, ["/S", `/D=${target}`]) }
+function install(setup, target) { return run(setup, ["/S", `/D=${target}`], { timeout: 240_000 }) }
 function hash(path) { return createHash("sha256").update(readFileSync(path)).digest("hex") }
 function compileFixture(stage, source) {
   const sourceName = validatePayload(source).appName
@@ -108,7 +108,14 @@ try {
   put(root, "user-data/session.json", "persistent user data sentinel")
   const current = compileFixture("current-setup", appDir)
   record("compile complete file-only payload", { metadata: current })
-  assert.equal(install(current.output, installed).status, 0, "owned upgrade must succeed")
+  const failure = join(root, "last-failure.txt")
+  if (existsSync(failure)) unlinkSync(failure)
+  const upgrade = install(current.output, installed)
+  assert.equal(upgrade.status, 0, `owned upgrade must succeed: ${existsSync(failure) ? readFileSync(failure, "utf8") : "no diagnostic"}`)
+  for (const file of payload.files) {
+    assert.equal(statSync(join(installed, file.path)).size, file.bytes, `installed file size: ${file.path}`)
+  }
+  record("upgrade installs every file of the release payload")
   assert(!existsSync(join(installed, "resources/gateway/obsolete-owned.txt")), "old gateway payload must be removed")
   assert(!existsSync(join(installed, "resources/app/$literal-owned.txt")), "escaped old app payload must be removed")
   assert.equal(readFileSync(join(installed, "keep-user-file.txt"), "utf8"), "unrelated install folder content")
