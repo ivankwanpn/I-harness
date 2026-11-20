@@ -3,11 +3,12 @@
 // and never creates the current user's shortcuts or uninstall registry entry.
 import assert from "node:assert/strict"
 import { randomUUID, createHash } from "node:crypto"
-import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { spawn, spawnSync } from "node:child_process"
 import { buildInstaller, testMarker, testOwner, validatePayload, validateTestRoot } from "../scripts/build-installer.mjs"
+import { createInstallerFixture } from "./installer-fixture.mjs"
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const repoRoot = resolve(packageRoot, "..", "..")
@@ -56,32 +57,15 @@ function put(base, relative, text = "fixture") {
   writeFileSync(path, text)
 }
 function earlierFixture() {
-  const earlier = join(root, "earlier-payload", "I-harness Desktop")
-  for (const file of [
-    "chrome_100_percent.pak", "chrome_200_percent.pak", "d3dcompiler_47.dll", "dxcompiler.dll",
-    "dxil.dll", "ffmpeg.dll", "icudtl.dat", "resources.pak", "v8_context_snapshot.bin", "snapshot_blob.bin",
-    "vk_swiftshader.dll", "vulkan-1.dll", "LICENSE", "LICENSES.chromium.html", "locales/en-US.pak",
-    "resources/app/out/main/index.js", "resources/app/out/preload/index.cjs", "resources/app/out/renderer/index.html",
-    "resources/app/out/model-catalog.json", "resources/app/out/main/model-catalog.json",
-    "resources/app/out/main/attachment-reader-worker.mjs", "resources/app/out/main/pdf.worker.mjs",
-    "resources/app/out/main/cmaps/fixture.bcmap", "resources/app/out/main/standard_fonts/fixture.pfb",
-    "resources/app/out/main/wasm/fixture.wasm", "resources/app/out/main/node_modules/@napi-rs/canvas/package.json",
-    "resources/app/licenses/opencode/LICENSE", "resources/app/licenses/zcode/LICENSE", "resources/gateway/cli/src/cli.ts",
-    "resources/gateway/cli/src/host.ts", "resources/gateway/node_modules/tsx/dist/loader.mjs",
-    "resources/gateway/obsolete-owned.txt", "resources/app/$literal-owned.txt",
-  ]) put(earlier, file)
-  for (const file of ["version", "resources/app/package.json", "resources/app/LICENSE", "resources/app/THIRD_PARTY_NOTICES", "resources/gateway/cli/package.json", "resources/gateway/node_modules/tsx/package.json"]) {
-    const target = join(earlier, file); mkdirSync(dirname(target), { recursive: true }); copyFileSync(join(appDir, file), target)
+  const earlier = createInstallerFixture(appDir, join(root, "earlier-payload", "I-harness Desktop"))
+  const manifestPath = join(earlier, "resources/app/package.json")
+  const legacyManifest = JSON.parse(readFileSync(manifestPath, "utf8"))
+  if (legacyManifest.productName !== "I-harness Desktop") {
+    renameSync(join(earlier, `${legacyManifest.productName}.exe`), join(earlier, "I-harness Desktop.exe"))
   }
-  const gateway = JSON.parse(readFileSync(join(appDir, "resources/gateway/cli/package.json"), "utf8"))
-  const legacyManifest = JSON.parse(readFileSync(join(earlier, "resources/app/package.json"), "utf8"))
   legacyManifest.productName = "I-harness Desktop"
-  writeFileSync(join(earlier, "resources/app/package.json"), JSON.stringify(legacyManifest))
-  for (const name of Object.keys(gateway.dependencies)) {
-    const file = `resources/gateway/node_modules/${name}/package.json`
-    const target = join(earlier, file); mkdirSync(dirname(target), { recursive: true }); copyFileSync(join(appDir, file), target)
-  }
-  copyFileSync(join(process.env.WINDIR, "System32", "whoami.exe"), join(earlier, "I-harness Desktop.exe"))
+  writeFileSync(manifestPath, JSON.stringify(legacyManifest))
+  put(earlier, "resources/app/$literal-owned.txt")
   return earlier
 }
 
@@ -140,14 +124,16 @@ try {
   const nodeProbe = join(root, "backend-probe.mjs")
   writeFileSync(nodeProbe, `import { pathToFileURL } from "node:url"; import assert from "node:assert/strict"; import { mkdirSync, writeFileSync } from "node:fs"; import { join } from "node:path";
 const appDir = process.env.IH_INSTALLER_APP_DIR; const root = process.env.IH_INSTALLER_TEST_ROOT;
-const { createDesktopHost } = await import(pathToFileURL(join(appDir, "resources/gateway/cli/src/host.ts")).href);
+const { createDesktopHost } = await import(pathToFileURL(join(appDir, "resources/gateway/cli/src/host.js")).href);
 assert.equal(typeof createDesktopHost, "function"); const frames = []; const workspace = join(root, "backend-workspace"); mkdirSync(workspace, { recursive: true });
 const settingsPath = join(root, "backend-settings.json"); writeFileSync(settingsPath, JSON.stringify({ sandboxMode: "read-only", autoTitle: false }));
 const host = await createDesktopHost({ workspace, sessionDir: join(root, "backend-sessions"), settingsPath, credentialsPath: join(root, "backend-credentials.json"), onWrite: frame => frames.push(frame) });
 try { await host.handleLine(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })); assert(frames.some(frame => frame.id === 1 && frame.result)); console.log(JSON.stringify({ node: process.versions.node, electron: process.versions.electron, backendImported: true, initialized: true })); } finally { await host.close(); }
 `)
   const childEnv = { ...process.env, ELECTRON_RUN_AS_NODE: "1", IH_INSTALLER_APP_DIR: installed, IH_INSTALLER_APP_EXE: executable, IH_INSTALLER_TEST_ROOT: root }
-  const nodeResult = run(executable, ["--import", pathToFileURL(join(installed, "resources/gateway/node_modules/tsx/dist/loader.mjs")).href, nodeProbe], { env: childEnv, windowsVerbatimArguments: false })
+  delete childEnv.NODE_OPTIONS
+  delete childEnv.NODE_PATH
+  const nodeResult = run(executable, [nodeProbe], { env: childEnv, windowsVerbatimArguments: false })
   assert.equal(nodeResult.status, 0, nodeResult.stderr)
   record("installed Electron runs shipped backend and initializes an isolated host", { output: nodeResult.stdout.trim() })
 
