@@ -1,9 +1,30 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { link, lstat, open, rename, unlink, type FileHandle } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { TASK_DOCUMENT_MAX_BYTES, type TaskDocumentAck, type TaskDocumentWrite, type TaskWriteOutcome } from '@i-harness/session-persistence'
 import { captureOriginalTaskWriteProducer } from '@i-harness/session-persistence/internal/task-document-operations'
 async function publishDocument(temp: string, path: string, mode: 'replace' | 'initialize') { if (mode === 'replace') await rename(temp, path); else await link(temp, path) }
+
+async function replaceLegacyDocument(temp: string, path: string): Promise<void> {
+  // A Windows reader can briefly block replacement. Keep the synced stage
+  // within the existing writer's lease while that sharing window clears.
+  const deadline = performance.now() + 500
+  let delayMs = 10
+  for (;;) {
+    try {
+      await rename(temp, path)
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | null)?.code
+      const remaining = deadline - performance.now()
+      if (process.platform !== 'win32' || (code !== 'EPERM' && code !== 'EBUSY') || remaining <= 0) throw error
+      await delay(Math.min(delayMs, remaining))
+      if (performance.now() >= deadline) throw error
+      delayMs = Math.min(delayMs * 2, 50)
+    }
+  }
+}
 /** Best-effort directory sync: POSIX needs it for rename durability, Windows
  * cannot open a directory for sync and the rename is already atomic there. */
 async function syncDirectory(directory: string): Promise<void> {
@@ -25,7 +46,7 @@ export async function writeLegacyDocument(path: string, data: unknown): Promise<
       await handle.writeFile(JSON.stringify(data) + '\n', 'utf-8')
       await handle.sync()
     } finally { await handle.close() }
-    await publishDocument(tmp, path, 'replace')
+    await replaceLegacyDocument(tmp, path)
   } catch (error) {
     await unlink(tmp).catch(() => {})
     throw error

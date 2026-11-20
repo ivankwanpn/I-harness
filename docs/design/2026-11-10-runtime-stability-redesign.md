@@ -877,6 +877,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - Gateway 標題案例的 50 秒外層期限曾在全庫執行中耗盡，原版隔離重跑為 15.401 秒。案例有兩個各自限時 30 秒的 prompt，調整外層至 90 秒以涵蓋請求以外的工作。新增失敗階段紀錄，並修正 loopback server 關閉現有連線的順序。原有標題斷言全部通過，該項實測 12.616 秒，同檔 4 項通過。[Gateway 日誌](C:/Users/IvanKwan/AppData/Local/Temp/ih-issue125-interrupted-checks/title-host-fixed.log)
 - 大型執行檔核准案例於全庫與隔離執行均超過 10 秒。以原始大型 fixture 與審批及執行次數斷言驗證，設定 30 秒外層期限並記錄失敗階段。完整 guard-approval 通過 107 項，該案例實測 10.176 秒。[審批套件日誌](C:/Users/IvanKwan/AppData/Local/Temp/ih-issue125-interrupted-checks/guard-full-fixed.log)
 
+#### 第一百二十五批　舊 JSONL 文件發布的 Windows 重試
+
+- 固定 `8e62cd8d` 的完整 `verify:all` 用時約 5 小時 07 分，82/82 個套件回報，16,510 項通過、84 項略過、1 項失敗。型別、端對端 127 項、reachability 374 列、套件邊界及隔離 compiled Gateway／Windows ACL 均通過。前後 5,857 個檔案的雜湊與路徑一致。[固定版本日誌](C:/Users/IvanKwan/AppData/Local/Temp/ih-verify-all-8e62cd8d/verify-all.log) [執行收據](C:/Users/IvanKwan/AppData/Local/Temp/ih-verify-all-8e62cd8d/metadata.json)
+- `project-context` 的常駐子代理完成寫入，但父會話的 `parent.doc.jsonl` 在保存期間兩次收到 Windows `rename` 的 `EPERM`。背景更新失敗後，案例在等待持久化的 `waiting` 狀態耗盡原有 90 秒。舊 JSONL 的 `putDocument` 現在由既有 writer lease 保有同一份已同步的候選檔，僅 `EPERM`／`EBUSY` 於 500 毫秒內按 10 至 50 毫秒退避重試。期限耗盡及其它 I/O 錯誤回傳原錯誤，保留舊文件。
+- 新回歸經正常 coordinator 寫入，在原版重現三項失敗。修正後 JSONL 定向 26 項、Executor 原案例整檔 10 項、同一案例單獨複驗及兩包型別檢查通過。覆蓋同一暫存檔重試、持續失敗保留舊文件及 EIO 直接回報。原 `project-context` 的等待期限與斷言仍用於驗收。[原版故障注入](C:/Users/IvanKwan/AppData/Local/Temp/ih-legacy-document-sharing-20261120/original.log) [修正後證據](C:/Users/IvanKwan/AppData/Local/Temp/ih-legacy-document-sharing-20261120/fixed-exits.json)
+- JSONL 全套 110 個測試檔、973 項通過。使用原 format 13 產生器輸出，16 個耐久檔案均符合 manifest，之前驗證結束後釋放的 10 個空鎖檔由正常執行管理。套件邊界維持 128，reachability 374 列無新增。 [完整 JSONL 套件日誌](C:/Users/IvanKwan/AppData/Local/Temp/ih-legacy-document-sharing-20261120/jsonl-full.log)
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。
@@ -1042,7 +1049,7 @@ Git 實際取得的 HTTPS 認證經 GitHub `/user` 核對為 `ivankwanpn`，帳�
 | 122 | selected target 的反覆 currentness 檢查重建整份不可變 seed，放大 fork 成本 | CPU profile 定位到重複 selected preparation、stage 解碼與 canonical JSON。原始 capture attempt 完成驗證並深度凍結後，只派生一次 preparation facts，後續每次仍核對原始 owner、route、native held lease 與 live source。關閉重用的對照案例中，反覆確認讓派生次數由 28 增至 94，候選控制驗證重複確認不再增加派生，真正來源變更仍拒絕 |
 | 123 | selected-results 的 managed rows 未納入實際依賴轉移，READY target 缺少結果內容 | 原確認只讀 manifest.artifacts，壓縮／reset 後僅保留在結果投影的 managed roots 因而遺漏。共用請求建構器合併兩份已驗證宣告並核對完整 ref，V2 原始請求在首次發布前固定，binding 與 closure 加入 results digest。額外未選取 ref、替換 digest、政策失效及 cross-version 控制通過，空 V2 亦使用自己的 closure |
 | 124 | JSONL selected target 冷恢復缺少真正 project／managed／legacy qualification 組合 | 在既有 coordinator factory 安裝一次原始 qualifiers，由 broker、managed results 與 legacy plan 各自持有資格及清理責任，再經原始 cold finalization 完成 READY。Metadata-only qualification 可在停用新 capture 時執行，body read／search 仍核對功能狀態。完整 C67 的 compaction、reset、來源 clear 及 cold target 精確內容控制通過 |
-| 125 | JSONL selected-results kernel 與公開 Gateway／SDK 入口尚未接通 | Host 目前只為 commit-log 安裝 V2 controller，JSONL 的原始 capture／publish／cold finalization 仍只由內部原生整合案例驅動。需要使用實際 host 入口完成 operation identity、重試、冷恢復及關閉整合，公開 JSONL 功能尚待交付 |
+| 125 | JSONL selected-results kernel 與公開 Gateway／SDK 入口未接通 | Typed SDK 與 Desktop IPC 現已提供可明確選用的 V2 route。使用真正 Gateway 驗證原始 operation、發布、重試、冷恢復及兩條 C67 結果路徑。實作及定向結果見第一百二十三批，整庫驗證見後續批次 |
 
 ### 程式定位
 

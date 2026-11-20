@@ -6,6 +6,8 @@
 
 `799ffb01` 的全庫驗證於 62/82 個專案回報後中斷。已修正當時記錄的三項測試失敗，定向重跑合計 181 項全部通過。最近一次完整全綠為 `52cf62ff`。 [中斷日誌](C:/Users/IvanKwan/AppData/Local/Temp/ih-verify-all-799ffb01/verify-all.log) [重跑結果](C:/Users/IvanKwan/AppData/Local/Temp/ih-issue125-interrupted-checks/fixed-exits.json)
 
+`8e62cd8d` 的固定版本完成 82/82 個套件，16,510 項通過、84 項略過、1 項失敗。五項後續檢查通過。唯一失敗來自舊 JSONL 保存父會話狀態的 Windows `EPERM`，寫入修正後定向故障注入與原 Executor 案例通過。此完整結果對應 `8e62cd8d`，修正後的完整結果另行記錄。 [全庫日誌](C:/Users/IvanKwan/AppData/Local/Temp/ih-verify-all-8e62cd8d/verify-all.log) [修正後定向驗證](C:/Users/IvanKwan/AppData/Local/Temp/ih-legacy-document-sharing-20261120/fixed-exits.json)
+
 ## 2026-11-16 接手審查註記
 
 原始全庫日誌確認 `cf92d076` 的 215 項失敗。舊清單 `verify-final2-file-failures.json` 共 94 列、failed 加總 184；**P0-A 已完成對帳**：31 項差額全部來自 31 個 file-summary 使用單數 `(1 test | 1 failed)` 而被舊解析規則（要求複數 `tests`）漏掉。對帳後清單為 215 項／125 檔，另列 5 筆 hook/cleanup 同名額外條目與 7 筆 unhandled errors（獨立通道）。skipped 104 項亦已逐項完成原因分類（0 unresolved），並核對舊基線 86 項之差異（+18，含 predecessor fixture 與 pwsh PATH 的執行環境差異）。詳見「P0-A 對帳」章節與證據目錄 `p0a-report.md`。下文的逐檔清單及掛起、WIP、flake 分類仍以原始失敗與正常入口進一步核實；兩個不同 HEAD 的全庫結果差異仍需配對證據才能完成根因判定。
