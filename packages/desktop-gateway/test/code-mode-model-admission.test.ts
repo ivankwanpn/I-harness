@@ -6,16 +6,15 @@ import { encodeFrame, isRpcSuccess, makeRequest, type RpcMessage } from '@i-harn
 import { createLoopbackProvider } from '../../core-agent/test/helpers/provider-loopback.ts';
 import { createDesktopHost } from '../src/host.ts';
 import { createHostFixtureModel } from './host-fixture-model.ts';
-it.each(['wait', 'close', 'history'] as const)('admits the original model Code call through the Desktop project and instruction assembly: %s', async (mode) => {
+it.each(['wait', 'close', 'history', 'parallel'] as const)('admits the original model Code call through the Desktop project and instruction assembly: %s', async (mode) => {
     const wire = (delta: unknown, finishReason: string) => `data: ${JSON.stringify({ choices: [{ delta, finish_reason: finishReason }], usage: { prompt_tokens: 20, completion_tokens: 10 } })}\n\ndata: [DONE]\n\n`;
+    const code = mode === 'parallel'
+        ? 'const both = await Promise.all([tools.list_dir({ path: "." }), tools.read({ path: "PROJECT.md" })]); text(JSON.stringify(both));'
+        : ['let sum = 0', 'for (let n = 1; n <= 100; n++) sum += n', 'text(sum)'].join('\n');
     const server = await createLoopbackProvider('/v1/chat/completions', [
         async (response) => {
             response.end(wire({ tool_calls: [{ index: 0, id: 'original-code', function: {
-                            name: 'code_exec', arguments: JSON.stringify({ code: [
-                                    'let sum = 0',
-                                    'for (let n = 1; n <= 100; n++) sum += n',
-                                    'text(sum)',
-                                ].join('\n'), yield_time_ms: 0 }),
+                            name: 'code_exec', arguments: JSON.stringify({ code, yield_time_ms: mode === 'parallel' ? 30_000 : 0 }),
                         } }] }, 'tool_calls'));
         },
         async (response, request) => {
@@ -49,6 +48,7 @@ it.each(['wait', 'close', 'history'] as const)('admits the original model Code c
         const workspace = join(root, 'workspace');
         await mkdir(workspace);
         await writeFile(join(workspace, 'AGENTS.md'), 'Use Code Mode for arithmetic. Preserve the original tool result.\n');
+        if (mode === 'parallel') await writeFile(join(workspace, 'PROJECT.md'), 'Original parallel read marker\n');
         const settingsPath = join(root, 'settings.json');
         const credentialsPath = join(root, 'credentials.json');
         await writeFile(settingsPath, JSON.stringify({ autoTitle: false, sandboxMode: 'read-only', codeMode: { mode: 'mixed' }, llm: {
@@ -111,6 +111,16 @@ it.each(['wait', 'close', 'history'] as const)('admits the original model Code c
         expect(events.filter(event => event.type === 'code/cell' && ['interrupted', 'failed'].includes(event.state ?? ''))).toEqual([]);
         expect(server.errors).toEqual([]);
         expect(server.requests).toHaveLength(mode === 'wait' ? 3 : 2);
+        if (mode === 'parallel') {
+            expect(events.filter(event => event.type === 'code/call').map(event => event.name)).toEqual(['list_dir', 'read']);
+            expect(events.filter(event => event.type === 'code/dispatch')).toHaveLength(2);
+            expect(events.filter(event => event.type === 'code/result').sort((a, b) => a.name!.localeCompare(b.name!))).toMatchObject([
+                { name: 'list_dir', envelope: { execution: { dispatch: 'dispatched', outcome: 'succeeded' } } },
+                { name: 'read', envelope: { execution: { dispatch: 'dispatched', outcome: 'succeeded' }, retention: { kind: 'inline', value: { content: expect.stringContaining('Original parallel read marker') } } } },
+            ]);
+            expect(events.filter(event => event.type === 'code/cell' && event.state === 'completed')).toHaveLength(1);
+            expect(events.filter(event => event.type === 'turn/end')).toHaveLength(1);
+        }
         if (mode !== 'wait')
             return;
         expect(events.filter(event => event.type === 'code/output')).toHaveLength(1);
