@@ -24,6 +24,7 @@ export type ForkPrepareRequestV2 = DeepReadonly<{ version:2; sourceSessionId:str
 export type SelectedResultsRequestIntentV2 = DeepReadonly<{ version:2;kind:'selected-results-fork-intent';requestCoreDigest:string;project:BootstrapProjectIntent }>
 export type ForkPreparedV2 = DeepReadonly<{version:2;kind:'session-fork-prepared';core:ForkRequestCoreV2;requestIntent:SelectedResultsRequestIntentV2;requestDigest:string}>
 export type ForkOperationV2 = DeepReadonly<{version:2;kind:'session-fork-operation';prepared:ForkPreparedV2;invocation:BootstrapInvocation}>
+export const SELECTED_RESULTS_FORK_CAPABILITY = 'session-fork-selected-results'
 export function readSelectedResultsCore(input: unknown): ForkRequestCoreV2 {
   const r=fields(input,['version','kind','sourceSessionId','selection','sourceCapture','metadata','results'])
   if(r.version!==2 || r.kind!=='session-fork-core' || r.sourceCapture!=='first-authorized-capture' || r.results!=='selected-results-v1') bad()
@@ -65,13 +66,28 @@ export function readSelectedResultsOperation(input:unknown):ForkOperationV2 {
   if(invocation.requestDigest!==prepared.requestDigest || invocation.targetSessionId===prepared.core.sourceSessionId) bad()
   return Object.freeze({version:2,kind:'session-fork-operation',prepared,invocation})
 }
+export function createSelectedResultsOperation(prepared: ForkPreparedV2, identity: { operationId: string; targetSessionId: string; createdAt: string }): ForkOperationV2 {
+  const originalPrepared = readSelectedResultsPrepared(prepared)
+  const original = fields(identity, ['operationId', 'targetSessionId', 'createdAt'])
+  return readSelectedResultsOperation({
+    version: 2, kind: 'session-fork-operation', prepared: originalPrepared,
+    invocation: { version: 1, ...original, requestDigest: originalPrepared.requestDigest },
+  })
+}
 export function readSelectedResultsCommand(input:unknown): ForkCommandV2 {
   const r=fields(input,['operation','mode']); if(r.mode!=='begin' && r.mode!=='retry') bad()
   return Object.freeze({operation:readSelectedResultsOperation(r.operation),mode:r.mode as 'begin'|'retry'})
 }
-export function readSelectedResultsPrepareResult(input:unknown): ForkPrepareResultV2 {
+export function readSelectedResultsPrepareResult(input:unknown, request?: ForkPrepareRequestV2): ForkPrepareResultV2 {
   const r=fields(input,['kind'],['prepared','reason'])
-  if(r.kind==='prepared') {fields(input,['kind','prepared']);return Object.freeze({kind:'prepared' as const,prepared:readSelectedResultsPrepared(r.prepared)})}
+  if (r.kind === 'prepared') {
+    fields(input, ['kind', 'prepared'])
+    const prepared = readSelectedResultsPrepared(r.prepared)
+    if (request && (prepared.core.sourceSessionId !== request.sourceSessionId
+      || !same(prepared.core.selection, request.selection ?? { kind: 'completed' })
+      || !same(prepared.core.metadata, request.metadata ?? {}))) bad()
+    return Object.freeze({ kind: 'prepared', prepared })
+  }
   fields(input,['kind','reason']);if(r.kind!=='unavailable' || !['unsupported','source-unavailable','policy','unavailable'].includes(r.reason)) bad()
   return Object.freeze({kind:'unavailable' as const,reason:r.reason as 'unsupported'|'source-unavailable'|'policy'|'unavailable'})
 }
@@ -118,3 +134,19 @@ export type ForkOutcomeV2 = DeepReadonly<{version:2;kind:'ready'|'adopted';opera
 export type ForkHostErrorDataV2 = DeepReadonly<{version:2;kind:'session-fork-error';operation:ForkOperationV2;capture:CaptureStateV2;reason:'host-unavailable'|'cleanup-incomplete'|'internal';lastOutcome?:ForkOutcomeV2}>
 export type ForkPrepareResultV2 = DeepReadonly<{kind:'prepared';prepared:ForkPreparedV2}|{kind:'unavailable';reason:'unsupported'|'source-unavailable'|'policy'|'unavailable'}>
 export type ForkCommandV2 = DeepReadonly<{operation:ForkOperationV2;mode:'begin'|'retry'}>
+
+export class SelectedResultsForkOperationError extends Error {
+  readonly outcome?: ForkOutcomeV2
+  readonly hostError?: ForkHostErrorDataV2
+
+  constructor(
+    readonly operation: ForkOperationV2,
+    readonly kind: 'outcome' | 'transport' | 'protocol' | 'host' | 'cleanup',
+    options: ErrorOptions & { outcome?: ForkOutcomeV2; hostError?: ForkHostErrorDataV2 } = {},
+  ) {
+    super('Selected-results fork ' + kind, options)
+    this.name = 'SelectedResultsForkOperationError'
+    this.outcome = options.outcome
+    this.hostError = options.hostError
+  }
+}

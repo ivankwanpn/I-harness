@@ -171,8 +171,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
         const archive = await backend.read(id)
         original.assertCurrent()
         original.held.assertHeld()
-        retainManagedJournalCleanup(existing.journalCleanup ??= new Map(), backend, id, original.held)
-        const actual = await backend.readJournalPrefix!(id, original.held)
+        const actual = await original.readOwnedPrefix()
         original.assertCurrent()
         document.assertObservable()
         if (documents.get(id) !== existing || existing.revoked || original.core.prefix !== expected

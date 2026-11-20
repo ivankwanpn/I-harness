@@ -43,7 +43,9 @@ export function createOwnedGatewayNative(options:{
    if(result.sessionId!==sessionId || !result.coordinator)throw Error('Original result store session unavailable')
    pending=acquireAssemblyResultStore(result);lease=await pending
    if(!lease.service||!lease.sourceFor)throw Error('Original result store unavailable')
-   return Object.freeze({service:lease.service,sourceFor:lease.sourceFor})
+   return Object.freeze({
+    service: lease.service, sourceFor: lease.sourceFor, withLegacyReadObservation: lease.withLegacyReadObservation,
+   })
   },
  }
 }

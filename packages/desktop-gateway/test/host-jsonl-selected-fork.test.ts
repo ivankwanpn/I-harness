@@ -60,7 +60,7 @@ it('forks a real tool turn through the dedicated JSONL public route', async () =
     // Retrying the same operation adopts the durable child and exact receipt
     // without a second capture, model request or publication effect.
     const childBytes = await readFile(join(fixture.sessionDir, 'selected-child.jsonl'))
-    const retried = await client.call('session/fork/retry', { operation }) as typeof begin
+    const retried = await client.call('session/fork/results/retry', { operation }) as typeof begin
     expect(retried.kind).toBe('adopted')
     expect(retried.receipt).toEqual(begin.receipt)
     expect(client.stats).toMatchObject({ modelCalls: 2, toolCalls: 1 })

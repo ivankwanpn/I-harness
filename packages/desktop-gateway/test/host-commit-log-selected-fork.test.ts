@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import { expect, it } from 'vitest'
+import { createSelectedResultsOperation, readSelectedResultsPrepareResult } from '@i-harness/sdk'
 import {
-  SELECTED_RESULTS_HEADER, createSelectedResultsHostFixture, forkSelected, seedManagedRows, storedSession,
+  SELECTED_RESULTS_HEADER, createSelectedResultsHostFixture, executeSelected, forkSelected, seedManagedRows, storedSession,
 } from './helpers/selected-results-host.ts'
 
 /** The source turn must really execute the read tool: the model scripts one
@@ -34,9 +35,17 @@ it('forks a real tool turn and keeps its selected result readable on the child',
     expect(before.bytes).toBe(saved.ref.encodedBytes)
     expect(createHash('sha256').update(Buffer.from(before.text, 'utf8')).digest('hex')).toBe(saved.ref.contentDigest)
 
-    const { prepared, operation, begin } = await forkSelected(client, sourceSessionId, 'selected-child', 'selected-fork')
+    const title = 'Retained output'
+    const request = { version: 2, sourceSessionId, results: 'selected-results-v1', metadata: { title } } as const
+    const response = readSelectedResultsPrepareResult(await client.call('session/fork/results/prepare', request), request)
+    if (response.kind !== 'prepared') throw Error('Selected-results preparation refused: ' + response.reason)
+    const { prepared } = response
+    const operation = createSelectedResultsOperation(prepared, {
+      operationId: 'selected-fork', targetSessionId: 'selected-child', createdAt: new Date().toISOString(),
+    })
+    const begin = await executeSelected(client, operation)
     expect(prepared).toMatchObject({ version: 2, kind: 'session-fork-prepared', core: { sourceSessionId, results: 'selected-results-v1' } })
-    expect(begin).toMatchObject({ kind: 'ready', capture: 'captured', sessionId: 'selected-child' })
+    expect(begin).toMatchObject({ kind: 'ready', capture: 'captured', sessionId: 'selected-child', title })
     expect(begin.receipt.results).toMatchObject({ version: 1, rows: 1, pages: 1 })
 
     const child = await storedSession(fixture.sessionDir, 'selected-child')
@@ -65,8 +74,8 @@ it('forks a real tool turn and keeps its selected result readable on the child',
 
     // Retrying the same operation adopts the same durable child without a
     // second capture, model request, seed write or retention effect.
-    const retried = await client.call('session/fork/retry', { operation }) as typeof begin
-    expect(retried.kind).toBe('adopted')
+    const retried = await client.call('session/fork/results/retry', { operation }) as typeof begin
+    expect(retried).toMatchObject({ kind: 'adopted', title })
     expect(retried.receipt).toEqual(begin.receipt)
     expect(client.stats).toMatchObject({ modelCalls: 2, toolCalls: 1 })
     const retriedChild = await storedSession(fixture.sessionDir, 'selected-child')

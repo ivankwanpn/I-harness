@@ -44,13 +44,43 @@ it.each(phases)('reports held v$version fork $phase activity and returns to idle
     const params = phase === 'prepare'
       ? { version, sourceSessionId: 'source', ...(version === 2 ? { results: 'selected-results-v1' } : {}) }
       : { operation: version === 1 ? f.legacyOperation : f.selectedOperation }
-    work = call('session/fork/' + phase, params)
+    work = call((version === 1 ? 'session/fork/' : 'session/fork/results/') + phase, params)
     await entered.promise
     for (let i = 0; i < 2; i++) expect((await call('session/dashboard')).result).toEqual({ sessions: [], active: true })
     release.resolve()
     expect(await work).toHaveProperty('result')
     for (let i = 0; i < 3; i++) expect((await call('session/dashboard')).result).toEqual({ sessions: [], active: false })
   } finally { release.resolve(); await work; await server.close() }
+})
+
+it.each([false, true])('serves the explicit selected-results routes with legacy fork enabled=%s', async legacy => {
+  const f = forkFixtures()
+  const server = createSdkServer(idleService(), {
+    ...(legacy ? {
+      prepareForkSession: async () => ({ kind: 'prepared' as const, prepared: f.legacy }),
+      executeForkSession: async () => { throw new Error('Unexpected legacy fork dispatch') },
+    } : {}),
+    prepareSelectedForkSession: async () => ({ kind: 'prepared', prepared: f.selected }),
+    executeSelectedForkSession: async ({ operation }) => ({
+      version: 2, kind: 'not-issued', operation, capture: 'uncaptured', reason: 'cancelled',
+    }),
+  })
+  let sequence = 0
+  const call = async (method: string, params: unknown = {}) => JSON.parse((await server.handleLine(encodeFrame(makeRequest(++sequence, method, params))))!)
+  const selectedRequest = { version: 2, sourceSessionId: 'source', results: 'selected-results-v1' }
+  try {
+    const initialized = await call('initialize')
+    expect(initialized.result.capabilities['session-fork-selected-results']).toEqual(['1'])
+    expect(initialized.result.capabilities['session-fork-bootstrap']).toEqual(legacy ? ['1'] : undefined)
+    expect(initialized.result.capabilities['session-fork-selected-results-default']).toBeUndefined()
+    expect((await call('session/fork/results/prepare', selectedRequest)).result).toEqual({ kind: 'prepared', prepared: f.selected })
+    expect((await call('session/fork/results/begin', { operation: f.selectedOperation })).result).toMatchObject({
+      kind: 'not-issued', operation: f.selectedOperation, reason: 'cancelled',
+    })
+    expect((await call('session/fork/results/retry', { operation: f.legacyOperation })).error.code).toBe(-32602)
+    expect((await call('session/fork/prepare', selectedRequest)).error.code).toBe(legacy ? -32602 : -32601)
+    expect((await call('session/fork/begin', { operation: f.selectedOperation })).error.code).toBe(legacy ? -32602 : -32601)
+  } finally { await server.close() }
 })
 
 it('retains factual owned activity when session listing is unavailable', async () => {

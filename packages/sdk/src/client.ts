@@ -2,6 +2,12 @@ import { readSessionContextState } from "@i-harness/core-session"
 import { randomUUID } from 'node:crypto'
 import { createForkOperation, readForkOperation, readForkPrepareRequest, readForkPrepareResult, readForkOutcome, readForkHostErrorData, ForkOperationError, ForkPreparationError,
   type ForkClientAttempt, type ForkOperation, type ForkOutcome, type ForkPrepared, type ForkPrepareRequest, type ForkPrepareResult, type ForkSuccess } from './fork.ts'
+import {
+  SELECTED_RESULTS_FORK_CAPABILITY, SelectedResultsForkOperationError, createSelectedResultsOperation,
+  readSelectedResultsCommand, readSelectedResultsHostError, readSelectedResultsOutcome,
+  readSelectedResultsPrepareRequest, readSelectedResultsPrepareResult,
+  type ForkCommandV2, type ForkOperationV2, type ForkOutcomeV2, type ForkPreparedV2, type ForkPrepareRequestV2, type ForkPrepareResultV2,
+} from '@i-harness/session-persistence/selected-results-fork-contract'
 // M27 R-C4: SDK client — low-level JSON-RPC exchange over an NDJSON line
 // transport (in-process or a spawned `i-harness sdk` subprocess) plus the
 // high-level run(session) surface. Zero new dependencies (node:child_process
@@ -42,6 +48,12 @@ export interface ServerInfo {
   version: string
   protocolVersion: number
   capabilities: Record<string, string[]>
+}
+
+interface SelectedResultsForkAttempt {
+  readonly operation: ForkOperationV2
+  readonly lastOutcome: ForkOutcomeV2 | undefined
+  run(): Promise<ForkOutcomeV2>
 }
 
 /** The connection itself failed (spawn error / exit / closed stream). */
@@ -322,6 +334,78 @@ export class HarnessClient {
     const attempt = this.createForkAttempt(prepared.prepared), outcome = await attempt.run()
     if (outcome.kind !== 'ready' && outcome.kind !== 'adopted') throw new ForkOperationError(attempt.operation, 'outcome', { outcome })
     return outcome
+  }
+
+  async prepareSelectedResultsFork(input: ForkPrepareRequestV2): Promise<ForkPrepareResultV2> {
+    const request = readSelectedResultsPrepareRequest(input)
+    if (!this.hasSelectedResultsForkCapability()) return { kind: 'unavailable', reason: 'unsupported' }
+    let reply: unknown
+    try { reply = await this.request('session/fork/results/prepare', request, 0) }
+    catch (cause) { throw new ForkPreparationError('transport', undefined, { cause }) }
+    try { return readSelectedResultsPrepareResult(reply, request) }
+    catch (cause) { throw new ForkPreparationError('protocol', undefined, { cause }) }
+  }
+
+  createSelectedResultsForkAttempt(prepared: ForkPreparedV2): SelectedResultsForkAttempt {
+    const operation = createSelectedResultsOperation(prepared, {
+      operationId: randomUUID(), targetSessionId: randomUUID(), createdAt: new Date().toISOString(),
+    })
+    let dispatched = false
+    let flight: Promise<ForkOutcomeV2> | undefined
+    let lastOutcome: ForkOutcomeV2 | undefined
+    const client = this
+    return Object.freeze({
+      operation,
+      get lastOutcome() { return lastOutcome },
+      run() {
+        if (flight) return flight
+        if (!client.hasSelectedResultsForkCapability()) {
+          lastOutcome = readSelectedResultsOutcome({
+            version: 2, kind: 'not-issued', operation, capture: dispatched ? 'unknown' : 'uncaptured', reason: 'unsupported',
+          }, operation)
+          return Promise.resolve(lastOutcome)
+        }
+        const mode = dispatched ? 'retry' : 'begin'
+        dispatched = true
+        const pending = client.executeSelectedResultsFork({ operation, mode }).then(outcome => {
+          lastOutcome = outcome
+          return outcome
+        }, cause => {
+          if (cause instanceof SelectedResultsForkOperationError && cause.hostError?.lastOutcome)
+            lastOutcome = cause.hostError.lastOutcome
+          throw cause
+        })
+        flight = pending
+        void pending.finally(() => { flight = undefined }).catch(() => {})
+        return pending
+      },
+    })
+  }
+
+  /** Execute an explicit V2 operation, including retrying an original operation on a new connection. */
+  async executeSelectedResultsFork(input: ForkCommandV2): Promise<ForkOutcomeV2> {
+    const { operation, mode } = readSelectedResultsCommand(input)
+    if (!this.hasSelectedResultsForkCapability()) return readSelectedResultsOutcome({
+      version: 2, kind: 'not-issued', operation, capture: mode === 'begin' ? 'uncaptured' : 'unknown', reason: 'unsupported',
+    }, operation)
+    let reply: unknown
+    try { reply = await this.request('session/fork/results/' + mode, { operation }, 0) }
+    catch (cause) {
+      if (cause instanceof RpcError) {
+        let data
+        try { data = readSelectedResultsHostError(cause.data, operation) }
+        catch { throw new SelectedResultsForkOperationError(operation, 'protocol', { cause }) }
+        throw new SelectedResultsForkOperationError(operation, data.reason === 'cleanup-incomplete' ? 'cleanup' : 'host', { cause, hostError: data })
+      }
+      throw new SelectedResultsForkOperationError(operation, 'transport', { cause })
+    }
+    try { return readSelectedResultsOutcome(reply, operation) }
+    catch (cause) { throw new SelectedResultsForkOperationError(operation, 'protocol', { cause }) }
+  }
+
+  private hasSelectedResultsForkCapability(): boolean {
+    const versions = this.serverInfo?.capabilities?.[SELECTED_RESULTS_FORK_CAPABILITY]
+    return Array.isArray(versions) && versions.includes('1')
   }
 
   async modelState(sessionId: string): Promise<SessionModelState> {

@@ -146,6 +146,9 @@ export type SessionCompactResult = import('@i-harness/context-engine').Reduction
  *   "session-fork-bootstrap": ["1"]
  *     session/fork/prepare → closed ForkPrepareResult
  *     session/fork/begin|retry { operation } → closed ForkOutcome
+ *   "session-fork-selected-results": ["1"]
+ *     session/fork/results/prepare → closed ForkPrepareResultV2
+ *     session/fork/results/begin|retry { operation } → closed ForkOutcomeV2
  *   "session-model": ["1"]
  *     session/model/state { sessionId } → SessionModelState
  *     session/model/set { sessionId, selection } → SessionModelState

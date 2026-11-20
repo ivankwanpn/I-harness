@@ -204,9 +204,9 @@ export function createSelectedForkController(options: {
         // Legacy `published:false` + archived has no durable way to distinguish
         // the birth hide from a later user archive; keep the archive and still
         // return the original receipt as an adopted operation.
-        if (publication === 'legacy-ambiguous') return { ...completed, kind: 'adopted' as const }
+        if (publication === 'legacy-ambiguous') return selectedReadyOutcome(operation, completed.receipt, 'adopted')
         const status = await selectedTargetStatus(coordinator, operation, { ignoreArchive: true })
-        if (status === 'ready') return { ...completed, kind: 'adopted' as const }
+        if (status === 'ready') return selectedReadyOutcome(operation, completed.receipt, 'adopted')
         if (status === 'policy') return { version: 2 as const, kind: 'refused' as const, operation, capture: 'captured' as const, reason: 'target-policy' as const }
         if (status === 'conflict') return { version: 2 as const, kind: 'refused' as const, operation, capture: 'captured' as const, reason: 'conflict' as const }
         return { version: 2 as const, kind: 'not-issued' as const, operation, capture: 'captured' as const, reason: 'unavailable' as const }
@@ -263,13 +263,16 @@ export function createSelectedForkController(options: {
         const projectKey = 'desktop-session-project-' + createHash('sha256').update(operation.invocation.targetSessionId).digest('hex')
         if (await coordinator.getDocument(projectKey) === undefined) await coordinator.putDocument(projectKey, Object.freeze({ version: 1, projectId: project.projectId }))
       }
-      const manifest = capture.records[0] as { results?: { version: 1; rows: number; pages: number; digest: string } }
-      const outcome = { version: 2 as const, kind: 'ready' as const, operation, capture: 'captured' as const, sessionId: operation.invocation.targetSessionId,
+      const manifest = capture.records[0]
+      if (manifest?.type !== 'conversation/seed-manifest' || manifest.version !== 3)
+        throw Error('Selected-results manifest is unavailable')
+      const outcome = selectedReadyOutcome(operation, {
+        version: 2, invocation: operation.invocation, manifestDigest: created.receipt.manifestDigest,
         seedLength: created.receipt.seedLength,
-        receipt: { version: 2 as const, invocation: operation.invocation, manifestDigest: created.receipt.manifestDigest, seedLength: created.receipt.seedLength,
-          dependencyClosureDigest: created.receipt.dependencyClosureDigest, seedDigest: capture.digest,
-          sourceObservation: { kind: 'semantic' as const, digest: (capture.sourceObservation as { digest: string }).digest },
-          results: manifest.results ?? { version: 1 as const, rows: 0, pages: 0, digest: '0'.repeat(64) } } }
+        dependencyClosureDigest: created.receipt.dependencyClosureDigest, seedDigest: capture.digest,
+        sourceObservation: { kind: 'semantic', digest: (capture.sourceObservation as { digest: string }).digest },
+        results: manifest.results,
+      }, 'ready')
       // Publish only after identity, retention, documents and the receipt are
       // ready. The coordinator re-checks the exact birth identity and pending
       // marker inside the same serialized metadata write; concurrent retries
@@ -343,7 +346,7 @@ function selectedTitle(operation: ForkOperationV2): { title?: string } {
   // absent metadata never invents a title.
   return operation.prepared.core.metadata.title === undefined ? {} : { title: operation.prepared.core.metadata.title }
 }
-function selectedReadyOutcome(operation: ForkOperationV2, receipt: ForkReceiptSummaryV2, kind: 'ready' | 'adopted'): ForkOutcomeV2 {
+function selectedReadyOutcome(operation: ForkOperationV2, receipt: ForkReceiptSummaryV2, kind: 'ready' | 'adopted'): SelectedForkSuccess {
   return Object.freeze({ version: 2 as const, kind, operation, capture: 'captured' as const,
     sessionId: operation.invocation.targetSessionId, seedLength: receipt.seedLength, receipt, ...selectedTitle(operation) })
 }

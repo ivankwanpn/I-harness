@@ -130,7 +130,10 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       }
 
       if (!message.method.startsWith("desktop/")) {
-        if (['session/fork/prepare', 'session/fork/begin', 'session/fork/retry'].includes(message.method)) {
+        if ([
+          'session/fork/prepare', 'session/fork/begin', 'session/fork/retry',
+          'session/fork/results/prepare', 'session/fork/results/begin', 'session/fork/results/retry',
+        ].includes(message.method)) {
           const request = { active: true }
           try { await forkRequestContext.run(request, () => base.handleLine(line, { fork: { async withNewWork<T>(sourceSessionId: string, _operationId: string, use: () => Promise<T>): Promise<T> {
             if (closed) throw new ForkAdmissionError('cancelled')

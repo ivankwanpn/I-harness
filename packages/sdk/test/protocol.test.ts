@@ -24,6 +24,7 @@ import { RpcError } from '../src/protocol.ts'
 import { SdkRunError } from '../src/client.ts'
 import { validationCollector } from '@i-harness/llm-seam'
 import { createBootstrapRequestIntent, readForkRequestCore, ForkOperationError, type ForkOperation } from '@i-harness/session-persistence'
+import { createSelectedResultsIntent, readSelectedResultsCore, SelectedResultsForkOperationError, type ForkOperationV2 } from '../src/index.ts'
 
 it('RPC and run errors retain only sanitized validation reports', () => {
   const check = validationCollector('openai-responses'); check.issue('binding', 'model', 'binding')
@@ -85,6 +86,71 @@ describe('public fork operation client over actual line transport', () => {
       expect(attempt.lastOutcome?.kind).toBe('adopted')
       expect(sent.map(value => value.method)).toEqual(['session/fork/begin','session/fork/retry'])
       expect(sent[0]!.operation).toEqual(sent[1]!.operation)
+    } finally { server.close(); await client.close() }
+  })
+})
+
+describe('explicit selected-results fork client', () => {
+  const request = { version: 2, sourceSessionId: 'source', results: 'selected-results-v1' } as const
+
+  it.each([{ capability: undefined }, { capability: '1' }, { capability: ['2'] }])('requires the selected-results capability for preparation (%j)', async ({ capability }) => {
+    const input = new PassThrough(), output = new PassThrough()
+    const server = new JsonRpcLineTransport(output, input), client = new HarnessClient(input, output)
+    const methods: string[] = []
+    server.onMessage(message => {
+      if (!isRpcRequest(message)) return
+      methods.push(message.method)
+      server.send(makeSuccess(message.id, { name: 'fixture', version: '1', protocolVersion: 3,
+        capabilities: { 'session-fork-bootstrap': ['1'], 'session-fork-selected-results': capability } }))
+    })
+    try {
+      await client.initialize()
+      expect(await client.prepareSelectedResultsFork(request)).toEqual({ kind: 'unavailable', reason: 'unsupported' })
+      expect(methods).toEqual(['initialize'])
+    } finally { server.close(); await client.close() }
+  })
+
+  it('keeps the original selected operation across cleanup failure and retry after deserialization', async () => {
+    const input = new PassThrough(), output = new PassThrough()
+    const server = new JsonRpcLineTransport(output, input), client = new HarnessClient(input, output)
+    const core = readSelectedResultsCore({ ...request, kind: 'session-fork-core', selection: { kind: 'completed' }, sourceCapture: 'first-authorized-capture', metadata: {} })
+    const { intent, requestDigest } = createSelectedResultsIntent(core, { kind: 'unassigned' })
+    const sent: { method: string; operation: ForkOperationV2 }[] = []
+    server.onMessage(message => {
+      if (!isRpcRequest(message)) return
+      if (message.method === 'initialize') {
+        server.send(makeSuccess(message.id, { name: 'fixture', version: '1', protocolVersion: 3, capabilities: { 'session-fork-selected-results': ['1'] } }))
+      } else if (message.method === 'session/fork/results/prepare') {
+        server.send(makeSuccess(message.id, { kind: 'prepared', prepared: { version: 2, kind: 'session-fork-prepared', core, requestIntent: intent, requestDigest } }))
+      } else {
+        const { operation } = message.params as { operation: ForkOperationV2 }
+        sent.push({ method: message.method, operation })
+        const outcome = {
+          version: 2, kind: 'adopted', operation, capture: 'captured', sessionId: operation.invocation.targetSessionId, seedLength: 2,
+          receipt: { version: 2, invocation: operation.invocation, manifestDigest: 'a'.repeat(64), seedLength: 2,
+            dependencyClosureDigest: 'b'.repeat(64), seedDigest: 'c'.repeat(64),
+            sourceObservation: { kind: 'semantic', digest: 'd'.repeat(64) }, results: { version: 1, rows: 1, pages: 1, digest: 'e'.repeat(64) } },
+        }
+        if (message.method === 'session/fork/results/begin') server.send(makeFailure(message.id, INTERNAL_ERROR, 'Fork cleanup incomplete', {
+          version: 2, kind: 'session-fork-error', operation, capture: 'captured', reason: 'cleanup-incomplete', lastOutcome: outcome,
+        }))
+        else server.send(makeSuccess(message.id, outcome))
+      }
+    })
+    try {
+      await client.initialize()
+      const prepared = await client.prepareSelectedResultsFork(request)
+      if (prepared.kind !== 'prepared') throw Error('Expected selected preparation')
+      const attempt = client.createSelectedResultsForkAttempt(prepared.prepared)
+      const first = attempt.run()
+      expect(attempt.run()).toBe(first)
+      expect(await first.catch(error => error)).toBeInstanceOf(SelectedResultsForkOperationError)
+      expect(attempt.lastOutcome).toMatchObject({ version: 2, operation: attempt.operation, kind: 'adopted' })
+      expect(await attempt.run()).toEqual(attempt.lastOutcome)
+      const restored = JSON.parse(JSON.stringify(attempt.operation)) as ForkOperationV2
+      expect(await client.executeSelectedResultsFork({ operation: restored, mode: 'retry' })).toEqual(attempt.lastOutcome)
+      expect(sent.map(frame => frame.method)).toEqual(['session/fork/results/begin', 'session/fork/results/retry', 'session/fork/results/retry'])
+      expect(sent.every(frame => JSON.stringify(frame.operation) === JSON.stringify(attempt.operation))).toBe(true)
     } finally { server.close(); await client.close() }
   })
 })

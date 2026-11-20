@@ -3,6 +3,7 @@
 // so client-only consumers never load the engine.
 export * from "./protocol.ts"
 export * from './fork.ts'
+export * from '@i-harness/session-persistence/selected-results-fork-contract'
 export { modelFailureFacts, safeModelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 export type { ImageInput, ImageMediaType } from "@i-harness/core-session"
 // M68 batch A: the host-side outbound bound (apps/cli wires it to stdout).

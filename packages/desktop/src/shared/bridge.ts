@@ -1,6 +1,6 @@
 import type { ProviderCommand } from "@i-harness/desktop-gateway"
 import type { PluginCommand } from "@i-harness/desktop-gateway"
-import type { ImageInput, SessionModelSelection } from "@i-harness/sdk"
+import type { ForkOperationV2, ForkPrepareRequestV2, ImageInput, SessionModelSelection } from "@i-harness/sdk"
 import type { AgentDefaults } from "@i-harness/desktop-gateway"
 import type { SubagentSettingsCommand } from "@i-harness/desktop-gateway"
 import type { HookSettingsCommand } from "@i-harness/desktop-gateway"
@@ -107,6 +107,9 @@ export type DesktopRequest =
   | { kind: "desktop/session/archived"; workspaceId: string }
   | { kind: 'desktop/session/fork/prepare'; workspaceId: string; request: ForkPrepareRequest }
   | { kind: 'desktop/session/fork/begin' | 'desktop/session/fork/retry'; workspaceId: string; operation: ForkOperation }
+  | { kind: 'desktop/session/fork/capabilities'; workspaceId: string }
+  | { kind: 'desktop/session/fork/results/prepare'; workspaceId: string; request: ForkPrepareRequestV2 }
+  | { kind: 'desktop/session/fork/results/begin' | 'desktop/session/fork/results/retry'; workspaceId: string; operation: ForkOperationV2 }
   | { kind: "desktop/session/manage"; workspaceId: string; sessionId: string; action: "rename" | "archive" | "restore" | "pin" | "unpin" | "read" | "unread"; title?: string }
   | { kind: "session/model/set"; workspaceId: string; sessionId: string; selection: SessionModelSelection }
   | { kind: "desktop/provider/directory"; workspaceId: string }

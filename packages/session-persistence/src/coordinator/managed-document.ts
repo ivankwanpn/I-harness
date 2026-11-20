@@ -94,7 +94,7 @@ type ProcessUpdate = { kind: 'unchanged'; highWater: number } | { kind: 'suffix'
 type ManagedProcessCapture = { readonly initial: SessionView; take(): ProcessUpdate; assertHealthy(): void; assertDrained(): void; markVerified(): void; close(): void };
 const executionStatuses = new WeakMap<ManagedDocument, () => 'available' | 'unavailable' | 'retired'>();
 type ExecutionState=Awaited<ReturnType<typeof restoreManagedExecutionState>>;
-const privateExecutionOwners=new WeakMap<object,{core:ExecutionState;held:HeldFactOwner;ownership:Ownership;assertCurrent():void;retainTask(domain:ManagedExecutionDomain,history:object,onRevoke:()=>void):ManagedTaskSourceRead;materialize(events:readonly import('@i-harness/core-session').SessionEventView[]):ManagedDocument&{assertObservable():void};materializeDuringPreparation(read:()=>Promise<ManagedDocument & {assertObservable():void}>):Promise<ManagedDocument & {assertObservable():void}>|undefined;invalidateMetadata(revision:object):void;beginTaskMetadata():TaskMetadataUpdate;captureTaskParent():Omit<TaskParentReadiness,'view'>;captureRequiredParent(source:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>):RequiredTaskParentReadiness;parent():{assertOriginal():void;assertCurrent():void;assertTask14Ready():void}}>();
+const privateExecutionOwners=new WeakMap<object,{core:ExecutionState;held:HeldFactOwner;ownership:Ownership;assertCurrent():void;readOwnedPrefix():Promise<JournalPrefix>;retainTask(domain:ManagedExecutionDomain,history:object,onRevoke:()=>void):ManagedTaskSourceRead;materialize(events:readonly import('@i-harness/core-session').SessionEventView[]):ManagedDocument&{assertObservable():void};materializeDuringPreparation(read:()=>Promise<ManagedDocument & {assertObservable():void}>):Promise<ManagedDocument & {assertObservable():void}>|undefined;invalidateMetadata(revision:object):void;beginTaskMetadata():TaskMetadataUpdate;captureTaskParent():Omit<TaskParentReadiness,'view'>;captureRequiredParent(source:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>):RequiredTaskParentReadiness;parent():{assertOriginal():void;assertCurrent():void;assertTask14Ready():void}}>();
 export function originalManagedExecution(document:ManagedDocument,ownership:Ownership){const original=privateExecutionOwners.get(document);if(!original||original.ownership!==ownership)throw TypeError('Original private execution owner required');return original}
 export function managedExecutionStatus(document: ManagedDocument): 'available' | 'unavailable' | 'retired' {
     return executionStatuses.get(document)?.() ?? 'unavailable';
@@ -234,6 +234,25 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
     }}).selectedJournal
     let selectedLane:SelectedScope|undefined,selectedIOStarted=false,selectedBindFlight:Promise<void>|undefined
     const settleSelected=async()=>{if(bootstrap?.selected&&selectedIOStarted){if(!backend.settleBootstrapCaptureIO)throw new FactRecoveryRequiredError();await backend.settleBootstrapCaptureIO(id,held);selectedIOStarted=false}}
+    async function readOwnedPrefix(): Promise<JournalPrefix> {
+        if (!bootstrap?.selected) {
+            retainManagedJournalCleanup(journalScopes, backend, id, held)
+            return backend.readJournalPrefix!(id, held)
+        }
+        const lane = selectedLane
+        if (!selectedJournal || !lane) throw new FactRecoveryRequiredError()
+        await settleSelected()
+        selectedIOStarted = true
+        let current: JournalPrefix
+        try { current = await selectedJournal.readJournalPrefix(id, held, lane) }
+        catch (cause) {
+            try { await settleSelected() }
+            catch (cleanup) { throw new AggregateError([cause, cleanup], 'Selected journal read cleanup unresolved') }
+            throw cause
+        }
+        await settleSelected()
+        return current
+    }
     const assertAuthorized = (authorization: Authorization) => {
         execution?.assertCurrent();
         held.assertHeld();
@@ -1063,7 +1082,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
     executionStatuses.set(document, executionStatus);
     if(core){
       const originalReady=document.assertReady;
-      core.bindOwner(document);privateExecutionOwners.set(document,{core,held,ownership,assertCurrent:execution!.assertCurrent,retainTask(domain,history,onRevoke){
+      core.bindOwner(document);privateExecutionOwners.set(document,{core,held,ownership,assertCurrent:execution!.assertCurrent,readOwnedPrefix,retainTask(domain,history,onRevoke){
         if(selectedAdmissions||queue.length||scheduled)throw new FactRecoveryRequiredError();
         const revision=metadataRevision, capturedPrefix=prefix, header=core.header, artifacts=assertOriginalManagedTaskHistory(domain,history);let revoked=false
         const listener=()=>{if(revoked)return;revoked=true;onRevoke()}

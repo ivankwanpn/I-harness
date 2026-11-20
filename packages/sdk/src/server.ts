@@ -4,7 +4,8 @@ import { captureBootstrapCaptureRequest, type ForkExecutionControl } from '@i-ha
 import { hasForkActivity } from '@i-harness/session-persistence/internal/fork-activity'
 import { readForkPrepareRequest, readForkPrepareResult, readForkCommand, readForkOperation, readForkOutcome, readForkHostErrorData, ForkOperationError,
   type ForkPrepareRequest, type ForkPrepareResult, type ForkCommand, type ForkOutcome, type ForkOperation } from './fork.ts'
-import { readSelectedResultsPrepareRequest, readSelectedResultsPrepared, readSelectedResultsCommand, readSelectedResultsOutcome,
+import { SELECTED_RESULTS_FORK_CAPABILITY, SelectedResultsForkOperationError, readSelectedResultsPrepareRequest,
+  readSelectedResultsPrepareResult, readSelectedResultsCommand, readSelectedResultsOutcome, readSelectedResultsHostError,
   type ForkPrepareRequestV2, type ForkPrepareResultV2, type ForkCommandV2, type ForkOutcomeV2 } from '@i-harness/session-persistence/selected-results-fork-contract'
 // M27 R-C4b: the SessionService-backed SDK server — in-process JSON-RPC
 // handler over the C-region SessionService. The CLI wires it to stdio
@@ -21,6 +22,8 @@ import { readSelectedResultsPrepareRequest, readSelectedResultsPrepared, readSel
 //   session/fork/prepare   → closed ForkPrepareResult
 //   session/fork/begin|retry {operation} → closed ForkOutcome
 //                          (requires both genuine host callbacks)
+//   session/fork/results/prepare → closed ForkPrepareResultV2
+//   session/fork/results/begin|retry {operation} → closed ForkOutcomeV2
 //   session/model/state {sessionId} [additive; host-gated on opts.modelState]
 //                          → SessionModelState — absent seam → -32601
 //   session/model/set {sessionId, selection} [additive; host-gated]
@@ -486,6 +489,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             "session-dashboard": ["1"],
             ...(opts.createSession !== undefined ? { "session-create": ["1"] } : {}),
             ...(forkAvailable() ? { 'session-fork-bootstrap': ['1'] } : {}),
+            ...(selectedForkAvailable() ? { [SELECTED_RESULTS_FORK_CAPABILITY]: ['1'] } : {}),
             ...(opts.modelState !== undefined && opts.setSessionModel !== undefined
               ? { "session-model": ["1"] }
               : {}),
@@ -509,56 +513,74 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
       }
       case 'session/fork/prepare': {
         if (!forkAvailable()) return makeFailure(id, METHOD_NOT_FOUND, 'Semantic fork unavailable')
-        let request: ForkPrepareRequest | undefined
-        try { request = readForkPrepareRequest(params) } catch { request = undefined }
-        if (!request) {
-          let selected: ForkPrepareRequestV2
-          try { selected = readSelectedResultsPrepareRequest(params) } catch { return makeFailure(id, INVALID_PARAMS, 'Invalid fork preparation request') }
-          if (!selectedForkAvailable()) return makeFailure(id, INVALID_PARAMS, 'Invalid fork preparation request')
-          return requestFlight(async () => {
-            try {
-              const result = await opts.prepareSelectedForkSession!(selected)
-              if (result.kind !== 'prepared') return makeFailure(id, INTERNAL_ERROR, `Selected results fork unavailable: ${result.reason}`)
-              return makeSuccess(id, readSelectedResultsPrepared(result.prepared))
-            } catch { return makeFailure(id, INTERNAL_ERROR, 'Session fork preparation unavailable') }
-          })
-        }
+        let request: ForkPrepareRequest
+        try { request = readForkPrepareRequest(params) }
+        catch { return makeFailure(id, INVALID_PARAMS, 'Invalid fork preparation request') }
         return requestFlight(async () => {
-          try { return makeSuccess(id, readForkPrepareResult(await opts.prepareForkSession!(request!))) }
+          try { return makeSuccess(id, readForkPrepareResult(await opts.prepareForkSession!(request))) }
           catch { return makeFailure(id, INTERNAL_ERROR, 'Session fork preparation unavailable') }
         })
       }
       case 'session/fork/begin':
       case 'session/fork/retry': {
         if (!forkAvailable()) return makeFailure(id, METHOD_NOT_FOUND, 'Semantic fork unavailable')
-        let command: ForkCommand | undefined, selectedCommand: ForkCommandV2 | undefined
+        let command: ForkCommand
         try {
           if (!params || typeof params !== 'object' || Array.isArray(params) || Object.keys(params).length !== 1 || !Object.hasOwn(params, 'operation')) throw new TypeError('Invalid fork params')
           const mode = method === 'session/fork/begin' ? 'begin' : 'retry'
-          try {
-            command = readForkCommand({ operation: (params as { operation: unknown }).operation, mode })
-            captureBootstrapCaptureRequest({ invocation: command.operation.invocation, core: command.operation.prepared.core, requestIntent: command.operation.prepared.requestIntent })
-          } catch {
-            selectedCommand = readSelectedResultsCommand({ operation: (params as { operation: unknown }).operation, mode })
-            if (!selectedForkAvailable()) return makeFailure(id, INVALID_PARAMS, 'Invalid fork operation')
-          }
+          command = readForkCommand({ operation: (params as { operation: unknown }).operation, mode })
+          captureBootstrapCaptureRequest({ invocation: command.operation.invocation, core: command.operation.prepared.core, requestIntent: command.operation.prepared.requestIntent })
         } catch { return makeFailure(id, INVALID_PARAMS, 'Invalid fork operation') }
-        if (selectedCommand) return requestFlight(async () => {
-          try {
-            const control: ForkExecutionControl = { ...forkControl, signal: AbortSignal.any([forkAbort.signal, ...(forkControl?.signal ? [forkControl.signal] : [])]) }
-            const result = readSelectedResultsOutcome(await opts.executeSelectedForkSession!(selectedCommand, control), selectedCommand.operation)
-            if (result.kind === 'ready' || result.kind === 'adopted') knownSessions.add(result.sessionId)
-            return makeSuccess(id, result)
-          } catch { return makeFailure(id, INTERNAL_ERROR, 'Session fork unavailable') }
-        })
-        const v1 = command!
         return requestFlight(async () => {
           try {
             const control: ForkExecutionControl = { ...forkControl, signal: AbortSignal.any([forkAbort.signal, ...(forkControl?.signal ? [forkControl.signal] : [])]) }
-            const result = readForkOutcome(await opts.executeForkSession!(v1, control), v1.operation)
+            const result = readForkOutcome(await opts.executeForkSession!(command, control), command.operation)
             if (result.kind === 'ready' || result.kind === 'adopted') knownSessions.add(result.sessionId)
             return makeSuccess(id, result)
-          } catch (cause) { return forkFailure(id, v1.operation, cause) }
+          } catch (cause) { return forkFailure(id, command.operation, cause) }
+        })
+      }
+      case 'session/fork/results/prepare': {
+        if (!selectedForkAvailable()) return makeFailure(id, METHOD_NOT_FOUND, 'Selected-results fork unavailable')
+        let request: ForkPrepareRequestV2
+        try { request = readSelectedResultsPrepareRequest(params) }
+        catch { return makeFailure(id, INVALID_PARAMS, 'Invalid selected-results fork preparation request') }
+        return requestFlight(async () => {
+          try {
+            return makeSuccess(id, readSelectedResultsPrepareResult(await opts.prepareSelectedForkSession!(request), request))
+          } catch {
+            return makeFailure(id, INTERNAL_ERROR, 'Session fork preparation unavailable')
+          }
+        })
+      }
+      case 'session/fork/results/begin':
+      case 'session/fork/results/retry': {
+        if (!selectedForkAvailable()) return makeFailure(id, METHOD_NOT_FOUND, 'Selected-results fork unavailable')
+        let command: ForkCommandV2
+        try {
+          if (!params || typeof params !== 'object' || Array.isArray(params) || Object.keys(params).length !== 1 || !Object.hasOwn(params, 'operation'))
+            throw new TypeError('Invalid selected-results fork params')
+          command = readSelectedResultsCommand({
+            operation: (params as { operation: unknown }).operation,
+            mode: method === 'session/fork/results/begin' ? 'begin' : 'retry',
+          })
+        } catch { return makeFailure(id, INVALID_PARAMS, 'Invalid selected-results fork operation') }
+        return requestFlight(async () => {
+          try {
+            const control: ForkExecutionControl = { ...forkControl, signal: AbortSignal.any([forkAbort.signal, ...(forkControl?.signal ? [forkControl.signal] : [])]) }
+            const result = readSelectedResultsOutcome(await opts.executeSelectedForkSession!(command, control), command.operation)
+            if (result.kind === 'ready' || result.kind === 'adopted') knownSessions.add(result.sessionId)
+            return makeSuccess(id, result)
+          } catch (cause) {
+            if (cause instanceof SelectedResultsForkOperationError && cause.hostError) {
+              try {
+                return makeFailure(id, INTERNAL_ERROR, 'Session fork unavailable', readSelectedResultsHostError(cause.hostError, command.operation))
+              } catch { /* Return the operation and unknown capture state for malformed host errors. */ }
+            }
+            return makeFailure(id, INTERNAL_ERROR, 'Session fork unavailable', {
+              version: 2, kind: 'session-fork-error', operation: command.operation, capture: 'unknown', reason: 'internal',
+            })
+          }
         })
       }
       case "session/model/state": {

@@ -8,7 +8,7 @@ import { dispatchDesktopRequest, registerDesktopIpc } from "../src/main/ipc.ts"
 import type { DesktopIpcDependencies, IpcMainLike } from "../src/main/ipc.ts"
 import { DESKTOP_EVENT_CHANNEL, DESKTOP_REQUEST_CHANNEL, type DesktopEvent, type DesktopRequest } from "../src/shared/bridge.ts"
 import type { WorkspaceEntry } from "../src/main/workspaces.ts"
-import { RpcError } from '@i-harness/sdk'
+import { RpcError, createSelectedResultsIntent, createSelectedResultsOperation, readSelectedResultsCore, readSelectedResultsPrepared } from '@i-harness/sdk'
 import { createForkOperation } from '@i-harness/sdk/fork'
 import { preparedFork, readyFork } from './helpers/fork-contract.ts'
 
@@ -57,6 +57,37 @@ function fixture() {
 }
 
 describe("Desktop scoped IPC", () => {
+  it('routes explicit V2 preparation and persisted retry with their own capability and checked reply', async () => {
+    const f = fixture()
+    const request = { version: 2, sourceSessionId: 'a', results: 'selected-results-v1', selection: { kind: 'completed', atSeq: 3 } } as const
+    const core = readSelectedResultsCore({ ...request, kind: 'session-fork-core', sourceCapture: 'first-authorized-capture', metadata: {} })
+    const { intent, requestDigest } = createSelectedResultsIntent(core, { kind: 'unassigned' })
+    const prepared = readSelectedResultsPrepared({ version: 2, kind: 'session-fork-prepared', core, requestIntent: intent, requestDigest })
+    const operation = createSelectedResultsOperation(prepared, { operationId: 'ipc-selected', targetSessionId: 'child', createdAt: '2026-10-27T00:00:00.000Z' })
+    const prepare = { kind: 'desktop/session/fork/results/prepare', workspaceId: ENTRY.id, request }
+    const retry = { kind: 'desktop/session/fork/results/retry', workspaceId: ENTRY.id, operation }
+    await expect(dispatchDesktopRequest({ ...prepare, extra: true }, f.dependencies)).rejects.toThrow('Invalid')
+    expect(f.get).not.toHaveBeenCalled()
+    f.setRuntime({ client: { request: f.request }, info: { capabilities: { 'session-fork-bootstrap': ['1'] } } })
+    expect(await dispatchDesktopRequest(prepare, f.dependencies)).toEqual({ kind: 'unavailable', reason: 'unsupported' })
+    expect(await dispatchDesktopRequest(retry, f.dependencies)).toMatchObject({ kind: 'not-issued', operation, reason: 'unsupported' })
+    expect(f.request).not.toHaveBeenCalled()
+
+    f.setRuntime({ client: { request: f.request }, info: { capabilities: { 'session-fork-selected-results': ['1'] } } })
+    expect(await dispatchDesktopRequest({ kind: 'desktop/session/fork/capabilities', workspaceId: ENTRY.id }, f.dependencies)).toEqual({
+      'session-fork-selected-results': ['1'],
+    })
+    f.request.mockResolvedValueOnce({ kind: 'prepared', prepared })
+    expect(await dispatchDesktopRequest(prepare, f.dependencies)).toEqual({ kind: 'prepared', prepared })
+    expect(f.request).toHaveBeenLastCalledWith('session/fork/results/prepare', request, 0)
+    f.request.mockResolvedValueOnce({ kind: 'prepared', prepared })
+    await expect(dispatchDesktopRequest({ ...prepare, request: { ...request, selection: { kind: 'completed', atSeq: 4 } } }, f.dependencies)).rejects.toThrow()
+    const fault = { version: 2, kind: 'session-fork-error', operation, capture: 'unknown', reason: 'internal' }
+    f.request.mockRejectedValueOnce(new RpcError(-32603, 'Session fork unavailable', fault))
+    expect(await dispatchDesktopRequest(retry, f.dependencies)).toEqual(fault)
+    expect(f.request).toHaveBeenLastCalledWith('session/fork/results/retry', { operation }, 0)
+  })
+
   it('routes explicit recovery to its known workspace owner without resetting on ordinary reads', async () => {
     const f = fixture(), recover = vi.fn(async () => ({} as never))
     f.dependencies.runtimes.recover = recover

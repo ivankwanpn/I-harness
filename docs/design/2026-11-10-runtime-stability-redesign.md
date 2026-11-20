@@ -861,6 +861,15 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 修正：在 commit coordinator 增加 per-target publication queue；`publishForkTarget` 先排入該 target 的佇列，再進入 `withWrite`，在取得 log 後才重讀 identity/pending 並決定 append。第一個回 `published`，第二個看到已 published 回 `already-published`，只寫一筆發布紀錄。一般 Gateway 同操作 flight 合併保留，coordinator 本身不再依賴上層。
 - 固定回歸：`selected-fork-publication-recovery.test.ts` 在真實 commit coordinator 注入同一 target 的兩個並行 `publishForkTarget`，斷言結果集合為 `{published, already-published}` 且 journal 只有 1 筆 published metadata；另保留「publication 成功但 receipt 寫入失敗→來源 archive/clear→冷重啟取得完全相同 receipt、result 仍可讀」的案例。
 - 驗證：directed 6 檔 **53/53**；session-persistence 全 package **1256/1256**；desktop-gateway/session-persistence typecheck 0；package boundaries 0；`git diff --check` 0。
+#### 第一百二十三批　公開 selected-results V2 與 C67
+
+- SDK 與 Desktop IPC 提供獨立的 `session/fork/results/prepare|begin|retry` 入口。Gateway 只在已接上兩個 V2 host callback 時公布 `session-fork-selected-results: ["1"]`。V1 保有自己的 DTO 與 wire path。V2 由呼叫者明確選用，預設路由仍取決於 child-history V2 的交付。
+- V2 prepare 交叉核對來源、選取邊界和 caller metadata。SDK attempt 在回覆不確定及 cleanup 失敗後沿用原 operation，並支援在新連線重送已保存的 operation。Gateway 保留已提交的 V2 outcome 於核對過的 cleanup error。Commit-log 首次發布與重播均帶回原始 title 和真正的 V3 results summary。
+- C67 使用真正的 Task 工具執行、compaction、reset 和冷續作產生資料，之後關閉 fixture owner，由真正的 Desktop Gateway 以 typed SDK 做 V2 fork。目標的模型在暖、冷兩個 host 從搜尋取得 ref 及 offset，再透過正常工具讀取。完整 managed bodies 由 SDK 逐頁重組，legacy bodies 由同一 host 的原始觀察逐頁核對。來源 clear 使用公開 RPC，仍保留 hidden、future、parent-private 等拒絕控制。
+- 公開工具驗證定位到 managed runtime 在掛載工具時漏傳原有 legacy read observation，以及 V3 execution 展開 view 時使用 legacy journal prefix。owned Shell／Code 的結果服務沿用真正的 observation runner。展開 execution view 使用該 document 已綁定的 journal lane，比對完整 prefix，對 selected I/O 保留原始清理責任。
+- 公開案例在原 180 秒期限內量得普通模式 158 秒，Code Mode 於冷 host 階段耗盡舊期限。最終定向執行普通模式 157.210 秒、Code Mode 243.170 秒，分別採用 240 與 300 秒的案例期限。兩項解析、內容及權限斷言全部通過。SDK 全套為 151 項，桌面 IPC 為 33 項，五個受影響 package 型別通過，邊界與 reachability 無新增。 [Gateway 定向原始日誌](C:/Users/IvanKwan/AppData/Local/Temp/ih-issue125-sdk-v2/gateway-public.log) [SDK 全套](C:/Users/IvanKwan/AppData/Local/Temp/ih-issue125-sdk-v2/sdk-full.json) [Desktop IPC](C:/Users/IvanKwan/AppData/Local/Temp/ih-issue125-sdk-v2/desktop-ipc.json)
+- 最終的 Gateway 定向九檔為 36 項全部通過，包含原並行發布、舊資料封存、暖／冷續作與不確定回覆恢復。Persistence 的 V2 contract 十項全部通過。四批合計 230 項、零失敗。 [分批執行結果](C:/Users/IvanKwan/AppData/Local/Temp/ih-issue125-sdk-v2/targeted-exits.json)
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

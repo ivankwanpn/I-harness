@@ -210,7 +210,7 @@ it('completes host close while a selected publication is in flight', async () =>
     control.holdPublish = true
     control.publishEntered = () => entered.resolve()
     const prepared = await prepareSelected(client, sourceSessionId, 'in-flight-child', 'in-flight-op')
-    begin = client.call('session/fork/begin', { operation: prepared.operation }).then(value => value, error => error)
+    begin = client.call('session/fork/results/begin', { operation: prepared.operation }).then(value => value, error => error)
     await entered.promise
     expect(control.holderCreates).toBe(1)
     let closed = false

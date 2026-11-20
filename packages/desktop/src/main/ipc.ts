@@ -26,7 +26,10 @@ import { listDesktopTerminalShellOptions } from "../../../desktop-gateway/src/te
 import type { attachNativeWindow } from "./native-window.ts"
 import type { createBrowserSurface } from "./browser-surface.ts"
 import { readForkPrepareRequest, readForkPrepareResult, readForkOperation, readForkOutcome, readForkHostErrorData } from '@i-harness/sdk/fork'
-import { RpcError } from '@i-harness/sdk'
+import {
+  RpcError, SELECTED_RESULTS_FORK_CAPABILITY, readSelectedResultsHostError, readSelectedResultsOperation,
+  readSelectedResultsOutcome, readSelectedResultsPrepareRequest, readSelectedResultsPrepareResult,
+} from '@i-harness/sdk'
 
 export interface DesktopIpcDependencies {
   surfaceObservation?: ReturnType<typeof createNativeSurfaceObservation>
@@ -454,6 +457,46 @@ export async function dispatchDesktopRequest(
         // operation-bound safe DTO crosses as data; never arbitrary RPC fields.
         try { return readForkHostErrorData(cause.data, operation) }
         catch { throw new Error('Invalid session fork response') }
+      }
+    }
+    case 'desktop/session/fork/capabilities': {
+      if (Object.keys(value).length !== 2) throw Error('Invalid fork capabilities request')
+      const workspaceId = requireNonEmpty(value.workspaceId, 'workspaceId')
+      const { info } = await runtimeForKnownWorkspace(workspaceId, dependencies)
+      const selected = info.capabilities[SELECTED_RESULTS_FORK_CAPABILITY]
+      const legacy = info.capabilities['session-fork-bootstrap']
+      return {
+        ...(Array.isArray(legacy) && legacy.includes('1') ? { 'session-fork-bootstrap': ['1'] } : {}),
+        ...(Array.isArray(selected) && selected.includes('1') ? { [SELECTED_RESULTS_FORK_CAPABILITY]: ['1'] } : {}),
+      }
+    }
+    case 'desktop/session/fork/results/prepare': {
+      if (Object.keys(value).length !== 3 || !Object.hasOwn(value, 'request') || !Object.hasOwn(value, 'workspaceId'))
+        throw Error('Invalid selected-results preparation request')
+      const workspaceId = requireNonEmpty(value.workspaceId, 'workspaceId')
+      const request = readSelectedResultsPrepareRequest(value.request)
+      const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
+      const versions = runtime.info.capabilities[SELECTED_RESULTS_FORK_CAPABILITY]
+      if (!Array.isArray(versions) || !versions.includes('1')) return { kind: 'unavailable', reason: 'unsupported' }
+      return readSelectedResultsPrepareResult(await runtime.client.request('session/fork/results/prepare', request, 0), request)
+    }
+    case 'desktop/session/fork/results/begin':
+    case 'desktop/session/fork/results/retry': {
+      if (Object.keys(value).length !== 3 || !Object.hasOwn(value, 'operation') || !Object.hasOwn(value, 'workspaceId'))
+        throw Error('Invalid selected-results operation request')
+      const workspaceId = requireNonEmpty(value.workspaceId, 'workspaceId')
+      const operation = readSelectedResultsOperation(value.operation)
+      const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
+      const versions = runtime.info.capabilities[SELECTED_RESULTS_FORK_CAPABILITY]
+      const mode = value.kind === 'desktop/session/fork/results/begin' ? 'begin' : 'retry'
+      if (!Array.isArray(versions) || !versions.includes('1')) return readSelectedResultsOutcome({
+        version: 2, kind: 'not-issued', operation, capture: mode === 'begin' ? 'uncaptured' : 'unknown', reason: 'unsupported',
+      }, operation)
+      try { return readSelectedResultsOutcome(await runtime.client.request('session/fork/results/' + mode, { operation }, 0), operation) }
+      catch (cause) {
+        if (!(cause instanceof RpcError)) throw cause
+        try { return readSelectedResultsHostError(cause.data, operation) }
+        catch { throw Error('Invalid selected-results fork response') }
       }
     }
     case "desktop/session/manage": {

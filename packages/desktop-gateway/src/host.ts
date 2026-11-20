@@ -98,7 +98,7 @@ import { createDesktopApprovalHistory } from "./approval-history.ts"
 import { createAgentShellSettings } from "./agent-shell.ts"
 import { watchSettings } from "@i-harness/settings"
 import { resolveHookTrustPath } from "@i-harness/hooks"
-import { makeNotification, type RpcMessage } from "@i-harness/sdk"
+import { makeNotification, SelectedResultsForkOperationError, type RpcMessage } from "@i-harness/sdk"
 import { createDesktopRouter, createGatewayWrite } from "./router.ts"
 import { createInteractionBridge } from "./interaction.ts"
 import { createProjectScopeBroker } from "./project-scope.ts"
@@ -649,7 +649,16 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         // Release only the fork's BIRTH document. Once a child turn has bound an
         // execution attachment, closing it by id would retire that live
         // execution document and the next turn would require reconciliation.
-        await coordinator.closeManagedBirthDocument?.(command.operation.invocation.targetSessionId)
+        try { await coordinator.closeManagedBirthDocument?.(command.operation.invocation.targetSessionId) }
+        catch (cause) {
+          throw new SelectedResultsForkOperationError(command.operation, 'cleanup', {
+            cause,
+            hostError: {
+              version: 2, kind: 'session-fork-error', operation: command.operation, capture: 'captured',
+              reason: 'cleanup-incomplete', lastOutcome: outcome,
+            },
+          })
+        }
       }
       return outcome
     },

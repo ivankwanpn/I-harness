@@ -145,9 +145,9 @@ export async function bindProject(client: SelectedHostClient, sessionId: string,
 /** Prepare one selected-results (V2) fork through the public RPC. */
 export async function prepareSelected(client: SelectedHostClient, sourceSessionId: string, targetSessionId: string, operationId: string,
   selection?: { kind: 'completed'; atSeq?: number }) {
-  const prepared = await client.call('session/fork/prepare', { version: 2, sourceSessionId, results: 'selected-results-v1', ...(selection === undefined ? {} : { selection }) }) as {
-    version: number; kind: string; core: { sourceSessionId: string; results: string }; requestDigest: string
-  }
+  const result = await client.call('session/fork/results/prepare', { version: 2, sourceSessionId, results: 'selected-results-v1', ...(selection === undefined ? {} : { selection }) }) as import('@i-harness/sdk').ForkPrepareResultV2
+  if (result.kind !== 'prepared') throw new Error('Selected results fork preparation refused: ' + result.reason)
+  const { prepared } = result
   const operation = {
     version: 2, kind: 'session-fork-operation', prepared,
     invocation: { version: 1, operationId, targetSessionId, createdAt: new Date().toISOString(), requestDigest: prepared.requestDigest },
@@ -164,7 +164,7 @@ type SelectedBegin = {
 
 /** Begin or retry one prepared operation through its real public route. */
 export async function executeSelected(client: SelectedHostClient, operation: unknown, mode: 'begin' | 'retry' = 'begin'): Promise<SelectedBegin> {
-  return await client.call(mode === 'begin' ? 'session/fork/begin' : 'session/fork/retry', { operation }) as SelectedBegin
+  return await client.call(mode === 'begin' ? 'session/fork/results/begin' : 'session/fork/results/retry', { operation }) as SelectedBegin
 }
 
 /** Prepare + begin one selected-results (V2) fork through the public RPC. */

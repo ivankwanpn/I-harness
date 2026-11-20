@@ -56,7 +56,7 @@ it('continues an adopted selected-results fork child after a JSONL host restart'
     await client.call('initialize')
     // The restarted host has no in-memory fork entry: the durable birth is
     // adopted through the operation token, exactly like a post-crash retry.
-    const retried = await client.call('session/fork/retry', { operation }) as { kind: string; sessionId: string }
+    const retried = await client.call('session/fork/results/retry', { operation }) as { kind: string; sessionId: string }
     expect(retried).toMatchObject({ kind: 'adopted', sessionId: 'child' })
 
     expect(await client.call('session/prompt', { sessionId: 'child', prompt: 'adopted child turn' }))
@@ -85,7 +85,7 @@ it('replays the original fork operation after the child has run turns', async ()
     await expect(client.call('session/prompt', { sessionId: 'child', prompt: 'child turn 2' })).resolves.toMatchObject({ ok: true })
     // Replaying the original operation must adopt the same target without
     // retiring the execution document the completed turns already mounted.
-    const adopted = await client.call('session/fork/retry', { operation }) as { kind: string; sessionId: string }
+    const adopted = await client.call('session/fork/results/retry', { operation }) as { kind: string; sessionId: string }
     expect(adopted).toMatchObject({ kind: 'adopted', sessionId: 'child' })
     await expect(client.call('session/prompt', { sessionId: 'child', prompt: 'child turn 3' })).resolves.toMatchObject({ ok: true })
     const child = await storedSession(fixture.sessionDir, 'child', 'jsonl')
