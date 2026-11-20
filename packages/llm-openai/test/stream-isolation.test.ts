@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
+import "./fixtures/mock-system-fetch.ts"
 import type { LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
 import { createOpenAIClient } from "../src/index.ts"
 

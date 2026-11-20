@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest"
+import "./fixtures/mock-system-fetch.ts"
 import { createRetryingClient, createWaitingGuard, resolveRetryPolicy, type LLMRequest, type ModelClient } from "@i-harness/llm-seam"
 import { createOpenAIClient } from "../src/index.ts"
 
