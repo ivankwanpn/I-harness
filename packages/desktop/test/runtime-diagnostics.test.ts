@@ -61,6 +61,27 @@ const status = (state: string, error?: string, sessionId = "s"): DesktopEvent =>
 const retry = { requestId: "req-1", phase: "waiting", attempt: 1, maxRetries: 5, delayMs: 500, code: "http_503", httpStatus: 503, providerId: "local", modelId: "model" }
 
 describe("native runtime diagnostics", () => {
+  it("reports local execution failure after a successful model attempt without exposing private error text", async () => {
+    const service = createRuntimeDiagnostics(await root())
+    service.observe(event("turn/start", { seq: 1 }))
+    service.observe(event("model/activity", { version: 1, activity: {
+      requestId: "physical-local", phase: "connecting", startedAt: 1000, waitingFor: "first-response",
+    } }))
+    service.observe(event("model/activity", { version: 1, activity: {
+      requestId: "physical-local", phase: "settled", startedAt: 1000, waitingFor: "progress", outcome: "completed",
+    } }))
+    service.observe({ kind: "sdk/notification", workspaceId: "ws", method: "session/status", params: {
+      sessionId: "s", status: "failed", errorCode: "FACT_RECOVERY_REQUIRED",
+      error: "Original writer dependency cleanup unresolved: private workspace path",
+    } })
+    const rows = (await service.list()).entries
+    expect(rows).toContainEqual(expect.objectContaining({ kind: "model/settled", outcome: "completed" }))
+    const entries = rows.filter(entry => entry.kind === "session/error")
+    expect(entries).toMatchObject([{ code: "FACT_RECOVERY_REQUIRED", message: "Session storage requires recovery before execution can continue." }])
+    expect(entries[0]).not.toHaveProperty("modelFailure")
+    expect(JSON.stringify(entries)).not.toContain("private workspace path")
+  })
+
   it("journals only scalar request/compaction/close facts from the existing notification owners", async () => {
     const service = createRuntimeDiagnostics(await root())
     service.observe({ kind: "sdk/notification", workspaceId: "ws", method: "desktop/context/diagnostic", params: { sessionId: "s", compaction: {

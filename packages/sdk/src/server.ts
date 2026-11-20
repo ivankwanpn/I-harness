@@ -79,7 +79,7 @@ import { SELECTED_RESULTS_FORK_CAPABILITY, SelectedResultsForkOperationError, re
 //   session/status { sessionId, status, error? } — lifecycle transitions
 // Malformed lines are ignored; unknown methods get -32601; invalid params -32602;
 // a request sent before `initialize` gets -32600 (M68 batch B, v3).
-import { createNondurableFactOwner, isNondurableSession, subscribe, IMAGE_MEDIA_TYPES, validateImages, type ImageInput, type SessionView as Session, type SessionEventView as SessionEvent, type SessionEvent as MutableSessionEvent } from "@i-harness/core-session"
+import { createNondurableFactOwner, isFactRecoveryRequired, isNondurableSession, subscribe, IMAGE_MEDIA_TYPES, validateImages, type ImageInput, type SessionView as Session, type SessionEventView as SessionEvent, type SessionEvent as MutableSessionEvent } from "@i-harness/core-session"
 import { createRewindIntentLog, withRewindFacts } from '@i-harness/session-executor'
 import { transportSessionEvents } from "./image-transport.ts"
 import { dispatchResultPage, type ResultPageHost } from './result-page.ts'
@@ -334,8 +334,10 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
     else if (event.kind === 'retiring') managedEvents.retire(event.sessionId,event.owner)
   }, {includeExisting:true})
 
-  const statusNotify = (sessionId: string, status: string, error?: string, modelFailure?: ModelFailureFacts): void => {
-    emitMessage(makeNotification("session/status", { sessionId, status, ...(error !== undefined ? { error } : {}), ...(modelFailure ? { modelFailure } : {}) }))
+  const statusNotify = (sessionId: string, status: string, error?: string, modelFailure?: ModelFailureFacts, errorCode?: "FACT_RECOVERY_REQUIRED"): void => {
+    emitMessage(makeNotification("session/status", {
+      sessionId, status, ...(error !== undefined ? { error } : {}), ...(modelFailure ? { modelFailure } : {}), ...(errorCode ? { errorCode } : {}),
+    }))
   }
   const offExecutionState = service.onExecutionState?.(state => {
     if (!closed) emitMessage(makeNotification("session/execution-state", state))
@@ -992,12 +994,14 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           return makeSuccess(id, { sessionId, ok: true })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
-          const modelFailure = modelFailureFacts(error)
-          statusNotify(sessionId, "error", message, modelFailure)
+          const errorCode = isFactRecoveryRequired(error) ? error.code : undefined
+          const modelFailure = errorCode ? undefined : modelFailureFacts(error)
+          statusNotify(sessionId, "error", message, modelFailure, errorCode)
           return makeFailure(id, INTERNAL_ERROR, message, {
             sessionId,
             events: boundedFailureEvents(liveEventsFor(service, sessionId)),
             ...(modelFailure ? { modelFailure } : {}),
+            ...(errorCode ? { errorCode } : {}),
           })
         } finally {
           submissions.delete(submission)

@@ -8,3 +8,7 @@ export function committedFactSeqs(outcome: ProducerFactOutcome): readonly number
     code: outcome.kind === 'not-issued' ? outcome.code : 'FACT_RECOVERY_REQUIRED', outcome,
   })
 }
+
+export function isFactRecoveryRequired(error: unknown): error is Error & { code: 'FACT_RECOVERY_REQUIRED' } {
+  return error instanceof Error && (error as Error & { code?: unknown }).code === 'FACT_RECOVERY_REQUIRED'
+}

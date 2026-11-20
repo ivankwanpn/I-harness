@@ -89,7 +89,7 @@ export type { FactOwner, ProducerFactOutcome, NondurableFactOutcome, MetadataFac
 export { createFactPorts } from './managed/ports-factory.ts'
 export { bindFactSettlementSource, delegateFactSettlementSource, isManagedSettlementSource, isOwnedSettlementSource, settlementSourceSessionId } from './managed/source-scope.ts'
 export { createNondurableFactOwner, isNondurableSession, isNondurableFactOwner, metadataFactsFor, feedbackFactsFor } from './managed/nondurable.ts'
-export { committedFactSeqs } from './managed/outcome.ts'
+export { committedFactSeqs, isFactRecoveryRequired } from './managed/outcome.ts'
 
 export { projectConversationCandidate } from "./conversation/candidate.ts"
 export type { ContextReductionDraft } from './managed/groups.ts'

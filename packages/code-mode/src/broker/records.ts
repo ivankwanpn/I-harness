@@ -1,12 +1,15 @@
 import { retainAcknowledgedExecutionMembers } from '@i-harness/core-session/internal/execution'
-import { committedFactSeqs, FactRecoveryRequiredError } from '@i-harness/core-session'
+import { committedFactSeqs, FactRecoveryRequiredError, isFactRecoveryRequired } from '@i-harness/core-session'
 import type { Queued } from './types.ts'
 import type { ResultEnvelope, ResultExecution } from '@i-harness/core-session'
 import type { ResultFinalization } from '@i-harness/core-tools'
 import { isOriginalResultFinalization, isOriginalSyntheticResultFinalization } from '@i-harness/core-tools'
 
 export const message = (error: unknown) => error instanceof Error ? error.message : String(error)
-export const fatal = (error: unknown) => Object.assign(new Error(message(error)), { policyRefusal: true as const })
+export const fatal = (error: unknown) => Object.assign(new Error(message(error)), {
+  policyRefusal: true as const,
+  ...(isFactRecoveryRequired(error) ? { code: error.code } : {}),
+})
 
 export function createCodeModeRecords(complete: (item: Queued) => Promise<unknown>, captureSynthetic?: (item: Queued, output: unknown, execution: ResultExecution) => ResultFinalization | undefined, view?: import('@i-harness/core-session').SessionView, privateContext?:(item:Queued)=>import('@i-harness/core-tools').ManagedSyntheticResultContext) {
   return {

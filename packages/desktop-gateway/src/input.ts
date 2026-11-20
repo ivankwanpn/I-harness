@@ -3,7 +3,7 @@ import type { AsyncInbox, ImageInput, SessionEventView } from "@i-harness/core-s
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 import { createDurableSessionLoader } from "@i-harness/session-executor"
-import { isManagedFactOwner, readInbox, validateImages } from "@i-harness/core-session"
+import { isFactRecoveryRequired, isManagedFactOwner, readInbox, validateImages } from "@i-harness/core-session"
 import { modelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 
 /** Exact producer-owned document identity for permanent session cleanup. */
@@ -39,7 +39,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
   prepare?: (sessionId: string, text: string) => Promise<string>
   /** Original managed runtime supplies its own retained preparation surface. */
   managedPreparation?: boolean
-  onStatus?: (sessionId: string, running: boolean, error?: string, modelFailure?: ModelFailureFacts) => void
+  onStatus?: (sessionId: string, running: boolean, error?: string, modelFailure?: ModelFailureFacts, errorCode?: "FACT_RECOVERY_REQUIRED") => void
 } = {}) {
   const load = createDurableSessionLoader(coordinator)
   const gates = new Map<string, Promise<unknown>>()
@@ -70,9 +70,12 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     })
       .then(() => { options.onStatus?.(id, service.queueState(id).running) }, (error) => {
         const message = error instanceof Error ? error.message : String(error)
-        const facts = modelFailureFacts(error)
-        if (facts) options.onStatus?.(id, false, message, facts)
-        else options.onStatus?.(id, false, message)
+        if (isFactRecoveryRequired(error)) options.onStatus?.(id, false, message, undefined, error.code)
+        else {
+          const facts = modelFailureFacts(error)
+          if (facts) options.onStatus?.(id, false, message, facts)
+          else options.onStatus?.(id, false, message)
+        }
       })
       .finally(() => { scheduled.delete(key); jobs.delete(job); controllers.delete(controller) })
     jobs.add(job)

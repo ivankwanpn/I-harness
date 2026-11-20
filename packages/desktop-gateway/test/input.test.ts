@@ -45,6 +45,23 @@ it('actual Gateway input reports bounded local final-schema refusal without tran
   } finally { await input.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
 
+it("keeps a local fact recovery failure distinct from model errors on queued input", async () => {
+  const root = await mkdtemp(join(tmpdir(), "desktop-input-recovery-"))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  await coordinator.create({ sessionId: "s" })
+  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), modelPolicy: "test-mock" })
+  const failure = Object.assign(new Error("Original writer dependency cleanup unresolved"), { code: "FACT_RECOVERY_REQUIRED" })
+  vi.spyOn(service, "submit").mockRejectedValue(failure)
+  const onStatus = vi.fn(), input = createDesktopInput(coordinator, service, { onStatus })
+  try {
+    await input.admit("s", { text: "resume after a local failure", delivery: "queue" })
+    await input.drain()
+    expect(onStatus).toHaveBeenCalledWith("s", false, failure.message, undefined, "FACT_RECOVERY_REQUIRED")
+  } finally {
+    await input.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true })
+  }
+})
+
 it("repeated model 400 failures preserve facts, the same service and parked work; legacy errors retain three status arguments", async () => {
   const root = await mkdtemp(join(tmpdir(), "desktop-model-failure-"))
   const coordinator = createSessionCoordinator(createJsonlBackend(root))

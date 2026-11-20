@@ -211,6 +211,22 @@ describe("createSdkServer", () => {
       expect(JSON.stringify([error.data, notifications])).not.toContain('sentinel-private-prompt')
     } finally { client.close(); lines.close(); input.destroy(); output.destroy(); await server.close() }
   })
+  it("preserves fact recovery identity in terminal status and the prompt error", async () => {
+    const service = makeStubService()
+    vi.mocked(service.submit).mockRejectedValue(Object.assign(new Error("Original writer dependency cleanup unresolved"), { code: "FACT_RECOVERY_REQUIRED" }))
+    const server = createSdkServer(service)
+    const notifications: RpcMessage[] = []
+    server.onNotify(message => notifications.push(message))
+    try {
+      await handshake(server)
+      const raw = await server.handleLine(encodeFrame(makeRequest(1, "session/prompt", { sessionId: "s", prompt: "task" })))
+      expect(JSON.parse(raw!)).toMatchObject({ error: { code: INTERNAL_ERROR, data: { errorCode: "FACT_RECOVERY_REQUIRED" } } })
+      const terminal = notifications.find(message => isRpcNotification(message) && message.method === "session/status" && (message.params as { status?: string }).status === "error")
+      expect(terminal).toMatchObject({ params: { errorCode: "FACT_RECOVERY_REQUIRED" } })
+      expect(terminal).not.toHaveProperty("params.modelFailure")
+    } finally { await server.close() }
+  })
+
   it("preserves safe model failure facts in status and RPC errors without replacing numeric codes", async () => {
     const service = makeStubService()
     const upstream = await describeHttpError("anthropic", new Response(JSON.stringify({ error: { type: "invalid_request_error", message: "context_length_exceeded private prompt", param: "messages" } }), { status: 400, headers: { "request-id": "req-sdk-123" } }))

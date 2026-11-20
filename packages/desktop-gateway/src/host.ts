@@ -467,7 +467,10 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const rawInput = createDesktopInput(coordinator, service, {
     managedPreparation: true,
     prepare: async (id, text) => expandPluginPrompt(await service.assemblyFor(id), text),
-    onStatus: (sessionId, running, error, modelFailure) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "error" : "completed", ...(error ? { error } : {}), ...(modelFailure ? { modelFailure } : {}) })),
+    onStatus: (sessionId, running, error, modelFailure, errorCode) => options.onWrite(makeNotification("session/status", {
+      sessionId, status: running ? "queued" : error ? "error" : "completed",
+      ...(error ? { error } : {}), ...(modelFailure ? { modelFailure } : {}), ...(errorCode ? { errorCode } : {}),
+    })),
   })
   const input = { ...rawInput, admit: (id: string, raw: Parameters<typeof rawInput.admit>[1]) => fence.run(id, () => rawInput.admit(id, raw)),
     resume: (id: string) => fence.run(id, () => rawInput.resume(id)), cancel: (id: string, inputId: string) => fence.run(id, () => rawInput.cancel(id, inputId)) }
