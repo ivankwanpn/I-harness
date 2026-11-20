@@ -1,8 +1,8 @@
 import { useId, useRef, useState } from "react"
-import { Braces, RefreshCw } from "lucide-react"
-import type { DesktopExecutionView, ExecutionCallView } from "@i-harness/desktop-gateway/src/execution.ts"
+import { Braces, RefreshCw, Square } from "lucide-react"
+import type { DesktopExecutionView, ExecutionCallView, ExecutionCellView } from "@i-harness/desktop-gateway/src/execution.ts"
 import { useExecutionObservation } from "../observation/use-observation.ts"
-import { useExecutionText } from "./execution-i18n.ts"
+import { codeModeLabels, useExecutionText } from "./execution-i18n.ts"
 import { useToolText } from "./tool-text.ts"
 import { OutputBlock } from "./OutputBlock.tsx"
 import { RawRecordedRecord } from "./RawRecordedData.tsx"
@@ -14,6 +14,18 @@ import "./execution-processes.css"
 type ExecutionPaneProps = { bridge: Pick<import('../../shared/bridge.ts').DesktopBridge,'request'> & Partial<Pick<import('../../shared/bridge.ts').DesktopBridge,'onEvent'>>; workspaceId: string; sessionId: string }
 type ExecutionTab = "code" | "output" | "trace"
 
+function cellStatus(cell: ExecutionCellView) {
+  switch (cell.status) {
+    case "started": return cell.live ? "已啟動" : "狀態待確認"
+    case "running": return cell.live ? "執行中" : "狀態待確認"
+    case "completed": return "已完成"
+    case "failed": return "執行失敗"
+    case "terminated": return "已停止"
+    case "interrupted": return "已中斷"
+    default: return "未識別狀態"
+  }
+}
+
 /** Tab choice persists; records, pending replies and confirmations own one scope. */
 export function ExecutionPane(props: ExecutionPaneProps) {
   const [tab, setTab] = useState<ExecutionTab>("code")
@@ -23,10 +35,15 @@ export function ExecutionPane(props: ExecutionPaneProps) {
 function ExecutionScope({ bridge, workspaceId, sessionId, tab, setTab }: ExecutionPaneProps & { tab: ExecutionTab; setTab(tab: ExecutionTab): void }) {
   const t = useExecutionText(), tt = useToolText(), tabsId = useId()
   const [offset, setOffset] = useState(0)
+  const [selectedCellId, setSelectedCellId] = useState<string>()
   const [stop, setStop] = useState<{ id: string; label: string }>()
   const [actionError, setActionError] = useState<string>()
 
   const view = useExecutionObservation(bridge, workspaceId, sessionId, offset, () => setOffset(0))
+  const page = view.state
+  const cells = page?.cells ?? []
+  const cell = cells.find(record => record.id === selectedCellId) ?? cells[0]
+  const recordName = (index: number) => `${t("執行單元")} ${(page?.offset ?? offset) + index + 1}`
   const current = useRef({ state: view.state, busy: view.busy, stop })
   current.current = { state: view.state, busy: view.busy, stop }
   function canStop(state: DesktopExecutionView | undefined, id: string) {
@@ -44,32 +61,54 @@ function ExecutionScope({ bridge, workspaceId, sessionId, tab, setTab }: Executi
     }, () => setStop(undefined))
   }
   const eligible = !!stop && canStop(view.state, stop.id)
+  const name = cell ? recordName(cells.indexOf(cell)) : ""
+  const status = cell ? cellStatus(cell) : undefined
+  function movePage(next: number) {
+    setSelectedCellId(undefined)
+    setOffset(next)
+  }
   return <section className="workflow-section execution-pane" aria-label={t("執行檢視")}>
     <header className="execution-surface-header"><div><Braces size={18} aria-hidden="true" /><h2>{t("執行檢視")}</h2></div><Button variant="ghost" size="small" disabled={view.busy} icon={<RefreshCw size={14} />} onClick={() => { void view.refresh() }}>{t("重新整理")}</Button></header>
-    <p className="execution-surface-note">{view.state?.effectiveMode ? t("目前有效模式") + "：" + view.state.effectiveMode : t("已儲存執行記錄")}</p>
-    <PaneTabs id={tabsId} label={t("Cell 內容")} items={([["code", "程式"], ["output", "輸出"], ["trace", "巢狀呼叫"]] as const).map(([id, label]) => ({ id, label: t(label) }))} selected={tab} onSelect={id => setTab(id as ExecutionTab)} />
+    {page ? <p className="execution-mode-note">{page.effectiveMode ? <>{t("目前有效模式")} <strong>{t(codeModeLabels[page.effectiveMode])}</strong></> : t("已儲存執行記錄")}</p> : null}
     {view.error && !stop ? <p role="alert" className="error-text">{view.error}</p> : null}
     {!view.state && !view.error ? <p role="status">{t("正在讀取…")}</p> : null}
-    {view.state?.cells.length === 0 ? <p className="execution-surface-empty">{t("尚無 Code Mode cell")}</p> : null}
-    <div role="tabpanel" id={tabsId + "-panel"} aria-labelledby={tabsId + "-" + tab} className="execution-record-list">{view.state?.cells.map((cell, index) => <article key={cell.id} className="execution-record-card">
-      <div className="execution-record-header"><h3>{tt("執行單元", "Cell")} {offset + index + 1}</h3><span className="execution-record-status">{cell.status} · {cell.live ? t("活躍") : t("歷史")}</span></div>
-      {tab === "code" ? cell.source ? <OutputBlock label={tt("JavaScript 原始碼", "JavaScript source")} language="javascript" text={cell.source} /> : <p className="execution-surface-note">{t("此記錄未保存程式")}</p>
-        : tab === "output" ? <div className="execution-record-content">{cell.output.length ? cell.output.map((item, index) => <OutputBlock key={String(item.seq ?? index) + ":" + index} label={item.kind === "text" ? tt("執行輸出", "Output") : tt("輸出記錄", "Output record") + " · " + item.kind} text={item.text} />) : <p className="execution-surface-note">{t("此 cell 尚無輸出")}</p>}</div>
-          : cell.calls.length ? <ExecutionTrace calls={cell.calls} /> : <p className="execution-surface-note">{t("此 cell 尚無巢狀呼叫")}</p>}
+    {page?.total === 0 ? <div className="ih-empty-state execution-empty"><Braces size={20} aria-hidden="true" /><strong>{t("尚無 Code Mode cell")}</strong><p>{t("Agent 透過程式編排工具後，執行結果會顯示在這裡。")}</p></div> : null}
+    {cell && cells.length > 1 ? <label className="execution-picker ih-control-scope">
+      {t("執行記錄")}
+      <select value={cell.id} disabled={view.busy} onChange={event => setSelectedCellId(event.target.value)}>
+        {cells.map((record, index) => <option key={record.id} value={record.id}>{recordName(index)} · {t(cellStatus(record))}</option>)}
+      </select>
+    </label> : null}
+    {cell && status ? <article key={cell.id} className="execution-record-card">
+      <div className="execution-record-header">
+        <h3>{name}</h3>
+        <span className="execution-state" data-state={status === "狀態待確認" ? "unconfirmed" : cell.status}>{t(status)}</span>
+        <span className="execution-record-origin">{cell.live ? t("活躍") : t("已保存")}</span>
+      </div>
       {cell.error !== undefined ? <OutputBlock label={tt("錯誤記錄", "Recorded error")} text={cell.error} defaultWrap /> : null}
       {cell.truncated ? <p className="execution-surface-note">{t("內容已截斷")}</p> : null}
-      {!cell.live && ["started", "running"].includes(cell.status) ? <p className="execution-surface-note">{t("已儲存狀態，未確認仍在執行；無法恢復或停止此 cell。")}</p> : null}
+      {status === "狀態待確認" ? <p className="execution-surface-note">{t("已儲存狀態，未確認仍在執行；無法恢復或停止此 cell。")}</p> : null}
+      <PaneTabs className="ih-segments" id={tabsId} label={t("Cell 內容")} items={[
+        { id: "code", label: t("程式") },
+        { id: "output", label: t("輸出") },
+        { id: "trace", label: t("巢狀呼叫") },
+      ]} selected={tab} onSelect={id => setTab(id as ExecutionTab)} />
+      <div role="tabpanel" id={tabsId + "-panel"} aria-labelledby={tabsId + "-" + tab} className="execution-record-content">
+        {tab === "code" ? cell.source ? <OutputBlock label={tt("JavaScript 原始碼", "JavaScript source")} language="javascript" text={cell.source} defaultWrap /> : <p className="execution-surface-note">{t("此記錄未保存程式")}</p>
+          : tab === "output" ? cell.output.length ? cell.output.map((item, index) => <OutputBlock key={String(item.seq ?? index) + ":" + index} label={item.kind === "text" ? tt("執行輸出", "Output") : tt("輸出記錄", "Output record") + " · " + item.kind} text={item.text} defaultWrap />) : <p className="execution-surface-note">{t("此 cell 尚無輸出")}</p>
+            : cell.calls.length ? <ExecutionTrace calls={cell.calls} /> : <p className="execution-surface-note">{t("此 cell 尚無巢狀呼叫")}</p>}
+      </div>
       <RawRecordedRecord value={cell} />
-      {canStop(view.state, cell.id) ? <div className="execution-record-actions"><Button variant="danger" size="small" disabled={view.busy} onClick={() => { setActionError(undefined); setStop({ id: cell.id, label: tt("執行單元", "Cell") + " " + (offset + index + 1) }) }}>{t("停止 cell")}</Button></div> : null}
-    </article>)}</div>
+      {canStop(page, cell.id) ? <div className="execution-record-actions"><Button variant="danger" size="small" icon={<Square size={13} />} disabled={view.busy} onClick={() => { setActionError(undefined); setStop({ id: cell.id, label: name }) }}>{t("停止 cell")}</Button></div> : null}
+    </article> : null}
     {stop ? <SettingsDialog title={t("確認停止 cell")} closeLabel={tt("關閉停止確認", "Close stop confirmation")} busy={view.busy} initialFocusSelector="[data-dialog-cancel]" onClose={() => setStop(undefined)} className="execution-action-dialog"><form onSubmit={event => { event.preventDefault(); void confirmStop() }}>
       <p>{t("停止此 cell 及其巢狀呼叫？")}</p><p className="execution-action-target">{stop.label}</p>
       <details className="execution-identity"><summary>{tt("操作詳情", "Action details")}</summary><dl><dt>Cell ID</dt><dd>{stop.id}</dd><dt>{tt("會話", "Conversation")}</dt><dd>{sessionId}</dd></dl></details>
       {!eligible ? <p role="status" className="execution-surface-note">{tt("此操作目前不可用；執行狀態或控制權已變更。", "This action is unavailable; execution state or control ownership changed.")}</p> : null}
       {actionError || view.error ? <p role="alert" className="error-text">{actionError ?? view.error}</p> : null}
-      <div className="execution-dialog-actions"><Button data-dialog-cancel disabled={view.busy} onClick={() => setStop(undefined)}>{t("返回")}</Button><Button type="submit" variant="danger" aria-label={t("確認停止")} disabled={!eligible} loading={view.busy} loadingLabel={tt("正在停止…", "Stopping…")}>{t("確認停止")}</Button></div>
+      <footer className="settings-dialog-actions"><Button data-dialog-cancel disabled={view.busy} onClick={() => setStop(undefined)}>{t("返回")}</Button><Button type="submit" variant="danger" aria-label={t("確認停止")} disabled={!eligible} loading={view.busy} loadingLabel={tt("正在停止…", "Stopping…")}>{t("確認停止")}</Button></footer>
     </form></SettingsDialog> : null}
-    {view.state && view.state.total > 0 ? <div className="execution-pagination"><Button size="small" variant="ghost" disabled={offset === 0 || view.busy} onClick={() => setOffset(Math.max(0, offset - 10))}>{t("較新記錄")}</Button><span>{offset + 1}–{Math.min(offset + 10, view.state.total)} / {view.state.total}</span><Button size="small" variant="ghost" disabled={!view.state.hasMore || view.busy} onClick={() => setOffset(offset + 10)}>{t("較舊記錄")}</Button></div> : null}
+    {page && (offset > 0 || page.hasMore) ? <div className="execution-pagination"><Button size="small" variant="ghost" disabled={offset === 0 || view.busy} onClick={() => movePage(Math.max(0, offset - 10))}>{t("較新記錄")}</Button><span>{offset + 1}–{Math.min(offset + cells.length, page.total)} / {page.total}</span><Button size="small" variant="ghost" disabled={!page.hasMore || view.busy} onClick={() => movePage(offset + 10)}>{t("較舊記錄")}</Button></div> : null}
   </section>
 }
 
@@ -78,7 +117,7 @@ function ExecutionTrace({ calls }: { calls: ExecutionCallView[] }) {
   const count = Math.ceil(calls.length / 20), current = Math.min(page, count - 1)
   return <div className="execution-record-content">{calls.slice(current * 20, (current + 1) * 20).map(call => <article key={call.id} className="execution-call-card">
     <div className="execution-record-header"><h4><code>{call.name}</code></h4><span className="execution-record-status">{call.isError ? tt("執行失敗", "Failed") : call.output !== undefined ? tt("已收到結果", "Result received") : call.dispatched ? tt("已派發，等待結果", "Dispatched, awaiting result") : t("未派送")}</span></div>
-    {call.output !== undefined ? <OutputBlock label={tt("呼叫結果", "Call result")} text={call.output} /> : <p className="execution-surface-note">{t("尚無結果")}</p>}
+    {call.output !== undefined ? <OutputBlock label={tt("呼叫結果", "Call result")} text={call.output} defaultWrap /> : <p className="execution-surface-note">{t("尚無結果")}</p>}
     <CallArguments value={call.args} /><RawRecordedRecord value={call} />
   </article>)}{count > 1 ? <div className="execution-pagination"><Button size="small" variant="ghost" disabled={current === 0} onClick={() => setPage(current - 1)}>{tt("上一頁", "Previous page")}</Button><span>{current + 1} / {count}</span><Button size="small" variant="ghost" disabled={current + 1 === count} onClick={() => setPage(current + 1)}>{tt("下一頁", "Next page")}</Button></div> : null}</div>
 }

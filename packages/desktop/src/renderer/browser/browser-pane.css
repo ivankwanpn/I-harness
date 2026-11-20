@@ -1,7 +1,10 @@
-.browser-pane .browser-tabs { gap: .286rem; padding: .286rem; }
-.browser-pane .browser-tabs [role="tab"] { min-width: 0; max-width: 12rem; padding: .429rem .714rem; }
-.browser-pane .browser-toolbar { flex-wrap: wrap; gap: .286rem; padding: .429rem; }
-.browser-pane .browser-toolbar input { flex: 1 1 9rem; min-width: 0; }
-.browser-pane .browser-toolbar .oc-button { flex: 0 0 auto; min-height: 2.143rem; }
+.browser-tabbar { display: flex; align-items: center; gap: .286rem; padding-block: .35rem; flex: none; }
+.browser-tabs { display: flex; min-width: 0; flex: 1; gap: .28rem; overflow-x: auto; scrollbar-width: thin; padding: 3px; }
+.browser-tabs [role="tab"] { min-width: 0; max-width: 12rem; flex: 0 0 auto; }
+.browser-tabs [role="tab"] > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-tabs .oc-button[aria-selected="true"] { background: var(--ih-selected); border-color: var(--ih-selected-border); }
+.browser-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .23rem; padding-block: .35rem .6rem; flex: none; }
+.browser-pane .browser-toolbar input { flex: 1 1 7rem; min-width: 0; }
+.browser-toolbar .oc-button { flex: 0 0 auto; }
 .browser-pane .browser-state { margin: 0; padding: 1.143rem; color: var(--ih-muted); font-size: .929rem; line-height: 1.6; }
 .browser-pane .browser-error { display: flex; align-items: center; gap: .571rem; color: var(--ih-control-danger); }

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useId, useState, useSyncExternalStore, useR
 import { createPortal } from "react-dom"
 import { ArrowUp, Square, Plus, FileText, X, ChevronDown, LoaderCircle, Shield, ShieldCheck, ShieldAlert, Check } from "lucide-react"
 import { useText } from "../design/i18n.ts"
+import { displayError } from "../design/error-display.ts"
 import { listenForegroundEscape } from "../design/foreground-escape.ts"
 import { ComposerSurface } from "../vendor/zcode/ComposerSurface.tsx"
 import type { DesktopBridge } from "../../shared/bridge.ts"
@@ -653,7 +654,7 @@ function SessionComposer({
   }
 
   return (
-    <ComposerSurface onSubmit={() => { void send() }} error={error}
+    <ComposerSurface onSubmit={() => { void send() }} error={error ? displayError(error, { english: useUiStore.getState().locale === "en" }).summary : undefined}
       editor={
       <>
       {contextRefs.length ? <div className="composer-file-references">{contextRefs.map((item, i) => <span className="composer-file-chip" key={JSON.stringify(item)}>{(item.kind === "session" && onOpenHistory) || (item.kind === "file" && onOpenProjectFile) ? <button type="button" className="link-button" onClick={() => item.kind === "session" ? onOpenHistory?.({ workspaceId: item.workspaceId, sessionId: item.sessionId, seq: item.seq }) : onOpenProjectFile?.({ workspaceId: item.workspaceId, path: item.path })}>{item.kind === "file" ? `${item.workspaceLabel ?? item.workspaceId}/${item.path}` : `${item.label} · ${item.workspaceId}/${item.sessionId}#${item.seq}`}</button> : <span>{item.kind === "file" ? `${item.workspaceLabel ?? item.workspaceId}/${item.path}` : `${item.label} · ${item.workspaceId}/${item.sessionId}#${item.seq}`}</span>}<button type="button" aria-label={`移除引用 ${item.label}`} onClick={() => saveContextRefs(contextRefs.filter((_, index) => i !== index))}><X size={12} /></button></span>)}</div> : null}
@@ -663,7 +664,7 @@ function SessionComposer({
       {texts.length ? <div className="composer-file-references">{texts.map((attachment) => <span key={attachment.id} className="composer-file-chip composer-text-chip"><FileText size={14} aria-hidden="true" /><span title={attachment.name}>{attachment.name}</span><button type="button" aria-label={t("移除附件 {name}", { name: attachment.name })} onClick={() => writeTextAttachmentDrafts(workspaceId, sessionId, texts.filter((value) => value.id !== attachment.id))}><X size={12} aria-hidden="true" /></button>{attachment.contentType ? <small title={attachment.contentType}>{documentLabels[attachment.contentType] ?? attachment.contentType}{attachment.bytes !== undefined ? ` · ${attachment.bytes} bytes` : ""}{attachment.truncated ? ` · ${attachmentText("已截斷")}` : ""}</small> : null}{attachment.reason ? <small title={attachment.reason}>{attachment.reason}</small> : null}</span>)}</div> : null}
       {draftRequest && (images.length || texts.length || references.length || contextRefs.length) ? <small className="composer-draft-policy">{attachmentText("未送出附件保留 7 天；本機草稿上限 128 MiB。")}</small> : null}
       {texts.some(isVideoAttachment) ? <small className="composer-draft-policy">{attachmentText("影片保留原檔案位置；分析完成前請勿移動或刪除。")}</small> : null}
-      {draftError ? <p role="alert" className="error-text">{attachmentText("草稿儲存失敗；目前輸入仍保留。")} {draftError}</p> : null}
+      {draftError ? <p role="alert" className="composer-draft-error">{attachmentText("草稿儲存失敗；目前輸入仍保留。")} <span>{displayError(draftError, { english: useUiStore.getState().locale === "en" }).summary}</span></p> : null}
       {pickError ? <p role="alert" className="error-text">{pickError}</p> : null}
       {imageError ? <p role="alert" className="error-text">{imageError}</p> : null}
       {bridge ? <SlashCommands ref={slashRef} anchorRef={editorRef} bridge={bridge} workspaceId={workspaceId} text={value} showCompact={onCompact !== undefined} workflows={workflowEnabled && !!onWorkflow} settings={!!onWorkflow} onSelect={(name, kind) => { const workflow = kind !== "skill" && onWorkflow && (name === "settings" || workflowEnabled && ["goal", "jobs", "reviews"].includes(name)); const next = workflow ? "" : `${kind === "skill" ? "$" : "/"}${name} `; setValue(next); writeDraft(workspaceId, sessionId, next); if (workflow) onWorkflow!(name); editorRef.current?.focus() }} /> : null}
@@ -709,7 +710,7 @@ function SessionComposer({
             onKeyDown={event => { if (event.key === "Tab" && permissionsOpen) { closePermissions(false); return } if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); permissionsFocus.current = event.key === "ArrowDown" ? "first" : "last"; setPermissionsOpen(true) } }}>
             <Shield size={15} aria-hidden="true" /><span>{t(approvalLabel)}</span><ChevronDown size={12} aria-hidden="true" />
           </button>
-          {permissionsOpen ? createPortal(<div ref={permissionsPanel} id={permissionsMenuId} className="composer-approval-menu" style={permissionsPlacement} role="menu" aria-label={t("核準模式")}
+          {permissionsOpen ? createPortal(<div ref={permissionsPanel} id={permissionsMenuId} className="composer-approval-menu ih-menu-surface" style={permissionsPlacement} role="menu" aria-label={t("核準模式")}
             onKeyDown={event => {
               const options = Array.from(permissionsPanel.current?.querySelectorAll<HTMLButtonElement>("[role=menuitemradio]:not(:disabled)") ?? [])
               const current = options.indexOf(document.activeElement as HTMLButtonElement)
@@ -721,7 +722,7 @@ function SessionComposer({
               else if (event.key === "Tab") closePermissions()
             }}>
             <p className="composer-approval-heading">{t("核準模式")}</p>
-            {allApprovalChoices.map(({ mode, label, description, Icon }) => <button key={mode} type="button" className="composer-approval-option" data-mode={mode} role="menuitemradio" aria-label={t(label)} aria-checked={effectiveApproval === mode} disabled={permissionsBusy || !permissions?.effective} onClick={() => { void chooseApproval(mode) }}>
+            {allApprovalChoices.map(({ mode, label, description, Icon }) => <button key={mode} type="button" className="ih-menu-item composer-approval-option" data-mode={mode} role="menuitemradio" aria-label={t(label)} aria-checked={effectiveApproval === mode} disabled={permissionsBusy || !permissions?.effective} onClick={() => { void chooseApproval(mode) }}>
               <Icon size={18} aria-hidden="true" /><span><strong>{t(label)}</strong><small>{t(description)}</small></span>{effectiveApproval === mode ? <Check size={16} aria-hidden="true" /> : <span />}
             </button>)}
             {!permissions?.effective && !permissionsError ? <p role="status" className="composer-approval-note">{t("正在讀取權限…")}</p> : null}

@@ -18,7 +18,7 @@ import { composeJsonlTaskTransitionCoordinator } from "../../session-persistence
 import { taskDocumentStorageContract } from "../../subagent/src/task/storage-contract.ts"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createDurableSessionLoader, createSessionService } from "@i-harness/session-executor"
-import { createDesktopExecution, createCodeModeSettings } from "../src/execution.ts"
+import { createDesktopExecution, createCodeModeSettings, displayValue } from "../src/execution.ts"
 const createCoordinator = (directory: string) => composeJsonlTaskTransitionCoordinator(createJsonlBackend(directory), { lock: { enabled: true } }, taskDocumentStorageContract)
 
 import { createAgentProcesses } from "../src/agent-processes.ts"
@@ -283,6 +283,7 @@ it("reads actual nested cell history and stops its live owner while a model obse
   const root = await mkdtemp(join(tmpdir(), "ih-execution-ui-"))
   const coordinator = createCoordinator(join(root, "sessions"))
   await coordinator.create({ sessionId: "owned" }); await coordinator.create({ sessionId: "other" })
+  await writeFile(join(root, "present.txt"), "Code Mode projection")
   let modelCalls = 0
   const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), codeMode: { mode: "mixed" }, sandbox: "danger-full-access", model: { async *stream() { modelCalls++; yield { type: "end" } } } })
   const view = createDesktopExecution(coordinator, service)
@@ -298,7 +299,11 @@ it("reads actual nested cell history and stops its live owner while a model obse
       return read
     })
     expect(read.cells[0]).toMatchObject({ id: cellId, live: true, canTerminate: true })
-    expect(read.cells[0]!.calls[0]).toMatchObject({ name: "list_dir", dispatched: true })
+    const resultFact = assembly.session.events.findLast(event => event.type === "code/result" && event.cellId === cellId && event.name === "list_dir")
+    if (resultFact?.type !== "code/result" || resultFact.envelope?.retention.kind !== "inline") throw new Error("Expected an inline nested result")
+    const expectedOutput = displayValue(resultFact.envelope.retention.value)
+    expect(expectedOutput).toContain("present.txt")
+    expect(read.cells[0]!.calls[0]).toMatchObject({ name: "list_dir", dispatched: true, output: expectedOutput, isError: false })
     expect(read.cells[0]!.output).not.toHaveLength(0)
     await expect(view.stop("other", cellId)).rejects.toThrow(/live|owner|cold/i)
     const observer = assembly.tools.execute({ name: "code_wait", args: { cell_id: cellId, yield_time_ms: 20000 } })
@@ -308,6 +313,7 @@ it("reads actual nested cell history and stops its live owner while a model obse
     await coordinator.flush("owned"); await service.closeSession("owned")
     const cold = await view.read("owned")
     expect(cold.cells[0]).toMatchObject({ live: false, canTerminate: false, status: "terminated" })
+    expect(cold.cells[0]!.calls[0]!.output).toBe(expectedOutput)
     await expect(view.stop("owned", cellId)).rejects.toThrow(/live|cold/i)
     expect(service.hasAssembly("owned")).toBe(false)
     expect(modelCalls).toBe(0)

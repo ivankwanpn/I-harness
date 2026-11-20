@@ -16,13 +16,17 @@
   gap: 10px;
   padding: 12px;
   border: 1px solid var(--ih-divider);
-  border-radius: 12px;
-  background: var(--ih-panel);
+  border-radius: var(--ih-radius-panel);
+  background: var(--ih-raised);
   color: var(--ih-text);
-  box-shadow: 0 6px 24px #0003;
+  box-shadow: var(--ih-overlay-shadow);
   pointer-events: auto;
 }
 .runtime-feedback-card > svg { flex: none; margin-top: 2px; color: var(--ih-muted); }
+.runtime-feedback-error { border-color: color-mix(in srgb, var(--ih-danger) 35%, var(--ih-divider)); }
+.runtime-feedback-error > svg { color: var(--ih-danger); }
+.runtime-feedback-warning > svg, .runtime-feedback-retry > svg { color: var(--ih-warning); }
+.runtime-feedback-wait > svg { color: var(--ih-accent); }
 .runtime-feedback-card > div { min-width: 0; flex: 1; }
 .runtime-feedback-card strong { font-size: 13px; }
 .runtime-feedback-card p { margin: 5px 0; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }

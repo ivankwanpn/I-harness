@@ -33,7 +33,7 @@ export async function settleFailedTurn(deps: Pick<AgentDeps,'facts'|'sourceFacts
     if (lifecycle.stepOpen) {
       // An incomplete provider step must not replay partial tool calls.
       // A completed provider/tool result keeps its existing provenance.
-      if (!lifecycle.providerCompleted && !lifecycle.stepFailed) await attempt(() => failStepBoundary(deps, lifecycle))
+      if (!lifecycle.providerCompleted && !lifecycle.stepFailed) await attempt(() => failStepBoundary(deps, lifecycle, error))
       if (beforeEnd) await attempt(beforeEnd)
       await attempt(() => closeStepBoundary(deps, lifecycle, { type: 'step/end' }))
     }
@@ -125,7 +125,13 @@ export async function closeStep(deps: Pick<AgentDeps, "telemetry" | 'facts' | 's
   const emptyThisStep = stepText === "" && toolCallsThisStep === 0 && !truncatedThisStep && !refusedThisStep
   if (emptyThisStep) deps.telemetry?.emit({ type: "provider/empty", ts: Date.now(), data: { step: getSteps() } })
 
-  await closeStepBoundary(deps,lifecycle,{ type: "step/end", ...(truncatedThisStep ? { truncated: true } : {}), ...(refusedThisStep ? { refused: true } : {}), ...(emptyThisStep ? { empty: true } : {}) })
+  await closeStepBoundary(deps,lifecycle,{
+    type: "step/end",
+    ...(truncatedThisStep ? { truncated: true } : {}),
+    ...(refusedThisStep ? { refused: true } : {}),
+    ...(emptyThisStep ? { empty: true } : {}),
+    ...(step.generation && !truncatedThisStep && !refusedThisStep && !emptyThisStep ? { generation: step.generation } : {}),
+  })
 
   return emptyThisStep
 }

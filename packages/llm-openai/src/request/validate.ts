@@ -1,6 +1,7 @@
 import { subscriptionFields, publicFields } from './fields.ts'
 import { validationCollector, type FinalValidator } from '@i-harness/llm-seam'
 import type { OpenAIConfig } from '../types.ts'
+import { isDeepSeekResponses } from './deepseek.ts'
 
 type Checks = ReturnType<typeof validationCollector>
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -98,7 +99,7 @@ function parameters(body: Record<string, unknown>, check: Checks): void {
   if (body.tool_choice !== undefined && typeof body.tool_choice !== 'string' && !record(body.tool_choice)) check.issue('parameter-type', 'tools')
   if (record(body.tool_choice) && !text(body.tool_choice.type)) check.issue('shape', 'tools')
 }
-function itemShape(item: Record<string, unknown>, check: Checks): void {
+function itemShape(item: Record<string, unknown>, check: Checks, plainReasoning: boolean): void {
   if (item.type === 'message' || item.type === undefined && item.role !== undefined) {
     extensions(item, ['type', 'id', 'role', 'content', 'status', 'phase'], check)
     if (!['system', 'developer', 'user', 'assistant'].includes(item.role as string)) check.issue('shape', 'input')
@@ -107,8 +108,10 @@ function itemShape(item: Record<string, unknown>, check: Checks): void {
   } else if (item.type === 'reasoning') {
     extensions(item, ['type', 'id', 'summary', 'content', 'encrypted_content', 'status'], check)
     check.native()
-    if (!Array.isArray(item.summary)) check.issue('native-replay', 'native', 'native-replay')
-    else content(item.summary, check, ['summary_text'], true)
+    if (item.summary != null || !plainReasoning || !Array.isArray(item.content) || item.content.length === 0) {
+      if (!Array.isArray(item.summary)) check.issue('native-replay', 'native', 'native-replay')
+      else content(item.summary, check, ['summary_text'], true)
+    }
     if (item.content !== undefined) content(item.content, check, ['reasoning_text'], true)
     if (item.encrypted_content !== undefined && item.encrypted_content !== null && typeof item.encrypted_content !== 'string') check.issue('native-replay', 'native', 'native-replay')
   } else if (item.type === 'item_reference') {
@@ -121,7 +124,7 @@ function itemShape(item: Record<string, unknown>, check: Checks): void {
   } else if (!text(item.type)) check.issue('shape', 'input')
   else { check.native(); check.gap('extension-unchecked'); check.gap('native-contract-unavailable') }
 }
-function inputGroups(input: unknown[], body: Record<string, unknown>, check: Checks, subscription: boolean): void {
+function inputGroups(input: unknown[], body: Record<string, unknown>, check: Checks, subscription: boolean, plainReasoning: boolean): void {
   const visible = new Set<string>(), pending = new Map<string, boolean>(), completed = new Set<string>()
   for (const item of input) {
     if (!record(item) || item.type !== 'function_call') continue
@@ -149,7 +152,7 @@ function inputGroups(input: unknown[], body: Record<string, unknown>, check: Che
       completed.add(item.call_id)
       content(item.output, check)
     } else {
-      itemShape(item, check)
+      itemShape(item, check, plainReasoning)
       if (!subscription && item.type === 'item_reference' && text(item.id)) remote = true
     }
   }
@@ -159,7 +162,8 @@ function inputGroups(input: unknown[], body: Record<string, unknown>, check: Che
   }
 }
 /** Literal final-body grammar, independent of the neutral encoder. */
-export function responsesValidator(config: Pick<OpenAIConfig, 'model' | 'baseUrl'>, subscription: boolean): FinalValidator<unknown> {
+export function responsesValidator(config: Pick<OpenAIConfig, 'model' | 'baseUrl' | 'providerId'>, subscription: boolean): FinalValidator<unknown> {
+  const plainReasoning = !subscription && isDeepSeekResponses(config)
   return body => {
     const check = validationCollector(subscription ? 'openai-responses-subscription' : 'openai-responses')
     if (!record(body)) { check.issue('shape', 'request'); return check.finish() }
@@ -180,7 +184,7 @@ export function responsesValidator(config: Pick<OpenAIConfig, 'model' | 'baseUrl
     if (body.conversation !== undefined && body.conversation !== null && !text(body.conversation) && !(record(body.conversation) && text(body.conversation.id))) check.issue('shape', 'request')
     if (body.previous_response_id != null || body.conversation != null || body.prompt != null) check.gap('remote-input-unavailable')
     tools(body.tools, check, subscription)
-    if (Array.isArray(body.input)) inputGroups(body.input, body, check, subscription)
+    if (Array.isArray(body.input)) inputGroups(body.input, body, check, subscription, plainReasoning)
     else if (typeof body.input !== 'string') check.issue('shape', 'input')
     return check.finish()
   }

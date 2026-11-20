@@ -4,6 +4,7 @@ import { Archive, Copy, FolderOpen, GitBranch, Mail, MailOpen, Pencil, Pin, PinO
 import { useLocale, useText } from "../design/i18n.ts"
 import { managementError } from "../session/management-error.ts"
 import { listenForegroundEscape } from "../design/foreground-escape.ts"
+import { Button } from "../vendor/opencode/Button.tsx"
 import "./session-actions.css"
 
 export type SessionAction = "rename" | "archive" | "restore" | "fork" | "fork-fresh" | "pin" | "unpin" | "read" | "unread"
@@ -87,21 +88,21 @@ export function SessionActions({ session, navigation, anchor, onManage, onCopyId
       <form onSubmit={(event) => { event.preventDefault(); if (title.trim() && !composing.current) manage("rename", title.trim()) }}>
         <label>{t("會話名稱")}<input value={title} maxLength={256} disabled={busy} onChange={(event) => setTitle(event.target.value)} onFocus={(event) => event.currentTarget.select()} onCompositionStart={() => { composing.current = true }} onCompositionEnd={() => { composing.current = false }} onKeyDown={(event) => { if (event.key === "Enter" && (composing.current || event.nativeEvent.isComposing)) event.preventDefault() }} /></label>
         {error ? <p role="alert" className="error-text">{error}</p> : null}
-        <div className="session-rename-actions"><button type="button" disabled={busy} onClick={close}>{t("取消")}</button><button type="submit" disabled={busy || !title.trim()}>{t(busy ? "正在處理…" : "儲存")}</button></div>
+        <footer className="settings-dialog-actions"><Button disabled={busy} onClick={close}>{t("取消")}</Button><Button type="submit" variant="primary" disabled={!title.trim()} loading={busy} loadingLabel={t("正在處理…")}>{t("儲存")}</Button></footer>
       </form>
     </div>
-  </div> : <div ref={root} className="session-action-menu" role="menu" aria-label={t("會話操作")} aria-busy={busy} style={position} onKeyDown={keyboard}>
+  </div> : <div ref={root} className="session-action-menu ih-menu-surface" role="menu" aria-label={t("會話操作")} aria-busy={busy} style={position} onKeyDown={keyboard}>
     {onManage ? <>
-      <button type="button" role="menuitem" disabled={busy} onClick={() => manage(navigation?.pinned ? "unpin" : "pin")}>{navigation?.pinned ? <PinOff size={15} /> : <Pin size={15} />}{t(navigation?.pinned ? "取消釘選" : "釘選會話")}</button>
-      <button type="button" role="menuitem" disabled={structuralBusy} onClick={() => { setError(undefined); setRenaming(true) }}><Pencil size={15} />{t("重新命名")}</button>
-      <button type="button" role="menuitem" disabled={busy} onClick={() => manage(navigation?.unread ? "read" : "unread")}>{navigation?.unread ? <MailOpen size={15} /> : <Mail size={15} />}{t(navigation?.unread ? "標記為已讀" : "標記為未讀")}</button>
-      <button type="button" role="menuitem" disabled={structuralBusy || session.turnCount === 0} title={session.turnCount === 0 ? t("完成一輪後才能建立分支") : undefined} onClick={() => manage("fork")}><GitBranch size={15} />{t("建立分支")}</button>
-      <button type="button" role="menuitem" disabled={archiveBlocked} title={session.running === true ? t("先停止目前回合再封存") : undefined} onClick={() => manage("archive")}><Archive size={15} />{t("封存會話")}</button>
+      <button type="button" role="menuitem" className="ih-menu-item" disabled={busy} onClick={() => manage(navigation?.pinned ? "unpin" : "pin")}>{navigation?.pinned ? <PinOff size={15} /> : <Pin size={15} />}{t(navigation?.pinned ? "取消釘選" : "釘選會話")}</button>
+      <button type="button" role="menuitem" className="ih-menu-item" disabled={structuralBusy} onClick={() => { setError(undefined); setRenaming(true) }}><Pencil size={15} />{t("重新命名")}</button>
+      <button type="button" role="menuitem" className="ih-menu-item" disabled={busy} onClick={() => manage(navigation?.unread ? "read" : "unread")}>{navigation?.unread ? <MailOpen size={15} /> : <Mail size={15} />}{t(navigation?.unread ? "標記為已讀" : "標記為未讀")}</button>
+      <button type="button" role="menuitem" className="ih-menu-item" disabled={structuralBusy || session.turnCount === 0} title={session.turnCount === 0 ? t("完成一輪後才能建立分支") : undefined} onClick={() => manage("fork")}><GitBranch size={15} />{t("建立分支")}</button>
+      <button type="button" role="menuitem" className="ih-menu-item" disabled={archiveBlocked} title={session.running === true ? t("先停止目前回合再封存") : undefined} onClick={() => manage("archive")}><Archive size={15} />{t("封存會話")}</button>
     </> : null}
-    {onManageSession ? <button type="button" role="menuitem" disabled={busy} onClick={() => { onManageSession(session.id); close() }}><Settings2 size={15} />{t("管理此會話")}</button> : null}
+    {onManageSession ? <button type="button" role="menuitem" className="ih-menu-item" disabled={busy} onClick={() => { onManageSession(session.id); close() }}><Settings2 size={15} />{t("管理此會話")}</button> : null}
     {onCopyId || onOpenFolder ? <div className="session-menu-separator" role="separator" /> : null}
-    {onCopyId ? <button type="button" role="menuitem" disabled={busy} onClick={() => { void run(() => onCopyId(session.id)) }}><Copy size={15} />{t("複製會話 ID")}</button> : null}
-    {onOpenFolder ? <button type="button" role="menuitem" disabled={busy} onClick={() => { void run(onOpenFolder) }}><FolderOpen size={15} />{t("開啟工作區資料夾")}</button> : null}
+    {onCopyId ? <button type="button" role="menuitem" className="ih-menu-item" disabled={busy} onClick={() => { void run(() => onCopyId(session.id)) }}><Copy size={15} />{t("複製會話 ID")}</button> : null}
+    {onOpenFolder ? <button type="button" role="menuitem" className="ih-menu-item" disabled={busy} onClick={() => { void run(onOpenFolder) }}><FolderOpen size={15} />{t("開啟工作區資料夾")}</button> : null}
     {busy ? <p role="status">{t("正在處理…")}</p> : null}
     {error ? <p role="alert" className="error-text">{error}</p> : null}
   </div>, document.body)

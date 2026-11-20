@@ -132,7 +132,7 @@ export const SlashCommands = forwardRef<PickerKeyboard, {
   useEffect(() => { if (active && selectedId) document.getElementById(selectedId)?.scrollIntoView?.({ block: "nearest" }) }, [active, selectedId, selected])
   if (!active) return null
   const groups = [{ kind: "builtin", label: t("操作") }, { kind: "command", label: t("命令") }, { kind: "skill", label: t("技能") }] as const
-  return createPortal(<div ref={panel} className="slash-command-menu" style={placement} role="dialog" aria-modal="false" aria-label={t("技能與命令")}>
+  return createPortal(<div ref={panel} className="slash-command-menu ih-menu-surface" style={placement} role="dialog" aria-modal="false" aria-label={t("技能與命令")}>
     <div className="slash-command-heading"><Search size={14} aria-hidden="true" /><span>{query || t("技能與命令")}</span>{current?.loading || !current ? <LoaderCircle className="slash-command-spinner" size={14} aria-label={t("正在讀取…")} /> : <small>{matches.length}</small>}</div>
     {current?.error ? <p className="slash-command-message error-text" role="alert">{current.error}</p> : null}
     <div className="slash-command-list" role="listbox" aria-label={t("可用命令")} aria-activedescendant={selectedId}>

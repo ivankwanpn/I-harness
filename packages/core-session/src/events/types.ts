@@ -28,6 +28,12 @@ export interface ModelActivityInfo {
   outcome?: "completed" | "failed" | "cancelled"
 }
 
+/** Provider-reported output and the observed interval from first content to completion. */
+export interface ModelGenerationStats {
+  outputTokens: number
+  generationMs: number
+}
+
 // `&` binds tighter than `|`, so the intersection must wrap the whole union —
 // otherwise only the last member would carry `ignorable`.
 export type SessionEvent =
@@ -40,7 +46,7 @@ export type SessionEvent =
     | import('./bootstrap.ts').SeedResultsRecordV1
     | import('./bootstrap.ts').BootstrapCompleteRecord
     | { type: "step/start"; actionId?: string; attemptId?: string; seq?: number }
-    | { type: "step/failed"; seq?: number }
+    | { type: "step/failed"; seq?: number; failure?: { code: string; httpStatus?: number } }
     | { type: "model/retry"; version: 1; ts: number; retry: ModelRetryInfo; seq?: number }
     | { type: "model/activity"; version: 1; ts: number; activity: ModelActivityInfo; seq?: number }
     // `internal: true` = model-visible but NOT a user-facing turn (runtime-
@@ -69,7 +75,7 @@ export type SessionEvent =
     // Candidate JSON writes become replayable only with a later successful
     // terminal code/cell record for this owner; later failure/stop suppresses them.
     | { type: "code/store"; version: 1; cellId: string; sessionId?: string; writes: Array<[string, unknown]>; seq?: number }
-    | { type: "step/end"; seq?: number; /** M72 Ⅱ: the provider stopped at the output cap. */ truncated?: true; /** M77: the provider REFUSED to produce content (HTTP 200, no content, a bare `end` at the seam). Written only as `true` — absent stays absent, exactly like `truncated`, and the two are INDEPENDENT: one step can be both. */ refused?: true; /** M80: the provider returned NO content at all — an empty success (HTTP 200, no text, no tool call, a bare `end`). Written only as `true`; absent stays absent. Excluded by construction from a step that was `truncated` or `refused` (those are the more specific facts about the same step), and a step whose only output was a tool call is NOT empty. */ empty?: true }
+    | { type: "step/end"; seq?: number; generation?: ModelGenerationStats; /** M72 Ⅱ: the provider stopped at the output cap. */ truncated?: true; /** M77: the provider REFUSED to produce content (HTTP 200, no content, a bare `end` at the seam). Written only as `true` — absent stays absent, exactly like `truncated`, and the two are INDEPENDENT: one step can be both. */ refused?: true; /** M80: the provider returned NO content at all — an empty success (HTTP 200, no text, no tool call, a bare `end`). Written only as `true`; absent stays absent. Excluded by construction from a step that was `truncated` or `refused` (those are the more specific facts about the same step), and a step whose only output was a tool call is NOT empty. */ empty?: true }
     | { type: "turn/end"; seq?: number }
     | { type: "subagent/inbox"; messageId: string; message: string; provenance?: InputProvenance; seq?: number }
     | { type: "compaction/start"; seq?: number }

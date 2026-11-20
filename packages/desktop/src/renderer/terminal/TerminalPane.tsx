@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { Plus, X } from "lucide-react"
 import { Terminal, type ITerminalOptions } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import "@xterm/xterm/css/xterm.css"
@@ -147,9 +148,13 @@ export function TerminalPane({ bridge, workspaceId, active: visible = true }: { 
     finally { locked.current = false; setBusy(false) }
   }
   return <section className="terminal-pane ih-control-scope" aria-label={t("終端")}>
-    <div className="terminal-controls"><select aria-label={t("選擇終端")} value={selected ?? ""} onChange={(event) => setSelected(event.target.value)}><option value="">{t("選擇終端")}</option>{entries.map((row) => <option key={row.id} value={row.id} title={row.command}>{terminalLabel(row)}</option>)}</select><Button size="small" disabled={busy || entries.length >= 8} onClick={() => { void act(false) }}>{t("新增終端")}</Button><Button size="small" disabled={busy || !selected} onClick={() => { void act(true) }}>{t("關閉終端")}</Button></div>
+    <div className="terminal-controls">
+      {entries.length ? <select aria-label={t("選擇終端")} value={selected ?? ""} onChange={(event) => setSelected(event.target.value)}><option value="">{t("選擇終端")}</option>{entries.map((row) => <option key={row.id} value={row.id} title={row.command}>{terminalLabel(row)}</option>)}</select> : null}
+      <Button size="small" variant={entries.length ? "secondary" : "primary"} icon={<Plus size={15} />} disabled={busy || entries.length >= 8} onClick={() => { void act(false) }}>{t("新增終端")}</Button>
+      {selected ? <Button size="small" variant="ghost" aria-label={t("關閉終端")} title={t("關閉終端")} icon={<X size={15} />} disabled={busy} onClick={() => { void act(true) }} /> : null}
+    </div>
     <p className="muted">{t("此終端使用本機使用者權限，並非 Agent 沙箱。")}</p>
     {error ? <p role="alert">{error}<Button size="small" disabled={busy} onClick={() => setReload(reload + 1)}>{t("重試")}</Button></p> : null}
-    {selected ? fontFamily === undefined ? <p>{t("正在載入終端…")}</p> : <Emulator key={selected} bridge={bridge} workspaceId={workspaceId} id={selected} fontFamily={fontFamily} /> : <p>{t("新增終端以開啟工作區 shell。")}</p>}
+    {selected ? fontFamily === undefined ? <p role="status">{t("正在載入終端…")}</p> : <Emulator key={selected} bridge={bridge} workspaceId={workspaceId} id={selected} fontFamily={fontFamily} /> : <div className="ih-empty-state">{t("新增終端以開啟工作區 shell。")}</div>}
   </section>
 }

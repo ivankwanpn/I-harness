@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect } from "react"
-import { ArrowLeft } from "lucide-react"
+import { useState, useCallback, useEffect, useRef } from "react"
+import { ArrowLeft, FolderOpen, Search } from "lucide-react"
 import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
 import { Button } from "../vendor/opencode/Button.tsx"
 import { useLocale, useText } from "../design/i18n.ts"
@@ -73,6 +73,8 @@ export function SettingsPane({ workspace, sessionId, onClose, bridge, onSandboxC
   const [executionBindingRevisions, setExecutionBindingRevisions] = useState<Record<string, number>>({})
   const current = settingsDestinations.find(section => section.id === location.section) ?? settingsDestinations[0]!
   const tab = current.id
+  const scrollRef = useRef<HTMLDivElement>(null)
+  useEffect(() => { if (active && scrollRef.current) scrollRef.current.scrollTop = 0 }, [active, tab, workspace?.id])
   const [usageLabels, setUsageLabels] = useState<{ projects: Record<string, string>; workspaces: Record<string, string> }>({ projects: {}, workspaces: {} })
   useEffect(() => {
     if (!active || tab !== "usage" || !bridge) return
@@ -124,7 +126,7 @@ export function SettingsPane({ workspace, sessionId, onClose, bridge, onSandboxC
         <SettingsRow label={t("文字大小")} control={<select aria-label={t("文字大小")} value={preferences.fontSize} onChange={event => preferences.update({ fontSize: Number(event.target.value) })}>{[13, 14, 16, 18].map(size => <option key={size} value={size}>{size}px</option>)}</select>} />
       </SettingsGroup>
       <div className="settings-preference-actions"><p className="muted">{t("外觀偏好只儲存在此電腦。")}</p><Button variant="secondary" size="small" onClick={() => preferences.update({ appearance: "dark", fontSize: 14 })}>{t("重設外觀偏好")}</Button></div>
-      {bridge ? <><RetrySettings bridge={bridge} /><ModelWaitSettings bridge={bridge} /><h2>{t("視窗與輸入")}</h2><NativeSettings bridge={bridge} section="window" /><AutoTitleSettings bridge={bridge} /></> : null}
+      {bridge ? <><h2>{t("視窗與輸入")}</h2><NativeSettings bridge={bridge} section="window" /><AutoTitleSettings bridge={bridge} /><RetrySettings bridge={bridge} /><ModelWaitSettings bridge={bridge} /></> : null}
     </>
     if (tab === "log" && bridge && pageActive) return <RuntimeLog bridge={bridge} />
     if (tab === "notifications" && bridge && pageActive) return <><NativeSettings bridge={bridge} section="notifications" /><NotificationsPane request={notificationRequest} subscribe={notificationSubscribe} onOpenTarget={openNotification} /></>
@@ -152,7 +154,7 @@ export function SettingsPane({ workspace, sessionId, onClose, bridge, onSandboxC
     <nav className="settings-navigation" aria-label={t("設定分類")}>
       <button type="button" className="row-button settings-back" onClick={onClose} aria-label={t("返回會話")} title={t("返回會話")}><ArrowLeft size={18} aria-hidden="true" /><span>{t("返回會話")}</span></button>
       <h2>{t("設定")}</h2>
-      <input className="settings-search" type="search" aria-label={t("搜尋設定")} placeholder={t("搜尋設定")} value={search} onChange={event => setSearch(event.target.value)} />
+      <label className="settings-search-field"><Search size={15} aria-hidden="true" /><input className="ih-control settings-search" type="search" aria-label={t("搜尋設定")} placeholder={t("搜尋設定")} value={search} onChange={event => setSearch(event.target.value)} /></label>
       {visible.length === 0 ? <div className="settings-search-empty"><p role="status" className="muted">{t("沒有符合的設定")}</p><Button variant="ghost" size="small" onClick={() => setSearch("")}>{t("清除搜尋")}</Button></div> : null}
       {(["基本設定", "Agent 設定", "本機資料"] as const).map(group => <div className="settings-nav-group" key={group}>
         {visible.some(section => section.group === group) ? <p>{t(group)}</p> : null}
@@ -161,9 +163,11 @@ export function SettingsPane({ workspace, sessionId, onClose, bridge, onSandboxC
     </nav>
     <main className="settings-main">
       {bridge ? <TitleBar bridge={bridge} title={t("設定")} /> : null}
-      <div className="settings-scroll"><div className={`settings-content${tab === "usage" ? " settings-content-usage" : ""}`}>
-        <h1>{t(current.label)}</h1>
-        <p className="settings-description">{t(current.description)}</p>
+      <div className="settings-scroll" ref={scrollRef}><div className={`settings-content${tab === "usage" ? " settings-content-usage" : ""}`}>
+        <header className="settings-page-heading">
+          <div><h1>{t(current.label)}</h1><p className="settings-description">{t(current.description)}</p></div>
+          {current.scope === "workspace" && workspace ? <span className="settings-page-context" title={workspace.path}><FolderOpen size={14} aria-hidden="true" /><span>{workspace.label}</span></span> : null}
+        </header>
         {reason ? <p role="status" className="settings-capability-status muted">{reason}</p> : retainedSections.has(tab) ? null : renderContent(tab, workspace, capabilities, active, sessionId)}
         {pages.map(page => {
           const pageActive = active && !reason && page.key === pageKey

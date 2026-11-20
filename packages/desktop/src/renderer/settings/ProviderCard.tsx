@@ -68,12 +68,6 @@ function ProviderCardContent({ row, onSave, bridge, workspaceId, active = true }
     <div className="provider-connection-summary">
       <SettingsRow label={t("API 網址")} control={<code>{row.baseURL || t("未指定")}</code>} />
     </div>
-    {row.auth.source !== "oauth" && ["openai-completions", "openai-responses"].includes(row.protocol ?? "") ? <form className="provider-editor" onSubmit={event => { event.preventDefault(); run({ action: "video-audio/set", id: row.id, model: audioModel.trim() }) }}>
-      <label>{english ? "Video audio model" : "影片音訊模型"}<input value={audioModel} onChange={event => setAudioModel(event.target.value)} required maxLength={256} disabled={busy} placeholder="gpt-audio-1.5" /></label>
-      <p className="muted">{english ? "Use a model that supports OpenAI Chat audio input to recognize speech and other sounds. Video audio is sent to this provider when read_video is used; the main conversation model is unchanged." : "指定支援 OpenAI Chat 音訊輸入的模型，辨識語音及其他聲音。使用 read_video 時會將影片音訊送到這個提供商；會話的主要模型維持原設定。"}</p>
-      {row.videoAudioModel ? <p>{english ? "Selected audio model: " : "目前音訊模型："}{row.videoAudioModel}</p> : null}
-      <div className="provider-actions"><button type="submit" disabled={busy || !audioModel.trim()}>{english ? "Use for video audio" : "用於影片音訊"}</button>{row.videoAudioModel ? <button type="button" disabled={busy} onClick={() => run({ action: "video-audio/set", id: row.id, model: null })}>{english ? "Disable audio analysis" : "停用音訊分析"}</button> : null}</div>
-    </form> : null}
     {keyOpen && row.auth.source !== "oauth" ? <form className="provider-editor" onSubmit={(event) => { event.preventDefault(); run({ action: "key/set", id: row.id, value: key }, () => { setKey(""); setKeyOpen(false) }) }}>
       <label>API key<input type="password" autoComplete="off" required maxLength={16384} value={key} disabled={busy} onChange={(event) => setKey(event.target.value)} /></label>
       <div className="provider-actions"><button disabled={busy} type="submit">{t("儲存")}</button><button type="button" disabled={busy || !row.auth.configured} onClick={() => remove("key", { action: "key/clear", id: row.id })}>{t(confirm === "key" ? "確認清除 API key" : "清除 API key")}</button></div>
@@ -94,5 +88,11 @@ function ProviderCardContent({ row, onSave, bridge, workspaceId, active = true }
       </div>)}
       {bridge && workspaceId ? <ProviderDiscovery active={active} bridge={bridge} workspaceId={workspaceId} id={row.id} onSave={save} /> : null}
     </section>
+    {row.auth.source !== "oauth" && ["openai-completions", "openai-responses"].includes(row.protocol ?? "") ? <form className="provider-editor provider-audio-settings" onSubmit={event => { event.preventDefault(); run({ action: "video-audio/set", id: row.id, model: audioModel.trim() }) }}>
+      <label>{english ? "Video audio model" : "影片音訊模型"}<input value={audioModel} onChange={event => setAudioModel(event.target.value)} required maxLength={256} disabled={busy} placeholder="gpt-audio-1.5" /></label>
+      <p className="muted">{english ? "Use a model that supports OpenAI Chat audio input to recognize speech and other sounds. Video audio is sent to this provider when read_video is used; the main conversation model is unchanged." : "指定支援 OpenAI Chat 音訊輸入的模型，辨識語音及其他聲音。使用 read_video 時會將影片音訊送到這個提供商；會話的主要模型維持原設定。"}</p>
+      {row.videoAudioModel ? <p>{english ? "Selected audio model: " : "目前音訊模型："}{row.videoAudioModel}</p> : null}
+      <div className="provider-actions"><button type="submit" disabled={busy || !audioModel.trim()}>{english ? "Use for video audio" : "用於影片音訊"}</button>{row.videoAudioModel ? <button type="button" disabled={busy} onClick={() => run({ action: "video-audio/set", id: row.id, model: null })}>{english ? "Disable audio analysis" : "停用音訊分析"}</button> : null}</div>
+    </form> : null}
   </SettingsGroup></div>
 }

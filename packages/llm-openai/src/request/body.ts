@@ -2,6 +2,7 @@ import { resolvePromptCacheMode, type LLMRequest, type ReasoningEffort } from "@
 import type { OpenAIConfig } from "../types.ts"
 import { mapMessages, withoutCacheBreakpoints } from "./messages.ts"
 import type { GeneratedAffinity } from "./cache-evidence.ts"
+import { isDeepSeekResponses } from "./deepseek.ts"
 
 /**
  * M32 openai-family translation table (Responses | Chat | DeepSeek — ONE
@@ -17,12 +18,14 @@ export function translateReasoning(_model: string, effort: ReasoningEffort | und
 
 /** Body precedence, cache policy, and account-bound wire restrictions. */
 export function createRequestBody(
-  config: Pick<OpenAIConfig, "model" | "providerId" | "options" | "promptCache">,
+  config: Pick<OpenAIConfig, "model" | "providerId" | "baseUrl" | "options" | "promptCache">,
   request: Pick<LLMRequest, "systemPrompt" | "tools" | "reasoningEffort" | "maxOutputTokens" | "promptCache">,
   messages: LLMRequest["messages"],
   codexSubscription: boolean,
   subscriptionCacheKey?: () => string,
 ) {
+  const reasoning = translateReasoning(config.model, request.reasoningEffort)
+  if (reasoning && isDeepSeekResponses(config)) delete reasoning.reasoning.summary
   const body: Record<string, unknown> = {
     ...(codexSubscription ? config.options ?? {} : {}),
     model: config.model,
@@ -32,7 +35,7 @@ export function createRequestBody(
     stream: true,
     ...(!codexSubscription ? config.options ?? {} : {}),
     // M32: request-level effort wins over config.options (explicit per-request intent).
-    ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
+    ...(reasoning ?? {}),
     // M72 Ⅱ: a request-level cap, so it lands after config.options (the
     // same precedence rule the reasoning line above documents).
     ...(request.maxOutputTokens !== undefined ? { max_output_tokens: request.maxOutputTokens } : {}),

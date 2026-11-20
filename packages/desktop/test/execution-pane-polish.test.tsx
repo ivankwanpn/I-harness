@@ -9,6 +9,23 @@ afterEach(() => { cleanup(); vi.useRealTimers() })
 const cell = { id: "owned-cell", ownerSessionId: "s", status: "running", source: "text('owned')", live: true, canTerminate: true, truncated: false, output: [{ kind: "text", text: "captured output" }], calls: [{ id: "nested", name: "read", args: '{"path":"owned.txt"}', output: "captured nested result", dispatched: true }] }
 const base: DesktopExecutionView = { sessionId: "s", live: true, effectiveMode: "mixed", cells: [cell], total: 1, offset: 0, hasMore: false }
 
+it("keeps the explicitly selected cell when a newer observation changes the order", async () => {
+  const saved = { ...cell, id: "saved-cell", status: "completed", source: "saved source", live: false, canTerminate: false }
+  let current = { ...base, cells: [cell, saved], total: 2 }
+  const request = async () => current
+  render(<ExecutionPane bridge={executionObservationFixture(request)} workspaceId="w" sessionId="s" />)
+  const picker = await screen.findByRole<HTMLSelectElement>("combobox", { name: "執行記錄" })
+  fireEvent.change(picker, { target: { value: saved.id } })
+  expect(screen.getByText("saved source")).toBeTruthy()
+  expect(screen.queryByText("text('owned')")).toBeNull()
+  expect(screen.queryByRole("button", { name: "停止 cell" })).toBeNull()
+  current = { ...current, cells: [{ ...cell, id: "newer-cell", source: "newer source" }, ...current.cells], total: 3 }
+  await act(async () => { publishExecutionChange(request) })
+  expect(picker.value).toBe(saved.id)
+  expect(screen.getByText("saved source")).toBeTruthy()
+  expect(screen.queryByText("newer source")).toBeNull()
+})
+
 it("bounds projected source and output, preserves their full copy and keeps technical identity in disclosure", async () => {
   const source = "s".repeat(60000), output = "o".repeat(60000), writes: string[] = []
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (value: string) => { writes.push(value) } } })

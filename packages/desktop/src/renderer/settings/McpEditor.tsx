@@ -28,7 +28,7 @@ export function McpEditor({ row, busy, onSave, onClose, onReload, draftIdentity 
     const control = field === "args" ? argsField : advancedField
     control.current?.focus()
   }
-  return <form className="provider-editor" onSubmit={(event) => {
+  return <form className="provider-editor mcp-editor" onSubmit={(event) => {
     event.preventDefault()
     if (busy || inFlight.current) return
     setError(undefined); setFieldError(undefined)
@@ -50,12 +50,12 @@ export function McpEditor({ row, busy, onSave, onClose, onReload, draftIdentity 
     <label>{t("伺服器名稱")}<input required maxLength={64} disabled={Boolean(row)} value={name} onChange={(event) => change({ name: event.target.value })} /></label>
     <label>{t("連線方式")}<select disabled={Boolean(row)} value={transport} onChange={(event) => change({ transport: event.target.value as typeof transport, patch: {} })}><option value="stdio">stdio</option><option value="streamable-http">Streamable HTTP</option></select></label>
     {transport === "stdio" ? <><label>{t("執行程式")}<input required value={command} onChange={(event) => change({ command: event.target.value })} /></label><label>{t("參數（JSON 陣列）")}<textarea ref={argsField} rows={3} value={args} aria-invalid={fieldError?.field === "args" || undefined} aria-describedby={fieldError?.field === "args" ? `${fieldId}-args-error` : undefined} onChange={(event) => { change({ args: event.target.value }); if (fieldError?.field === "args") setFieldError(undefined) }} /></label>{fieldError?.field === "args" ? <p role="alert" id={`${fieldId}-args-error`}>{fieldError.message}</p> : null}<label>{t("工作目錄（選填）")}<input value={cwd} onChange={(event) => change({ cwd: event.target.value })} /></label></> : <label>URL<input type="url" required value={url} onChange={(event) => change({ url: event.target.value })} /></label>}
-    <details><summary>{t(transport === "stdio" ? "環境變數" : "HTTP Headers")}</summary><McpSecrets draftIdentity={[...draftIdentity, transport, "secrets"]} input={draft.privateInputs[transport] ?? { name: "", value: "" }} onInputChange={input => setDraft(previous => ({ ...previous, privateInputs: { ...previous.privateInputs, [transport]: input } }))} keys={row?.secretKeys ?? []} patch={patch} onChange={patch => change({ patch })} /></details>
-    <details ref={advancedDisclosure}><summary>{t("進階設定")}</summary><label>{t("進階設定（JSON）")}<textarea ref={advancedField} rows={5} value={advanced} aria-invalid={fieldError?.field === "advanced" || undefined} aria-describedby={fieldError?.field === "advanced" ? `${fieldId}-advanced-error` : undefined} onChange={(event) => { change({ advanced: event.target.value }); if (fieldError?.field === "advanced") setFieldError(undefined) }} /></label>{fieldError?.field === "advanced" ? <p role="alert" id={`${fieldId}-advanced-error`}>{fieldError.message}</p> : null}</details>
+    <details className="provider-advanced"><summary>{t(transport === "stdio" ? "環境變數" : "HTTP Headers")}</summary><McpSecrets draftIdentity={[...draftIdentity, transport, "secrets"]} input={draft.privateInputs[transport] ?? { name: "", value: "" }} onInputChange={input => setDraft(previous => ({ ...previous, privateInputs: { ...previous.privateInputs, [transport]: input } }))} keys={row?.secretKeys ?? []} patch={patch} onChange={patch => change({ patch })} /></details>
+    <details className="provider-advanced" ref={advancedDisclosure}><summary>{t("進階設定")}</summary><label>{t("進階設定（JSON）")}<textarea ref={advancedField} rows={5} value={advanced} aria-invalid={fieldError?.field === "advanced" || undefined} aria-describedby={fieldError?.field === "advanced" ? `${fieldId}-advanced-error` : undefined} onChange={(event) => { change({ advanced: event.target.value }); if (fieldError?.field === "advanced") setFieldError(undefined) }} /></label>{fieldError?.field === "advanced" ? <p role="alert" id={`${fieldId}-advanced-error`}>{fieldError.message}</p> : null}</details>
     {!row ? <p className="muted">{t("新增設定預設停用；儲存後可啟用並載入現有會話。")}</p> : null}
-    {error ? <p role="alert">{error}</p> : null}
+    {error ? <p className="error-text" role="alert">{error}</p> : null}
     {row && onReload ? <Button disabled={busy} onClick={() => { void onReload().then(value => { if (!value) throw new Error(t("項目已不可用，請重新整理。")); setComparison(value); setError(undefined) }).catch(reason => setError(String(reason))) }}>{t("重新讀取來源以比較")}</Button> : null}
     {comparison ? <div><h3>{t("目前來源內容")}</h3><pre className="tool-output">{JSON.stringify(comparison.config, null, 2)}</pre><Button disabled={busy} onClick={() => { change({ revision: comparison.revision }); setComparison(undefined); setError(undefined) }}>{t("保留草稿並採用此來源修訂")}</Button></div> : null}
-    <div className="provider-actions"><button type="submit" className="primary-button">{t(busy ? "儲存中…" : "儲存")}</button><button type="button" onClick={onClose}>{t("取消")}</button></div>
+    <footer className="settings-dialog-actions"><Button disabled={busy} onClick={onClose}>{t("取消")}</Button><Button type="submit" variant="primary" loading={busy} loadingLabel={t("儲存中…")}>{t("儲存")}</Button></footer>
   </fieldset></form>
 }

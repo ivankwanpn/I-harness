@@ -51,7 +51,8 @@ export function SessionManager({ bridge, workspaceId, onManage, onRewindComplete
   const rewindPanel = useRef<HTMLDivElement>(null)
   const composing = useRef(false)
   const blocked = busy || rewindBusy
-  const batchBlocked = blocked || !selected.size || selected.size > 100
+  const selectedRows = (rows ?? []).filter(row => selected.has(row.id))
+  const batchBlocked = blocked || !selectedRows.length || selectedRows.length > 100
   const busyListener = useRef(onBusyChange)
   busyListener.current = onBusyChange
   useEffect(() => { busyListener.current?.(busy || rewindBusy) }, [busy, rewindBusy])
@@ -59,7 +60,7 @@ export function SessionManager({ bridge, workspaceId, onManage, onRewindComplete
   const initialSelectionKey = JSON.stringify(initialSelected)
   const scope = useRef({ workspaceId, archived })
   if (scope.current.workspaceId !== workspaceId || scope.current.archived !== archived) scope.current = { workspaceId, archived }
-  useEffect(() => { setSelected(new Set(initialSelected)); setBatchConfirmation(undefined); setBatchResults(undefined); setPage(0); setMenu(undefined); setRewinding(undefined) }, [workspaceId, archived, initialSelectionKey])
+  useEffect(() => { setSelected(new Set(archived === initialArchived ? initialSelected : [])); setBatchConfirmation(undefined); setBatchResults(undefined); setPage(0); setMenu(undefined); setRewinding(undefined) }, [workspaceId, archived, initialArchived, initialSelectionKey])
   useEffect(() => { rewindPanel.current?.querySelector<HTMLSelectElement>("select")?.focus() }, [rewinding])
   useEffect(() => {
     let active = true
@@ -78,8 +79,8 @@ export function SessionManager({ bridge, workspaceId, onManage, onRewindComplete
     finally { lock.current = false; setBusy(false) }
   }
   function confirmBatch(action: ManageSessionBatchCommand["action"]) {
-    const sessionIds = (rows ?? []).filter(row => selected.has(row.id)).map(row => row.id)
-    if (!sessionIds.length || sessionIds.length > 100 || blocked) return
+    if (batchBlocked) return
+    const sessionIds = selectedRows.map(row => row.id)
     setBatchConfirmation({ action, sessionIds, ...(action === "move" ? { ...(destination ? { projectId: destination } : {}), expectedOwners: Object.fromEntries(sessionIds.map(id => [id, currentOwners?.[id] ?? null])) } : {}) })
   }
   async function runBatch(retry?: ManageSessionBatchCommand) {
@@ -121,19 +122,24 @@ export function SessionManager({ bridge, workspaceId, onManage, onRewindComplete
     else void run(menuRow.id, kind)
   }
   const failed = batchResults?.results.filter(row => !row.ok).length ?? 0
+  function switchList(next: boolean) {
+    if (next === archived) return
+    setRows(undefined)
+    setArchived(next)
+  }
   return <section className="session-manager ih-control-scope" aria-label={t("管理會話")}>
     <h2 className="session-manager-heading">{t("管理會話")}</h2>
     <div className="session-manager-toolbar">
       <div className="session-manager-navigation">
-        <div className="session-manager-tabs" role="group" aria-label={c("會話列表", "Conversation lists")}>
-          <Button variant="ghost" size="small" disabled={blocked} aria-pressed={!archived} icon={<MessageSquare size={14} />} onClick={() => setArchived(false)}>{t("目前會話")}</Button>
-          <Button variant="ghost" size="small" disabled={blocked} aria-pressed={archived} icon={<Archive size={14} />} onClick={() => setArchived(true)}>{t("已封存會話")}</Button>
+        <div className="ih-segments" role="group" aria-label={c("會話列表", "Conversation lists")}>
+          <Button variant="ghost" size="small" disabled={blocked} aria-pressed={!archived} icon={<MessageSquare size={14} />} onClick={() => switchList(false)}>{t("目前會話")}</Button>
+          <Button variant="ghost" size="small" disabled={blocked} aria-pressed={archived} icon={<Archive size={14} />} onClick={() => switchList(true)}>{t("已封存會話")}</Button>
         </div>
         {rows ? <span className="session-manager-total">{c(`${rows.length} 筆會話`, `${rows.length} conversations`)}</span> : null}
       </div>
       {onBatch ? <div className="session-manager-batch" role="group" aria-label={c("批次會話操作", "Batch conversation actions")}>
         <div className="session-manager-batch-actions">
-          <div className="session-manager-selection" aria-live="polite"><strong>{c(`已選取 ${selected.size} 筆`, `${selected.size} selected`)}</strong><span>{c("每批最多 100 筆", "Up to 100 per batch")}</span></div>
+          <div className="session-manager-selection" aria-live="polite"><strong>{c(`已選取 ${selectedRows.length} 筆`, `${selectedRows.length} selected`)}</strong><span>{c("每批最多 100 筆", "Up to 100 per batch")}</span></div>
           <Button variant="ghost" size="small" disabled={blocked || !selected.size} onClick={() => setSelected(new Set())}>{c("取消選取", "Clear selection")}</Button>
           <Button size="small" disabled={batchBlocked} aria-label={archived ? c("還原所選會話", "Restore selected conversations") : c("封存所選會話", "Archive selected conversations")} icon={archived ? <ArchiveRestore size={14} /> : <Archive size={14} />} onClick={() => confirmBatch(archived ? "restore" : "archive")}>{archived ? c("還原", "Restore") : c("封存", "Archive")}</Button>
           {archived ? <Button variant="danger" size="small" disabled={batchBlocked} aria-label={c("永久刪除所選會話", "Permanently delete selected conversations")} icon={<Trash2 size={14} />} onClick={() => confirmBatch("delete")}>{c("永久刪除", "Delete permanently")}</Button> : null}
@@ -152,7 +158,7 @@ export function SessionManager({ bridge, workspaceId, onManage, onRewindComplete
       </details></section> : null}
       {error && !editing && !confirm && !batchConfirmation ? <div className="session-manager-error" role="alert"><span>{error}</span><Button size="small" disabled={blocked} onClick={() => setRefresh(refresh + 1)}>{t("重試")}</Button></div> : null}
       {rows === undefined && !error ? <p className="session-manager-state" role="status">{t("正在讀取…")}</p> : null}
-      {rows?.length === 0 ? <p className="session-manager-state">{t("尚無會話")}</p> : null}
+      {rows?.length === 0 ? <p className="session-manager-state ih-empty-state">{t("尚無會話")}</p> : null}
       {visibleRows?.length ? <ul className="session-manager-list" aria-label={c("會話列表", "Conversation list")}>{visibleRows.map(row => {
         const name = row.title || t("未命名會話")
         const project = projectName(row)
@@ -177,12 +183,12 @@ export function SessionManager({ bridge, workspaceId, onManage, onRewindComplete
     </div>
     {pageCount > 1 ? <div className="session-manager-pagination" role="group" aria-label={c("會話列表分頁", "Conversation list pages")}><span>{c(`${currentPage * 50 + 1}–${Math.min((currentPage + 1) * 50, rows?.length ?? 0)} / ${rows?.length ?? 0} 筆`, `${currentPage * 50 + 1}–${Math.min((currentPage + 1) * 50, rows?.length ?? 0)} of ${rows?.length ?? 0}`)}</span><div><Button variant="ghost" size="small" disabled={blocked || currentPage === 0} icon={<ChevronLeft size={14} />} onClick={() => setPage(currentPage - 1)}>{t("上一頁")}</Button><span>{currentPage + 1} / {pageCount}</span><Button variant="ghost" size="small" disabled={blocked || currentPage + 1 >= pageCount} onClick={() => setPage(currentPage + 1)}>{t("下一頁")}<ChevronRight size={14} aria-hidden /></Button></div></div> : null}
     {activeMenu && (activeMenu.kind === "destination" || menuRow) ? <SessionManagerMenu id={menuId} label={activeMenu.kind === "destination" ? c("目的專案", "Destination project") : `${t("會話操作")} ${menuRow!.title || t("未命名會話")}`} anchor={activeMenu.element} initialFocusSelector={activeMenu.kind === "destination" ? '[aria-checked="true"]' : undefined} onClose={closeMenu}>
-      {activeMenu.kind === "destination" ? [{ id: "", name: c("未分組", "Ungrouped") }, ...(projects ?? [])].map(project => <button className="session-manager-menu-item" key={project.id} type="button" role="menuitemradio" aria-checked={destination === project.id} onClick={() => { setDestination(project.id); closeMenu() }}><Folder size={15} aria-hidden /><span>{project.name}</span>{destination === project.id ? <Check size={14} aria-hidden /> : null}</button>) : <>
-        <button className="session-manager-menu-item" type="button" role="menuitem" onClick={() => action("rename")}><Pencil size={15} aria-hidden />{t("重新命名")}</button>
-        {archived ? <button className="session-manager-menu-item" type="button" role="menuitem" onClick={() => action("restore")}><ArchiveRestore size={15} aria-hidden />{t("還原會話")}</button> : <>
-          <button className="session-manager-menu-item" type="button" role="menuitem" onClick={() => action("fork")}><GitBranch size={15} aria-hidden />{t("建立分支")}</button>
-          {onRewindComplete ? <button className="session-manager-menu-item" type="button" role="menuitem" onClick={() => action("rewind")}><RotateCcw size={15} aria-hidden />{t("回復會話")}</button> : null}
-          <button className="session-manager-menu-item" type="button" role="menuitem" onClick={() => action("archive")}><Archive size={15} aria-hidden />{t("封存會話")}</button>
+      {activeMenu.kind === "destination" ? [{ id: "", name: c("未分組", "Ungrouped") }, ...(projects ?? [])].map(project => <button className="session-manager-menu-item ih-menu-item" key={project.id} type="button" role="menuitemradio" aria-checked={destination === project.id} onClick={() => { setDestination(project.id); closeMenu() }}><Folder size={15} aria-hidden /><span>{project.name}</span>{destination === project.id ? <Check size={14} aria-hidden /> : null}</button>) : <>
+        <button className="session-manager-menu-item ih-menu-item" type="button" role="menuitem" onClick={() => action("rename")}><Pencil size={15} aria-hidden />{t("重新命名")}</button>
+        {archived ? <button className="session-manager-menu-item ih-menu-item" type="button" role="menuitem" onClick={() => action("restore")}><ArchiveRestore size={15} aria-hidden />{t("還原會話")}</button> : <>
+          <button className="session-manager-menu-item ih-menu-item" type="button" role="menuitem" onClick={() => action("fork")}><GitBranch size={15} aria-hidden />{t("建立分支")}</button>
+          {onRewindComplete ? <button className="session-manager-menu-item ih-menu-item" type="button" role="menuitem" onClick={() => action("rewind")}><RotateCcw size={15} aria-hidden />{t("回復會話")}</button> : null}
+          <button className="session-manager-menu-item ih-menu-item" type="button" role="menuitem" onClick={() => action("archive")}><Archive size={15} aria-hidden />{t("封存會話")}</button>
         </>}
         <div className="session-manager-menu-id"><span>{c("會話 ID", "Conversation ID")}</span><code>{menuRow!.id}</code></div>
       </>}

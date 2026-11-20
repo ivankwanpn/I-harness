@@ -146,7 +146,7 @@ function SessionSchedulePane({ bridge, workspaceId, sessionId, canCreate, active
     {notice ? <p role="status" className="workflow-hint">{notice}</p> : null}
     {(readbackRequired || schedules === undefined && error) && !confirmDelete ? <Button size="small" disabled={busy || !active} onClick={() => void retryRead()}>{t("重新讀取提醒")}</Button> : null}
     {schedules === undefined ? !error && active ? <p role="status" className="muted">{t("正在讀取提醒…")}</p> : null
-      : schedules.length === 0 ? <p className="muted">{t("此會話尚無提醒")}</p>
+      : schedules.length === 0 ? <p className="ih-empty-state">{t("此會話尚無提醒")}</p>
         : <ul className="schedule-list">{schedules.map((schedule) => <li key={schedule.id} className="schedule-card">
           <div><strong>{schedule.prompt}</strong><small>{t(schedule.kind === "every" ? "重複" : "單次")} · {new Date(schedule.scheduledAt).toLocaleString(locale)} · {t(schedule.state === "overdue" ? "已到期，等候下一步" : "已排定")}</small></div>
           <Button size="small" disabled={busy || !writable} onClick={() => setConfirmDelete(schedule.id)}>{t("刪除提醒")}</Button>

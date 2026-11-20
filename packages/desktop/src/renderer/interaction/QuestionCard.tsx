@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { Check, MessageCircleQuestion, Pencil } from "lucide-react"
 import { useText } from "../design/i18n.ts"
+import { Button } from "../vendor/opencode/Button.tsx"
 import "./question-card.css"
 
 const OTHER_LABEL = /^(?:其他|其它|other)(?:$|[\s（(])/i
@@ -30,55 +31,51 @@ export function QuestionCard({ requestId, prompt, options, busy, interrupted, dr
     : otherSelected ? (typed.length > 0 ? answer : undefined)
       : options.length > 0 && selected !== "" ? options[Number(selected)] : undefined
   const showField = freeform || otherSelected
-  useEffect(() => { if (showField) field.current?.focus() }, [showField])
+  useEffect(() => { if (otherSelected) field.current?.focus() }, [otherSelected])
   const submit = () => { if (chosen !== undefined && chosen !== "" && !busy) onAnswer(chosen) }
-  const choose = (index: number) => {
-    setSelected(String(index)); setAnswer("")
-    if (index === other) requestAnimationFrame(() => field.current?.focus())
-  }
-  return <div className="ih-question-card" aria-busy={busy} data-request-id={requestId}>
-    <div className="ih-question-head">
-      <span className="ih-question-icon" aria-hidden="true"><MessageCircleQuestion size={17} /></span>
-      <div className="ih-question-heading">
-        <p className="ih-question-eyebrow">{t("代理提出問題")}</p>
-        <h2 className="ih-question-title">{prompt}</h2>
+  const choose = (index: number) => setSelected(String(index))
+  return <section className="ih-interaction-card ih-question-card ih-control-scope" aria-label={t("代理提出問題")} aria-busy={busy} data-request-id={requestId}>
+    <header className="ih-interaction-head">
+      <span className="ih-interaction-icon" aria-hidden="true"><MessageCircleQuestion size={18} /></span>
+      <div className="ih-interaction-heading">
+        <p className="ih-interaction-context">{t("代理提出問題")}</p>
+        <h2 className="ih-interaction-title">{prompt}</h2>
       </div>
-    </div>
-    {interrupted ? <div className="ih-question-banner" role="status">
+    </header>
+    {interrupted ? <div className="ih-interaction-banner" role="status">
       <strong>{t("等待期間已中斷")}</strong>
       <span>{t("回答會儲存為待續會話輸入，繼續會話時交給代理。")}</span>
     </div> : null}
-    <div className="ih-question-options" role="radiogroup" aria-label={prompt}>
+    {!freeform ? <div className="ih-question-options" role="radiogroup" aria-label={prompt}>
       {options.map((label, index) => <label key={`${label}:${index}`} className="ih-question-option" data-selected={selected === String(index) ? "" : undefined}>
         <input type="radio" name={`question-${requestId}`} value={index} checked={selected === String(index)} disabled={busy}
           onChange={() => choose(index)} />
-        <span className="ih-question-number" aria-hidden="true">{selected === String(index) ? <Check size={12} /> : index + 1}</span>
+        <span className="ih-question-radio" aria-hidden="true">{selected === String(index) ? <Check size={12} /> : null}</span>
         <span className="ih-question-option-label">{label}</span>
       </label>)}
-      {!freeform && otherIndex < 0 ? <label className="ih-question-option" data-selected={otherSelected ? "" : undefined}>
+      {otherIndex < 0 ? <label className="ih-question-option" data-selected={otherSelected ? "" : undefined}>
         <input type="radio" name={`question-${requestId}`} value="other" aria-label={t("其他")} checked={otherSelected} disabled={busy}
           onChange={() => choose(other)} />
-        <span className="ih-question-number" aria-hidden="true">{otherSelected ? <Check size={12} /> : <Pencil size={11} />}</span>
+        <span className="ih-question-radio" aria-hidden="true">{otherSelected ? <Check size={12} /> : <Pencil size={11} />}</span>
         <span className="ih-question-option-label">{t("其他")}</span>
       </label> : null}
-    </div>
-    {showField ? <div className="ih-question-custom" data-other="" aria-hidden={undefined}>
-      <textarea ref={field} className="ih-question-answer" aria-label={`${t("回答")} ${prompt}`} rows={1} value={answer}
+    </div> : null}
+    {showField ? <div className="ih-question-custom" data-other="">
+      <textarea ref={field} className="ih-question-answer" aria-label={`${t("回答")} ${prompt}`} rows={2} value={answer}
         placeholder={t("請輸入回答")} disabled={busy}
         onChange={(event) => {
           setAnswer(event.target.value)
           if (!freeform) setSelected(String(other))
         }}
-        onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); submit() } }} />
+        onKeyDown={(event) => { if (!event.nativeEvent.isComposing && event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); submit() } }} />
     </div> : null}
-    <div className="ih-question-footer">
-      <p className="ih-question-hint">{t(options.length ? "選擇選項，或選其他自行輸入" : "填寫後按確認送出")}</p>
-      <div className="ih-question-actions">
-        {onDefer && !interrupted ? <button type="button" className="ih-question-secondary" disabled={busy}
-          onClick={onDefer} aria-label={`${t("保留問題，稍後回答")} ${prompt}`}>{t("保留問題，稍後回答")}</button> : null}
-        <button type="button" className="ih-question-primary" disabled={busy || chosen === undefined || chosen === ""}
-          onClick={submit}>{t(busy ? "正在送出…" : interrupted ? "儲存回答" : "送出回答")}</button>
+    <footer className="ih-interaction-footer">
+      <div className="ih-interaction-actions">
+        {onDefer && !interrupted ? <Button variant="ghost" disabled={busy}
+          onClick={onDefer} aria-label={`${t("保留問題，稍後回答")} ${prompt}`}>{t("保留問題，稍後回答")}</Button> : null}
+        <Button variant="primary" loading={busy} loadingLabel={t("正在送出…")} disabled={chosen === undefined || chosen === ""}
+          onClick={submit}>{t(interrupted ? "儲存回答" : "送出回答")}</Button>
       </div>
-    </div>
-  </div>
+    </footer>
+  </section>
 }

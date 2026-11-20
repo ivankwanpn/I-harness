@@ -15,7 +15,7 @@ export function ResourceTabs({ resourceKind, onSelect, active = true, ...props }
     onSelect(kind)
   }
   return <div className="settings-resource-tabs">
-    <div role="tablist" aria-label={t("資源分類")} className="zc-pane-tabs">
+    <div role="tablist" aria-label={t("資源分類")} className="zc-pane-tabs ih-segments">
       {kinds.map((kind, index) => <button key={kind} ref={element => { buttons.current[index] = element }} type="button" role="tab" className="zc-pane-tab" id={`${id}-${kind}-tab`} aria-controls={`${id}-${kind}-panel`} aria-selected={resourceKind === kind} tabIndex={resourceKind === kind ? 0 : -1} onClick={() => select(kind)} onKeyDown={event => {
         let next: number
         if (event.key === "ArrowRight" || event.key === "ArrowLeft") next = (index + 1) % kinds.length

@@ -60,7 +60,7 @@ function ProviderDirectoryContent({ bridge, workspaceId, showHeading, active }: 
   }, [bridge, workspaceId, reload, active])
   return <section hidden={!active} className="provider-directory" aria-label={t("模型與提供商")}>
     <header className="provider-directory-heading">{showHeading ? <h2>{t("模型與提供商")}</h2> : <span />}
-    <Button variant="secondary" size="small" icon={<Plus size={16} />} onClick={(event) => { addTrigger.current = event.currentTarget; setAddingBusy(false); setAdding(true) }}>{t("新增提供商")}</Button></header>
+    <Button variant="primary" size="small" icon={<Plus size={16} />} onClick={(event) => { addTrigger.current = event.currentTarget; setAddingBusy(false); setAdding(true) }}>{t("新增提供商")}</Button></header>
     {saved ? <p role="status">{t("設定已儲存")}</p> : null}
     {capabilityNotice ? <p className="provider-capability-notice" role="status">{t("輸入類型已更新；現有會話請在模型選擇器重新套用模型，之後才會使用更新後的能力。")}</p> : null}
     {adding ? <SettingsDialog active={active} title={t("新增提供商")} closeLabel={t("關閉新增提供商")} busy={addingBusy} onClose={closeAdding} initialFocusSelector=".provider-editor input:not(:disabled)"><ProviderEditor draftIdentity={["providers", workspaceId, "new"]} onSave={save} onClose={closeAdding} onBusyChange={setAddingBusy} /></SettingsDialog> : null}

@@ -90,10 +90,10 @@ export function RuntimeLog({ bridge }: { bridge: Bridge }) {
     {error ? <p role="alert" className="error-text">{error}</p> : null}
     {storageError ? <p role="status" className="runtime-log-warning">{storageError}</p> : null}
     {notice ? <p role="status">{notice}</p> : null}
-    {!loading && entries.length === 0 && !error ? <p className="muted">{t("沒有符合的診斷記錄。")}</p> : null}
+    {!loading && entries.length === 0 && !error ? <p className="ih-empty-state">{t("沒有符合的診斷記錄。")}</p> : null}
     <ol className="runtime-log-entries">{entries.map(entry => <li key={entry.id} className={`runtime-log-entry runtime-log-${entry.level}`}>
       <div className="runtime-log-entry-meta"><time dateTime={new Date(entry.timestamp).toISOString()}>{new Date(entry.timestamp).toLocaleString()}</time><span>{t(entry.level === "error" ? "錯誤" : entry.level === "warning" ? "警告" : "資訊")}</span><code>{entry.kind}</code></div>
-      <p>{entry.message}</p><div className="runtime-log-entry-footer"><small>{entry.sessionId ?? entry.workspaceId ?? t("全域")}{entry.code ? ` · ${entry.code}` : ""}</small><Button variant="ghost" size="small" onClick={() => setDetails(entry)}>{t("詳細資料")}</Button></div>
+      <p>{entry.message}</p><div className="runtime-log-entry-footer"><small title={entry.sessionId ?? entry.workspaceId}>{entry.sessionId ?? entry.workspaceId ?? t("全域")}{entry.code ? ` · ${entry.code}` : ""}</small><Button variant="ghost" size="small" onClick={() => setDetails(entry)}>{t("詳細資料")}</Button></div>
     </li>)}</ol>
     {details ? <RuntimeDetails key={details.id} bridge={bridge} entry={details} onClose={() => setDetails(undefined)} /> : null}
   </section>

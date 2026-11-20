@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react"
+import { Plus, RotateCw } from "lucide-react"
 import type { McpSettingsCommand } from "@i-harness/desktop-gateway/src/mcp-settings.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useText } from "../design/i18n.ts"
 import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
+import { Button } from "../vendor/opencode/Button.tsx"
+import { SettingsDialog } from "./SettingsDialog.tsx"
 import { McpEditor, type McpState } from "./McpEditor.tsx"
 import { SettingsDraftScope, useSettingsDraft } from "./settings-drafts.tsx"
 interface McpSettingsProps { bridge: DesktopBridge; workspaceId: string; active?: boolean }
@@ -46,16 +49,17 @@ function McpSettingsContent({ bridge, workspaceId, active = true }: McpSettingsP
   }
   return <section hidden={!active} aria-label={t("MCP 伺服器")}>
     <p className="settings-description">{t("這些 MCP 設定由本機工作區共用。啟用與停用會套用到現有 Agent；插件提供的 MCP 由插件頁管理。")}</p>
-    <div className="provider-actions"><button disabled={busy} onClick={() => setEditing(null)}>{t("新增 MCP 伺服器")}</button><button disabled={busy} onClick={() => { void run("refresh") }}>{t("重新套用")}</button></div>
-    {error ? <p role="alert">{error}{!state ? <button disabled={busy} onClick={() => { void run("state") }}>{t("重試")}</button> : null}</p> : null}
-    {state?.applyError ? <p role="alert">{state.applyError}<button disabled={busy} onClick={() => { void run("refresh") }}>{t("重試套用")}</button></p> : null}
+    <div className="provider-actions"><Button variant="primary" icon={<Plus size={15} />} disabled={busy || !state} onClick={() => setEditing(null)}>{t("新增 MCP 伺服器")}</Button><Button icon={<RotateCw size={15} />} disabled={busy} onClick={() => { void run("refresh") }}>{t("重新套用")}</Button></div>
+    {error ? <div role="alert" className="error-text">{error}{!state ? <Button size="small" disabled={busy} onClick={() => { void run("state") }}>{t("重試")}</Button> : null}</div> : null}
+    {state?.applyError ? <div role="alert" className="error-text">{state.applyError}<Button size="small" disabled={busy} onClick={() => { void run("refresh") }}>{t("重試套用")}</Button></div> : null}
     {busy ? <p role="status">{t("正在處理…")}</p> : null}
-    {editing !== undefined && state ? <McpEditor key={editing ?? "$new"} draftIdentity={["mcp", workspaceId, editing ?? "$new"]} row={state.servers.find((row) => row.config.serverName === editing)} busy={busy} onSave={command => run(command, true)} onReload={reloadSource} onClose={() => setEditing(undefined)} /> : null}
-    {state?.servers.length === 0 ? <p className="muted">{t("尚未設定 MCP 伺服器")}</p> : null}
+    {editing !== undefined && state ? <SettingsDialog active={active} title={t(editing === null ? "新增 MCP 伺服器" : "編輯 MCP 設定")} closeLabel={t("關閉對話框")} busy={busy} initialFocusSelector=".mcp-editor input:not(:disabled)" onClose={() => setEditing(undefined)}>
+      <McpEditor key={editing ?? "$new"} draftIdentity={["mcp", workspaceId, editing ?? "$new"]} row={state.servers.find((row) => row.config.serverName === editing)} busy={busy} onSave={command => run(command, true)} onReload={reloadSource} onClose={() => setEditing(undefined)} />
+    </SettingsDialog> : null}
+    {state?.servers.length === 0 ? <p className="ih-empty-state">{t("尚未設定 MCP 伺服器")}</p> : null}
     {state?.servers.map((row) => <SettingsGroup key={row.config.serverName}>
       <SettingsRow label={row.config.serverName} description={row.config.transport === "stdio" ? row.config.command : row.config.url} control={<span>{t(row.enabled ? "設定已啟用" : "已停用")}</span>} />
-      <div className="provider-actions"><button disabled={busy} onClick={() => { void run({ action: row.enabled ? "disable" : "enable", name: row.config.serverName }) }}>{t(row.enabled ? "停用" : "啟用")}</button><button disabled={busy} onClick={() => setEditing(row.config.serverName)}>{t("編輯 MCP 設定")}</button><button disabled={busy} onClick={() => { if (confirm === row.config.serverName) void run({ action: "remove", name: row.config.serverName }); else setConfirm(row.config.serverName) }}>{t(confirm === row.config.serverName ? "確認移除 MCP" : "移除")}</button></div>
+      <div className="provider-actions mcp-server-actions"><Button size="small" disabled={busy} onClick={() => { void run({ action: row.enabled ? "disable" : "enable", name: row.config.serverName }) }}>{t(row.enabled ? "停用" : "啟用")}</Button><Button size="small" variant="ghost" disabled={busy} onClick={() => setEditing(row.config.serverName)}>{t("編輯 MCP 設定")}</Button><Button size="small" variant={confirm === row.config.serverName ? "danger" : "ghost"} disabled={busy} onClick={() => { if (confirm === row.config.serverName) void run({ action: "remove", name: row.config.serverName }); else setConfirm(row.config.serverName) }}>{t(confirm === row.config.serverName ? "確認移除 MCP" : "移除")}</Button>{confirm === row.config.serverName ? <Button size="small" variant="ghost" disabled={busy} onClick={() => setConfirm(undefined)}>{t("取消")}</Button> : null}</div>
     </SettingsGroup>)}
-    {confirm ? <button disabled={busy} onClick={() => setConfirm(undefined)}>{t("取消")}</button> : null}
   </section>
 }

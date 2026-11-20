@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useId, useRef, useState, useCallback, lazy, Suspense, type CSSProperties } from "react"
-import { Brain, Search, PanelLeft, PanelRight, FolderOpen, TerminalSquare, Globe, UsersRound, Code2, Activity, Wrench, Target, ListTodo, ShieldCheck, GitBranch, FileDiff, FileText } from "lucide-react"
+import { Activity, Bell, Brain, Code2, FileDiff, FileText, FolderOpen, GitBranch, Globe, ListTodo, PanelLeft, PanelRight, Search, ShieldCheck, Target, TerminalSquare, UsersRound, Wrench } from "lucide-react"
 import { BrowserPane } from "../browser/BrowserPane.tsx"
 import { WorkbenchTools, type WorkbenchTool } from "./WorkbenchTools.tsx"
 import { useUiStore } from "./ui-store.ts"
@@ -409,17 +409,18 @@ export function Workbench({
             { label: english ? "Project" : "專案", items: [
               { id: "browser", label: t("瀏覽器"), icon: <Globe size={16} />, selected: reviewOpen && workPaneTab === "browser", open: () => openPane("browser") },
               ...(capabilities["desktop-terminal"]?.includes("1") ? [{ id: "terminal", label: t("終端"), icon: <TerminalSquare size={16} />, selected: reviewOpen && workPaneTab === "terminal", open: () => openPane("terminal") }] : []),
+              { id: "files", label: t("檔案"), icon: <FolderOpen size={16} />, selected: reviewOpen && workPaneTab === "files", open: () => openPane("files") },
               ...(capabilities["desktop-memory"]?.includes("1") ? [{ id: "memory", label: t(memoryOpen ? "返回會話" : "工作區記憶"), icon: <Brain size={16} />, selected: memoryOpen, open: () => setMemoryOpen(open => !open) }] : []),
               ...(capabilities["desktop-environment-diagnostics"]?.includes("1") ? [{ id: "diagnostics", label: diagnosticsLabel, icon: <Wrench size={16} />, selected: reviewOpen && workPaneTab === "diagnostics", open: () => openPane("diagnostics") }] : []),
             ] },
             { label: english ? "Conversation" : "會話", items: selectedSessionId ? [
-              { id: "files", label: t("檔案"), icon: <FolderOpen size={16} />, selected: reviewOpen && workPaneTab === "files", open: () => openPane("files") },
               { id: "changes", label: t("變更"), icon: <FileDiff size={16} />, selected: reviewOpen && workPaneTab === "changes", open: () => openPane("changes") },
               { id: "tasks", label: t("任務"), icon: <ListTodo size={16} />, selected: reviewOpen && workPaneTab === "tasks", open: () => openPane("tasks") },
               ...(capabilities["desktop-execution"]?.includes("1") ? [{ id: "execution", label: "Code Mode", icon: <Code2 size={16} />, selected: reviewOpen && workPaneTab === "execution", open: () => openPane("execution") }] : []),
               ...(capabilities["desktop-agent-processes"]?.includes("1") ? [{ id: "processes", label: processesLabel, icon: <Activity size={16} />, selected: reviewOpen && workPaneTab === "processes", open: () => openPane("processes") }] : []),
               ...(capabilities['desktop-instructions']?.includes('1') ? [{ id: 'instructions', label: english ? 'Instructions' : '指令來源', icon: <FileText size={16} />, selected: reviewOpen && workPaneTab === 'instructions', open: () => openPane('instructions') }] : []),
               ...(capabilities["desktop-subagent-catalog"]?.includes("1") ? [{ id: "subagents", label: t("子代理"), icon: <UsersRound size={16} />, selected: reviewOpen && workPaneTab === "subagents", open: () => openPane("subagents") }] : []),
+              ...(capabilities["desktop-schedule"]?.includes("1") ? [{ id: "reminders", label: t("提醒"), icon: <Bell size={16} />, selected: reviewOpen && workPaneTab === "reminders", open: () => openPane("reminders") }] : []),
             ] : [] },
             { label: english ? "Work and collaboration" : "工作與協作", items: selectedSessionId && capabilities["desktop-workflow"]?.includes("1") ? ([["goal", "Goal / Plan", Target], ["jobs", t("背景工作"), ListTodo], ["reviews", t("代審"), ShieldCheck]] as const).map(([id, label, Icon]): WorkbenchTool => ({ id, label, icon: <Icon size={16} />, open: () => openWorkflow(id) })) : [] },
           ]} /> : null}
@@ -432,7 +433,7 @@ export function Workbench({
           ? null
           : (
             <p className="notice error-text" title={error}>
-              {displayError(error).summary}
+              {displayError(error, { english }).summary}
               {onRetry === undefined ? null : (
                 <button type="button" className="link-button" onClick={onRetry}>{t("重試")}</button>
               )}
@@ -442,7 +443,7 @@ export function Workbench({
           {selectedSessionId !== undefined && selectedWorkspaceId !== undefined && conversation !== undefined
             ? (
               <>
-                {conversation.historyError ? <p role="alert" className="notice error-text" title={conversation.historyError}>{displayError(conversation.historyError).summary}<button type="button" className="link-button" onClick={onRetry}>{t("重試")}</button></p> : null}
+                {conversation.historyError ? <p role="alert" className="notice error-text" title={conversation.historyError}>{displayError(conversation.historyError, { english }).summary}<button type="button" className="link-button" onClick={onRetry}>{t("重試")}</button></p> : null}
                 {capabilities["desktop-work-state"]?.includes("1") && conversation.workStateError ? <p role="alert" className="notice error-text">{t("工作狀態讀取失敗")}：{displayError(conversation.workStateError).summary}{conversation.onRetryWorkState ? <button type="button" className="link-button" onClick={conversation.onRetryWorkState}>{t("重試")}</button> : null}{conversation.onReloadSession ? <button type="button" className="link-button" onClick={() => { void conversation.onReloadSession?.() }}>{t("重新載入會話")}</button> : null}</p> : null}
                 {conversation.historyNotice ? <p className="notice history-notice">{conversation.historyNotice}</p> : null}
                 {capabilities["desktop-work-state"]?.includes("1") && !conversation.workStateError && conversation.workState?.goal ? <div className="conversation-goal" title={conversation.workState.goal.objective}>

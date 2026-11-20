@@ -6,13 +6,15 @@ export type WireEvent = HistoryRange["events"][number]
 export type ToolResultReference = Extract<WireEvent, { type: "context/result-ref" }>["ref"]
 export type RecordedResultEnvelope = NonNullable<Extract<WireEvent, { type: "tool/result" }>["envelope"]>
 export type RecordedCodeEvent = Extract<WireEvent, { type: "code/cell" | "code/output" | "code/store" }>
+export type GenerationReading = NonNullable<Extract<WireEvent, { type: "step/end" }>["generation"]> & { measuredSteps: number }
 
 export type TimelineRow = (
-  | { id: string; kind: "message"; role: "user" | "assistant"; text: string; images?: ImageInput[]; transient?: true }
+  | { id: string; kind: "message"; role: "user" | "assistant"; text: string; images?: ImageInput[]; transient?: true; interrupted?: true; generation?: GenerationReading }
   | { id: string; kind: "tool"; name: string; args?: unknown; output?: unknown; envelope?: RecordedResultEnvelope; resultReceived?: true; isError?: true; dispatched?: true; cellId?: string; parentCallId?: string; resultRefs?: ToolResultReference[]; groupScope?: string }
   | { id: string; kind: "outcome"; flags: { refused?: true; truncated?: true; empty?: true } }
+  | { id: string; kind: "failure"; failure: NonNullable<Extract<WireEvent, { type: "step/failed" }>["failure"]> }
   | { id: string; kind: "other"; label: string; title?: string; detail?: string; codeActivity?: RecordedCodeEvent; transient?: true }
-) & { turn?: { id: string; complete: boolean }; seqs?: number[] }
+) & { turn?: { id: string; complete: boolean; generation?: GenerationReading }; seqs?: number[] }
 
 /** Pure fold of durable records and live chunks, with stable rendered ids. */
 export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
@@ -26,13 +28,14 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
   const admittedInputs = new Map<string, Extract<WireEvent, { type: "agent/input/admitted" }>>()
   let promotedInput: Extract<WireEvent, { type: "agent/input/admitted" }> | undefined
   let streamIndex: number | undefined
+  let stepMessageIndex: number | undefined
   let groupScope: string | undefined
   let turn: TimelineRow["turn"]
   let truncatedStep = false
   const appendRow = (row: TimelineRow) => rows.push(turn ? { ...row, turn } : row)
   for (const [index, event] of events.entries()) {
-    if (event.type === "turn/start") { groupScope = `turn:${event.seq ?? index}`; turn = { id: groupScope, complete: false }; truncatedStep = false }
-    if (event.type === "turn/end") { if (turn) turn.complete = true; turn = undefined; groupScope = undefined; promotedInput = undefined; truncatedStep = false }
+    if (event.type === "turn/start") { groupScope = `turn:${event.seq ?? index}`; turn = { id: groupScope, complete: false }; truncatedStep = false; stepMessageIndex = undefined }
+    if (event.type === "turn/end") { if (turn) turn.complete = true; turn = undefined; groupScope = undefined; promotedInput = undefined; truncatedStep = false; stepMessageIndex = undefined }
     if (event.type === "user/message" && event.internal) continue
     if (event.type === "agent/input/admitted") { admittedInputs.set(event.inputId, event); continue }
     if (event.type === "agent/input/promoted") { promotedInput = admittedInputs.get(event.inputId); continue }
@@ -107,17 +110,31 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
       // the durable payload intact for the lazy renderer instead of eagerly
       // formatting it or mounting it in the generic activity disclosure.
       appendRow({ id: `event:${event.seq ?? index}`, kind: "other", label: event.type, title, codeActivity: event })
-    } else if (event.type === "step/end" && (event.refused === true || event.truncated === true || event.empty === true)) {
-      appendRow({
-        id: `step:${event.seq ?? index}`,
-        kind: "outcome",
-        flags: {
-          ...(event.refused === true ? { refused: true as const } : {}),
-          ...(event.truncated === true ? { truncated: true as const } : {}),
-          ...(event.empty === true ? { empty: true as const } : {}),
-        },
-      })
-      if (event.truncated === true) truncatedStep = true
+    } else if (event.type === "step/end") {
+      const { generation } = event
+      if (event.refused || event.truncated || event.empty) {
+        appendRow({ id: `step:${event.seq ?? index}`, kind: "outcome", flags: {
+          ...(event.refused === true ? { refused: true } : {}),
+          ...(event.truncated === true ? { truncated: true } : {}),
+          ...(event.empty === true ? { empty: true } : {}),
+        } })
+        if (event.truncated) truncatedStep = true
+      } else if (generation && Number.isSafeInteger(generation.outputTokens) && generation.outputTokens > 0
+        && Number.isSafeInteger(generation.generationMs) && generation.generationMs > 0) {
+        if (stepMessageIndex !== undefined) {
+          const message = rows[stepMessageIndex]
+          if (message?.kind === "message" && message.turn === turn) rows[stepMessageIndex] = { ...message, generation: { ...generation, measuredSteps: 1 } }
+        }
+        if (turn) {
+          const previous = turn.generation
+          turn.generation = {
+            outputTokens: (previous?.outputTokens ?? 0) + generation.outputTokens,
+            generationMs: (previous?.generationMs ?? 0) + generation.generationMs,
+            measuredSteps: (previous?.measuredSteps ?? 0) + 1,
+          }
+        }
+      }
+      stepMessageIndex = undefined
     } else if (event.type === "user/message" || event.type === "assistant/message") {
       if (event.type === "user/message") {
         // Old records can be linked only through the trusted promotion and an
@@ -141,6 +158,7 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
         ...(event.type === "user/message" && event.images?.length ? { images: event.images } : {}),
         ...(turn ? { turn } : {}),
       }
+      if (event.type === "assistant/message") stepMessageIndex = streamIndex ?? rows.length
       if (event.type === "assistant/message" && streamIndex !== undefined) rows[streamIndex] = message
       else appendRow(message)
       streamIndex = undefined
@@ -152,10 +170,16 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
         const previous = rows[streamIndex]!
         if (previous.kind === "message") rows[streamIndex] = { ...previous, text: previous.text + event.text }
       }
-    } else if (event.type === "turn/start" || event.type === "turn/end"
-      || event.type === "step/start" || event.type === "step/end") {
+    } else if (event.type === "turn/start" || event.type === "turn/end" || event.type === "step/start") {
       // Structural markers carry no readable content.
-      if (event.type !== "step/end") streamIndex = undefined
+      streamIndex = undefined
+      if (event.type === "step/start") { stepMessageIndex = undefined; truncatedStep = false }
+    } else if (event.type === "step/failed" && event.failure && !truncatedStep) {
+      if (stepMessageIndex !== undefined) {
+        const message = rows[stepMessageIndex]
+        if (message?.kind === "message") rows[stepMessageIndex] = { ...message, interrupted: true }
+      }
+      appendRow({ id: `event:${event.seq ?? index}`, kind: "failure", failure: event.failure })
     } else if (ACTIVITY_EVENT_TYPES.has(event.type)) {
       // A truncated step already renders the explicit outcome row; labelling the
       // paired step/failed as "response interrupted" contradicts the cause.

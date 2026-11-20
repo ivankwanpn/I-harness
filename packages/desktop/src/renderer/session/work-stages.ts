@@ -1,5 +1,6 @@
 import type { TimelineItem } from "./activity-groups.ts"
-export interface WorkStage { kind: "work-stage"; id: string; count: number; active: boolean; hasErrors: boolean }
+import type { GenerationReading } from "./project.ts"
+export interface WorkStage { kind: "work-stage"; id: string; count: number; active: boolean; hasErrors: boolean; generation?: GenerationReading }
 export type WorkItem = TimelineItem | WorkStage
 
 /** A stage hides intermediate work only. Headers/children stay flat so the
@@ -31,7 +32,7 @@ export function workStages(items: readonly TimelineItem[], open: ReadonlyMap<str
     }
     // Thinking, commentary, tools and background inputs share the same ordered
     // work disclosure. The first thought remains a collapsed hint inside it.
-    const work = (row: TimelineItem) => row.id !== finalId && row.kind !== "outcome"
+    const work = (row: TimelineItem) => row.id !== finalId && row.kind !== "outcome" && row.kind !== "failure"
       && !(row.kind === "message" && row.role === "user")
     const count = segment.filter(work).length
     const failed = (row: TimelineItem): boolean => {
@@ -49,8 +50,12 @@ export function workStages(items: readonly TimelineItem[], open: ReadonlyMap<str
     const active = running && !turn.complete && end === items.length
     let header = false
     for (const row of segment) {
+      if (row.id === finalId && row.kind === "message" && !row.interrupted && turn.generation) {
+        result.push({ ...row, generation: turn.generation })
+        continue
+      }
       if (!work(row)) { result.push(row); continue }
-      if (!header && count) { result.push({ kind: "work-stage", id, count, active, hasErrors }); header = true }
+      if (!header && count) { result.push({ kind: "work-stage", id, count, active, hasErrors, generation: finalId === undefined ? turn.generation : undefined }); header = true }
       if (open.get(id) ?? active) result.push(row)
     }
     start = end

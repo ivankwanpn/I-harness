@@ -13,7 +13,9 @@
 .notification-kind { font-size:12px; font-weight:600; }
 .notification-copy time { font-size:11px; color:var(--ih-muted); }
 .notification-actions { display:flex; align-items:flex-start; flex-direction:column; gap:8px; flex-shrink:0; }
-.notifications-empty { text-align:center; padding:32px 16px; color:var(--ih-muted); border:1px dashed var(--ih-divider); border-radius:12px; margin-top:16px; }
+.notifications-empty { display: grid; justify-items: start; gap: .5rem; }
+.notifications-empty strong { color: var(--ih-text); }
+.notifications-empty p { margin: 0; }
 .notifications-confirm { padding:16px; margin-top:12px; border:1px solid var(--ih-divider); border-radius:12px; background:var(--ih-panel); }
 .notifications-pane .secondary-button, .notifications-pane .danger-button { display:inline-flex; align-items:center; gap:6px; padding:7px 10px; border:1px solid var(--ih-divider); border-radius:7px; background:var(--ih-panel); color:var(--ih-text); font:inherit; cursor:pointer; }
 .notifications-pane .danger-button { color:#e99890; }

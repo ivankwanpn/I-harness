@@ -51,7 +51,7 @@ export class DurableDraftClient {
   // the captured local revision as well as its payload, never a newer identical draft.
   capture(): string { return JSON.stringify([this.editVersion, fingerprint(this.read())]) }
   private check(record: DurableDraft) { if (!record || !((typeof record.revision === "string") || record.revision === null) || record.draft !== null && (!record.draft || typeof record.draft.prompt !== "string" || !Array.isArray(record.draft.images) || !Array.isArray(record.draft.texts) || !Array.isArray(record.draft.references) || !Array.isArray(record.draft.contextRefs))) throw new Error("Invalid durable draft response") }
-  private report(error: unknown) { this.status(`Draft persistence failed; your in-memory draft is retained: ${error instanceof Error ? error.message : String(error)}`) }
+  private report(error: unknown) { this.status(error instanceof Error ? error.message : String(error)) }
   private async saveDirty() {
     while (this.dirty && !this.retired) {
       const version = this.persistenceVersion, snapshot = this.read()

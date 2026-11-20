@@ -1,4 +1,5 @@
 import type { SessionEvent } from '@i-harness/core-session';
+import { modelFailureFacts } from '@i-harness/llm-seam';
 import { agentFacts, committedFactSeqs } from './facts.ts';
 import type { AgentDeps, TurnLifecycle } from './types.ts';
 type Dependencies = Pick<AgentDeps, 'facts' | 'sourceFacts'> & {session?:AgentDeps['session']};
@@ -19,9 +20,15 @@ export function closeStepBoundary(deps: Dependencies, lifecycle: TurnLifecycle, 
         lifecycle.stepOpen = false;
     })();
 }
-export function failStepBoundary(deps: Dependencies, lifecycle: TurnLifecycle): Promise<void> {
+export function failStepBoundary(deps: Dependencies, lifecycle: TurnLifecycle, error?: unknown): Promise<void> {
     return lifecycle.stepFailure ??= (async () => {
-        committedFactSeqs(await (deps.sourceFacts?.lifecycle ?? agentFacts(deps).agent).lifecycle({ type: 'step/failed' }));
+        const facts = error === undefined ? undefined : modelFailureFacts(error);
+        // Persist only the category and status. Provider bodies remain outside history.
+        const failure = error === undefined ? undefined : {
+            code: facts?.code ?? (error instanceof Error && error.name === 'AbortError' ? 'ABORTED' : 'UNKNOWN'),
+            ...(facts?.httpStatus !== undefined ? { httpStatus: facts.httpStatus } : {}),
+        };
+        committedFactSeqs(await (deps.sourceFacts?.lifecycle ?? agentFacts(deps).agent).lifecycle({ type: 'step/failed', ...(failure ? { failure } : {}) }));
         lifecycle.stepFailed = true;
     })();
 }

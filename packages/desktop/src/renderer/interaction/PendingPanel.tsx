@@ -1,7 +1,8 @@
 import { useRef, useSyncExternalStore } from "react"
 import { ApprovalCard } from "./ApprovalCard.tsx"
 import { QuestionCard } from "./QuestionCard.tsx"
-import { useText } from "../design/i18n.ts"
+import { useLocale, useText } from "../design/i18n.ts"
+import { displayError } from "../design/error-display.ts"
 import type { PendingInteraction } from "./pending.ts"
 import type { ApprovalRememberView } from "@i-harness/desktop-gateway/src/approval-rules.ts"
 import type { RememberApprovalOptions } from "@i-harness/desktop-gateway/src/approval-rules.ts"
@@ -49,10 +50,15 @@ function questionShape(payload: unknown, fallback: string): { prompt: string; op
 
 export function PendingPanel({ draftOwner, workspaceId, pending, onReply }: PendingPanelProps) {
   const t = useText()
+  const english = useLocale(state => state.locale) === "en"
   const fallback = useRef({})
   const store = interactionDrafts(draftOwner ?? fallback.current)
   useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
   const key = (row: PendingInteraction) => interactionDraftKey(workspaceId, row.sessionId, row.requestId)
+  const replyError = (row: PendingInteraction) => {
+    const error = store.get(key(row)).error
+    return error ? <p role="alert" className="ih-interaction-banner error-text">{displayError(error, { english }).summary}</p> : null
+  }
 
   if (pending.length === 0) return null
 
@@ -78,7 +84,7 @@ export function PendingPanel({ draftOwner, workspaceId, pending, onReply }: Pend
             <li key={row.requestId} className="task-row">
               <ApprovalCard requestId={row.requestId} description={approvalText(row.payload, t("工具請求"))} details={approvalDetails(row.payload)} busy={store.get(key(row)).busy} interrupted={row.state === "interrupted"}
                 remember={approvalRemember(row.payload)} onConfirm={(approved, remember) => { void reply(row, { kind: "approval", approved, ...(remember ? { remember } : {}) }) }} />
-              {store.get(key(row)).error ? <p role="alert" className="notice error-text">{store.get(key(row)).error}</p> : null}
+              {replyError(row)}
             </li>
           )
           : (() => {
@@ -86,7 +92,7 @@ export function PendingPanel({ draftOwner, workspaceId, pending, onReply }: Pend
               return (
                 <li key={row.requestId} className="task-row">
                   <QuestionCard requestId={row.requestId} prompt={prompt} options={options} draft={store.get(key(row))} onDraftChange={patch => store.update(key(row), patch)} busy={store.get(key(row)).busy} interrupted={row.state === "interrupted"} onAnswer={(answer) => { void reply(row, { kind: "question", answer }) }} onDefer={() => { void reply(row, { kind: "question", deferred: true }) }} />
-                  {store.get(key(row)).error ? <p role="alert" className="notice error-text">{store.get(key(row)).error}</p> : null}
+                  {replyError(row)}
                 </li>
               )
             })())}

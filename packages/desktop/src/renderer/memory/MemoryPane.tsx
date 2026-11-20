@@ -4,6 +4,7 @@ import { useAuthoringText } from "../settings/resource-authoring-text.ts"
 import type { MemoryAuthoringRequest, MemoryAuthoringRequestHandler } from "@i-harness/desktop-gateway/src/memory-wire.ts"
 export type { MemoryAuthoringRequest, MemoryAuthoringRequestHandler } from "@i-harness/desktop-gateway/src/memory-wire.ts"
 import { SettingsDraftScope, useSettingsDraft, useSettingsDraftMap } from "../settings/settings-drafts.tsx"
+import { Button } from "../vendor/opencode/Button.tsx"
 
 interface Note { id: string; title: string; text?: string; snippet?: string; revision?: string }
 interface NoteDraft { title: string; text: string; note?: Note }
@@ -88,7 +89,7 @@ function MemoryPaneContent({ bridge, workspaceId, embedded = false, onAuthoringR
     setSummary(undefined)
   }
 
-  return <section hidden={!active} className={embedded ? "memory-pane settings-embedded" : "memory-pane"} aria-label={t("工作區記憶")}>
+  return <section hidden={!active} className={embedded ? "memory-pane settings-embedded" : "memory-pane ih-control-scope"} aria-label={t("工作區記憶")}>
     {embedded ? null : <h1>{t("工作區記憶")}</h1>}
     <p className="muted">{t("筆記保存在此工作區，可供不同會話查找。目前不會自動生成記憶。")}</p>
     {error === undefined ? null : <p role="alert" className="error-text">{error}</p>}
@@ -104,14 +105,14 @@ function MemoryPaneContent({ bridge, workspaceId, embedded = false, onAuthoringR
       setAppliedQuery(query)
     }) }}>
       <input maxLength={1024} aria-label={t("搜尋筆記")} placeholder={t("搜尋筆記")} value={query} onChange={(event) => setQuery(event.target.value)} />
-      <button className="primary-button" disabled={busy}>{t("搜尋")}</button>
-      <button type="button" className="primary-button" disabled={busy} onClick={() => { void run(refresh) }}>{t("全部筆記")}</button>
+      <Button type="submit" variant="primary" disabled={busy}>{t("搜尋")}</Button>
+      <Button disabled={busy} onClick={() => { void run(refresh) }}>{t("全部筆記")}</Button>
     </form>
     {busy ? <p role="status" className="muted">{t("正在讀取…")}</p> : null}
-    <div className="memory-summary"><button type="button" className="primary-button" disabled={busy} onClick={() => { void run(async () => {
+    <div className="memory-summary"><Button disabled={busy} onClick={() => { void run(async () => {
       const result = await scopedRequest({ kind: "desktop/memory/summary", workspaceId }) as { text: string }
       setSummary(result.text)
-    }) }}>{t("查看筆記摘要")}</button>
+    }) }}>{t("查看筆記摘要")}</Button>
       <p className="muted">{t("僅擷取已保存筆記，不會呼叫模型。")}</p>
       {summary === undefined ? null : <pre className="tool-output">{summary || t("沒有可顯示的摘要")}</pre>}
     </div>
@@ -124,7 +125,7 @@ function MemoryPaneContent({ bridge, workspaceId, embedded = false, onAuthoringR
           if (result.kind !== "forgotten") throw new Error(t("未收到已刪除的結果"))
           setSelected(undefined); setChecked({}); setConfirmBatch(false); await refresh(false)
         }) }}>{t("確認刪除選取筆記")}</button><button disabled={busy} onClick={() => setConfirmBatch(false)}>{t("取消")}</button></div> : null}
-        {!busy && !error && notes.length === 0 ? <p className="muted">{t(appliedQuery ? "沒有符合的筆記" : "尚未建立筆記")}</p> : null}
+        {!busy && !error && notes.length === 0 ? <p className="ih-empty-state">{t(appliedQuery ? "沒有符合的筆記" : "尚未建立筆記")}</p> : null}
         <ul className="session-list">{notes.map((note) => <li key={note.id}>
           {onAuthoringRequest && note.revision ? <input type="checkbox" aria-label={t("選取 {title}", { title: note.title })} disabled={busy} checked={note.id in checked} onChange={event => { const next = { ...checked }; if (event.target.checked) next[note.id] = note.revision!; else delete next[note.id]; setChecked(next); setConfirmBatch(false) }} /> : null}
           <button className="row-button" disabled={busy} aria-current={selected?.id === note.id ? "true" : undefined} onClick={() => { void run(async () => {
@@ -170,7 +171,7 @@ function MemoryPaneContent({ bridge, workspaceId, embedded = false, onAuthoringR
         <label>{t("標題")}<input autoFocus maxLength={200} disabled={busy} value={title} onChange={(event) => updateDraft({ title: event.target.value })} /></label>
         <label>{t("內容")}<textarea rows={8} maxLength={16384} disabled={busy} value={text} onChange={(event) => updateDraft({ text: event.target.value })} /></label>
         {editing && conflictNote?.id === editing.id ? <div><h3>{t("目前保存的筆記")}</h3><p>{conflictNote.title}</p><pre className="tool-output">{conflictNote.text}</pre><button type="button" disabled={busy} onClick={() => { drafts.set(draftKey, { title, text, note: conflictNote }); setEditing(conflictNote); setConflictNote(undefined); setError(undefined) }}>{t("保留草稿並採用此筆記修訂")}</button></div> : null}
-        <div className="provider-actions"><button className="primary-button" disabled={busy || title.trim() === "" || text.trim() === ""}>{t(editing ? "儲存變更" : "儲存筆記")}</button><button type="button" disabled={busy} onClick={() => { setCreating(false); setEditing(undefined) }}>{t("取消")}</button></div>
+        <footer className="settings-dialog-actions"><Button disabled={busy} onClick={() => { setCreating(false); setEditing(undefined) }}>{t("取消")}</Button><Button type="submit" variant="primary" disabled={busy || title.trim() === "" || text.trim() === ""}>{t(editing ? "儲存變更" : "儲存筆記")}</Button></footer>
       </form> : null}
     </div>
     {enabled === false ? <p className="muted">{t("啟用記憶後才可新增筆記；現有筆記仍可閱讀。")}</p> : null}

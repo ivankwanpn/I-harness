@@ -5,6 +5,8 @@ import type { WorkspaceEntry } from "../../main/workspaces.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { SettingsDialog } from "../settings/SettingsDialog.tsx"
 import { useText } from "../design/i18n.ts"
+import { Button } from "../vendor/opencode/Button.tsx"
+import { SearchInput } from "../vendor/zcode/SearchInput.tsx"
 import "./projects.css"
 
 interface Draft { id?: string; name: string; workspaceIds: string[]; primaryWorkspaceId?: string; pinned: boolean; expectedUpdatedAt?: string }
@@ -51,19 +53,23 @@ export function ProjectManager({ bridge, projects, workspaces, onChanged, onOpen
       await onChanged()
     })
   }
-  return <section className="settings-pane project-manager" aria-label={t("專案")}>
-    <header className="projects-header"><button type="button" className="icon-button" disabled={busy} onClick={onClose} aria-label={t("返回會話")}><ArrowLeft size={18} /></button><h1>{t("專案")}</h1><input aria-label={t("搜尋專案")} placeholder={t("搜尋專案")} value={query} onChange={(event) => setQuery(event.target.value)} /><button type="button" disabled={busy} className="project-primary" onClick={() => edit()}><Plus size={15} />{t("新增專案")}</button></header>
+  return <section className="settings-pane project-manager ih-control-scope" aria-label={t("專案")}>
+    <header className="projects-header">
+      <div className="projects-title"><Button variant="ghost" icon={<ArrowLeft size={18} />} disabled={busy} onClick={onClose} aria-label={t("返回會話")} /><h1>{t("專案")}</h1></div>
+      <Button variant="primary" icon={<Plus size={15} />} disabled={busy} onClick={() => edit()}>{t("新增專案")}</Button>
+    </header>
     {error && !draft && !confirmRemoval ? <p role="alert" className="error-text">{error}</p> : null}
     <p className="project-description">{t("每個會話可存取專案內全部資料夾；主要資料夾作為新會話的預設起點。")}</p>
+    {projects.length ? <div className="projects-search"><SearchInput aria-label={t("搜尋專案")} placeholder={t("搜尋專案")} value={query} clearLabel={t("清除搜尋")} onChange={event => setQuery(event.target.value)} onClear={() => setQuery("")} /></div> : null}
     <div className="projects-list">
       {filteredProjects.map((project) => <article className="project-list-row" key={project.id}>
-        <button type="button" className="project-open" disabled={busy} onClick={() => onOpen(project)}><Folder size={18} /><span><strong>{project.name}</strong><small>{project.workspaceIds.length ? project.workspaceIds.map((id) => folderMap.get(id)?.label ?? id).join(" · ") : t("尚未加入資料夾")}</small></span></button>
+        <button type="button" className="project-open" disabled={busy} onClick={() => onOpen(project)}><span className="project-list-icon"><Folder size={18} aria-hidden="true" /></span><span className="project-list-name"><strong>{project.name}</strong><small>{project.workspaceIds.length ? project.workspaceIds.map((id) => folderMap.get(id)?.label ?? id).join(" · ") : t("尚未加入資料夾")}</small></span></button>
         <time className="muted">{new Date(project.updatedAt).toLocaleDateString()}</time>
         <button type="button" className="icon-button" aria-label={t(project.pinned ? "取消釘選專案 {name}" : "釘選專案 {name}", { name: project.name })} aria-pressed={project.pinned === true} disabled={busy} onClick={() => { void action(async () => { await bridge.request({ kind: "projects/save", input: { ...project, expectedUpdatedAt: project.updatedAt, pinned: !project.pinned } }); await onChanged() }) }}><Pin size={15} /></button>
         <button type="button" className="icon-button" disabled={busy} aria-label={t("編輯專案 {name}", { name: project.name })} onClick={() => edit(project)}><Pencil size={15} /></button>
       </article>)}
-      {projects.length === 0 ? <div className="project-empty"><FolderPlus size={28} /><p>{t("建立專案，集中管理資料夾與會話。")}</p></div> : null}
-      {projects.length > 0 && filteredProjects.length === 0 ? <p className="muted">{t("沒有符合的專案")}</p> : null}
+      {projects.length === 0 ? <div className="project-empty ih-empty-state"><FolderPlus size={22} aria-hidden="true" /><p>{t("建立專案，集中管理資料夾與會話。")}</p></div> : null}
+      {projects.length > 0 && filteredProjects.length === 0 ? <p className="ih-empty-state">{t("沒有符合的專案")}</p> : null}
     </div>
     {draft ? <SettingsDialog title={t(draft.id ? "編輯專案" : "新增專案")} closeLabel={t("關閉")} busy={busy} initialFocusSelector="input[name='project-name']" onClose={closeEditor}>
       <form className="project-editor" onSubmit={(event) => { event.preventDefault(); if (staleDraft) return; void action(async () => { const saved = await bridge.request({ kind: "projects/save", input: draft }) as ProjectEntry & { runtimeSyncError?: string }; if (saved?.id) setDraft({ id: saved.id, name: saved.name ?? draft.name, workspaceIds: saved.workspaceIds ?? draft.workspaceIds, primaryWorkspaceId: saved.primaryWorkspaceId ?? draft.primaryWorkspaceId, pinned: saved.pinned ?? draft.pinned, expectedUpdatedAt: saved.updatedAt }); await onChanged(); if (saved.runtimeSyncError) throw new Error(saved.runtimeSyncError); closeEditor() }) }}>
@@ -75,9 +81,20 @@ export function ProjectManager({ bridge, projects, workspaces, onChanged, onOpen
         {workspaces.some((folder) => !draft.workspaceIds.includes(folder.id)) ? <label>{t("加入已開啟的資料夾")}<select disabled={busy} value="" onChange={(event) => { const id = event.target.value; if (id) setDraft({ ...draft, workspaceIds: [...draft.workspaceIds, id], primaryWorkspaceId: draft.primaryWorkspaceId ?? id }) }}><option value="">{t("選擇資料夾")}</option>{workspaces.filter((folder) => !draft.workspaceIds.includes(folder.id)).map((folder) => <option key={folder.id} value={folder.id}>{folder.label} · {folder.path}</option>)}</select></label> : null}
         {error ? <p role="alert" className="error-text">{error}</p> : null}
         {staleDraft ? <p role="alert" className="error-text">{t("專案已更新，請重新開啟編輯以保留最新資料夾設定。")}</p> : null}
-        <footer className="project-editor-footer">{draft.id ? <button type="button" className="project-danger" disabled={busy} onClick={() => { const project = projects.find((row) => row.id === draft.id); if (project) { setDraft(undefined); setConfirmRemoval(project) } }}>{t("移除本機專案")}</button> : <span />}<button type="button" className="project-secondary" disabled={busy} onClick={closeEditor}>{t("取消")}</button><button type="submit" className="project-primary" disabled={busy || staleDraft || !draft.name.trim()}>{t(busy ? "儲存中…" : "儲存")}</button></footer>
+        <footer className="settings-dialog-actions">
+          {draft.id ? <Button variant="danger" className="settings-dialog-actions-leading" disabled={busy} onClick={() => { const project = projects.find((row) => row.id === draft.id); if (project) { setDraft(undefined); setConfirmRemoval(project) } }}>{t("移除本機專案")}</Button> : null}
+          <Button disabled={busy} onClick={closeEditor}>{t("取消")}</Button>
+          <Button type="submit" variant="primary" disabled={staleDraft || !draft.name.trim()} loading={busy} loadingLabel={t("儲存中…")}>{t("儲存")}</Button>
+        </footer>
       </form>
     </SettingsDialog> : null}
-    {confirmRemoval ? <SettingsDialog title={t("移除本機專案")} closeLabel={t("關閉")} busy={busy} initialFocusSelector="button.project-secondary" onClose={closeEditor}><p>{t("僅移除專案分組，資料夾和會話會保留。")}</p><p>{confirmRemoval.name}</p>{error ? <p role="alert" className="error-text">{error}</p> : null}<footer className="project-editor-footer"><button type="button" className="project-secondary" disabled={busy} onClick={closeEditor}>{t("取消")}</button><button type="button" className="project-danger" disabled={busy} onClick={() => { void action(async () => { const result = await bridge.request({ kind: "projects/remove", id: confirmRemoval.id }) as { runtimeSyncError?: string }; closeEditor(); await onChanged(); if (result?.runtimeSyncError) throw new Error(result.runtimeSyncError) }) }}>{t("確認移除專案")}</button></footer></SettingsDialog> : null}
+    {confirmRemoval ? <SettingsDialog title={t("移除本機專案")} closeLabel={t("關閉")} busy={busy} initialFocusSelector="[data-dialog-cancel]" onClose={closeEditor}>
+      <p>{t("僅移除專案分組，資料夾和會話會保留。")}</p><p><strong>{confirmRemoval.name}</strong></p>
+      {error ? <p role="alert" className="error-text">{error}</p> : null}
+      <footer className="settings-dialog-actions">
+        <Button data-dialog-cancel disabled={busy} onClick={closeEditor}>{t("取消")}</Button>
+        <Button variant="danger" loading={busy} onClick={() => { void action(async () => { const result = await bridge.request({ kind: "projects/remove", id: confirmRemoval.id }) as { runtimeSyncError?: string }; closeEditor(); await onChanged(); if (result?.runtimeSyncError) throw new Error(result.runtimeSyncError) }) }}>{t("確認移除專案")}</Button>
+      </footer>
+    </SettingsDialog> : null}
   </section>
 }

@@ -50,7 +50,7 @@ export function NativeSettings({ bridge, section = "all" }: { bridge: DesktopBri
       }} />} /> : null}
     {section !== "notifications" ? <SettingsRow label={t("視窗位置與大小")} description={t("關閉時保存，下次啟動恢復。")}
       control={<button className="primary-button" disabled={busy} onClick={() => { setBusy(true); setError(undefined); void bridge.request({ kind: "window/reset-bounds" }).catch((reason: unknown) => setError(String(reason))).finally(() => setBusy(false)) }}>{t("重設視窗")}</button>} /> : null}
-  </SettingsGroup>{section !== "notifications" ? <><SettingsGroup><SettingsRow label={t("後續訊息處理方式")} description={t("執行期間送出新訊息時，預設加入佇列或引導目前執行。")}
+    {section !== "notifications" ? <SettingsRow label={t("後續訊息處理方式")} description={t("執行期間送出新訊息時，預設加入佇列或引導目前執行。")}
       control={<select aria-label={t("後續訊息處理方式")} value={value?.followupDelivery ?? "queue"} disabled={busy || !value} onChange={(event) => {
         const followupDelivery = event.target.value as FollowupDelivery
         setBusy(true); setError(undefined)
@@ -60,7 +60,8 @@ export function NativeSettings({ bridge, section = "all" }: { bridge: DesktopBri
           useUiStore.getState().setFollowupDelivery(next.followupDelivery === "steer" ? "steer" : "queue")
         }).catch((reason: unknown) => setError(String(reason))).finally(() => setBusy(false))
       }}><option value="queue">{t("加入佇列")}</option><option value="steer">{t("引導目前執行")}</option></select>}
-      detail={<p className="muted">{t("執行期間按 Ctrl+Enter 使用相反的處理方式；Shift+Enter 換行。")}</p>} /></SettingsGroup><h2>{t("終端")}</h2><SettingsGroup><SettingsRow label={t("整合終端 Shell")} description={t("只影響新開的內建終端；Windows 自動優先 Git Bash，找不到則使用 CMD。既有終端保持目前 Shell；Agent 的 bash、pwsh 工具各自使用同名 Shell。")}
+      detail={<p className="muted">{t("執行期間按 Ctrl+Enter 使用相反的處理方式；Shift+Enter 換行。")}</p>} /> : null}
+  </SettingsGroup>{section !== "notifications" ? <><h2>{t("終端")}</h2><SettingsGroup><SettingsRow label={t("整合終端 Shell")} description={t("只影響新開的內建終端；Windows 自動優先 Git Bash，找不到則使用 CMD。既有終端保持目前 Shell；Agent 的 bash、pwsh 工具各自使用同名 Shell。")}
       control={<select aria-label={t("整合終端 Shell")} value={selectedShell} disabled={busy || !value || shells.length === 0} onChange={(event) => {
         const terminalShell = event.target.value as TerminalShellChoice
         setBusy(true); setError(undefined)

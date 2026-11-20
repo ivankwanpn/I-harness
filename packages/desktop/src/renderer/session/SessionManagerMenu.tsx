@@ -55,5 +55,5 @@ export function SessionManagerMenu({ id, label, anchor, initialFocusSelector = '
     event.preventDefault()
     items[next]?.focus()
   }
-  return createPortal(<div ref={panel} id={id} role="menu" aria-label={label} className="session-manager-menu" style={position} onKeyDown={keyboard}>{children}</div>, document.body)
+  return createPortal(<div ref={panel} id={id} role="menu" aria-label={label} className="session-manager-menu ih-menu-surface" style={position} onKeyDown={keyboard}>{children}</div>, document.body)
 }

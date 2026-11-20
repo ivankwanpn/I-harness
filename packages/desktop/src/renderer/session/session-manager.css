@@ -40,9 +40,6 @@
 .session-manager-heading { margin: 0; padding: 1rem 1.429rem; font-size: 1.143rem; }
 .session-manager-toolbar { flex: 0 0 auto; padding: 1rem 1.429rem; border-bottom: 1px solid var(--ih-divider); }
 .session-manager-navigation { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .571rem; }
-.session-manager-tabs { display: inline-flex; max-width: 100%; gap: .214rem; padding: .214rem; border: 1px solid var(--ih-divider); border-radius: .714rem; background: var(--ih-control-background); }
-.session-manager-tabs .oc-button { color: var(--ih-muted); }
-.session-manager-tabs .oc-button[aria-pressed="true"] { background: var(--ih-bg); color: var(--ih-text); border-color: var(--ih-control-border); box-shadow: 0 1px 3px var(--ih-control-shadow); }
 .session-manager-total { color: var(--ih-muted); font-size: .857rem; font-variant-numeric: tabular-nums; }
 .session-manager-batch { display: grid; gap: .714rem; margin-top: 1rem; }
 .session-manager-batch-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .429rem; }
@@ -101,15 +98,11 @@
   padding: .357rem;
   overflow: auto;
   overscroll-behavior: contain;
-  border: 1px solid var(--ih-divider);
-  border-radius: .643rem;
-  background: var(--ih-panel);
-  box-shadow: 0 12px 34px rgb(0 0 0 / 35%);
+  font-size: .86rem;
 }
-.session-manager-menu .session-manager-menu-item { display: flex; align-items: center; gap: .643rem; width: 100%; min-height: 2.429rem; padding: .571rem .643rem; border: 0; border-radius: .357rem; background: transparent; color: var(--ih-text); font: inherit; font-size: .857rem; line-height: 1.45; text-align: left; cursor: pointer; }
+.session-manager-menu .session-manager-menu-item { width: 100%; }
 .session-manager-menu-item > svg { flex: 0 0 auto; color: var(--ih-muted); }
 .session-manager-menu-item > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.session-manager-menu .session-manager-menu-item:hover, .session-manager-menu .session-manager-menu-item:focus-visible { background: color-mix(in srgb, var(--ih-text) 8%, transparent); outline: none; }
 .session-manager-menu-id { display: grid; gap: .286rem; margin: .357rem .643rem 0; padding: .714rem 0 .357rem; border-top: 1px solid var(--ih-divider); color: var(--ih-muted); font-size: .786rem; }
 .session-manager-menu-id code { overflow-wrap: anywhere; user-select: text; }
 .session-manager-rename > label { display: grid; gap: .571rem; color: var(--ih-muted); font-size: .929rem; }

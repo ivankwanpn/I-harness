@@ -66,6 +66,7 @@ export function BrowserPane({ bridge, workspaceId, visible = true }: { bridge: D
 
   useEffect(() => {
     const scope = live.current
+    if (!selected) addressFocused.current = false
     if (scope && !addressFocused.current) patch(scope, { address: current?.url ?? "" })
   }, [selected, current?.url, bridge, workspaceId])
   useNativeBrowserViewport(bridge, workspaceId, viewport, {
@@ -87,21 +88,23 @@ export function BrowserPane({ bridge, workspaceId, visible = true }: { bridge: D
   }
   const changeAddress = (address: string) => { const scope = live.current; if (scope) patch(scope, { address }) }
   return <section className="browser-pane ih-control-scope" aria-label={t("瀏覽器")} aria-busy={busy || view.tabs === undefined && !view.listError}>
-    <div className="browser-tabs" role="tablist" aria-label={t("瀏覽器分頁")}>
-      {tabs.map(tab => <Button variant="ghost" size="small" role="tab" aria-selected={selected === tab.id} key={tab.id} title={tab.title || tab.url} onClick={() => { const scope = live.current; if (scope) patch(scope, { selected: tab.id }) }}>{tab.title || t("新分頁")}</Button>)}
-      <Button variant="ghost" size="small" aria-label={t("新增分頁")} disabled={busy || tabs.length >= 8} icon={<Plus size={15} />} onClick={() => { void run({ kind: "browser/open", workspaceId }) }} />
+    <div className="browser-tabbar">
+      {tabs.length ? <div className="browser-tabs" role="tablist" aria-label={t("瀏覽器分頁")}>
+        {tabs.map(tab => <Button variant="ghost" size="small" role="tab" aria-selected={selected === tab.id} key={tab.id} title={tab.title || tab.url} onClick={() => { const scope = live.current; if (scope) patch(scope, { selected: tab.id }) }}><span>{tab.title || t("新分頁")}</span></Button>)}
+      </div> : null}
+      <Button variant={tabs.length ? "ghost" : "primary"} size="small" aria-label={t("新增分頁")} title={t("新增分頁")} disabled={busy || tabs.length >= 8} icon={<Plus size={15} />} onClick={() => { void run({ kind: "browser/open", workspaceId }) }}>{tabs.length ? null : t("新增分頁")}</Button>
+      {selected ? <Button variant="ghost" size="small" aria-label={t("關閉分頁")} title={t("關閉分頁")} disabled={busy} icon={<X size={15} />} onClick={() => { void run({ kind: "browser/close", workspaceId, id: selected }) }} /> : null}
     </div>
-    <form className="browser-toolbar" onSubmit={event => { event.preventDefault(); if (selected) void run({ kind: "browser/navigate", workspaceId, id: selected, url: address }) }}>
+    {selected ? <form className="browser-toolbar" onSubmit={event => { event.preventDefault(); void run({ kind: "browser/navigate", workspaceId, id: selected, url: address }) }}>
       <Button variant="ghost" size="small" aria-label={t("上一頁")} disabled={busy || !current?.canGoBack} icon={<ArrowLeft size={15} />} onClick={() => { if (selected) void run({ kind: "browser/action", workspaceId, id: selected, action: "back" }) }} />
       <Button variant="ghost" size="small" aria-label={t("下一頁")} disabled={busy || !current?.canGoForward} icon={<ArrowRight size={15} />} onClick={() => { if (selected) void run({ kind: "browser/action", workspaceId, id: selected, action: "forward" }) }} />
       <Button variant="ghost" size="small" aria-label={t(current?.loading ? "停止" : "重新整理")} disabled={busy || !selected} icon={current?.loading ? <Square size={15} /> : <RotateCw size={15} />} onClick={() => { if (selected) void run({ kind: "browser/action", workspaceId, id: selected, action: current?.loading ? "stop" : "reload" }) }} />
       <input aria-label={t("網址")} placeholder="https://" type="url" required maxLength={8192} value={address} disabled={!selected || busy} onFocus={() => { addressFocused.current = true }} onBlur={() => { addressFocused.current = false }} onChange={event => changeAddress(event.target.value)} />
       <Button type="submit" size="small" disabled={busy || !selected || !address.trim()}>{t("前往")}</Button>
-      <Button variant="ghost" size="small" aria-label={t("關閉分頁")} disabled={busy || !selected} icon={<X size={15} />} onClick={() => { if (selected) void run({ kind: "browser/close", workspaceId, id: selected }) }} />
-    </form>
+    </form> : null}
     {error ? <p role="alert" className="browser-error">{error}{view.listError ? <Button size="small" disabled={busy} onClick={() => { void live.current?.read() }}>{t("重試")}</Button> : null}</p> : null}
     <div ref={viewport} className="browser-viewport">
-      {view.tabs === undefined && !view.listError ? <p role="status" className="browser-state">{t("正在載入瀏覽器分頁…")}</p> : view.tabs?.length === 0 && !view.listError ? <p className="browser-state">{t("新增分頁並輸入網址以開始瀏覽。")}</p> : null}
+      {view.tabs === undefined && !view.listError ? <p role="status" className="browser-state">{t("正在載入瀏覽器分頁…")}</p> : view.tabs?.length === 0 && !view.listError ? <p className="ih-empty-state">{t("新增分頁並輸入網址以開始瀏覽。")}</p> : null}
     </div>
   </section>
 }

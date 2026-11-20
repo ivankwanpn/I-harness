@@ -1,5 +1,5 @@
 import { Children, isValidElement, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { ArrowDown, Brain } from "lucide-react"
+import { ArrowDown, Brain, ChevronRight, CircleAlert } from "lucide-react"
 import { elementScroll, useVirtualizer } from "@tanstack/react-virtual"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -9,13 +9,13 @@ import { ToolActivity } from "./ToolActivity.tsx"
 import { ActivityGroup } from "./ActivityGroup.tsx"
 import { groupActivities } from "./activity-groups.ts"
 import { workStages, type WorkItem } from "./work-stages.ts"
-import { ChevronRight } from "lucide-react"
-import { useText } from "../design/i18n.ts"
+import { useLocale, useText } from "../design/i18n.ts"
+import { displayError } from "../design/error-display.ts"
 import type { FileNavigation } from "./file-navigation.ts"
 import { OutputBlock } from "./OutputBlock.tsx"
 import { RecordedCodeActivity } from "./RecordedCodeActivity.tsx"
 import { SettingsDialog } from "../settings/SettingsDialog.tsx"
-import { MessageActions } from "./MessageActions.tsx"
+import { GenerationSpeed, MessageActions } from "./MessageActions.tsx"
 import { useToolText } from "./tool-text.ts"
 import "./timeline-polish.css"
 
@@ -34,19 +34,23 @@ const MarkdownMessage = memo(function MarkdownMessage({ text }: { text: string }
   }}>{text}</Markdown>
 })
 
-function RowView({ row, open, toggle, page, setPage, navigation, onPreview, resultReader }: { resultReader?: RecordedResultReader; row: WorkItem; open: Map<string, boolean>; toggle(id: string): void; page: number; setPage(page: number): void; navigation?: FileNavigation; onPreview(preview: { src: string; name: string }): void }) {
+function RowView({ row, open, toggle, running, page, setPage, navigation, onPreview, resultReader }: { resultReader?: RecordedResultReader; row: WorkItem; open: Map<string, boolean>; toggle(id: string, expanded?: boolean): void; running: boolean; page: number; setPage(page: number): void; navigation?: FileNavigation; onPreview(preview: { src: string; name: string }): void }) {
   const t = useText()
   const toolText = useToolText()
+  const english = useLocale(state => state.locale) === "en"
   if (row.kind === "work-stage") {
     const expanded = open.get(row.id) ?? row.active
     const count = `${row.count} ${toolText("項活動",row.count===1?"activity":"activities")}`
     const note = row.hasErrors ? toolText("部分活動未完成","Some activities were not completed") : undefined
-    return <button type="button" className="work-stage-heading" aria-label={t("工作過程")} aria-description={`${count}${note?` · ${note}`:""}`} aria-expanded={expanded} onClick={() => toggle(row.id)}>{t("工作過程")}<span className="work-stage-meta" aria-hidden="true">{count}{note?<span className="work-stage-incomplete">{note}</span>:null}</span><ChevronRight size={14} className={expanded ? "rotate-90" : ""} /></button>
+    return <button type="button" className="work-stage-heading" aria-label={t("工作過程")} aria-description={`${count}${note?` · ${note}`:""}`} aria-expanded={expanded} onClick={() => toggle(row.id)}>{t("工作過程")}<span className="work-stage-meta">{count}{note?<span className="work-stage-incomplete">{note}</span>:null}{row.generation ? <GenerationSpeed generation={row.generation} /> : null}</span><ChevronRight size={14} className={expanded ? "rotate-90" : ""} /></button>
   }
   if (row.kind === "activity-group") return <ActivityGroup resultReader={resultReader} row={row} page={page} setPage={setPage} expanded={open.get(row.id) ?? row.rows.some((tool) => open.get(tool.id) === true)} isOpen={(id) => open.get(id) === true} toggle={toggle} navigation={navigation} onPreview={onPreview} />
   if (row.kind === "message") {
     return <div className={`timeline-message timeline-${row.role}`}>
-      {row.role === "assistant" ? <><MarkdownMessage text={row.text} /><MessageActions text={row.text}/></> : row.text}
+      {row.role === "assistant" ? <>
+        {row.interrupted ? <p className="timeline-partial-reply">{toolText("中斷前的回覆", "Response before interruption")}</p> : null}
+        <MarkdownMessage text={row.text} /><MessageActions text={row.text} generation={row.generation} />
+      </> : row.text}
       {row.role === "user" && row.images?.length ? <div className="timeline-user-images">{row.images.map((item, index) => {
         const name = item.name || `${t("圖片")} ${index + 1}`
         const src = `data:${item.mediaType};base64,${item.dataBase64}`
@@ -57,12 +61,32 @@ function RowView({ row, open, toggle, page, setPage, navigation, onPreview, resu
     </div>
   }
   if (row.kind === "outcome") {
-    return <p className="timeline-outcome">{outcomeLabel(row.flags, t)}</p>
+    return <p className="timeline-outcome"><CircleAlert size={16} aria-hidden="true" />{outcomeLabel(row.flags, t)}</p>
+  }
+  if (row.kind === "failure") {
+    const { code, httpStatus } = row.failure
+    const summary = displayError(t("模型回應已中斷"), { english, code, httpStatus }).summary
+    return <div className="timeline-failure" data-stopped={code === "ABORTED" || undefined}>
+      <CircleAlert size={16} aria-hidden="true" />
+      <div><strong>{summary}</strong>{typeof httpStatus === "number" && Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? <small>HTTP {httpStatus}</small> : null}</div>
+    </div>
   }
   if (row.kind === "other") {
-    const expanded = open.get(row.id) ?? false
+    const reasoning = row.label === "reasoning"
+    const streaming = reasoning && row.transient === true && running
+    const expanded = open.get(row.id) ?? streaming
     if (row.codeActivity) return <RecordedCodeActivity resultReader={resultReader} event={row.codeActivity} expanded={expanded} onToggle={() => toggle(row.id)} onPreview={onPreview} />
-    return row.detail ? <details className={`timeline-other muted${row.label === "reasoning" ? " timeline-reasoning" : ""}`} open={expanded} onToggle={(event) => { if (event.currentTarget.open !== expanded) toggle(row.id) }}><summary>{row.label === "reasoning" ? <Brain size={14} aria-hidden="true" /> : null}{row.title ?? activityLabel(row.label, t)}</summary>{row.label === "reasoning" ? <div className="timeline-reasoning-body"><MarkdownMessage text={row.detail} /></div> : <pre className="tool-output">{row.detail}</pre>}</details> : <p className="timeline-other muted">{row.title ?? activityLabel(row.label, t)}</p>
+    const label = row.title ?? activityLabel(row.label, t)
+    if (!row.detail) return <p className="timeline-other muted">{label}</p>
+    return <details className={`timeline-other muted${reasoning ? " timeline-reasoning" : ""}`} open={expanded} onToggle={(event) => { if (event.currentTarget.open !== expanded) toggle(row.id, event.currentTarget.open) }}>
+      <summary>
+        {reasoning ? <Brain size={15} aria-hidden="true" /> : null}
+        <span>{label}</span>
+        {streaming ? <span className="timeline-reasoning-live">{toolText("思考中…", "Thinking…")}</span> : null}
+        {reasoning ? <ChevronRight size={15} className="timeline-reasoning-chevron" aria-hidden="true" /> : null}
+      </summary>
+      {expanded ? reasoning ? <div className="timeline-reasoning-body"><MarkdownMessage text={row.detail} /></div> : <pre className="tool-output">{row.detail}</pre> : null}
+    </details>
   }
   return <ToolActivity resultReader={resultReader} name={row.name} args={row.args} output={row.output} envelope={row.envelope} resultReceived={row.resultReceived} isError={row.isError} dispatched={row.dispatched} cellId={row.cellId} parentCallId={row.parentCallId} resultRefs={row.resultRefs} expanded={open.get(row.id) === true} onToggle={() => toggle(row.id)} navigation={navigation} onPreview={onPreview} />
 }
@@ -71,18 +95,21 @@ function RowView({ row, open, toggle, page, setPage, navigation, onPreview, resu
 export interface TimelineProps { resultReader?: RecordedResultReader; rows: TimelineRow[]; navigation?: FileNavigation; running?: boolean; targetSeq?: number; historical?: boolean; onTargetVisible?(seq: number): void }
 export function Timeline({ rows, navigation, running = false, targetSeq, historical = false, onTargetVisible, resultReader }: TimelineProps) {
   const t = useText()
+  const tt = useToolText()
+  const latestTurn = rows.at(-1)?.turn
+  const liveGeneration = running && !historical && !latestTurn?.complete ? latestTurn?.generation : undefined
   const [preview, setPreview] = useState<{ src: string; name: string }>()
   const grouped = useMemo(() => groupActivities(rows), [rows])
   const [open, setOpen] = useState(new Map<string, boolean>())
   const items = useMemo(() => workStages(grouped, open, running), [grouped, open, running])
   const [pages, setPages] = useState(new Map<string, number>())
-  const toggle = (id: string) => {
+  const toggle = (id: string, expanded?: boolean) => {
     pauseFollowing()
     setOpen((previous) => {
     const next = new Map(previous)
     const group = items.find((item) => item.id === id)
     const current = previous.get(id) ?? (group?.kind === "work-stage" ? group.active : (group?.kind === "activity-group" && group.rows.some((tool) => previous.get(tool.id) === true)))
-    next.set(id, !current)
+    next.set(id, expanded ?? !current)
     if (next.size > 2000) next.delete(next.keys().next().value!)
     return next
     })
@@ -193,7 +220,7 @@ export function Timeline({ rows, navigation, running = false, targetSeq, histori
     }
   }, [followLatest, historical, targetSeq])
   return (
-    <div className="timeline-region">
+    <div className="timeline-region" data-live-generation={liveGeneration ? "" : undefined}>
     <div ref={parentRef} className="timeline" data-testid="timeline" tabIndex={0} aria-label={t("會話內容")}
       onWheel={event => { if (event.deltaY < 0) pauseFollowing(); else if (event.deltaY > 0) readingDirection.current = "down" }}
       onTouchStart={event => { touchY.current = event.touches[0]?.clientY }}
@@ -244,7 +271,7 @@ export function Timeline({ rows, navigation, running = false, targetSeq, histori
               style={{ transform: `translateY(${item.start}px)`, ...(row.id === target?.id || (row.kind === "activity-group" && row.rows.some(tool => tool.id === target?.id)) ? { outline: "2px solid var(--accent, #5073c8)", outlineOffset: "-2px" } : {}) }}
             >
               {row.id === target?.id || (row.kind === "activity-group" && row.rows.some(tool => tool.id === target?.id)) ? <span className="muted">搜尋命中</span> : null}
-              <RowView resultReader={resultReader} row={row} open={open} toggle={toggle} navigation={navigation} onPreview={setPreview} page={pages.get(row.id) ?? 0} setPage={(page) => {
+              <RowView resultReader={resultReader} row={row} open={open} toggle={toggle} running={running} navigation={navigation} onPreview={setPreview} page={pages.get(row.id) ?? 0} setPage={(page) => {
                 pauseFollowing()
                 setPages((previous) => {
                 const next = new Map(previous); next.set(row.id, page)
@@ -257,6 +284,7 @@ export function Timeline({ rows, navigation, running = false, targetSeq, histori
         })}
       </div>
     </div>
+    {liveGeneration ? <div className="timeline-activity-speed"><span>{tt("本輪已量測", "This turn so far")}</span><GenerationSpeed generation={liveGeneration} /></div> : null}
     {!historical && showLatest && rows.length > 0 ? <button type="button" className="timeline-latest" onClick={() => {
       following.current = true; setShowLatest(false); followLatest()
     }}><ArrowDown size={14} />{t("回到最新內容")}</button> : null}

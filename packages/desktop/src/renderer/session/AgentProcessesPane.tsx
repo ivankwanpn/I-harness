@@ -94,7 +94,7 @@ function ProcessesScope({ bridge, workspaceId, sessionId, cols, rows, setCols, s
     {view.error && !confirm ? <p role="alert" className="error-text">{view.error}</p> : null}
     {!view.state && !view.error ? <p role="status">{t("正在讀取…")}</p> : null}
     <h3>{t("Agent PTY／程序")}</h3>
-    {view.state?.terminals.length === 0 ? <p className="execution-surface-empty">{t("目前沒有此會話擁有的 PTY 程序")}</p> : null}
+    {view.state?.terminals.length === 0 ? <p className="ih-empty-state">{t("目前沒有此會話擁有的 PTY 程序")}</p> : null}
     <div className="execution-record-list">{view.state?.terminals.map((row, index) => <article key={row.id} className="execution-record-card">
       <div className="execution-record-header"><h4>{row.command || tt("PTY 程序", "PTY process") + " " + (index + 1)}</h4><span className="execution-record-status">{row.status} · {row.live ? t("活躍") : t("歷史")}</span></div>
       {!row.live && row.status === "running" ? <p className="execution-surface-note">{t("已儲存狀態，未確認仍在執行")}</p> : null}
@@ -104,7 +104,7 @@ function ProcessesScope({ bridge, workspaceId, sessionId, cols, rows, setCols, s
       </div><RawRecordedRecord value={row} />
     </article>)}</div>
     <h3>{t("背景工作")}</h3>
-    {view.state?.jobs.length === 0 ? <p className="execution-surface-empty">{t("尚無背景工作")}</p> : null}
+    {view.state?.jobs.length === 0 ? <p className="ih-empty-state">{t("尚無背景工作")}</p> : null}
     <div className="execution-record-list">{view.state?.jobs.map(job => <article key={job.jobId} className="execution-record-card">
       <div className="execution-record-header"><h4>{job.label}</h4><span className="execution-record-status">{job.status} · {job.live ? t("活躍") : t("歷史")}</span></div>
       {!job.live && job.status === "running" ? <p className="execution-surface-note">{t("已儲存狀態，未確認仍在執行")}</p> : null}

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 const viewport = vi.hoisted(() => ({ visible: true, scroll: vi.fn() }))
 vi.mock("@tanstack/react-virtual", () => ({ elementScroll: () => {}, useVirtualizer: (options: { count: number }) => ({ getTotalSize: () => 200, getVirtualItems: () => viewport.visible ? Array.from({ length:options.count }, (_, index) => ({ index, start: index * 56 })) : [], measureElement: () => {}, scrollToIndex: viewport.scroll, scrollToOffset: () => {} }) }))
@@ -80,7 +80,7 @@ it("creates the completed work disclosure only after the turn ends while keeping
   expect(screen.getByRole("button",{name:"工具詳情 read"})).toBeTruthy()
 })
 
-it("shows persisted model reasoning inside expandable work details", () => {
+it("shows persisted model reasoning inside expandable work details", async () => {
   const rows = projectTimeline([
     { type: "turn/start", seq: 0 },
     { type: "user/message", text: "Task", seq: 1 },
@@ -95,25 +95,53 @@ it("shows persisted model reasoning inside expandable work details", () => {
   fireEvent.click(screen.getByRole("button", { name: "工作過程" }))
   const disclosure = screen.getByText("思考過程").closest("details")
   expect(disclosure).toBeTruthy()
-  expect(disclosure?.textContent).toContain("Inspect the directory first")
+  expect(disclosure?.open).toBe(false)
+  expect(screen.queryByText("Inspect")).toBeNull()
   fireEvent.click(screen.getByText("思考過程"))
   expect(disclosure?.open).toBe(true)
-  expect(screen.getByText("Inspect").tagName).toBe("STRONG")
+  expect((await screen.findByText("Inspect")).tagName).toBe("STRONG")
 })
 
-it("keeps incoming reasoning collapsed and preserves a reader's expansion as the block grows and settles", () => {
+it("opens live reasoning and preserves a reader's choice as the block grows and settles", async () => {
   const chunk = { type: "reasoning/chunk" as const, streamId: "a", text: "Inspect ", offset: 0, atSeq: 0 }
   const view = render(<Timeline rows={projectTimeline([chunk])} running />)
   let disclosure = screen.getByText("思考過程").closest("details")!
-  expect(disclosure.open).toBe(false)
-  fireEvent.click(screen.getByText("思考過程"))
   expect(disclosure.open).toBe(true)
+  expect(screen.getByText("思考中…")).toBeTruthy()
+  fireEvent.click(screen.getByText("思考過程"))
+  await waitFor(() => expect(disclosure.open).toBe(false))
   view.rerender(<Timeline rows={projectTimeline([chunk, { ...chunk, text: "files", offset: 8 }])} running />)
   disclosure = screen.getByText("思考過程").closest("details")!
-  expect(disclosure.open).toBe(true)
-  expect(disclosure.textContent).toContain("Inspect files")
+  expect(disclosure.open).toBe(false)
+  fireEvent.click(screen.getByText("思考過程"))
+  await screen.findByText("Inspect files")
   view.rerender(<Timeline rows={projectTimeline([{ type: "reasoning", streamId: "a", text: "Inspect files", seq: 0 }])} />)
   expect(screen.getByText("思考過程").closest("details")!.open).toBe(true)
+})
+
+it("shows measured generation with the final answer and omits a speed on an older turn", () => {
+  const rows = projectTimeline([
+    { type: "turn/start" }, { type: "user/message", text: "Compare" }, { type: "step/start" },
+    { type: "assistant/message", text: "" }, { type: "step/end", generation: { outputTokens: 90, generationMs: 3_000 } },
+    { type: "step/start" }, { type: "assistant/message", text: "Final result" },
+    { type: "step/end", generation: { outputTokens: 60, generationMs: 1_000 } }, { type: "turn/end" },
+    { type: "turn/start" }, { type: "assistant/message", text: "Older style record" }, { type: "step/end" }, { type: "turn/end" },
+  ])
+  render(<Timeline rows={rows} historical />)
+  const speed = screen.getByText("37.5 tok/s")
+  expect(speed.closest(".timeline-message")?.textContent).toContain("Final result")
+  expect(speed.getAttribute("title")).toContain("150 輸出 Token")
+  expect(screen.getByText("Older style record").closest(".timeline-message")?.textContent).not.toContain("tok/s")
+})
+
+it("keeps a classified failure visible with the interrupted answer after the turn closes", () => {
+  render(<Timeline rows={projectTimeline([
+    { type: "turn/start" }, { type: "step/start" }, { type: "assistant/message", text: "Partial reply" },
+    { type: "step/failed", failure: { code: "RATE_LIMIT", httpStatus: 429 } }, { type: "step/end" }, { type: "turn/end" },
+  ])} />)
+  expect(screen.getByText("中斷前的回覆")).toBeTruthy()
+  expect(screen.getByText("供應商暫時限制請求。請稍後重試。")).toBeTruthy()
+  expect(screen.getByText("HTTP 429")).toBeTruthy()
 })
 
 it("keeps inner and outer disclosure choices across growth and virtual unmount", () => {

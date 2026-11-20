@@ -3,8 +3,8 @@
  * Modified: native buttons with keyboard navigation; no drag/drop or store imports.
  */
 import { useLayoutEffect, useRef } from "react"
-export function PaneTabs({ id, items, selected, onSelect, label }: {
-  id: string; items: { id: string; label: string }[]; selected: string; onSelect(id: string): void; label: string
+export function PaneTabs({ id, items, selected, onSelect, label, className }: {
+  id: string; items: { id: string; label: string }[]; selected: string; onSelect(id: string): void; label: string; className?: string
 }) {
   const buttons = useRef<(HTMLButtonElement | null)[]>([])
   const strip = useRef<HTMLDivElement>(null)
@@ -23,7 +23,7 @@ export function PaneTabs({ id, items, selected, onSelect, label }: {
     for (const button of buttons.current) if (button) observer.observe(button)
     return () => observer.disconnect()
   }, [selected, items])
-  return <div ref={strip} role="tablist" aria-label={label} className="zc-pane-tabs">
+  return <div ref={strip} role="tablist" aria-label={label} className={className ? `zc-pane-tabs ${className}` : "zc-pane-tabs"}>
     {items.map((item, index) => <button ref={(element) => { buttons.current[index] = element }} key={item.id} type="button" role="tab" id={`${id}-${item.id}`} aria-controls={`${id}-panel`} aria-selected={selected === item.id} tabIndex={selected === item.id ? 0 : -1}
       onClick={() => onSelect(item.id)} onKeyDown={(event) => {
         let next: number

@@ -72,6 +72,37 @@ const usageEvents = (emitted: TelemetryEvent[]): TelemetryEvent[] =>
   emitted.filter((e) => e.type === "provider/usage")
 
 describe("core-agent provider usage (M5 T2)", () => {
+  it.each([true, false])("records only valid generation samples after first visible output (%s)", async valid => {
+    const ctx = createContext(), session = createSession()
+    let now = 0
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now)
+    const model: ModelClient = { async *stream() {
+      now = 5_000
+      yield { type: "reasoning", text: "Compute the remainder" }
+      now = 6_200
+      yield { type: "text/chunk", text: "9" }
+      yield { type: "usage", usage: { outputTokens: 42, ...(!valid ? { measurementValidity: "invalid" } : {}) } }
+      now = 7_000
+      yield { type: "end" }
+    } }
+    try {
+      const agent = createAgent(ctx, { session, tools: createToolRegistry(ctx), model, systemPrompt: "" })
+      expect((await agent.run("Calculate a remainder")).finalText).toBe("9")
+      const end = session.events.find(event => event.type === "step/end")
+      expect(end?.type === "step/end" && end.generation).toEqual(valid ? { outputTokens: 42, generationMs: 2_000 } : undefined)
+    } finally { clock.mockRestore() }
+  })
+
+  it("keeps a payload-free provider failure with the interrupted step", async () => {
+    const ctx = createContext(), session = createSession()
+    const model: ModelClient = { async *stream() {
+      yield { type: "error", error: Object.assign(new Error("private upstream payload"), { code: "AUTH", httpStatus: 401 }) }
+    } }
+    await expect(createAgent(ctx, { session, tools: createToolRegistry(ctx), model, systemPrompt: "" }).run("Hi")).rejects.toThrow()
+    const failed = session.events.find(event => event.type === "step/failed")
+    expect(failed).toMatchObject({ failure: { code: "AUTH", httpStatus: 401 } })
+    expect(JSON.stringify(failed)).not.toContain("private upstream payload")
+  })
   it.each(['stop', 'generation'] as const)('retains one failed-attempt usage report and original %s identity after the boundary closes', async mode => {
     const ctx = createContext(), session = createSession(), stop = new AbortController(), { telemetry, events } = spyTelemetry()
     const original = mode === 'stop' ? new Error('controlled Stop') : generationError('GENERATION_CLOSED')

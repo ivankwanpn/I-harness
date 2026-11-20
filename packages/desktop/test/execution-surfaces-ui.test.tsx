@@ -51,7 +51,7 @@ it("shows saved and effective Code Mode separately and retains the saved value o
   render(<CodeModeSettings bridge={{ request }} workspaceId="w" sessionId="s" />)
   const select = await screen.findByRole("combobox", { name: "Code Mode" }) as HTMLSelectElement
   expect(select.value).toBe("only")
-  expect(screen.getByRole("status").textContent).toContain("mixed")
+  expect(screen.getByRole("status").textContent).toContain("直接工具與程式編排")
   fireEvent.change(select, { target: { value: "off" } })
   expect(await screen.findByRole("alert")).toBeTruthy()
   expect(select.value).toBe("only")

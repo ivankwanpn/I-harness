@@ -6,6 +6,7 @@ import { ToolActivity } from "./session/ToolActivity.tsx"
 import { LightweightDiffPreview } from "./vendor/zcode/LightweightDiffPreview.tsx"
 import "./design/tokens.css"
 import "./vendor/zcode/styles.css"
+import "./design/controls.css"
 
 createRoot(document.getElementById("root")!).render(
   <main style={{ padding: 24, maxWidth: 850, margin: "0 auto", height: "100%", overflow: "auto" }}>

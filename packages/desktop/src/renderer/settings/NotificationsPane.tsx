@@ -48,7 +48,7 @@ export function NotificationsPane({ request, onOpenTarget, subscribe }: {
     </header>
     {error ? <p role="alert" className="notice">{error}</p> : null}
     {confirmClear ? <div className="notifications-confirm" role="alertdialog" aria-label={t("清除所有通知記錄？")}><p>{t("清除所有通知記錄？")}</p><div className="provider-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirmClear(false)}>{t("取消")}</button><button type="button" className="danger-button" disabled={busy} onClick={() => { void act({ kind: "desktop/notifications/clear", confirmed: true }) }}>{t("確認清除")}</button></div></div> : null}
-    {view?.items.length === 0 ? <div className="notifications-empty"><Bell size={26} /><p>{t("尚無通知記錄")}</p><p className="muted">{t("需要確認或回答的通知會保留在這裡。")}</p></div> : null}
+    {view?.items.length === 0 ? <div className="notifications-empty ih-empty-state"><Bell size={22} aria-hidden="true" /><strong>{t("尚無通知記錄")}</strong><p>{t("需要確認或回答的通知會保留在這裡。")}</p></div> : null}
     <ul className="notifications-list">{view?.items.map(row => <li key={row.id} className={row.read ? "notification-read" : "notification-unread"}>
       <div className="notification-copy"><span className="notification-kind">{t(row.kind === "approval" ? "需要核准" : "等待回答")}</span><p>{row.summary}</p><time dateTime={row.createdAt}>{new Date(row.createdAt).toLocaleString()}</time></div>
       <div className="notification-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => { void onOpenTarget({ workspaceId: row.workspaceId, sessionId: row.sessionId }).catch(reason => { if (mounted.current) setError(reason instanceof Error ? reason.message : String(reason)) }) }}>{t("開啟會話")}</button>

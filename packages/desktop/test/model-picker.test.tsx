@@ -58,6 +58,14 @@ it("shows only the effort list reported by the effective protocol", () => {
   expect(screen.queryByRole("button", { name: "Max" })).toBeNull()
 })
 
+it("uses the wire protocol when selecting Max on an OpenAI-compatible route", async () => {
+  const select = vi.fn().mockResolvedValue(undefined)
+  render(<SessionModelPicker bridge={{ request: vi.fn(), onEvent: () => () => {} }} workspaceId="w" current={{ status: "ready", providerId: "local", modelId: "m", label: "m", protocol: "openai-compatible" }} disabled={false} onSelect={select} />)
+  fireEvent.click(screen.getByRole("button", { name: "思考強度：Default" }))
+  fireEvent.click(screen.getByRole("button", { name: "Max" }))
+  await waitFor(() => expect(select).toHaveBeenCalledWith({ provider: "local", model: "m", protocol: "openai-completions", reasoningEffort: "max" }))
+})
+
 it("resets reasoning to provider default when choosing another model", async () => {
   const select = vi.fn().mockResolvedValue(undefined)
   render(<SessionModelPicker bridge={{ request: vi.fn().mockResolvedValue(routes), onEvent: () => () => {} }} workspaceId="w" current={{ status: "ready", providerId: "deepseek", modelId: "deepseek-flash", label: "Flash", reasoningEffort: "high" }} disabled={false} onSelect={select} />)

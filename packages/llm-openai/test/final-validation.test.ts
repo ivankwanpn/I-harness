@@ -1,10 +1,32 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { createOpenAIClient } from '../src/index.ts'
 import { responsesValidator } from '../src/request/validate.ts'
+import type { LLMRequest } from '@i-harness/llm-seam'
 const request = { systemPrompt: '', messages: [], tools: [] }
 const call = (id: string) => ({ type: 'function_call', call_id: id, name: 'historic_tool', arguments: '{"x":1}' })
 const out = (id: string) => ({ type: 'function_call_output', call_id: id, output: 'sentinel-output' })
 afterEach(() => vi.unstubAllGlobals())
+it('switches the same DeepSeek model from Chat to Responses with Max and preserves its plain-text reasoning', async () => {
+  let body: any
+  vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => { body = JSON.parse(String(init.body)); return new Response('data: [DONE]\n\n') })
+  const config = { apiKey: 'fixture', baseUrl: 'https://api.deepseek.com', providerId: 'deepseek', model: 'deepseek-flash' }
+  const messages: LLMRequest['messages'] = [{ role: 'user', content: 'read file' }, {
+    role: 'assistant', content: '', toolCalls: [{ id: 'call_1', name: 'read', args: { path: 'file.txt' } }],
+    providerContinuation: { kind: 'openai-compatible', providerId: 'deepseek', model: 'deepseek-flash', reasoningContent: 'Retained provider content' },
+  }, { role: 'tool', toolCallId: 'call_1', content: 'File contents' }]
+  const prepared = await createOpenAIClient(config).prepare!({ ...request, messages, reasoningEffort: 'max' })
+  for await (const _ of prepared.stream()) {}
+  expect(body.reasoning).toEqual({ effort: 'max' })
+  expect(body.input.slice(1)).toMatchObject([
+    { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'Retained provider content' }] },
+    { type: 'function_call', call_id: 'call_1' },
+    { type: 'function_call_output', call_id: 'call_1' },
+  ])
+  const unrelated = await createOpenAIClient({ ...config, baseUrl: 'https://api.openai.com' }).prepare!({ ...request, messages, reasoningEffort: 'max' })
+  for await (const _ of unrelated.stream()) {}
+  expect(body.reasoning).toEqual({ effort: 'max', summary: 'auto' })
+  expect(body.input.some((item: { type?: string }) => item.type === 'reasoning')).toBe(false)
+})
 it.each([
   { summary: [], content: 'wrong-container' }, { summary: [], content: {} },
   { summary: [], content: [null] }, { summary: [null] },

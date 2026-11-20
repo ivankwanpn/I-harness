@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { AlertCircle, LoaderCircle, X } from "lucide-react"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import type { RuntimeActivity, RuntimeDiagnosticEntry } from "../../shared/runtime-diagnostics.ts"
-import { useText } from "../design/i18n.ts"
+import { useLocale, useText } from "../design/i18n.ts"
 import { displayError } from "../design/error-display.ts"
 import { Button } from "../vendor/opencode/Button.tsx"
 import { RuntimeDetails } from "../settings/RuntimeLog.tsx"
@@ -21,6 +21,7 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
   bridge: DesktopBridge; workspaceId?: string; sessionId?: string; onOpenLog(): void
 }) {
   const t = useText()
+  const english = useLocale(state => state.locale) === "en"
   const draftScope = useUiStore(state => state.draftSubmissionScope)
   const activeSessionId = sessionId ?? (draftScope && draftScope.workspaceId === workspaceId ? draftScope.sessionId : undefined)
   const [scopes, setScopes] = useState<Map<string, Feedback>>(() => new Map())
@@ -157,7 +158,7 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
       await bridge.request({kind:'desktop/workspace/repair',workspaceId:failure.workspaceId})
       if(failure.sessionId)await bridge.request({kind:'desktop/session/reload',workspaceId:failure.workspaceId,sessionId:failure.sessionId}).catch(()=>undefined)
       setScopes(previous=>{const next=new Map(previous),key=scopeKey(failure.workspaceId,failure.sessionId);next.set(key,{...next.get(key),error:undefined});return next})
-    }catch(error){setRepairError(displayError(error).summary)}
+    }catch(error){setRepairError(displayError(error, { english }).summary)}
     finally{setRepairing(false)}
   }
   const activity = selected?.activity
@@ -194,7 +195,7 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
         </div>
       </div> : null}
       {failure ? <div className="runtime-feedback-card runtime-feedback-error" role="alert">
-        <AlertCircle size={18} aria-hidden="true" /><div><strong>{t("請求未完成")}</strong><p title={failure.message}>{displayError(failure.message).summary}</p>
+        <AlertCircle size={18} aria-hidden="true" /><div><strong>{t("請求未完成")}</strong><p>{displayError(failure.message, { english, code: failure.modelFailure?.code ?? failure.code, httpStatus: failure.modelFailure?.httpStatus ?? failure.httpStatus }).summary}</p>
           <div className="runtime-feedback-actions">{repairable?<Button variant="ghost" size="small" disabled={repairing} onClick={()=>void repairWorkspace()}>{t(repairing?'正在修復…':'修復工作區')}</Button>:null}{repairError?<small role="status">{repairError}</small>:null}<Button variant="ghost" size="small" onClick={() => setDetails(failure)}>{t("詳細資料")}</Button><Button variant="ghost" size="small" onClick={onOpenLog}>{t("診斷記錄")}</Button></div>
         </div><Button variant="ghost" size="small" className="runtime-feedback-close" aria-label={t("關閉錯誤通知")} icon={<X size={15} />} onClick={() => setScopes(previous => {
           const next = new Map(previous), key = scopeKey(failure.workspaceId, failure.sessionId)

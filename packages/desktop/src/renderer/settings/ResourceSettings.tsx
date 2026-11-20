@@ -93,7 +93,7 @@ function ResourceSettingsContent({ bridge, workspaceId, resourceKind, onUse, onM
     {!list && !error ? <p role="status">{t("正在讀取…")}</p> : null}
     {list?.diagnostics.length ? <details className="resource-diagnostics"><summary>{t("載入診斷")}</summary>{list.diagnostics.map((message, index) => <p key={index}>{message}</p>)}</details> : null}
     {list ? <>
-      {list.items.length === 0 ? <div className="resource-empty"><Icon size={28} aria-hidden="true" /><p>{t(search.query.trim() ? "沒有符合的項目" : resourceKind === "skills" ? "尚未建立技能" : "尚未建立命令")}</p></div> : <ul className="resource-cards" aria-label={t(resourceKind === "skills" ? "技能列表" : "命令列表")}>
+      {list.items.length === 0 ? <div className="resource-empty ih-empty-state"><Icon size={22} aria-hidden="true" /><p>{t(search.query.trim() ? "沒有符合的項目" : resourceKind === "skills" ? "尚未建立技能" : "尚未建立命令")}</p></div> : <ul className="resource-cards" aria-label={t(resourceKind === "skills" ? "技能列表" : "命令列表")}>
         {list.items.map((row) => <li key={`${row.source}:${row.pluginId ?? ""}:${row.name}`}><button className="resource-card" type="button" aria-label={row.name} onClick={(event) => { returnFocus.current = event.currentTarget; void select(row) }}>
           <div className="resource-card-top"><span className="resource-card-icon"><Icon size={16} aria-hidden="true" /></span><strong>{resourceKind === "commands" ? "/" : "$"}{row.name}</strong><ArrowRight size={15} aria-hidden="true" /></div>
           <p>{row.description || t("選取以查看內容")}</p>

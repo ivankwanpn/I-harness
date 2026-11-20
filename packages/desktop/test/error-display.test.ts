@@ -14,6 +14,14 @@ describe("displayError", () => {
     expect(displayError("Writer dependency cleanup unresolved").summary).toContain("工作狀態需要恢復")
     expect(displayError("EACCES: permission denied").summary).toContain("權限")
   })
+  it("uses the provider category ahead of an ambiguous transport wrapper", () => {
+    const quota = displayError("Error invoking remote method 'ih-desktop:request': RpcError: HTTP 429", { code: "QUOTA" })
+    expect(quota.summary).toContain("供應商額度不足")
+    expect(quota.detail).toContain("HTTP 429")
+    expect(displayError("unknown", { code: "RATE_LIMIT", english: true }).summary).toContain("rate limiting")
+    expect(displayError("HTTP 404", { code: "INVALID_ARGUMENT", httpStatus: 404 }).summary).toContain("模型或 API 端點")
+    expect(displayError("Error: session/model/set: Invalid model protocol").summary).toContain("重新選擇模型")
+  })
 })
 
 it('keeps task deadlines distinct from connection loss', () => {

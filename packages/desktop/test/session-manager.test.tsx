@@ -11,6 +11,20 @@ async function chooseConversationAction(title: string, action: string) {
   fireEvent.click(screen.getByRole("menuitem", { name: action }))
 }
 
+it("scopes the preselection and batch controls to the visible session list", async () => {
+  const bridge = { request: vi.fn(async (request: { kind: string }) => request.kind === "desktop/session/archived" ? [] : { sessions: [{ id: "active", title: "Current conversation" }] }), onEvent: () => () => {} }
+  const onBatch = vi.fn(async () => ({ results: [] }))
+  render(<SessionManager workspaceId="w" bridge={bridge} onManage={async () => {}} onBatch={onBatch} initialSelected={["active"]} />)
+  await screen.findByText("已選取 1 筆")
+  fireEvent.click(screen.getByRole("button", { name: "已封存會話" }))
+  expect(screen.getByText("已選取 0 筆")).toBeTruthy()
+  await screen.findByText("尚無會話")
+  const remove = screen.getByRole<HTMLButtonElement>("button", { name: "永久刪除所選會話" })
+  expect(remove.disabled).toBe(true)
+  fireEvent.click(remove)
+  expect(onBatch).not.toHaveBeenCalled()
+})
+
 it("gives a conversation menu keyboard and composition-safe Escape ownership before returning focus", async () => {
   const bridge = { request: async () => ({ sessions: [{ id: "owned-session-id", title: "First" }] }), onEvent: () => () => {} }
   render(<SettingsDialog title="Manager" closeLabel="Close manager" initialFocusSelector="button" onClose={() => {}}><SessionManager workspaceId="w" bridge={bridge} onManage={async () => {}} /></SettingsDialog>)

@@ -126,7 +126,17 @@ export function createDesktopExecution(coordinator: SessionCoordinator, service:
         } else if (event.type === "code/dispatch" || event.type === "code/result") {
           const call = cell.calls.find(call => call.id === event.callId)
           if (call && event.type === "code/dispatch") call.dispatched = true
-          if (call && event.type === "code/result") { call.output = clip(cell, event.output); call.isError = event.isError === true }
+          if (call && event.type === "code/result") {
+            const envelope = event.envelope
+            if (envelope) {
+              const { preview, retention } = envelope
+              call.output = clip(cell, retention.kind === "inline" ? retention.value : { preview, retention })
+              call.isError = envelope.execution.outcome === "failed"
+            } else {
+              call.output = clip(cell, event.output)
+              call.isError = event.isError === true
+            }
+          }
         }
       }
       const result = { sessionId, live: Boolean(assembly), ...(assembly?.executionState ? { effectiveMode: assembly.executionState().codeMode } : {}), cells: selected.map(id => cells.get(id)!), total: ids.length, offset, hasMore: offset + limit < ids.length }

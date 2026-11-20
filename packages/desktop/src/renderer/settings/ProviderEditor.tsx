@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wire.ts"
 import { useText, useLocale, type Message } from "../design/i18n.ts"
+import { Button } from "../vendor/opencode/Button.tsx"
 import { useSettingsDraft } from "./settings-drafts.tsx"
 
 type ModelProtocol = NonNullable<Extract<ProviderCommand, { model: string; fields: unknown }>["fields"]["protocol"]>
@@ -86,12 +87,12 @@ export function ProviderEditor({ id, provider, model, newModel = false, fixedPro
       {creatingProvider ? <>
         {["displayName", "baseURL"].map(renderField)}
         <details className="provider-advanced"><summary>{t("進階設定")}</summary>{["modelsURL", "catalog", "apiKeyEnv"].map(renderField)}</details>
-      </> : Object.keys(labels).map(renderField)}
+      </> : isModel ? <div className="provider-model-form-grid">{Object.keys(labels).map(renderField)}</div> : Object.keys(labels).map(renderField)}
       {!isModel && fixedProtocol ? <label>{t("通訊協定")}<input readOnly value={fixedProtocol} /></label> : null}
       {fixedProtocol || fixedConnection ? <p className="muted">{english ? "Codex subscriptions use a fixed Responses connection. Manage account authorization in Coding Plans." : "Codex 訂閱固定使用 Responses 連線；帳號授權請在 Coding Plans 管理。"}</p> : null}
       <p className="muted">{t(editingBuiltIn ? "此內建提供商的第一次儲存會建立自訂設定，之後仍可編輯。" : existing ? "留空以清除覆寫；未更改的欄位不會寫入。" : isModel ? "模型建成後仍可在列表編輯。" : "建立後可新增模型與設定 API key；未填的選填欄位可稍後補上。")}</p>
-      {error ? <p role="alert">{error}</p> : null}
-      <div className="provider-actions"><button type="submit" className="primary-button">{t(busy ? "儲存中…" : "儲存")}</button><button type="button" onClick={onClose}>{t("取消")}</button></div>
+      {error ? <p className="error-text" role="alert">{error}</p> : null}
+      <footer className="settings-dialog-actions"><Button disabled={busy} onClick={onClose}>{t("取消")}</Button><Button type="submit" variant="primary" loading={busy} loadingLabel={t("儲存中…")}>{t("儲存")}</Button></footer>
     </fieldset>
   </form>
 }

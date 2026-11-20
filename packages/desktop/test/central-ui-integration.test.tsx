@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 import { Workbench, type WorkbenchProps } from "../src/renderer/shell/Workbench.tsx"
 import { SettingsPane } from "../src/renderer/settings/SettingsPane.tsx"
@@ -127,7 +127,7 @@ it("keeps defaults and remembered rules in settings and opens operational diagno
   const view = render(<SettingsPane workspace={workspace} sessionId="moved" bridge={bridge} onClose={() => {}} capabilities={{ "desktop-agent-settings": ["1"], "desktop-code-mode-settings": ["1"], "desktop-environment-diagnostics": ["1"] }} />)
   const mode = await screen.findByRole("combobox", { name: "Code Mode" })
   await waitFor(() => expect((mode as HTMLSelectElement).value).toBe("only"))
-  expect(screen.getByText("mixed")).toBeTruthy()
+  expect(within(screen.getByRole("region", { name: "Code Mode" })).getByRole("status").textContent).toBe("直接工具與程式編排")
   fireEvent.change(mode, { target: { value: "off" } })
   await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/code-mode/configure", workspaceId: "source", sessionId: "moved", patch: { mode: "off" } }))
   expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/approval-rules/state", workspaceId: "source" })

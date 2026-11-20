@@ -27,6 +27,9 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
   // Reports merge within this attempt; a discarded retry resets usage.
   let stepUsage: LLMUsage = {}
   let usageReported = false
+  let invalidUsage = false
+  let firstOutputAt: number | undefined
+  let streamEndedAt: number | undefined
   const reasoningStart = reasoning.length
   const batch: BatchCall[] = []
   // Endings belong to this step. Truncated and refused are independent bits;
@@ -40,15 +43,15 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
   let modelFailed = false
   let providerEnded = false
   let failedSettlement: Promise<void> | undefined
-  function discard() {
-    return failedSettlement ??= settleFailedAttempt().catch(error => {
+  function discard(error?: unknown) {
+    return failedSettlement ??= settleFailedAttempt(error).catch(error => {
       // A backend-proven absence still owns this captured audit operation.
       // Keep optional work fenced until its existing source can settle it.
       deps.sourceFacts?.holdRecovery()
       throw error
     })
   }
-  async function settleFailedAttempt() {
+  async function settleFailedAttempt(error?: unknown) {
     modelFailed = true
     const failedBatch = [...batch], failedText = stepText
     const nativeThinking = thinkingBlocks, nativeContinuation = providerContinuation
@@ -65,7 +68,7 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
       committedFactSeqs(await (deps.sourceFacts?.lifecycle ?? agentFacts(deps).agent).auditAssistant({ type: "assistant/message", text: failedText, ...(nativeThinking?.length ? { thinkingBlocks: nativeThinking } : {}), ...(nativeContinuation ? { providerContinuation: nativeContinuation } : {}) }))
     }
     for (const result of results) committedFactSeqs(await result.admit())
-    await failStepBoundary(deps,lifecycle)
+    await failStepBoundary(deps,lifecycle,error)
     await closeStepBoundary(deps,lifecycle,{type:'step/end', ...(truncatedThisStep ? { truncated: true } : {}), ...(refusedThisStep ? { refused: true } : {})})
   }
   return {
@@ -76,6 +79,7 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
       // Stop. Accumulate them on this original attempt without publishing
       // content or accepting completion; the failure owner reports them.
       if (ev.type === 'usage') {
+        if (ev.usage.measurementValidity === "invalid") invalidUsage = true
         for (const field of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"] as const) {
           const value = ev.usage[field]
           if (typeof value === "number" && Number.isFinite(value)) stepUsage[field] = value
@@ -84,6 +88,7 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
         return
       }
       abort?.throwIfAborted()
+      const receivedAt = ev.type === "text/chunk" || ev.type === "reasoning" || ev.type === "end" ? performance.now() : undefined
       const settlingRetry = ev.type === "retry" && !providerEnded && ev.retry.phase === "waiting" && reopenedRetry !== `${ev.retry.requestId}:${ev.retry.attempt}`
       // Stop above remains authoritative. Once handling a genuine waiting event,
       // retain its provider failure before publication checks can throw.
@@ -119,6 +124,9 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
             }
             stepUsage = {}
             usageReported = false
+            invalidUsage = false
+            firstOutputAt = undefined
+            streamEndedAt = undefined
             stepText = ""
             toolCallsThisStep = 0
             batch.length = 0
@@ -140,9 +148,11 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
           committedFactSeqs(await agentFacts(deps).agent.lifecycle({ type: "model/retry", version: 1, ts: Date.now(), retry: ev.retry }))
           break
         case "text/chunk":
+          if (ev.text.length > 0) firstOutputAt ??= receivedAt
           stepText += ev.text
           break
         case "reasoning":
+          if (ev.text.length > 0) firstOutputAt ??= receivedAt
           await stepReasoning.accept(ev)
           break
         case "tool_call": {
@@ -165,6 +175,7 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
         case "end":
           if (providerEnded && endFingerprint !== JSON.stringify(ev)) throw Object.assign(new Error("Conflicting model completion records"), { code: "MODEL_RESPONSE_INCOMPLETE" })
           endFingerprint = JSON.stringify(ev)
+          streamEndedAt ??= receivedAt
           providerEnded = true
           thinkingBlocks = ev.thinkingBlocks
           providerContinuation = ev.providerContinuation
@@ -182,7 +193,7 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
       }
     },
     async fail(error: unknown): Promise<never> {
-      try { await discard() }
+      try { await discard(error) }
       catch (saving) {
         throw savingFailure(error, [saving], 'model attempt saving failed')
       }
@@ -194,7 +205,13 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
       }
       await (failedSettlement ?? stepReasoning.flush())
     },
-    result() { return { receipt, stepText, toolCallsThisStep, batch, stepUsage: usageReported ? {} : stepUsage, truncatedThisStep, refusedThisStep, thinkingBlocks, providerContinuation, providerEnded, identity: { actionId, attemptId, stepStartSeq } } },
+    result() {
+      const outputTokens = stepUsage.outputTokens
+      const generationMs = firstOutputAt === undefined || streamEndedAt === undefined ? 0 : Math.round(streamEndedAt - firstOutputAt)
+      const generation = !modelFailed && !invalidUsage && outputTokens !== undefined && Number.isSafeInteger(outputTokens) && outputTokens > 0 && generationMs > 0
+        ? { outputTokens, generationMs } : undefined
+      return { receipt, stepText, toolCallsThisStep, batch, stepUsage: usageReported ? {} : stepUsage, generation, truncatedThisStep, refusedThisStep, thinkingBlocks, providerContinuation, providerEnded, identity: { actionId, attemptId, stepStartSeq } }
+    },
   }
 }
 

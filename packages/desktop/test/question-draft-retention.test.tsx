@@ -3,10 +3,43 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, expect, it, vi } from "vitest"
 import { Workbench } from "../src/renderer/shell/Workbench.tsx"
 import { PendingPanel } from "../src/renderer/interaction/PendingPanel.tsx"
+import { ApprovalCard } from "../src/renderer/interaction/ApprovalCard.tsx"
+import { QuestionCard } from "../src/renderer/interaction/QuestionCard.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 
 afterEach(() => { cleanup(); localStorage.clear(); useUiStore.setState({ surface: "conversation", locale: "zh-TW", reviewOpen: false }) })
 const row = { requestId: "owned-question", sessionId: "owned-session", kind: "question" as const, openedAt: 1, payload: { prompt: "Owned free answer", options: [] } }
+it("separates the exact read-only command from its technical approval metadata", () => {
+  const confirm = vi.fn()
+  const command = "Get-ChildItem -LiteralPath . -Name"
+  render(<ApprovalCard requestId="read-approval" description={`pwsh：dangerous command requires approval: ${command}`} details={JSON.stringify({ command })} busy={false} onConfirm={confirm} />)
+  expect(screen.getByText("代理申請執行 pwsh 指令")).toBeTruthy()
+  expect(screen.getByLabelText("待核准的指令").textContent).toBe(command)
+  expect(screen.getByText("詳細資料").closest("details")?.open).toBe(false)
+  fireEvent.click(screen.getByRole("button", { name: "批准" }))
+  expect(confirm).toHaveBeenCalledExactlyOnceWith(true, undefined)
+})
+
+it("preserves a custom answer while comparing a suggested option", () => {
+  const submit = vi.fn()
+  render(<QuestionCard requestId="question-option" prompt="Choose scope" options={["One file", "All files"]} busy={false} onAnswer={submit} />)
+  fireEvent.click(screen.getByRole("radio", { name: "其他" }))
+  fireEvent.change(screen.getByRole("textbox", { name: "回答 Choose scope" }), { target: { value: "Two files" } })
+  fireEvent.click(screen.getByRole("radio", { name: "One file" }))
+  fireEvent.click(screen.getByRole("radio", { name: "其他" }))
+  expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "回答 Choose scope" }).value).toBe("Two files")
+  fireEvent.click(screen.getByRole("button", { name: "送出回答" }))
+  expect(submit).toHaveBeenCalledExactlyOnceWith("Two files")
+})
+
+it("makes expanded access visible and keeps refusal separate from approval", () => {
+  const confirm = vi.fn()
+  render(<ApprovalCard requestId="access-approval" description="pwsh：escalate sandbox to danger-full-access for run command test" busy={false} onConfirm={confirm} />)
+  expect(screen.getByText("pwsh 申請以完整存取權執行")).toBeTruthy()
+  expect(screen.getByRole("button", { name: "批准" }).getAttribute("data-variant")).toBe("danger")
+  fireEvent.click(screen.getByRole("button", { name: "拒絕" }))
+  expect(confirm).toHaveBeenCalledExactlyOnceWith(false)
+})
 it("keeps the free answer through actual Workbench Settings navigation", async () => {
   const bridge = { request: vi.fn(async () => undefined), onEvent: () => () => {} }
   render(<Workbench bridge={bridge} workspaces={[{ id: "owned", label: "Owned", path: "D:/owned" }]} selectedWorkspaceId="owned" selectedSessionId="owned-session" capabilities={{}} onSelectWorkspace={() => {}} onSelectSession={() => {}}

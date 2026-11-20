@@ -35,9 +35,9 @@ function WorkflowSession({ bridge, workspaceId, sessionId, running = false, onCh
   useEffect(() => { setVisited(current => current.has(tab) ? current : new Set(current).add(tab)) }, [tab])
   const { view, busy, error, disabled, retry, mutate } = useWorkflow(bridge, workspaceId, sessionId, onChanged, active)
   const mounted = (name: string) => tab === name || visited.has(name)
-  return <section className="workflow-pane" aria-label={t("工作流程")} aria-busy={busy || !view && !error || undefined}>
+  return <section className="workflow-pane ih-control-scope" aria-label={t("工作流程")} aria-busy={busy || !view && !error || undefined}>
     <header className="workflow-pane-header"><h1>{t("工作流程")}</h1><Button size="small" variant="ghost" disabled={busy || !active} onClick={() => { void retry() }}>{t("重新整理")}</Button></header>
-    <PaneTabs id={id} items={tabs.map((item) => ({ id: item.id, label: t(item.label) }))} selected={tab} onSelect={(id) => setTab(id as typeof section)} label={t("工作流程")} />
+    <PaneTabs className="ih-segments" id={id} items={tabs.map((item) => ({ id: item.id, label: t(item.label) }))} selected={tab} onSelect={(id) => setTab(id as typeof section)} label={t("工作流程")} />
     {error ? <p role="alert" className="workflow-error">{error}<Button size="small" variant="ghost" disabled={busy || !active} onClick={() => { void retry() }}>{t("重試")}</Button></p> : null}
     {busy ? <p className="workflow-progress" role="status">{t("更新中…")}</p> : null}
     <div role="tabpanel" id={`${id}-panel`} aria-labelledby={`${id}-${tab}`} className="workflow-tab-body">

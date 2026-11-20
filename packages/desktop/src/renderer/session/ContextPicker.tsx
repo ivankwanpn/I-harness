@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useState } from "react"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import type { ContextItem, ContextPage } from "@i-harness/desktop-gateway/src/context-picker.ts"
 import { useText } from "../design/i18n.ts"
+import { Button } from "../vendor/opencode/Button.tsx"
 export interface PickerKeyboard { key(key: string): boolean }
 export const ContextPicker = forwardRef<PickerKeyboard, { bridge: DesktopBridge; workspaceId: string; sessionId?: string; projectId?: string; text: string; onSelect(item: ContextItem): void }>(function ContextPicker({ bridge, workspaceId, sessionId, projectId, text, onSelect }, ref) {
   const t = useText()
@@ -34,12 +35,12 @@ export const ContextPicker = forwardRef<PickerKeyboard, { bridge: DesktopBridge;
     return false
   } }))
   if (!active) return null
-  return <div className="slash-commands context-picker">
-    <div><button type="button" aria-pressed={kind === "files"} onClick={() => setKind("files")}>{t("檔案")}</button><button type="button" aria-pressed={kind === "sessions"} onClick={() => setKind("sessions")}>{t("會話")}</button></div>
+  return <div className="context-picker ih-menu-surface">
+    <div className="ih-segments" role="group" aria-label={t("專案引用")}><Button variant="ghost" size="small" aria-pressed={kind === "files"} onClick={() => setKind("files")}>{t("檔案")}</Button><Button variant="ghost" size="small" aria-pressed={kind === "sessions"} onClick={() => setKind("sessions")}>{t("會話")}</Button></div>
     {error ? <p role="alert">{error}</p> : loading ? <p role="status">{t("搜尋中…")}</p> : page.items.length === 0 ? <p role="status">{t("沒有符合的引用")}</p> : null}
-    <div role="listbox" aria-label={t("專案引用")}>{page.items.map((item, i) => <button type="button" role="option" aria-selected={i === index} key={JSON.stringify(item)} onClick={() => onSelect(item)}>{item.kind === "file" ? `${item.workspaceLabel ?? item.workspaceId}/${item.path}` : `${item.label} · ${item.workspaceId}/${item.sessionId}#${item.seq}`}</button>)}</div>
-    {page.nextOffset !== null ? <button type="button" onClick={() => setOffset(page.nextOffset!)}>{t("下一頁")}</button> : null}
-    {offset > 0 ? <button type="button" onClick={() => setOffset(Math.max(0, offset - 30))}>{t("上一頁")}</button> : null}
+    <div role="listbox" aria-label={t("專案引用")}>{page.items.map((item, i) => <button type="button" role="option" className="ih-menu-item" aria-selected={i === index} key={JSON.stringify(item)} onClick={() => onSelect(item)}>{item.kind === "file" ? `${item.workspaceLabel ?? item.workspaceId}/${item.path}` : `${item.label} · ${item.workspaceId}/${item.sessionId}#${item.seq}`}</button>)}</div>
+    {offset > 0 ? <Button variant="ghost" size="small" onClick={() => setOffset(Math.max(0, offset - 30))}>{t("上一頁")}</Button> : null}
+    {page.nextOffset !== null ? <Button variant="ghost" size="small" onClick={() => setOffset(page.nextOffset!)}>{t("下一頁")}</Button> : null}
     {page.truncated ? <p>{t("結果已達搜尋上限，請縮小搜尋範圍。")}</p> : null}
   </div>
 })

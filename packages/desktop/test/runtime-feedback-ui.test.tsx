@@ -34,7 +34,7 @@ it("shows the canonical context diagnosis and keeps safe facts in the error deta
   vi.mocked(f.bridge.request).mockResolvedValue({ entries: [row] })
   render(<RuntimeFeedback bridge={f.bridge} workspaceId="w" sessionId="a" onOpenLog={() => {}} />)
   f.entry({ ...row, retry: undefined })
-  expect(screen.getByRole("alert").textContent).toContain("Model input exceeds the context window.")
+  expect(screen.getByRole("alert").textContent).toContain("輸入超過模型的上下文上限")
   fireEvent.click(screen.getByText("詳細資料"))
   await screen.findByText(/200000/)
   expect(screen.getByRole("dialog").textContent).toContain("200000")

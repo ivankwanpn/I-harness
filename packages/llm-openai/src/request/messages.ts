@@ -1,5 +1,6 @@
 import { canReplayContinuation, replayBlockOrder, type LLMContentPart, type LLMRequest } from "@i-harness/llm-seam"
 import type { OpenAIConfig } from "../types.ts"
+import { isDeepSeekResponses } from "./deepseek.ts"
 
 function toInputContent(content: string | LLMContentPart[]): unknown {
   if (typeof content === "string") return content
@@ -47,7 +48,8 @@ function splitToolContent(content: string | LLMContentPart[]): { text: string; i
 }
 
 /** Map projected history, preserving native continuation ordering and tool images. */
-export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenAIConfig, "model" | "providerId">, codexSubscription: boolean): unknown {
+export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenAIConfig, "model" | "providerId" | "baseUrl">, codexSubscription: boolean): unknown {
+  const deepSeek = !codexSubscription && isDeepSeekResponses(config)
   return messages
     .map((m) => {
       if (m.role === "user") return { role: "user", content: toInputContent(m.content) }
@@ -58,8 +60,13 @@ export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenA
         return [output, { role: "user", content: images.map((part) => ({ type: "input_image", image_url: `data:${part.image.mediaType};base64,${part.image.dataBase64}` })) }]
       }
       // assistant
-      const continuation = m.providerContinuation?.kind === "openai-responses" && canReplayContinuation(m.providerContinuation, config) ? m.providerContinuation : undefined
-      const originalReasoningItems = continuation?.reasoningItems ?? []
+      const previous = m.providerContinuation
+      const continuation = previous?.kind === "openai-responses" && canReplayContinuation(previous, config) ? previous : undefined
+      // DeepSeek's two APIs use different envelopes for the same provider text.
+      // Require explicit matching provenance before translating an older round.
+      const chatReasoning = deepSeek && previous?.kind === "openai-compatible" && previous.providerId === config.providerId && previous.model === config.model
+        ? previous.reasoningContent : undefined
+      const originalReasoningItems = continuation?.reasoningItems ?? (chatReasoning ? [{ type: "reasoning", content: [{ type: "reasoning_text", text: chatReasoning }] }] : [])
       const calls = m.toolCalls?.map((c) => ({
         type: "function_call",
         call_id: c.id,

@@ -51,7 +51,7 @@ export function WorkflowJobs({ jobs, bridge, workspaceId, sessionId, disabled, m
         {job.outputAvailable || job.live ? <Button size="small" disabled={!visible} onClick={() => { void readOutput(job) }}>{t("查看輸出")}</Button> : null}
         {job.canCancel ? <Button size="small" disabled={disabled || !visible} onClick={() => { setCancelError(undefined); setConfirmCancel(job.jobId) }}>{t("取消工作")}</Button> : null}
       </div>
-    </article>)}</div> : <p className="workflow-empty">{t("尚無背景任務")}</p>}
+    </article>)}</div> : <p className="ih-empty-state">{t("尚無背景任務")}</p>}
     {output ? <section className="workflow-card workflow-output" aria-label={t("背景任務輸出")}>
       <div className="workflow-heading"><h3>{output.label}</h3><Button size="small" variant="ghost" onClick={() => { ticket.current++; setOutput(undefined) }}>{t("關閉輸出")}</Button></div>
       {output.error ? <p className="error-text" role="alert">{output.error}<Button size="small" disabled={!visible} onClick={() => { const job = jobs.find((item) => item.jobId === output.id); if (job) void readOutput(job) }}>{t("重試")}</Button></p> : output.text === undefined ? <p role="status">{t("正在讀取輸出…")}</p> : output.text || output.truncated ? <OutputBlock label={t("背景任務輸出")} text={output.text} truncated={output.truncated} defaultWrap /> : <p className="workflow-empty">{t("此工作尚無輸出")}</p>}
@@ -80,6 +80,6 @@ export function WorkflowReviews({ reviews }: { reviews: DesktopWorkflowView["rev
       </dl>
       {review.reusedContext ? <p className="workflow-hint">{t("使用既有代審上下文")}</p> : null}
       <OutputBlock label={t("操作參數")} text={review.request.args} language="json" truncated={review.request.argsTruncated} defaultWrap />
-    </details>)}</div> : <p className="workflow-empty">{t("尚無代審記錄")}</p>}
+    </details>)}</div> : <p className="ih-empty-state">{t("尚無代審記錄")}</p>}
   </section>
 }

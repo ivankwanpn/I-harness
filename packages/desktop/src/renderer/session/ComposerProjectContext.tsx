@@ -64,11 +64,11 @@ export function ComposerProjectContext({ context, projects, workspaces, editable
       disabled={disabled || projects === undefined} title={label} onClick={() => { setQuery(""); setOpen(value => !value) }}>
       <Folder size={14} aria-hidden /><span>{label}</span><ChevronDown size={12} aria-hidden />
     </button> : <span className="composer-project-label" title={current?.projectId && !current.projectName ? current.projectId : label} aria-live="polite"><Folder size={14} aria-hidden /><span>{label}</span></span>}
-    {open && !disabled && selectable ? createPortal(<div ref={panel} id={id} role="dialog" aria-label={t("選擇專案")} className="composer-project-picker" style={placement} onKeyDown={keyboard}>
+    {open && !disabled && selectable ? createPortal(<div ref={panel} id={id} role="dialog" aria-label={t("選擇專案")} className="composer-project-picker ih-menu-surface" style={placement} onKeyDown={keyboard}>
       <label className="composer-project-search"><Search size={14} aria-hidden /><input type="search" aria-label={t("搜尋專案")} placeholder={t("搜尋專案")} value={query} onChange={event => setQuery(event.target.value)} /></label>
       <div className="composer-project-options">{visible.map(project => {
         const primary = folder(project)
-        return <button type="button" key={project.id} className="composer-project-option" aria-pressed={current?.projectId === project.id} disabled={!primary} title={primary?.path ?? t("尚未加入資料夾")} onClick={() => choose(() => onSelect?.(project.id))}>
+        return <button type="button" key={project.id} className="composer-project-option ih-menu-item" aria-pressed={current?.projectId === project.id} disabled={!primary} title={primary?.path ?? t("尚未加入資料夾")} onClick={() => choose(() => onSelect?.(project.id))}>
           <Folder size={14} aria-hidden /><span><strong>{project.name}</strong><small>{primary?.path ?? t("尚未加入資料夾")}</small></span>{current?.projectId === project.id ? <Check size={14} aria-hidden /> : null}
         </button>
       })}{!visible.length ? <p className="composer-project-empty">{t("沒有符合的專案")}</p> : null}</div>

@@ -10,7 +10,8 @@
 .runtime-log-entry-meta { display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; color: var(--ih-muted); }
 .runtime-log-entry p { margin: 8px 0; font-size: 13px; overflow-wrap: anywhere; }
 .runtime-log-entry-footer { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
-.runtime-log-entry-footer small { min-width: 0; overflow-wrap: anywhere; color: var(--ih-muted); }
+.runtime-log-entry-footer small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ih-muted); }
+.runtime-log-entry-footer .oc-button { flex-shrink: 0; }
 .runtime-log-warning { font-size: 12px; }
 .runtime-details-json { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow-y: auto; font-size: 12px; background: var(--ih-panel); border: 1px solid var(--ih-divider); padding: 12px; border-radius: 8px; }
 .retry-settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
