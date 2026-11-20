@@ -57,21 +57,34 @@ async function fixture(mode: "text" | "approval" = "text") {
   return {
     child, client, outsidePath, sessionDir,
     async close() {
-      await client.close()
-      await new Promise<void>((resolve) => provider.close(() => resolve()))
-      provider.closeAllConnections()
-      rmSync(root, { recursive: true, force: true })
+      try {
+        await client.close()
+      } finally {
+        const closed = new Promise<void>((resolve) => provider.close(() => resolve()))
+        provider.closeAllConnections()
+        await closed
+        rmSync(root, { recursive: true, force: true })
+      }
     },
   }
 }
 
 describe("desktop-gateway subprocess keeps SDK v3 compatible", () => {
-  it("creates one durable automatic title and preserves a manual title", async () => {
+  it("creates one durable automatic title and preserves a manual title", async ({ onTestFailed }) => {
+    const started = performance.now()
+    let phase = "fixture setup"
+    onTestFailed(() => {
+      console.error(JSON.stringify({ fixture: "gateway durable title", phase, elapsedMs: Math.round(performance.now() - started) }))
+    })
     const f = await fixture()
+    let titlesVerified = false
     try {
+      phase = "initialize and create first session"
       await f.client.initialize()
       const first = await f.client.createSession()
+      phase = "prompt and generate automatic title"
       await f.client.request("session/prompt", { sessionId: first.sessionId, prompt: "Design a small workbench" }, 30_000)
+      phase = "inspect durable automatic title"
       const listed = await f.client.listSessions()
       expect(listed.sessions.find((row) => row.id === first.sessionId)?.title).toBe("fixture answer")
       const history = await f.client.history(first.sessionId)
@@ -86,9 +99,12 @@ describe("desktop-gateway subprocess keeps SDK v3 compatible", () => {
       const titleMirror = JSON.parse(readFileSync(join(f.sessionDir, "session-title", `${first.sessionId}.doc.jsonl`), "utf8"))
       expect(titleMirror).toMatchObject({ formatVersion: 1, title: "fixture answer", source: "provider" })
 
+      phase = "create second session and set manual title"
       const second = await f.client.createSession()
       await f.client.request("desktop/session/manage", { sessionId: second.sessionId, action: "rename", title: "My title" })
+      phase = "prompt with an existing manual title"
       await f.client.request("session/prompt", { sessionId: second.sessionId, prompt: "Another workbench" }, 30_000)
+      phase = "inspect durable manual title"
       expect((await f.client.listSessions()).sessions.find((row) => row.id === second.sessionId)?.title).toBe("My title")
       // Rename is a committed user title fact now
       // (packages/desktop-gateway/src/session-management.ts:200), and the managed
@@ -96,8 +112,14 @@ describe("desktop-gateway subprocess keeps SDK v3 compatible", () => {
       // must not add a second automatic title fact.
       const secondTitles = (await f.client.history(second.sessionId)).events.filter((event) => event.type === "session/title")
       expect(secondTitles).toEqual([expect.objectContaining({ title: "My title", source: "user" })])
-    } finally { await f.close() }
-  }, 50_000)
+      titlesVerified = true
+    } finally {
+      if (titlesVerified) phase = "close the SDK and loopback server"
+      await f.close()
+    }
+    // Both prompts retain separate 30s deadlines. Setup, reads and close
+    // need room outside those individual request budgets.
+  }, 90_000)
 
   it("initializes, creates, prompts, replays and cancels through existing SDK methods", async () => {
     const f = await fixture()

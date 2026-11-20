@@ -870,6 +870,13 @@ P1 Task 群組的共通根因是 fixture 直接 `tools.execute('spawn_agent')`�
 - 公開案例在原 180 秒期限內量得普通模式 158 秒，Code Mode 於冷 host 階段耗盡舊期限。最終定向執行普通模式 157.210 秒、Code Mode 243.170 秒，分別採用 240 與 300 秒的案例期限。兩項解析、內容及權限斷言全部通過。SDK 全套為 151 項，桌面 IPC 為 33 項，五個受影響 package 型別通過，邊界與 reachability 無新增。 [Gateway 定向原始日誌](C:/Users/IvanKwan/AppData/Local/Temp/ih-issue125-sdk-v2/gateway-public.log) [SDK 全套](C:/Users/IvanKwan/AppData/Local/Temp/ih-issue125-sdk-v2/sdk-full.json) [Desktop IPC](C:/Users/IvanKwan/AppData/Local/Temp/ih-issue125-sdk-v2/desktop-ipc.json)
 - 最終的 Gateway 定向九檔為 36 項全部通過，包含原並行發布、舊資料封存、暖／冷續作與不確定回覆恢復。Persistence 的 V2 contract 十項全部通過。四批合計 230 項、零失敗。 [分批執行結果](C:/Users/IvanKwan/AppData/Local/Temp/ih-issue125-sdk-v2/targeted-exits.json)
 
+#### 第一百二十四批　固定版本驗證的三處測試修正
+
+- `799ffb01` 的全庫執行在 62/82 個套件回報後中斷，當時記錄三個失敗。C67 的普通工具與 Code Mode 均已通過，耗時分別為 162.949 與 247.981 秒。[中斷前全庫日誌](C:/Users/IvanKwan/AppData/Local/Temp/ih-verify-all-799ffb01/verify-all.log)
+- 多根目錄監看測試改為等待 watcher 的就緒訊號，並在原有事件等待預算內容許第一個目錄後續送來的通知。兩個檔案仍各自必須收到新增事件。完整 fs-watch 通過 70 項。[監看套件日誌](C:/Users/IvanKwan/AppData/Local/Temp/ih-issue125-interrupted-checks/watch-full-fixed.log)
+- Gateway 標題案例的 50 秒外層期限曾在全庫執行中耗盡，原版隔離重跑為 15.401 秒。案例有兩個各自限時 30 秒的 prompt，調整外層至 90 秒以涵蓋請求以外的工作。新增失敗階段紀錄，並修正 loopback server 關閉現有連線的順序。原有標題斷言全部通過，該項實測 12.616 秒，同檔 4 項通過。[Gateway 日誌](C:/Users/IvanKwan/AppData/Local/Temp/ih-issue125-interrupted-checks/title-host-fixed.log)
+- 大型執行檔核准案例於全庫與隔離執行均超過 10 秒。以原始大型 fixture 與審批及執行次數斷言驗證，設定 30 秒外層期限並記錄失敗階段。完整 guard-approval 通過 107 項，該案例實測 10.176 秒。[審批套件日誌](C:/Users/IvanKwan/AppData/Local/Temp/ih-issue125-interrupted-checks/guard-full-fixed.log)
+
 ### 審查與提交基準
 
 第一輪 production source 提交為 `61b0a731`。下表記錄該輪的 44 項具體問題，另有 7 項結構成本。2026-11-11 的後續指示把這些結構成本、實際影響及根本設計問題全部納入實作。

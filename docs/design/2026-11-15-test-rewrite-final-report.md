@@ -4,6 +4,8 @@
 
 明確選用的 typed SDK V2 與桌面 IPC 端點已接通。C67 的普通工具與 Code Mode 經真正的公開 Gateway fork、搜尋、來源清除、目標冷重啟和精確內容驗證均通過。公開驗收揭露的 legacy read observation 與 V3 journal lane 已接回原 owner。最新固定版本的完整 `verify:all` 另外記錄。 [本輪設計與證據](D:/codex-ih-development/docs/design/2026-11-10-runtime-stability-redesign.md)
 
+`799ffb01` 的全庫驗證於 62/82 個專案回報後中斷。已修正當時記錄的三項測試失敗，定向重跑合計 181 項全部通過。最近一次完整全綠為 `52cf62ff`。 [中斷日誌](C:/Users/IvanKwan/AppData/Local/Temp/ih-verify-all-799ffb01/verify-all.log) [重跑結果](C:/Users/IvanKwan/AppData/Local/Temp/ih-issue125-interrupted-checks/fixed-exits.json)
+
 ## 2026-11-16 接手審查註記
 
 原始全庫日誌確認 `cf92d076` 的 215 項失敗。舊清單 `verify-final2-file-failures.json` 共 94 列、failed 加總 184；**P0-A 已完成對帳**：31 項差額全部來自 31 個 file-summary 使用單數 `(1 test | 1 failed)` 而被舊解析規則（要求複數 `tests`）漏掉。對帳後清單為 215 項／125 檔，另列 5 筆 hook/cleanup 同名額外條目與 7 筆 unhandled errors（獨立通道）。skipped 104 項亦已逐項完成原因分類（0 unresolved），並核對舊基線 86 項之差異（+18，含 predecessor fixture 與 pwsh PATH 的執行環境差異）。詳見「P0-A 對帳」章節與證據目錄 `p0a-report.md`。下文的逐檔清單及掛起、WIP、flake 分類仍以原始失敗與正常入口進一步核實；兩個不同 HEAD 的全庫結果差異仍需配對證據才能完成根因判定。

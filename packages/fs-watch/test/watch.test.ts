@@ -294,14 +294,27 @@ describe("createFsWatcher", () => {
     const b = await makeTmp()
     const w = createFsWatcher({ roots: [a.dir, b.dir] })
     try {
+      await withTimeout(w.ready, 8000, "both roots ready")
       const it = w.events[Symbol.asyncIterator]()
-      await sleep(readinessMargin)
-      await writeFile(join(a.dir, "one.txt"), "1")
+      const first = join(a.dir, "one.txt")
+      const second = join(b.dir, "two.txt")
+      await writeFile(first, "1")
       const e1 = await withTimeout(it.next(), 8000, "add (root a)")
-      expect(e1.value.path).toBe(join(a.dir, "one.txt"))
-      await writeFile(join(b.dir, "two.txt"), "2")
-      const e2 = await withTimeout(it.next(), 8000, "add (root b)")
-      expect(e2.value.path).toBe(join(b.dir, "two.txt"))
+      expect(e1.value).toMatchObject({ path: first, kind: "add" })
+      await writeFile(second, "2")
+      await withTimeout((async () => {
+        for (;;) {
+          const event = await it.next()
+          expect(event.done).toBe(false)
+          if (event.value.path === second) {
+            expect(event.value.kind).toBe("add")
+            return
+          }
+          // A native change notification can follow the add for root A.
+          expect(event.value.path).toBe(first)
+          expect(["add", "change"]).toContain(event.value.kind)
+        }
+      })(), 8000, "add (root b)")
     } finally {
       await w.close()
       await a.cleanup()

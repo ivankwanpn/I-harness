@@ -11,7 +11,14 @@ import { createApprovalRulesAdapter } from "../../desktop-gateway/src/approval-r
 import { createInteractionBridge } from "../../desktop-gateway/src/interaction.ts"
 import { nativeExecutableFixture } from "./native-executable-fixture.ts"
 
-it("offers a trusted reusable read candidate for a packaged-size image and denies replacement held before the actual body", async () => {
+// The original 10s outer limit expired both in the workspace run and in
+// isolation with the existing packaged-size fixture.
+it("offers a trusted reusable read candidate for a packaged-size image and denies replacement held before the actual body", async ({ onTestFailed }) => {
+  const started = performance.now()
+  let phase = "packaged fixture setup"
+  onTestFailed(() => {
+    console.error(JSON.stringify({ fixture: "packaged executable approval", phase, elapsedMs: Math.round(performance.now() - started) }))
+  })
   const directory = mkdtempSync(join(tmpdir(), "ih-packaged-read-"))
   let bridge: ReturnType<typeof createInteractionBridge> | undefined
   try {
@@ -34,6 +41,7 @@ it("offers a trusted reusable read candidate for a packaged-size image and denie
     }
     let { ctx, registry } = attach()
     const call = { name: "read", args: { path: "approval.txt" } }
+    phase = "prepare and save reusable approval"
     const preparing = registry.prepare(call, undefined, { sessionId: "s" })
     await new Promise((resolve) => setTimeout(resolve, 0))
     const row = bridge!.pending()[0]!, request = row.payload as ApprovalRequest
@@ -41,10 +49,12 @@ it("offers a trusted reusable read candidate for a packaged-size image and denie
     expect(request.remember?.candidateId).toBeDefined()
     bridge!.replyTrustedHuman({ requestId: row.requestId, sessionId: "s", decision: { kind: "approval", approved: true, remember: { scope: "workspace", expiresAt: 2000 } } })
     const first = await preparing
+    phase = "dispatch the approved read"
     expect(JSON.stringify(await registry.dispatch(first))).toContain("actual filesystem read")
     expect(bodies).toBe(1)
     bridge!.close(); rules = createApprovalRulesAdapter(options)
     ;({ ctx, registry } = attach())
+    phase = "prepare with the saved approval"
     const remembered = await registry.prepare(call, undefined, { sessionId: "s" })
     expect(bridge!.pending()).toEqual([])
     let release!: () => void, entered!: () => void
@@ -53,9 +63,10 @@ it("offers a trusted reusable read candidate for a packaged-size image and denie
     ctx.onCascade("tools/execute", async (_input, next) => { entered(); await gate; return next() })
     const dispatch = registry.dispatch(remembered)
     const refusal = expect(dispatch).rejects.toThrow(/approval.*changed/)
+    phase = "verify the revalidation refusal"
     await arrived
     renameSync(executable, join(directory, "previous.exe")); writeFileSync(executable, nativeExecutableFixture(2))
     release(); await refusal
     expect(bodies).toBe(1)
   } finally { bridge?.close(); rmSync(directory, { recursive: true, force: true }) }
-}, 10000)
+}, 30_000)
