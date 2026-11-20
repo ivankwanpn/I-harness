@@ -82,6 +82,7 @@ export interface ProviderRuntimeEntry {
   defaultModel?: string
   /** Persisted user choice for this route, distinct from a catalog fallback. */
   selectedDefaultModel?: string
+  selectedDefaultReasoningEffort?: string
   discovery: "available" | "manual-only"
   /** The card family this route declared, if it declared one. ABSENT means the
    * route name IS the family (the default — see ProviderProfile.catalog), which

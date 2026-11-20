@@ -6,7 +6,15 @@ import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useLocale, useText } from "../design/i18n.ts"
 import { listenForegroundEscape } from "../design/foreground-escape.ts"
 
-export interface ModelDirectoryRoute { id: string; displayName: string; configured?: boolean; auth?: { configured: boolean }; models: { id: string; inputModalities?: string[] }[] }
+export interface ModelDirectoryRoute {
+  id: string
+  displayName: string
+  configured?: boolean
+  auth?: { configured: boolean }
+  selectedDefaultModel?: string
+  selectedDefaultReasoningEffort?: string
+  models: { id: string; inputModalities?: string[] }[]
+}
 type Route = ModelDirectoryRoute
 type Panel = "model" | "effort" | null
 const effortOptions = [

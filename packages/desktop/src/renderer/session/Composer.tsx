@@ -40,7 +40,7 @@ const applyingDrafts = new Set<string>()
 const retiredRawKeys = new Set<string>()
 type SubmissionMetadata = {
   selection?: SessionModelSelection; createdId?: string; creationToken?: string
-  token?: string; payload?: string; appliedModel?: string
+  token?: string; payload?: string; appliedModel?: string; submissionSelection?: SessionModelSelection
 }
 type CapturedSubmission = Readonly<SubmissionMetadata & {
   selection: Readonly<SessionModelSelection>; creationToken: string; token: string; fingerprint: string
@@ -54,6 +54,7 @@ subscribeDraftChanges((workspace, session, source) => {
     if (metadata.token !== undefined || metadata.payload !== undefined) {
       delete metadata.token
       delete metadata.payload
+      delete metadata.submissionSelection
       rawWrite(metadataKey, JSON.stringify(metadata))
     }
   }
@@ -265,7 +266,13 @@ export function NewTaskComposer({ bridge, draftRequest, onOpenHistory, onOpenPro
     const changed = (key: string) => { if (key === metadataKey) setMetadata(readMetadata()) }
     rawListeners.add(changed); return () => { rawListeners.delete(changed) }
   }, [metadataKey])
-  const selected = metadata.selection
+  const defaultRoute = models.find(route => (route.configured || route.auth?.configured) && route.selectedDefaultModel)
+  const defaultSelection: SessionModelSelection | undefined = defaultRoute?.selectedDefaultModel ? {
+    provider: defaultRoute.id,
+    model: defaultRoute.selectedDefaultModel,
+    ...(defaultRoute.selectedDefaultReasoningEffort !== undefined ? { reasoningEffort: defaultRoute.selectedDefaultReasoningEffort } : {}),
+  } : undefined
+  const selected = metadata.submissionSelection ?? metadata.selection ?? defaultSelection
   const declared = models.find(route => route.id === selected?.provider)?.models.find(model => model.id === selected?.model)
   const model: SessionModelState | undefined = selected ? { status: "ready", providerId: selected.provider, modelId: selected.model, label: selected.model, ...(selected.protocol ? { protocol: selected.protocol } : {}), ...(selected.reasoningEffort ? { reasoningEffort: selected.reasoningEffort } : {}), ...(declared?.inputModalities?.includes("image") ? { imageInput: true } : {}) } : undefined
   return <Composer onOpenHistory={onOpenHistory} onOpenProjectFile={onOpenProjectFile} bridge={bridge} draftRequest={draftRequest} workspaceId={workspaceId} sessionId={sessionId} projectId={projectId} draftSession
@@ -277,10 +284,13 @@ export function NewTaskComposer({ bridge, draftRequest, onOpenHistory, onOpenPro
     captureSubmission={(text, images) => {
       if (isDraftRetired(workspaceId, sessionId)) throw new ComposerPreparationError(t("無法準備新會話；草稿仍保留。"))
       const current = readMetadata()
-      if (!current.selection) throw new ComposerPreparationError(t("選擇模型"))
-      const state = { ...current, creationToken: current.creationToken ?? crypto.randomUUID(), token: current.token ?? crypto.randomUUID() }
+      const modelSelection = current.submissionSelection ?? current.selection ?? defaultSelection
+      if (!modelSelection) throw new ComposerPreparationError(t("選擇模型"))
+      // A retry keeps the model captured with its input token, including when
+      // the choice initially came from the provider default.
+      const selection = Object.freeze({ ...modelSelection })
+      const state = { ...current, creationToken: current.creationToken ?? crypto.randomUUID(), token: current.token ?? crypto.randomUUID(), submissionSelection: selection }
       saveSubmission(state)
-      const selection = Object.freeze({ ...current.selection })
       const fingerprint = JSON.stringify({ text, selection, files: readFileReferences(workspaceId, sessionId), references: rawRead(`${draftKey(workspaceId, sessionId)}:context-references`), texts: readTextAttachmentDrafts(workspaceId, sessionId), images })
       return Object.freeze({
         selection, creationToken: state.creationToken, token: state.token,

@@ -56,7 +56,10 @@ export function createDirectory(settings: SettingsStoreSurface, registry: Provid
           }),
           ...(view.defaultModel !== undefined ? { defaultModel: view.defaultModel } : {}),
           ...(settings.get().llm.videoAudio?.provider === view.id ? { videoAudioModel: settings.get().llm.videoAudio!.model } : {}),
-          ...(selectedDefault.provider === view.id && selectedDefault.model ? { selectedDefaultModel: selectedDefault.model } : {}),
+          ...(selectedDefault.provider === view.id && selectedDefault.model ? {
+            selectedDefaultModel: selectedDefault.model,
+            ...(selectedDefault.reasoningEffort !== undefined ? { selectedDefaultReasoningEffort: selectedDefault.reasoningEffort } : {}),
+          } : {}),
           discovery: view.protocol === "bedrock" ? "manual-only" : "available",
           cardFamily: cardFamilyOf(view),
           ...(view.catalog !== undefined ? { catalog: view.catalog } : {}),

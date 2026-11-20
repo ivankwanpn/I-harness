@@ -39,6 +39,60 @@ function durableDrafts(beforeSave?: (draft: UnsentDraft) => Promise<void>) {
 }
 
 afterEach(() => { cleanup(); localStorage.clear(); vi.unstubAllGlobals(); useUiStore.setState({ surface: "conversation", reviewOpen: false, locale: "zh-TW" }) })
+it('uses the saved default in a new draft and pins that model to an uncertain input retry', async () => {
+  vi.stubGlobal('crypto', webcrypto)
+  const workspaceId = 'saved-default-draft'
+  const originalRevision = useUiStore.getState().providerRevision
+  const selected = vi.fn()
+  let defaultModel = 'saved-default'
+  let admissions = 0
+  const request = vi.fn(async (input: any) => {
+    if (input.kind === 'desktop/provider/directory') return [{
+      id: 'fixture', displayName: 'Fixture', configured: true,
+      defaultModel: 'catalog-default', selectedDefaultModel: defaultModel, selectedDefaultReasoningEffort: 'low',
+      models: [{ id: 'catalog-default' }, { id: 'saved-default' }, { id: 'next-default' }],
+    }]
+    if (input.kind === 'session/create') return { sessionId: 'default-session' }
+    if (input.kind === 'desktop/session/input/submit') {
+      if (++admissions === 1) throw Error('First admission reply unavailable')
+      return { admitted: true }
+    }
+  })
+  const mounted = render(<Workbench bridge={{ request, onEvent: () => () => {} }}
+    workspaces={[{ id: workspaceId, label: 'Fixture', path: 'D:/fixture' }]} selectedWorkspaceId={workspaceId}
+    capabilities={{ 'session-create': ['1'], 'desktop-draft-create': ['1'], 'desktop-input': ['1'] }}
+    onSelectWorkspace={() => {}} onSelectSession={selected} />)
+  const send = () => screen.getByRole('button', { name: '送出' }) as HTMLButtonElement
+  try {
+    await screen.findByRole('button', { name: 'saved-default' })
+    fireEvent.change(screen.getByRole('textbox', { name: '提示' }), { target: { value: 'Use the saved default' } })
+    fireEvent.click(send())
+    await waitFor(() => expect(admissions).toBe(1))
+    await waitFor(() => expect(send().disabled).toBe(false))
+    expect(request).toHaveBeenCalledWith({
+      kind: 'session/model/set', workspaceId, sessionId: 'default-session',
+      selection: { provider: 'fixture', model: 'saved-default', reasoningEffort: 'low' },
+    })
+
+    defaultModel = 'next-default'
+    await act(async () => useUiStore.setState({ providerRevision: originalRevision + 1 }))
+    await waitFor(() => expect(request.mock.calls.filter(([input]) => input.kind === 'desktop/provider/directory')).toHaveLength(2))
+    expect(screen.getByRole('button', { name: 'saved-default' })).toBeTruthy()
+    fireEvent.click(send())
+    await waitFor(() => expect(selected).toHaveBeenCalledWith('default-session'))
+    const commands = (kind: string) => request.mock.calls.filter(([input]) => input.kind === kind).map(([input]) => input)
+    expect(commands('session/create')).toHaveLength(1)
+    expect(commands('session/model/set')).toHaveLength(1)
+    const inputs = commands('desktop/session/input/submit')
+    expect(inputs).toHaveLength(2)
+    expect(inputs[1]).toEqual(inputs[0])
+    await screen.findByRole('button', { name: 'next-default' })
+  } finally {
+    mounted.unmount()
+    useUiStore.setState({ providerRevision: originalRevision })
+  }
+})
+
 it("offers image attachments only for the selected model's declared image input", async () => {
   const request = vi.fn(async (input: any) => {
     if (input.kind === "desktop/provider/directory") return [{ id: "fixture", displayName: "Fixture", configured: true, models: [{ id: "text-model", inputModalities: ["text"] }, { id: "vision-model", inputModalities: ["text", "image"] }] }]
