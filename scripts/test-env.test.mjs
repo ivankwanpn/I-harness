@@ -1,10 +1,11 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { after, test } from "node:test"
 import { fileURLToPath } from "node:url"
+import { testEnvironment } from "./test-env.mjs"
 
 const wrapper = fileURLToPath(new URL("./test-env.mjs", import.meta.url))
 const repository = resolve(dirname(wrapper), "..")
@@ -53,4 +54,16 @@ test("preserves arguments through a Windows command shim", { skip: process.platf
 test("returns the child process exit status", () => {
   const result = invoke(process.execPath, ["-e", "process.exitCode = 23"])
   assert.equal(result.status, 23, result.stderr)
+})
+
+test("uses the canonical Windows temp path for child fixtures", { skip: process.platform !== "win32" }, () => {
+  const actual = join(root, "physical-temp")
+  const alias = join(root, "temp-alias")
+  mkdirSync(actual)
+  symlinkSync(actual, alias, "junction")
+  const env = testEnvironment({ TEMP: alias, TMP: alias })
+  const canonical = realpathSync.native(actual)
+  assert.equal(env.TEMP, canonical)
+  assert.equal(env.TMP, canonical)
+  assert.equal(dirname(dirname(env.IH_CONFIG_DIR)), canonical)
 })

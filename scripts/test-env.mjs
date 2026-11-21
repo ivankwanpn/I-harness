@@ -9,7 +9,7 @@
 // Usage as an env wrapper:  node scripts/test-env.mjs pnpm -r --no-bail test
 // Usage as a module:        import { testEnvironment } from './test-env.mjs'
 
-import { mkdirSync } from "node:fs"
+import { mkdirSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import spawn from "cross-spawn"
@@ -38,10 +38,23 @@ export const EVIDENCE_DIRECTORY_VARS = Object.freeze([
  * NOT defaulted: they are opt-in diagnostics, and inventing paths for them
  * would turn "not recording evidence" into "recording it somewhere unexpected".
  */
-export function testEnvironment(source = process.env, base = join(tmpdir(), `i-harness-tests-${process.pid}-${Date.now().toString(36)}`)) {
+export function testEnvironment(source = process.env, base) {
   const env = { ...source }
+  let temp = tmpdir()
+  if (process.platform === "win32") {
+    // Hosted Windows can expose TEMP through an 8.3 alias. Incidental fixture
+    // paths should match the canonical paths returned by the actual shell,
+    // filesystem and Gateway. Tests can still create their own alias roots.
+    temp = realpathSync.native(source.TEMP || source.TMP || temp)
+    for (const name of Object.keys(env)) {
+      if (name.toUpperCase() === "TEMP" || name.toUpperCase() === "TMP") delete env[name]
+    }
+    env.TEMP = temp
+    env.TMP = temp
+  }
   const missing = EVIDENCE_DIRECTORY_VARS.filter((name) => !env[name])
   if (missing.length === 0) return env
+  base ??= join(temp, `i-harness-tests-${process.pid}-${Date.now().toString(36)}`)
   mkdirSync(base, { recursive: true })
   for (const name of missing) {
     const directory = join(base, name.toLowerCase())

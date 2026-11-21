@@ -364,9 +364,9 @@ for (const mode of ['off', 'only'] as const) it(
     const adopted = await publicHost.client.executeSelectedResultsFork({ operation: attempt.operation, mode: 'retry' })
     expect(adopted).toMatchObject({ kind: 'adopted', receipt: fork.receipt })
     await assertPublicDiscovery()
-    await runtime.contextOutput.configure({enabled:false})
+    await publicHost.client.request('desktop/context-subsystems/configure', { patch: { scope: 'global', contextOutput: { enabled: false } } })
     await runtime.withLegacyReadObservation({sessionId:fork.sessionId},read=>expect(runtime.contextOutput.readLegacyObserved({sessionId:fork.sessionId},{refId:refs[0]!.id},read)).rejects.toThrow(/disabled/))
-    await runtime.contextOutput.configure({enabled:true})
+    await publicHost.client.request('desktop/context-subsystems/configure', { patch: { scope: 'global', contextOutput: { enabled: true } } })
     await assertInherited('target-cold')
     expect(effects).toBe(1)
   }finally{

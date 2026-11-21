@@ -107,6 +107,7 @@ it.each(["off", "mixed", "only"] as const)("forwards saved %s Code Mode and norm
   await writeFile(credentialsPath, JSON.stringify({ refs: { IH_CODE_FIXTURE_KEY: "fixture" } }))
   const frames: RpcMessage[] = []
   let host: Awaited<ReturnType<typeof createDesktopHost>> | undefined
+  let primary: { cause: unknown } | undefined
   let id = 0
   const call = async (method: string, params = {}) => {
     const requestId = ++id
@@ -131,11 +132,17 @@ it.each(["off", "mixed", "only"] as const)("forwards saved %s Code Mode and norm
       expect(events.some(event => event.type === "code/cell" && event.state === "completed")).toBe(true)
       expect(resultOutput(events.find(event => event.type === "tool/result" && (resultOutput(event) as { text?: string } | undefined)?.text === "long")!)).toMatchObject({ text: "long", truncated: true })
     } else expect(events.some(event => event.type.startsWith("code/"))).toBe(false)
+  } catch (cause) {
+    primary = { cause }
   } finally {
     try { await trace.run('host/close', async () => { await host?.close() }) }
+    catch (cleanup) {
+      throw primary ? new AggregateError([primary.cause, cleanup], "Code Mode fixture and cleanup failed") : cleanup
+    }
     finally {
       server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()))
     }
     await rm(root, { recursive: true, force: true })
   }
+  if (primary) throw primary.cause
 }, 90_000)

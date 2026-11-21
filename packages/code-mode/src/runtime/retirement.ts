@@ -176,10 +176,16 @@ export function createRetirement(options: CodeModeRuntimeOptions, errorCap: numb
                 return;
             // The callback observes only committed store data and may publish the
             // already-computed true terminal. It cannot restart executable work.
-            const merged = currentStore(cell.origin);
-            for (const [key, value] of writes)
-                merged.set(key, value);
-            const bounded = entries([...merged]);
+            // Only store writers need to inspect the committed store here. A
+            // read-only cell can publish its terminal while another producer
+            // has a journal write in flight.
+            let bounded: CodeModeStoreEntries | undefined;
+            if (writes.length) {
+                const merged = currentStore(cell.origin);
+                for (const [key, value] of writes)
+                    merged.set(key, value);
+                bounded = entries([...merged]);
+            }
             terminalStarted = true;
             let installed = false;
             const committed = () => {
@@ -187,7 +193,7 @@ export function createRetirement(options: CodeModeRuntimeOptions, errorCap: numb
                     return;
                 if (!cell.completionRetained && cell.status !== 'running')
                     return;
-                if (writes.length)
+                if (bounded)
                     state.installStore(bounded);
                 cell.status = 'completed';
                 cell.recoveryRequired = false;

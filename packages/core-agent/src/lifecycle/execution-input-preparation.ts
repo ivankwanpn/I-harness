@@ -16,12 +16,26 @@ export function assertExecutionPreparation(execution: ManagedExecutionAttachment
 export function createExecutionInputPreparationOwner(execution: ManagedExecutionAttachment, action: ManagedAction<ProducerFactOutcome>, options: {ready?():Promise<void>;transform?(text:string):Promise<string>;cancel(id:string):Promise<unknown>}) {
   if(!isManagedExecutionOwner(execution.identity,execution.owner)||!execution.owner.ownsAction(action))throw generationError('GENERATION_UNSUPPORTED')
   const retained=new Set<CapturedActionFact<ProducerFactOutcome>>(),pins=new Set<Pin>(),running=new Set<Promise<PreparedInputResult>>()
-  const receipt=async(capture:CapturedActionFact<ProducerFactOutcome>)=>{
-    retained.add(capture);let outcome=await capture.admit()
-    if(outcome.kind==='unknown'||outcome.kind==='recovery-required')outcome=await capture.reconcile()
-    committedFactSeqs(outcome);retained.delete(capture);return outcome
+  const uncertain = (outcome: ProducerFactOutcome) => outcome.kind === 'unknown' || outcome.kind === 'recovery-required' || outcome.kind === 'conflict'
+  const settle = async (capture: CapturedActionFact<ProducerFactOutcome>, outcome: ProducerFactOutcome) => {
+    if (uncertain(outcome)) outcome = await capture.reconcile()
+    if (!uncertain(outcome)) retained.delete(capture)
+    return outcome
   }
-  const source=action.registerSettlementSource(async()=>{await Promise.allSettled([...running]);for(const capture of retained)await receipt(capture)})
+  const receipt = async (capture: CapturedActionFact<ProducerFactOutcome>) => {
+    retained.add(capture)
+    const outcome = await settle(capture, await capture.admit())
+    committedFactSeqs(outcome)
+    return outcome
+  }
+  const source = action.registerSettlementSource(async () => {
+    await Promise.allSettled([...running])
+    // Inspect the original disposition; cancellation must never issue it again.
+    for (const capture of retained) {
+      const outcome = await settle(capture, await capture.observe())
+      if (uncertain(outcome)) committedFactSeqs(outcome)
+    }
+  })
   const states=new Map<string,{actionId:string;flight?:Promise<PreparedInputResult>;failure?:{cause:unknown};started?:boolean;result?:PreparedInputResult;start?:CapturedActionFact<ProducerFactOutcome>;complete?:CapturedActionFact<ProducerFactOutcome>;observations?:PreparedInputObservation[];envelope?:{type:'agent/input/preparation';version:1;preparationId:string;actionId:string;actionSeq:number;admissionSeq:number;inputId:string;claim?:'steer'}}> ()
   return {
     async prepare(inputId:string,generation:Pick<AgentGenerationAction,'actionId'|'openedSeq'|'assertOpen'>,claim?:'steer'):Promise<PreparedInputResult>{
@@ -70,9 +84,10 @@ export async function prepareExecutionInput(options:{execution:ManagedExecutionA
   const ensureReady=()=>ready??=options.ready()
   const close=async()=>{
     if(!generationClosed){let closing:Promise<void>|undefined;try{closing=generation?.close(options.signal.aborted?'stopped':'failed')}finally{decision.resolve()}await closing;generationClosed=true}
-    if(!finished){action.finish();finished=true}
+    // The preparation-start capture still belongs to the original action.
     if(!drained){await generations?.drain();drained=true}
     if(!preparationClosed){await preparations?.close();preparationClosed=true}
+    if(!finished){action.finish();finished=true}
   }
   options.retain(close)
   try{

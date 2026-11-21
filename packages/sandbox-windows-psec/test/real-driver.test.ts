@@ -39,6 +39,19 @@ function fixture(engine: "psec" | "unrestricted", omitLocalAppData = false, comm
 describe.skipIf(process.platform !== "win32")("real Windows helper through public execution", () => {
   it.each(["unrestricted", "psec"] as const)("%s launch returns real PID, output, and confirmed settlement", async engine => {
     const f = fixture(engine)
+    if (engine === "psec") {
+      const probe = await f.backend.probe()
+      // The helper can be valid while the Windows host lacks PSEC. In that
+      // case exercise the public refusal and ensure no authority is consumed.
+      if (probe.availability === "unavailable") {
+        expect(probe.assurance).toBe("experimental")
+        let authorityChecks = 0
+        await expect(launchExecution({ backend: f.backend, spec: f.spec, policy: f.policy,
+          requirements: f.requirements, validateAuthority: () => { authorityChecks++ } })).rejects.toThrow(/missing backend requirements: availability/)
+        expect(authorityChecks).toBe(0)
+        return
+      }
+    }
     const handle = await launchExecution({ backend: f.backend, spec: f.spec, policy: f.policy,
       requirements: f.requirements, validateAuthority: actual => expect(actual).toBe(f.policy) })
     expect(handle.pid).toBeGreaterThan(0)
@@ -64,8 +77,13 @@ describe.skipIf(process.platform !== "win32")("real Windows helper through publi
     await supervisor.dispose()
   }, 30000)
 
-  it("missing LOCALAPPDATA preserves native PSEC error 203 and rolls back", async () => {
+  it("missing LOCALAPPDATA preserves native PSEC error 203 on a supporting host", async ({ skip }) => {
     const f = fixture("psec", true)
+    const probe = await f.backend.probe()
+    if (probe.availability === "unavailable") {
+      expect(probe.assurance).toBe("experimental")
+      skip("Native PSEC is unavailable on this Windows host")
+    }
     await expect(launchExecution({ backend: f.backend, spec: f.spec, policy: f.policy,
       requirements: f.requirements, validateAuthority: () => {} })).rejects.toThrow(/203/)
   }, 30000)

@@ -1,10 +1,18 @@
-// Install the process filter before this module's first native SQLite import.
+// Install the filter before the first CommonJS load of the SQLite built-in.
+// In early Node 22 builds a static ESM import can warn during linking.
 import "../warning.ts"
-import { DatabaseSync } from "node:sqlite"
+import { createRequire } from "node:module"
+import type { DatabaseSync } from "node:sqlite"
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { foreignIndex } from "./contracts.ts"
 import { INDEX_DB_APPLICATION_ID, INDEX_DB_SCHEMA_VERSION, runSchemaSetup } from "./schema.ts"
+
+const requireBuiltin = createRequire(import.meta.url)
+export function openNativeDatabase(path: string, options: ConstructorParameters<typeof DatabaseSync>[1] = {}): DatabaseSync {
+  const sqlite: typeof import("node:sqlite") = requireBuiltin("node:sqlite")
+  return new sqlite.DatabaseSync(path, options)
+}
 
 // Closed-connection tracking (Windows file-handle release parity with
 // index.ts's closeSessionQueries): a file-backed query that persisted its
@@ -16,7 +24,7 @@ export function closeFileBackedConnections(): void {
 }
 
 function openIndexDatabase(path: string): DatabaseSync {
-  const db = new DatabaseSync(path)
+  const db = openNativeDatabase(path)
   try {
     // Cross-process lock contention waits instead of failing instantly
     // (sqlite backend discipline, dsh parity).

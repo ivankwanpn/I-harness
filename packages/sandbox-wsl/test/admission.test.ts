@@ -1,8 +1,14 @@
-import { expect, it } from "vitest"
+import { mkdtempSync, realpathSync, rmdirSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { afterAll, expect, it } from "vitest"
 import type { CompiledSandboxPolicy, ProcessSpec } from "@i-harness/sandbox"
 import { captureRequest, parseWslInventory } from "../src/admission.ts"
 
-const root = "D:\\I-harness-main"
+const root = process.platform === "win32"
+  ? realpathSync.native(mkdtempSync(join(tmpdir(), "ih-wsl-admission-")))
+  : "C:\\ih-wsl-fixture"
+afterAll(() => { if (process.platform === "win32") rmdirSync(root) })
 const spec = (): ProcessSpec => ({ argv: ["/usr/bin/bash", "-c", "true"], cwd: root, env: { PATH: "/usr/bin:/bin" },
   owner: { sessionId: "owner" }, transport: "pipe", lifetime: "complete-tree", argumentEncoding: "crt" })
 const policy = (): CompiledSandboxPolicy => ({ mode: "read-only", owner: { sessionId: "owner" }, authorityRevision: "r1",

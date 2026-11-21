@@ -55,7 +55,10 @@ export function createManagedAdmission(host: ManagedAgentHost, context: ReturnTy
                     continue;
                 }
                 assertCurrentRepresentable(captured, initial);
-                const assess = (authorized = false, selected = initial, selectOutputCap = true) => context.budget.assess(selected, captured, captured.snapshot.surface.contextWindow, captured.snapshot.surface.maxOutputTokens, context.budgetReserveRatio, authorized, selectOutputCap, context.pressurePolicy, authorized ? 'recovery' : 'main');
+                // A combined model surface is already captured and measured.
+                // Standalone hosts retain the live overhead validation contract.
+                const reserveRatio = host.modelSurface ? context.budgetReserveRatio : context.budgetConfig?.reserveRatio;
+                const assess = (authorized = false, selected = initial, selectOutputCap = true) => context.budget.assess(selected, captured, captured.snapshot.surface.contextWindow, captured.snapshot.surface.maxOutputTokens, reserveRatio, authorized, selectOutputCap, context.pressurePolicy, authorized ? 'recovery' : 'main');
                 let assessed = assess();
                 if (assessed.decision.disposition === 'blocked')
                     throw Error(assessed.snapshot.coverage === 'incomplete' ? assessed.snapshot.reason : `Prepared request admission blocked: ${assessed.decision.reason}`);

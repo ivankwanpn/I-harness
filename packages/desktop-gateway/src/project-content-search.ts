@@ -145,7 +145,7 @@ export function createProjectContentSearch(workspace: string, options: ProjectCo
         if (!snapshot) throw new Error(budget.diagnostics[0] ?? "Search preview is unavailable")
         const decoded = decodeSearchText(snapshot.bytes, query.encoding), lines = decoded.text.split("\n"), target = Math.min(line - 1, lines.length - 1)
         let encodingWarning: string | undefined
-        const strictEncoding = ({ utf8: "utf-8", utf16le: "utf-16le", utf16be: "utf-16be", windows1252: "windows-1252" } as Record<string, string>)[decoded.encoding]
+        const strictEncoding = ({ utf8: "utf-8", utf16le: "utf-16le", utf16be: "utf-16be" } as Record<string, string>)[decoded.encoding]
         if (strictEncoding) {
           try { new TextDecoder(strictEncoding, { fatal: true }).decode(snapshot.bytes) }
           catch { encodingWarning = `Invalid or incomplete ${decoded.encoding} bytes in the captured prefix; replacement characters are shown` }

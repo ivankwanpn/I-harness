@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest"
 import { createOpenAIClient } from "../src/index.ts"
 import type { LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
+import "./fixtures/mock-system-fetch.ts"
 afterEach(() => vi.unstubAllGlobals())
 it.each([false, true])("reports neutral activity without changing wire or events (subscription %s)", async subscription => {
  const bodies: unknown[] = [], activities: string[] = []

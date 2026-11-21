@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
 import { modelFailureFacts, retryErrorCode } from "@i-harness/llm-seam"
 import { createOpenAIClient } from "../src/index.ts"
+import "./fixtures/mock-system-fetch.ts"
 
 const request: LLMRequest = { messages: [{ role: "user", content: "hi" }], systemPrompt: "Help", tools: [{ name: "read", description: "Read a file", inputSchema: { type: "object" } }] }
 const completed = { type: "response.completed", response: { status: "completed" } }

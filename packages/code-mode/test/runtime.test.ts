@@ -419,6 +419,18 @@ describe('isolated Code Mode runtime', () => {
       expect(await r.exec({ code: 'text("next")' })).toMatchObject({ status: 'completed', text: 'next' })
     } finally { acknowledgement.resolve(); await r.dispose() }
   })
+  it('completes a cell with no store writes while a later store read would require recovery', async () => {
+    let reads = 0
+    const r = make({ restoreStore() {
+      if (++reads > 1) throw new FactRecoveryRequiredError()
+      return [['existing', 'original']]
+    } })
+    try {
+      const out = await r.exec({ code: 'text(load("existing"))', yield_time_ms: 5_000 })
+      expect(out).toMatchObject({ status: 'completed', text: 'original' })
+      expect(reads).toBe(1)
+    } finally { await r.dispose() }
+  })
   it.each(['failure', 'recovery'] as const)('preserves original asynchronous terminal callback %s instead of committing completed', async kind => {
     const original = kind === 'failure' ? new Error('original terminal callback failed') : new FactRecoveryRequiredError()
     const r = make({ onEvent(event) {

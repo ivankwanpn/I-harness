@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest"
 import { SettingsStore } from "@i-harness/settings"
 import { createCredentialStore } from "@i-harness/credentials"
 import { createProviderRegistry } from "@i-harness/provider"
+import "../../llm-openai/test/fixtures/mock-system-fetch.ts"
 import { createProviderRuntime } from "../src/index.ts"
 
 const roots: string[] = []

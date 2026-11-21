@@ -74,14 +74,30 @@ it.each(['healthy','lost-ACK'] as const)('mounts actual source/router/SDK/runtim
         expect(mounted.container.textContent).toContain('connected output')
         const queue=service.queueState('s')
         await act(async()=>{
-            await finite(action.facts.code.record({type:'code/cell',cellId:'later',state:'started',source:'second actual managed cell'}))
-            await finite(action.facts.code.record({type:'code/call',cellId:'cell',callId:'nested',name:'fixture-call',args:{path:'fixture'}}))
-            await finite(action.facts.code.record({type:'code/result',cellId:'cell',callId:'nested',name:'fixture-call',output:'connected nested result'}))
+            expect((await finite(action.facts.code.record({type:'code/cell',cellId:'later',state:'started',source:'second actual managed cell'}))).kind).toBe('committed')
+            expect((await finite(action.facts.code.record({type:'code/call',cellId:'cell',callId:'nested',name:'fixture-call',args:{path:'fixture'}}))).kind).toBe('committed')
+            expect((await finite(action.facts.code.record({type:'code/result',cellId:'cell',callId:'nested',name:'fixture-call',output:'connected nested result'}))).kind).toBe('committed')
         })
+        const nestedDeadline = process.hrtime.bigint() + 10_000_000_000n
+        while (!mounted.queryByRole('combobox', { name: '執行記錄' }) && process.hrtime.bigint() < nestedDeadline) {
+            await act(async () => { await new Promise(resolve=>setImmediate(resolve)); await vi.advanceTimersByTimeAsync(0) })
+        }
+        const picker = mounted.getByRole('combobox', { name: '執行記錄' }) as HTMLSelectElement
+        expect(picker.value).toBe('later')
+        fireEvent.change(picker, { target: { value: 'cell' } })
         fireEvent.click(mounted.getByRole('tab',{name:'巢狀呼叫'}))
-        await finite((async()=>{for(let i=0;i<1000&&!mounted.container.textContent?.includes('connected nested result');i++)await act(async()=>{await new Promise(resolve=>setImmediate(resolve))})})())
+        while (!mounted.container.textContent?.includes('connected nested result') && process.hrtime.bigint() < nestedDeadline) {
+            await act(async () => {
+                await new Promise(resolve => setImmediate(resolve))
+                await vi.advanceTimersByTimeAsync(0)
+            })
+        }
         expect(mounted.container.textContent).toContain('connected nested result');expect(service.queueState('s')).toEqual(queue)
-        fireEvent.click(mounted.getByRole('tab',{name:'程式'}));expect(mounted.container.textContent).toContain('second actual managed cell')
+        fireEvent.click(mounted.getByRole('tab',{name:'程式'}))
+        expect(mounted.container.textContent).toContain('original managed cell')
+        fireEvent.change(picker, { target: { value: 'later' } })
+        expect(mounted.container.textContent).toContain('second actual managed cell')
+        fireEvent.change(picker, { target: { value: 'cell' } })
         fireEvent.click(mounted.getByRole('tab',{name:'輸出'}))
         const priorReads=reads.mock.calls.length;holdNextSnapshot=true;fireEvent.click(mounted.getByRole('button',{name:'重新整理'}))
         const originalResponse=await finite(responseHeld.promise);expect(originalResponse.kind).toBe('snapshot')

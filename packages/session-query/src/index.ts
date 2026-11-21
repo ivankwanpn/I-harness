@@ -1,10 +1,6 @@
-// BUG-1 (m49 audit): the warning filter MUST evaluate before node:sqlite —
-// this import is hoisted before this module's own node:sqlite import below
-// (ESM evaluates dependencies first).
-import "./warning.ts"
-import { DatabaseSync } from "node:sqlite"
+import type { DatabaseSync } from "node:sqlite"
 import type { SessionEvent } from "@i-harness/core-session"
-import { closeFileBackedConnections } from "./file-backed.ts"
+import { closeFileBackedConnections, openNativeDatabase } from "./file-backed/database.ts"
 
 export interface SearchHit {
   sessionId: string
@@ -87,7 +83,7 @@ interface LineageNodeBase {
 }
 
 export function createSessionQuery(dbPath: string): SessionQuery {
-  const db = new DatabaseSync(dbPath, { readOnly: true })
+  const db = openNativeDatabase(dbPath, { readOnly: true })
   openConnections.add(db)
 
   function ensureFts(): void {

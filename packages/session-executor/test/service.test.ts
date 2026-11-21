@@ -811,17 +811,38 @@ describe("createSessionService", () => {
     await expect(service.close()).resolves.toBeUndefined()
   })
   it("queueState reports running/queued from the per-session lane", async () => {
-    const service: SessionService = createSessionService({ workspace: process.cwd(), approveAll: true, modelPolicy: "test-mock", mockCycles: true })
-    expect(service.queueState("s1")).toEqual({ running: false, queued: 0 })
-    const p1 = service.submit("s1", "one", new AbortController().signal)
-    const p2 = service.submit("s1", "two", new AbortController().signal)
-    // Submission admission is asynchronous; publish the rows before reading.
-    await vi.waitFor(() => expect(service.queue("s1").length).toBeGreaterThan(0))
-    // while both in flight the lane either runs or queues the second
-    const st = service.queueState("s1")
-    expect(st.running || st.queued > 0).toBe(true)
-    await Promise.all([p1, p2])
-    expect(service.queueState("s1")).toEqual({ running: false, queued: 0 })
+    const workspace = mkdtempSync(join(tmpdir(), "ih-queue-state-"))
+    const release = Promise.withResolvers<void>()
+    let entered = false
+    const model = controlledModel(async function* () {
+      entered = true
+      await release.promise
+      yield { type: "text/chunk", text: "done" }
+      yield { type: "end" }
+    })
+    const service: SessionService = createSessionService({ workspace, approveAll: true, model })
+    const submissions: Promise<void>[] = []
+    const submit = (text: string) => {
+      const turn = service.submit("s1", text, new AbortController().signal)
+      void turn.catch(() => {})
+      submissions.push(turn)
+    }
+    try {
+      expect(service.queueState("s1")).toEqual({ running: false, queued: 0 })
+      submit("one")
+      await vi.waitFor(() => expect(entered).toBe(true), { timeout: 15_000 })
+      expect(service.queueState("s1")).toEqual({ running: true, queued: 0 })
+      submit("two")
+      await vi.waitFor(() => expect(service.queueState("s1")).toEqual({ running: true, queued: 1 }), { timeout: 15_000 })
+      release.resolve()
+      await Promise.all(submissions)
+      expect(service.queueState("s1")).toEqual({ running: false, queued: 0 })
+    } finally {
+      release.resolve()
+      await Promise.allSettled(submissions)
+      await service.close()
+      rmWorkspaceSync(workspace)
+    }
   }, 60_000)
 
   // M32 T3: per-session reasoning effort — the service resolves the value at

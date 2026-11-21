@@ -1,7 +1,3 @@
-// ESM dependencies evaluate in import order: install before the database
-// module evaluates node:sqlite, for both public and direct facade entrypoints.
-import { suppressSqliteExperimentalWarning } from "./warning.ts"
-suppressSqliteExperimentalWarning()
 import { openFileBackedDatabase } from "./file-backed/database.ts"
 import { createIndexRefresh } from "./file-backed/index-refresh.ts"
 import { createIndexedQuery } from "./file-backed/query.ts"

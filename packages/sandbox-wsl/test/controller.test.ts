@@ -1,6 +1,9 @@
 import { EventEmitter } from "node:events"
+import { mkdtempSync, realpathSync, rmdirSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { PassThrough, Writable } from "node:stream"
-import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest"
 import type { CompiledSandboxPolicy, ProcessSpec } from "@i-harness/sandbox"
 
 const state = vi.hoisted(() => ({ mode: "normal", commands: [] as Record<string, unknown>[],
@@ -76,7 +79,10 @@ vi.mock("node:child_process", () => ({
 }))
 
 import { createWslExecutionBackend } from "../src/index.ts"
-const root = "D:\\I-harness-main"
+const root = process.platform === "win32"
+  ? realpathSync.native(mkdtempSync(join(tmpdir(), "ih-wsl-controller-")))
+  : "C:\\ih-wsl-fixture"
+afterAll(() => { if (process.platform === "win32") rmdirSync(root) })
 const spec = (): ProcessSpec => ({ argv: ["/usr/bin/bash", "-c", "true"], cwd: root, env: {}, owner: { sessionId: "owner" },
   transport: "pipe", lifetime: "complete-tree", argumentEncoding: "crt" })
 const policy = (): CompiledSandboxPolicy => ({ mode: "read-only", owner: { sessionId: "owner" }, authorityRevision: "r",

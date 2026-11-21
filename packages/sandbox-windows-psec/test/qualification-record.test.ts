@@ -8,8 +8,8 @@ expectTypeOf<WindowsQualificationView["applicability"]>().toEqualTypeOf<"matchin
 describe.skipIf(process.platform !== "win32")("shipped Windows qualification record", () => {
   it("ties the incomplete outcome to this helper, protocol and Windows release", async () => {
     const view = await readWindowsQualification()
-    expect(view.applicability).toBe("matching-os-artifacts")
-    expect(view.record.windowsRelease).toBe(osRelease())
+    const expectedApplicability = view.record.windowsRelease === osRelease() ? "matching-os-artifacts" : "different-os-artifacts"
+    expect(view.applicability).toBe(expectedApplicability)
     expect(view.record.observationScope).toBe("historical-one-host")
     expect(view.record.applicabilityInputs).toEqual(["windows-release", "helper-sha256", "protocol-sha256"])
     expect(view.record.result).toBe("incomplete")

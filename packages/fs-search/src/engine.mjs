@@ -2,12 +2,27 @@ import { spawn } from 'node:child_process'
 import { normalizeSearchQuery, normalizeLimits, createSearchStats, createSearchResult, markSearchResult, addDiagnostic, cropText, finishSearchResult } from './options.mjs'
 
 const encodingFlags = { auto: 'auto', utf8: 'utf-8', utf16le: 'utf-16le', utf16be: 'utf-16be', windows1252: 'windows-1252', latin1: 'utf-8' }
+// WHATWG Windows-1252 index for bytes 0x80–0x9F. The other bytes match Latin-1.
+// Keep preview offsets aligned with ripgrep on Node builds without that ICU table.
+const windows1252Controls = [
+  0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021,
+  0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008d, 0x017d, 0x008f,
+  0x0090, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014,
+  0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d, 0x017e, 0x0178,
+]
 export function decodeSearchText(input, requested = 'auto') {
   const bytes = Buffer.from(input.buffer, input.byteOffset, input.byteLength)
   let encoding = requested
   if (encoding === 'auto') encoding = bytes[0] === 255 && bytes[1] === 254 ? 'utf16le' : bytes[0] === 254 && bytes[1] === 255 ? 'utf16be' : 'utf8'
-  if (!(encoding in encodingFlags)) throw new Error('unsupported encoding')
-  const text = encoding === 'latin1' ? bytes.toString('latin1') : new TextDecoder({ utf8: 'utf-8', utf16le: 'utf-16le', utf16be: 'utf-16be', windows1252: 'windows-1252' }[encoding]).decode(bytes)
+  if (!Object.hasOwn(encodingFlags, encoding)) throw new Error('unsupported encoding')
+  let text
+  if (encoding === 'windows1252') {
+    text = bytes.toString('latin1').replace(/[\x80-\x9f]/g, char => String.fromCharCode(windows1252Controls[char.charCodeAt(0) - 0x80]))
+  } else if (encoding === 'latin1') {
+    text = bytes.toString('latin1')
+  } else {
+    text = new TextDecoder(encodingFlags[encoding]).decode(bytes)
+  }
   return { text: text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n'), encoding }
 }
 
