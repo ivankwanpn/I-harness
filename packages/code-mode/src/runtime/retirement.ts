@@ -71,7 +71,7 @@ export function createRetirement(options: CodeModeRuntimeOptions, errorCap: numb
         }
         const bounded = error === undefined ? undefined : diagnostic(error, errorCap);
         const joinTermination = !!cell.instructionReplan || !!cell.origin.instructionOrigin;
-        const joinOutput = cell.pendingOutputReceipts > 0;
+        const joinOutput = status === 'terminated' && cell.pendingOutputReceipts > 0;
         if (joinTermination || joinOutput) cell.terminalReceiptPending = true;
         cell.status = status;
         if (status === 'terminated') { cell.instructionReplan = undefined; cell.replanTerminalStarted = false; }

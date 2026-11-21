@@ -316,14 +316,22 @@ describe('isolated Code Mode runtime', () => {
     } finally { await r.dispose() }
   })
   it('successful completion wins later termination and commits concurrent store writes in completion order', async () => {
-    const r = make()
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), completed = Promise.withResolvers<void>()
+    let slowId: string | undefined
+    const r = make({
+      async invoke() { entered.resolve(); await release.promise; return null },
+      onEvent(event) { if (event.type === 'closed' && event.cellId === slowId) completed.resolve() },
+    })
     try {
-      const slow = await r.exec({code:`store('order','slow'); await new Promise(r=>setTimeout(r,200));`,yield_time_ms:0})
-      expect((await r.exec({code:`store('order','fast')`})).status).toBe('completed')
-      await sleep(250)
+      const slow = await r.exec({code:`store('order','slow'); await tools.read({});`,yield_time_ms:0})
+      slowId = slow.cellId
+      await entered.promise
+      expect((await r.exec({code:`store('order','fast')`,yield_time_ms:5000})).status).toBe('completed')
+      release.resolve()
+      await completed.promise
       expect((await r.wait({cell_id:slow.cellId,terminate:true})).status).toBe('completed')
       expect((await r.exec({code:`text(load('order'))`})).text).toBe('slow')
-    } finally { await r.dispose() }
+    } finally { release.resolve(); await r.dispose() }
   })
   it('validates options and alias collisions before worker admission and bounds active cells', async () => {
     expect(()=>make({config:{cpuTimeMs:NaN}})).toThrow(/invalid/i)
