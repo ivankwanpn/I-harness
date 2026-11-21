@@ -114,30 +114,57 @@ it("shows persisted model reasoning inside expandable work details", async () =>
   expect(screen.queryByRole("button", { name: "工具詳情 read" })).toBeNull()
   expect(screen.queryByText("思考過程")).toBeNull()
   fireEvent.click(screen.getByRole("button", { name: "工作過程" }))
-  const disclosure = screen.getByText("思考過程").closest("details")
-  expect(disclosure).toBeTruthy()
-  expect(disclosure?.open).toBe(false)
+  const disclosure = screen.getByRole("button", { name: "思考過程" })
+  expect(disclosure.getAttribute("aria-expanded")).toBe("false")
   expect(screen.queryByText("Inspect")).toBeNull()
-  fireEvent.click(screen.getByText("思考過程"))
-  expect(disclosure?.open).toBe(true)
+  fireEvent.click(disclosure)
+  expect(disclosure.getAttribute("aria-expanded")).toBe("true")
   expect((await screen.findByText("Inspect")).tagName).toBe("STRONG")
 })
 
-it("opens live reasoning and preserves a reader's choice as the block grows and settles", async () => {
-  const chunk = { type: "reasoning/chunk" as const, streamId: "a", text: "Inspect ", offset: 0, atSeq: 0 }
+it("keeps live reasoning compact and preserves an opened segment through the final answer", async () => {
+  const prefix = [{ type: "turn/start" as const, seq: 0 }, { type: "user/message" as const, text: "Check the files", seq: 1 }]
+  const chunk = { type: "reasoning/chunk" as const, streamId: "a", text: "Inspect the directory\n\nRead", offset: 0, atSeq: 2 }
+  const view = render(<Timeline rows={projectTimeline([...prefix, chunk])} running />)
+  const disclosure = screen.getByRole("button", { name: "思考中…" })
+  expect(disclosure.getAttribute("aria-expanded")).toBe("false")
+  expect(screen.getByText("Inspect the directory")).toBeTruthy()
+  expect(screen.queryByText("Read")).toBeNull()
+  view.rerender(<Timeline rows={projectTimeline([...prefix, chunk, { ...chunk, text: " the files", offset: chunk.text.length }])} running />)
+  expect(screen.getByText("Inspect the directory")).toBeTruthy()
+  expect(screen.queryByText("Read the files")).toBeNull()
+  fireEvent.click(disclosure)
+  await screen.findByText("Read the files")
+  view.rerender(<Timeline rows={projectTimeline([...prefix,
+    { type: "reasoning", streamId: "a", text: "Inspect the directory\n\nRead the files", seq: 2 },
+    { type: "tool/call", callId: "read", name: "read", args: {}, seq: 3 },
+    { type: "assistant/message", text: "Done", seq: 4 }, { type: "turn/end", seq: 5 },
+  ])} />)
+  expect(screen.getByRole("button", { name: "思考過程" })).toBe(disclosure)
+  expect(disclosure.getAttribute("aria-expanded")).toBe("true")
+  expect(screen.getByRole("button", { name: "工作過程" }).getAttribute("aria-expanded")).toBe("true")
+  expect(screen.getByText("Read the files")).toBeTruthy()
+  expect(screen.getByText("Done")).toBeTruthy()
+})
+
+it("follows live reasoning only while the reader stays at the bottom", async () => {
+  const chunk = { type: "reasoning/chunk" as const, streamId: "a", text: "Starting", offset: 0, atSeq: 0 }
   const view = render(<Timeline rows={projectTimeline([chunk])} running />)
-  let disclosure = screen.getByText("思考過程").closest("details")!
-  expect(disclosure.open).toBe(true)
-  expect(screen.getByText("思考中…")).toBeTruthy()
-  fireEvent.click(screen.getByText("思考過程"))
-  await waitFor(() => expect(disclosure.open).toBe(false))
-  view.rerender(<Timeline rows={projectTimeline([chunk, { ...chunk, text: "files", offset: 8 }])} running />)
-  disclosure = screen.getByText("思考過程").closest("details")!
-  expect(disclosure.open).toBe(false)
-  fireEvent.click(screen.getByText("思考過程"))
-  await screen.findByText("Inspect files")
-  view.rerender(<Timeline rows={projectTimeline([{ type: "reasoning", streamId: "a", text: "Inspect files", seq: 0 }])} />)
-  expect(screen.getByText("思考過程").closest("details")!.open).toBe(true)
+  fireEvent.click(screen.getByRole("button", { name: "思考中…" }))
+  const body = screen.getByRole("region", { name: "思考過程" })
+  let height = 1000
+  Object.defineProperties(body, { clientHeight: { value: 200 }, scrollHeight: { get: () => height } })
+  body.scrollTop = 350
+  fireEvent.scroll(body)
+  height = 1080
+  view.rerender(<Timeline rows={projectTimeline([{ ...chunk, text: "Starting output" }])} running />)
+  await screen.findByText("Starting output")
+  expect(body.scrollTop).toBe(350)
+  body.scrollTop = 880
+  fireEvent.scroll(body)
+  height = 1200
+  view.rerender(<Timeline rows={projectTimeline([{ ...chunk, text: "Starting output, continued" }])} running />)
+  await waitFor(() => expect(body.scrollTop).toBe(1200))
 })
 
 it("shows measured generation with the final answer and omits a speed on an older turn", () => {
