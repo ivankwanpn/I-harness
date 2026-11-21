@@ -290,9 +290,6 @@ button { font: inherit; color: inherit; }
 .timeline-reasoning summary { display: flex; align-items: center; gap: 8px; width: fit-content; color: var(--ih-muted); }
 .timeline-reasoning summary:hover { color: var(--ih-text); }
 .timeline-reasoning summary::-webkit-details-marker { display: none; }
-.timeline-reasoning-body { max-height: 360px; overflow: auto; margin: 8px 0 10px 8px; padding: 2px 12px; border-left: 1px solid var(--ih-divider); color: var(--ih-muted); line-height: 1.6; }
-.timeline-reasoning-body > :first-child { margin-top: 0; }
-.timeline-reasoning-body > :last-child { margin-bottom: 0; }
 .timeline-reasoning-body code { font-family: Consolas, monospace; }
 .timeline-reasoning-body pre { overflow-x: auto; padding: 10px; background: var(--ih-panel); border: 1px solid var(--ih-divider); border-radius: 8px; }
 .tool-summary { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 4px; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; text-align: left; font-size: 12px; }

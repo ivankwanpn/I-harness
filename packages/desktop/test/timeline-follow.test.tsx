@@ -57,7 +57,7 @@ it("keeps the physical bottom when the current assistant message grows before it
   expect(screen.queryByRole("button", { name: "回到最新內容" })).toBeNull()
 })
 
-it("keeps a following conversation at the bottom through reasoning disclosure and local scrolling", () => {
+it("keeps a following conversation at the bottom as reasoning opens, grows, and closes", () => {
   vi.useFakeTimers()
   virtual.showItems = true
   const reasoning = { id: "reasoning", kind: "other" as const, label: "reasoning", detail: "Checking the workspace", transient: true as const }
@@ -70,7 +70,6 @@ it("keeps a following conversation at the bottom through reasoning disclosure an
   Object.defineProperty(timeline, "scrollHeight", { configurable: true, value: 2450 })
   act(() => vi.runOnlyPendingTimers())
   expect(timeline.scrollTop).toBe(2050)
-  fireEvent.wheel(screen.getByRole("region", { name: "思考過程" }), { deltaY: -180 })
   Object.defineProperty(timeline, "scrollHeight", { configurable: true, value: 2600 })
   view.rerender(<Timeline rows={[{ ...reasoning, detail: "Checking the workspace\n\nReading the source files" }]} running />)
   act(() => vi.runOnlyPendingTimers())
@@ -82,7 +81,7 @@ it("keeps a following conversation at the bottom through reasoning disclosure an
   expect(timeline.scrollTop).toBe(1600)
 })
 
-it("lets a reader above the bottom open reasoning until they use the separate return control", () => {
+it("scrolls the conversation from expanded reasoning and lets the reader return to the bottom", () => {
   vi.useFakeTimers()
   virtual.showItems = true
   const reasoning = { id: "reasoning", kind: "other" as const, label: "reasoning", detail: "Checking the workspace", transient: true as const }
@@ -90,10 +89,13 @@ it("lets a reader above the bottom open reasoning until they use the separate re
   const timeline = screen.getByTestId("timeline")
   Object.defineProperties(timeline, { scrollHeight: { configurable: true, value: 2000 }, clientHeight: { configurable: true, value: 400 } })
   act(() => vi.runOnlyPendingTimers())
-  fireEvent.wheel(timeline, { deltaY: -550 })
+  const toggle = screen.getByRole("button", { name: "思考中…" })
+  fireEvent.click(toggle)
+  fireEvent.wheel(screen.getByRole("region", { name: "思考過程" }), { deltaY: -550 })
   timeline.scrollTop = 1050
   fireEvent.scroll(timeline)
-  fireEvent.click(screen.getByRole("button", { name: "思考中…" }))
+  fireEvent.click(toggle)
+  fireEvent.click(toggle)
   Object.defineProperty(timeline, "scrollHeight", { configurable: true, value: 2600 })
   view.rerender(<Timeline rows={[{ ...reasoning, detail: "New reasoning while reading" }]} running />)
   act(() => vi.runOnlyPendingTimers())

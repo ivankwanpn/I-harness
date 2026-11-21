@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 const viewport = vi.hoisted(() => ({ visible: true, scroll: vi.fn() }))
 vi.mock("@tanstack/react-virtual", () => ({ elementScroll: () => {}, useVirtualizer: (options: { count: number }) => ({ getTotalSize: () => 200, getVirtualItems: () => viewport.visible ? Array.from({ length:options.count }, (_, index) => ({ index, start: index * 56 })) : [], measureElement: () => {}, scrollToIndex: viewport.scroll, scrollToOffset: () => {} }) }))
@@ -135,6 +135,9 @@ it("keeps live reasoning compact and preserves an opened segment through the fin
   expect(screen.queryByText("Read the files")).toBeNull()
   fireEvent.click(disclosure)
   await screen.findByText("Read the files")
+  const reasoning = screen.getByRole("region", { name: "思考過程" })
+  expect(reasoning.closest(".timeline")).toBe(screen.getByTestId("timeline"))
+  expect(reasoning.hasAttribute("tabindex")).toBe(false)
   view.rerender(<Timeline rows={projectTimeline([...prefix,
     { type: "reasoning", streamId: "a", text: "Inspect the directory\n\nRead the files", seq: 2 },
     { type: "tool/call", callId: "read", name: "read", args: {}, seq: 3 },
@@ -145,26 +148,6 @@ it("keeps live reasoning compact and preserves an opened segment through the fin
   expect(screen.getByRole("button", { name: "工作過程" }).getAttribute("aria-expanded")).toBe("true")
   expect(screen.getByText("Read the files")).toBeTruthy()
   expect(screen.getByText("Done")).toBeTruthy()
-})
-
-it("follows live reasoning only while the reader stays at the bottom", async () => {
-  const chunk = { type: "reasoning/chunk" as const, streamId: "a", text: "Starting", offset: 0, atSeq: 0 }
-  const view = render(<Timeline rows={projectTimeline([chunk])} running />)
-  fireEvent.click(screen.getByRole("button", { name: "思考中…" }))
-  const body = screen.getByRole("region", { name: "思考過程" })
-  let height = 1000
-  Object.defineProperties(body, { clientHeight: { value: 200 }, scrollHeight: { get: () => height } })
-  body.scrollTop = 350
-  fireEvent.scroll(body)
-  height = 1080
-  view.rerender(<Timeline rows={projectTimeline([{ ...chunk, text: "Starting output" }])} running />)
-  await screen.findByText("Starting output")
-  expect(body.scrollTop).toBe(350)
-  body.scrollTop = 880
-  fireEvent.scroll(body)
-  height = 1200
-  view.rerender(<Timeline rows={projectTimeline([{ ...chunk, text: "Starting output, continued" }])} running />)
-  await waitFor(() => expect(body.scrollTop).toBe(1200))
 })
 
 it("shows measured generation with the final answer and omits a speed on an older turn", () => {

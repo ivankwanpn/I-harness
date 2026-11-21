@@ -46,36 +46,27 @@ function ReasoningRow({ label, text, streaming, expanded, onToggle }: { label: s
   const bodyId = useId()
   const textForRender = useDeferredValue(text)
   const body = useRef<HTMLDivElement>(null)
-  const followsEnd = useRef(true)
   const revealOnOpen = useRef(false)
   const summary = streaming && !expanded ? reasoningPreview(textForRender) : undefined
   const heading = streaming ? tt("思考中…", "Thinking…") : label
 
   useLayoutEffect(() => {
-    const element = body.current
-    if (!element || !expanded) return
-    if (revealOnOpen.current) {
-      revealOnOpen.current = false
-      element.scrollIntoView?.({ block: "nearest", inline: "nearest" })
-    }
-    if (streaming && followsEnd.current) element.scrollTop = element.scrollHeight
-  }, [expanded, streaming, textForRender])
+    if (!expanded || !revealOnOpen.current) return
+    revealOnOpen.current = false
+    body.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" })
+  }, [expanded])
 
   return <div className="timeline-reasoning" data-streaming={streaming || undefined}>
     <button type="button" className="timeline-reasoning-trigger" aria-expanded={expanded} aria-controls={bodyId} onClick={() => {
       const keepFollowing = onToggle()
-      if (!expanded) { followsEnd.current = true; revealOnOpen.current = !keepFollowing }
+      if (!expanded) revealOnOpen.current = !keepFollowing
     }}>
       <Brain size={14} aria-hidden="true" />
       <span className="timeline-reasoning-label">{heading}</span>
       {summary ? <span className="timeline-reasoning-preview" aria-hidden="true">{summary}</span> : null}
       <ChevronRight size={14} className="timeline-reasoning-chevron" aria-hidden="true" />
     </button>
-    <div ref={body} id={bodyId} className="timeline-reasoning-body" role="region" aria-label={label} hidden={!expanded} tabIndex={expanded ? 0 : undefined}
-      onScroll={(event) => {
-        const element = event.currentTarget
-        followsEnd.current = element.scrollHeight - element.clientHeight - element.scrollTop <= 12
-      }}>
+    <div ref={body} id={bodyId} className="timeline-reasoning-body" role="region" aria-label={label} hidden={!expanded}>
       {expanded ? <MarkdownMessage text={streaming ? textForRender : text} streaming={streaming} /> : null}
     </div>
   </div>
@@ -136,9 +127,6 @@ function RowView({ row, open, toggle, activeReasoningId, page, setPage, navigati
 export interface TimelineProps { resultReader?: RecordedResultReader; rows: TimelineRow[]; assistantPreview?: AssistantPreview; navigation?: FileNavigation; running?: boolean; targetSeq?: number; historical?: boolean; onTargetVisible?(seq: number): void }
 function timelineKey(row: WorkItem): string {
   return row.kind === "message" && row.stepStartSeq !== undefined ? `assistant:${row.stepStartSeq}` : row.id
-}
-function withinReasoningScroll(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest(".timeline-reasoning-body") !== null
 }
 export function Timeline({ rows, assistantPreview, navigation, running = false, targetSeq, historical = false, onTargetVisible, resultReader }: TimelineProps) {
   const t = useText()
@@ -290,13 +278,11 @@ export function Timeline({ rows, assistantPreview, navigation, running = false, 
     <div className="timeline-region">
     <div ref={parentRef} className="timeline" data-testid="timeline" tabIndex={0} aria-label={t("會話內容")}
       onWheel={event => {
-        if (withinReasoningScroll(event.target)) return
         if (event.deltaY < 0) pauseFollowing()
         else if (event.deltaY > 0) readingDirection.current = "down"
       }}
-      onTouchStart={event => { touchY.current = withinReasoningScroll(event.target) ? undefined : event.touches[0]?.clientY }}
+      onTouchStart={event => { touchY.current = event.touches[0]?.clientY }}
       onTouchMove={event => {
-        if (withinReasoningScroll(event.target)) return
         const current = event.touches[0]?.clientY
         if (current !== undefined && touchY.current !== undefined && current < touchY.current) readingDirection.current = "down"
         else pauseFollowing()
