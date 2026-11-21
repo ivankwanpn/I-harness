@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { createContextOutputService, createContextOutputTools, renderContextRecovery } from '../src/index.ts'
@@ -6,6 +6,15 @@ import { ContextStore } from '../src/store.ts'
 import { DatabaseSync } from 'node:sqlite'
 import { createToolRegistry } from '@i-harness/core-tools'
 import { createContext } from '../../core-plugin/src/index.ts'
+
+const grantCut = vi.hoisted(() => ({ afterRename: undefined as ((path: string) => Promise<void>) | undefined }))
+vi.mock('node:fs/promises', async original => {
+  const fs = await original<typeof import('node:fs/promises')>()
+  return { ...fs, async rename(...args: Parameters<typeof fs.rename>) {
+    await fs.rename(...args)
+    if (grantCut.afterRename) await grantCut.afterRename(String(args[1]))
+  } }
+})
 
 const fixtureBase = resolve(import.meta.dirname, '../../../build/context-output-tests')
 const roots: string[] = []
@@ -461,14 +470,13 @@ describe('owned context outputs', () => {
     const workspace = (await readdir(resolve(root, 'context-output')))[0]!
     const ledger = resolve(root, 'context-output', workspace, 'owners', ids[0]! + '.json')
     const controller = new AbortController()
-    const granting = service.grant({ sessionId: 'a', signal: controller.signal }, ids, 'target')
-    const rejected = expect(granting).rejects.toThrow(/abort/i)
-    let ended = false
-    granting.finally(() => { ended = true }).catch(() => {})
-    while (!JSON.parse(await readFile(ledger, 'utf8')).includes('target') && !ended) await new Promise((r) => setImmediate(r))
-    expect(ended).toBe(false)
-    controller.abort()
-    await rejected
+    grantCut.afterRename = async path => {
+      if (path !== ledger || controller.signal.aborted) return
+      expect(JSON.parse(await readFile(ledger, 'utf8'))).toContain('target')
+      controller.abort()
+    }
+    try { await expect(service.grant({ sessionId: 'a', signal: controller.signal }, ids, 'target')).rejects.toThrow(/abort/i) }
+    finally { grantCut.afterRename = undefined }
     await service.close()
     const restarted = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true } })
     services.push(restarted)

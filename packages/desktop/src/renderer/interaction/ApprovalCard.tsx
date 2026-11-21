@@ -15,8 +15,8 @@ function approvalCommand(details: string | undefined): string | undefined {
   } catch { return undefined }
 }
 
-export function ApprovalCard({ requestId, description, details, busy, interrupted, remember, onConfirm }: {
-  requestId: string; description: string; details?: string; busy: boolean; interrupted?: boolean; remember?: ApprovalRememberView; onConfirm(approved: boolean, remember?: RememberApprovalOptions): void
+export function ApprovalCard({ requestId, description, details, command: submittedCommand, busy, interrupted, remember, onConfirm }: {
+  requestId: string; description: string; command?: string; details?: string; busy: boolean; interrupted?: boolean; remember?: ApprovalRememberView; onConfirm(approved: boolean, remember?: RememberApprovalOptions): void
 }) {
   const t = useText()
   const tt = useToolText()
@@ -26,7 +26,8 @@ export function ApprovalCard({ requestId, description, details, busy, interrupte
   const title = t(interrupted ? "等待期間已中斷" : "需要你的確認")
   const allow = t(interrupted ? "儲存重新評估請求" : "批准")
   const deny = t(interrupted ? "捨棄請求" : "拒絕")
-  const command = approvalCommand(details)
+  const command = submittedCommand ?? approvalCommand(details)
+  const detailBody = details === command ? undefined : details
   const tool = command ? /^([\w-]+)\s*[:：]\s*dangerous command requires approval[:：]/i.exec(description)?.[1] : undefined
   const expandedAccess = /^([\w-]+)\s*[:：]\s*escalate sandbox to danger-full-access\b/i.exec(description)?.[1]
   const preview = command ?? (expandedAccess ? description : undefined)
@@ -43,8 +44,8 @@ export function ApprovalCard({ requestId, description, details, busy, interrupte
       </header>
       {interrupted ? <p className="ih-interaction-banner">{t("此操作尚未獲得核准。繼續會話後，代理會重新評估並依目前設定要求核准。")}</p> : null}
       {preview ? <pre className="ih-approval-command" tabIndex={0} aria-label={tt("待核准的指令", "Command awaiting approval")}>{preview}</pre> : null}
-      {details || remember?.reason ? <details className="ih-interaction-details"><summary>{t("詳細資料")}</summary>
-        {details ? <pre className="approval-details">{details}</pre> : null}
+      {detailBody || (!interrupted && remember?.reason) ? <details className="ih-interaction-details"><summary>{t("詳細資料")}</summary>
+        {detailBody ? <pre className="approval-details">{detailBody}</pre> : null}
         {!interrupted && remember?.reason ? <p>{remember.reason}</p> : null}
       </details> : null}
       {rememberable ? <fieldset disabled={busy} className="ih-approval-remember">

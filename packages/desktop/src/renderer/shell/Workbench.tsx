@@ -86,7 +86,7 @@ export interface ConversationView {
   historyNotice?: string
   pending: PendingInteraction[]
   onPrompt(text: string, context?: string, images?: ImageInput[], onAdmitted?: () => void): Promise<void>
-  onCancel(): void
+  onCancel(): void | Promise<void>
   onCancelTask(taskId: string): void
   onCancelQueue(queueId: string): void
   onReply(reply: InteractionReply): Promise<void>
@@ -464,7 +464,7 @@ export function Workbench({
                   : <Timeline resultReader={resultReader} key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={conversation.rows} assistantPreview={conversation.assistantPreview} running={conversation.running} navigation={fileNavigation} />}
                 <div className="conversation-dock">
                 {conversation.taskError && !(reviewOpen && workPaneTab === "tasks") ? <p role="alert" className="notice error-text" title={conversation.taskError}>{displayError(conversation.taskError).summary}</p> : null}
-                <PendingPanel key={`${selectedWorkspaceId}:${selectedSessionId}`} draftOwner={bridge} workspaceId={selectedWorkspaceId} pending={conversation.pending} onReply={conversation.onReply} />
+                <PendingPanel key={`${selectedWorkspaceId}:${selectedSessionId}`} draftOwner={bridge} workspaceId={selectedWorkspaceId} pending={conversation.pending} onReply={conversation.onReply} onStop={conversation.running ? conversation.onCancel : undefined} />
                 {(() => {
                   const queued = (conversation.queue ?? []).filter(row => row.state === "queued")
                   if (queued.length === 0) return null
@@ -477,7 +477,6 @@ export function Workbench({
                     {queued.length > 3 ? <span className="composer-queue-more">+{queued.length - 3}</span> : null}
                   </div>
                 })()}
-                {conversation.pending.length > 0 && conversation.running ? <button type="button" className="link-button dock-cancel" onClick={conversation.onCancel}>{t("停止")}</button> : null}
                 <div hidden={conversation.pending.length > 0}>
                 {composerProject}
                 <Composer

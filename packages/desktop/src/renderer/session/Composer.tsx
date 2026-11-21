@@ -225,7 +225,7 @@ export interface ComposerProps {
   onPrompt(text: string, context?: string, images?: ImageInput[], onAdmitted?: (consumeSubmission?: () => void) => void | Promise<void>, submission?: CapturedSubmission): Promise<void>
   steeringEnabled?: boolean
   onSteer?(text: string, context?: string, images?: ImageInput[], onAdmitted?: (consumeSubmission?: () => void) => void | Promise<void>, submission?: CapturedSubmission): Promise<void>
-  onCancel(): void
+  onCancel(): void | Promise<void>
 }
 
 /** Failed admission retains both the complete Composer draft and its created
@@ -499,7 +499,7 @@ function SessionComposer({
     const timer = setTimeout(() => setForceStopReady(true), 4000)
     return () => clearTimeout(timer)
   }, [running, stopPending])
-  const requestStop = () => { setStopPending(true); setForceStopReady(false); onCancel() }
+  const requestStop = () => { setStopPending(true); setForceStopReady(false); void onCancel() }
   async function forceStop() {
     if (!bridge) return
     setForceStopReady(false); setStopPending(true)

@@ -84,8 +84,22 @@ describe("PendingPanel", () => {
   })
   it("shows the command itself before one-click approval", () => {
     render(<PendingPanel pending={[{ ...approval, payload: { name: "bash", reason: "tool requires approval", command: "pwd && echo APPROVAL_ACTION_42" } }]} onReply={async () => {}} />)
-    expect(screen.getByText("pwd && echo APPROVAL_ACTION_42")).toBeTruthy()
+    expect(screen.getByText("pwd && echo APPROVAL_ACTION_42").closest("details")).toBeNull()
     expect(screen.getByRole("button", { name: "批准" })).toBeTruthy()
+  })
+
+  it("shares one run stop across both live cards and keeps it busy until acknowledged", async () => {
+    const completion = Promise.withResolvers<void>()
+    const onStop = vi.fn(() => completion.promise), onReply = vi.fn(async () => {})
+    render(<PendingPanel pending={[approval, question]} onReply={onReply} onStop={onStop} />)
+    const stop = screen.getByRole("button", { name: "停止執行" }) as HTMLButtonElement
+    fireEvent.click(stop)
+    expect((screen.getByRole("button", { name: "正在停止…" }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(stop)
+    expect(onStop).toHaveBeenCalledOnce()
+    expect(onReply).not.toHaveBeenCalled()
+    completion.resolve()
+    await waitFor(() => expect((screen.getByRole("button", { name: "停止執行" }) as HTMLButtonElement).disabled).toBe(false))
   })
   it("shows executable arguments instead of only its name", () => {
     render(<PendingPanel pending={[{ ...approval, payload: { name: "terminal_open", reason: "tool requires approval", command: "powershell.exe", argumentsSummary: '{"command":"powershell.exe","args":["-Command","Remove-Item outside"]}' } }]} onReply={async () => {}} />)

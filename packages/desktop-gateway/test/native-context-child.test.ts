@@ -77,8 +77,8 @@ it('live enabling lets a real explore child capture and search native refs throu
   const model:ModelClient=controlledModel(request => ({async *stream(request){requests.push(request);calls++
     // The marker leads the retained body: managed search reads a bounded prefix
     // of each artifact, so a marker after the padding could not be found.
-    if(calls===1)yield{type:'tool_call',call:{name:'code_exec',args:{code:'text(ALL_TOOLS.map(t=>t.name));text("CHILD_RETAINED"+"a".repeat(20000)+"b".repeat(20000));',max_output_tokens:16}}}
-    else if(calls===2)yield{type:'tool_call',call:{name:'code_exec',args:{code:'const found=await tools.context_output_search({query:"CHILD_RETAINED"});text(JSON.stringify(found.hits.map(hit=>({id:hit.ref.id,offset:hit.offset}))));text(await tools.context_output_read({refId:found.hits[0].ref.id,offset:found.hits[0].offset,maxBytes:1024}));'}}}
+    if(calls===1)yield{type:'tool_call',call:{name:'code_exec',args:{code:'text(ALL_TOOLS.map(t=>t.name));text("CHILD_RETAINED"+"a".repeat(20000)+"b".repeat(20000));',max_output_tokens:16,yield_time_ms:15_000}}}
+    else if(calls===2)yield{type:'tool_call',call:{name:'code_exec',args:{code:'const found=await tools.context_output_search({query:"CHILD_RETAINED"});text(JSON.stringify(found.hits.map(hit=>({id:hit.ref.id,offset:hit.offset}))));text(await tools.context_output_read({refId:found.hits[0].ref.id,offset:found.hits[0].offset,maxBytes:1024}));',yield_time_ms:15_000}}}
     else yield{type:'text/chunk',text:'Child finished.'}
     yield{type:'end'}
   }} as import('@i-harness/llm-seam').ModelClient).stream(request))

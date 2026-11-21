@@ -1,4 +1,5 @@
-import { useRef, useSyncExternalStore } from "react"
+import { useRef, useState, useSyncExternalStore } from "react"
+import { Square } from "lucide-react"
 import { ApprovalCard } from "./ApprovalCard.tsx"
 import { QuestionCard } from "./QuestionCard.tsx"
 import { useLocale, useText } from "../design/i18n.ts"
@@ -7,6 +8,7 @@ import type { PendingInteraction } from "./pending.ts"
 import type { ApprovalRememberView } from "@i-harness/desktop-gateway/src/approval-rules.ts"
 import type { RememberApprovalOptions } from "@i-harness/desktop-gateway/src/approval-rules.ts"
 import { interactionDrafts, interactionDraftKey } from "./interaction-drafts.ts"
+import { Button } from "../vendor/opencode/Button.tsx"
 
 export type InteractionReply = {
   requestId: string
@@ -18,6 +20,7 @@ export interface PendingPanelProps {
   workspaceId?: string
   pending: PendingInteraction[]
   onReply(reply: InteractionReply): Promise<void>
+  onStop?(): void | Promise<void>
 }
 
 function approvalText(payload: unknown, fallback: string): string {
@@ -34,6 +37,11 @@ function approvalDetails(payload: unknown): string | undefined {
   return typeof record.pathSummary === "string" ? record.pathSummary : undefined
 }
 
+function approvalCommand(payload: unknown): string | undefined {
+  const command = (payload as { command?: unknown } | null)?.command
+  return typeof command === "string" && command.trim() ? command : undefined
+}
+
 function approvalRemember(payload: unknown): ApprovalRememberView | undefined {
   const value = (payload as { remember?: unknown } | null)?.remember
   if (!value || typeof value !== "object" || typeof (value as ApprovalRememberView).available !== "boolean") return undefined
@@ -48,10 +56,13 @@ function questionShape(payload: unknown, fallback: string): { prompt: string; op
   }
 }
 
-export function PendingPanel({ draftOwner, workspaceId, pending, onReply }: PendingPanelProps) {
+export function PendingPanel({ draftOwner, workspaceId, pending, onReply, onStop }: PendingPanelProps) {
   const t = useText()
   const english = useLocale(state => state.locale) === "en"
   const fallback = useRef({})
+  const stopFlight = useRef(false)
+  const [stopping, setStopping] = useState(false)
+  const [stopError, setStopError] = useState<string>()
   const store = interactionDrafts(draftOwner ?? fallback.current)
   useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
   const key = (row: PendingInteraction) => interactionDraftKey(workspaceId, row.sessionId, row.requestId)
@@ -75,14 +86,29 @@ export function PendingPanel({ draftOwner, workspaceId, pending, onReply }: Pend
     }
   }
 
+  async function stop(): Promise<void> {
+    if (!onStop || stopFlight.current) return
+    stopFlight.current = true
+    setStopping(true)
+    setStopError(undefined)
+    try { await onStop() }
+    catch (reason) { setStopError(reason instanceof Error ? reason.message : String(reason)) }
+    finally { stopFlight.current = false; setStopping(false) }
+  }
+
   return (
     <section className="pending-panel" aria-label={t("待人處理")}>
-      <h3 className="review-title">{t("待人處理")} · {pending.length}</h3>
+      <header className="ih-pending-heading">
+        <h3>{t("待人處理")}{pending.length > 1 ? ` · ${pending.length}` : ""}</h3>
+        {onStop ? <Button size="small" variant="danger" className="ih-interaction-stop" icon={<Square size={11} fill="currentColor" />}
+          loading={stopping} loadingLabel={t("正在停止…")} onClick={() => { void stop() }}>{t("停止執行")}</Button> : null}
+      </header>
+      {stopError ? <p role="alert" className="ih-interaction-banner error-text">{displayError(stopError, { english }).summary}</p> : null}
       <ul className="task-list">
         {pending.map((row) => row.kind === "approval"
           ? (
             <li key={row.requestId} className="task-row">
-              <ApprovalCard requestId={row.requestId} description={approvalText(row.payload, t("工具請求"))} details={approvalDetails(row.payload)} busy={store.get(key(row)).busy} interrupted={row.state === "interrupted"}
+              <ApprovalCard requestId={row.requestId} description={approvalText(row.payload, t("工具請求"))} command={approvalCommand(row.payload)} details={approvalDetails(row.payload)} busy={store.get(key(row)).busy} interrupted={row.state === "interrupted"}
                 remember={approvalRemember(row.payload)} onConfirm={(approved, remember) => { void reply(row, { kind: "approval", approved, ...(remember ? { remember } : {}) }) }} />
               {replyError(row)}
             </li>

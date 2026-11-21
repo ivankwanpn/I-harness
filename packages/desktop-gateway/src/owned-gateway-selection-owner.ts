@@ -4,12 +4,17 @@ import {isOriginalOwnedPluginMount,type createOwnedPluginMount} from './owned-pl
 
 type Captured=Awaited<ReturnType<typeof captureOwnedGatewaySelection>>
 type Mount=ReturnType<typeof createOwnedPluginMount>
+function hasExtensions(selection: Captured): boolean {
+ const { inputs, directMcp } = selection
+ return !!(inputs.skillDirs.length || inputs.commandDescriptors.length || inputs.agentDescriptors.length ||
+  inputs.hookConfigs.length || Object.keys(inputs.mcpServerConfigs).length || directMcp.length)
+}
 /** One selection witness per original runtime. A refresh may replace its witness
  * only after the same original mount accepted exactly those current inputs. */
 export function createOwnedGatewaySelectionOwner(options:Parameters<typeof captureOwnedGatewaySelection>[0]) {
- type Row={current:Captured;mount?:Mount;update?:Mount['update'];original?:ManagedRegistryConstruction;refresh?:Promise<void>;retired:boolean;failed:boolean}
+ type Row={current:Captured;mount?:Mount;update?:Mount['update'];original?:ManagedRegistryConstruction;refresh?:Promise<void>;applying?:boolean;retired:boolean;failed:boolean}
  const rows=new Map<string,Row>()
- function check(row:Row){if(row.retired)throw Error('Gateway selection retired');if(row.refresh)throw Error('Gateway plugin refresh pending');if(row.failed)throw Error('Gateway plugin refresh requires recovery');row.current.assertCurrent()}
+ function check(row:Row){if(row.retired)throw Error('Gateway selection retired');if(row.applying)throw Error('Gateway plugin refresh pending');if(row.failed)throw Error('Gateway plugin refresh requires recovery');row.current.assertCurrent()}
  return Object.freeze({
   async prepare(id:string){
    const prior=rows.get(id);if(prior?.mount)throw Error('Gateway selection already exists');if(prior)prior.retired=true
@@ -36,12 +41,26 @@ export function createOwnedGatewaySelectionOwner(options:Parameters<typeof captu
     // the write to settle instead of poisoning the selection permanently.
     for(let attempt=0;;attempt++){
      try{
-      original.assertCurrent();const candidate=await captureOwnedGatewaySelection(options);original.assertCurrent();candidate.assertCurrent();if(row.retired||row.mount!==mount||mount.update!==update)throw Error('Original Gateway plugin mount changed');await Reflect.apply(update,mount,[candidate.inputs,candidate.directMcp]);original.assertCurrent();candidate.assertCurrent();if(row.retired||row.mount!==mount||mount.update!==update)throw Error('Original Gateway plugin mount changed');row.current=candidate;row.failed=false;return
+      original.assertCurrent()
+      const candidate=await captureOwnedGatewaySelection(options)
+      original.assertCurrent();candidate.assertCurrent()
+      if(row.retired||row.mount!==mount||mount.update!==update)throw Error('Original Gateway plugin mount changed')
+      // An empty refresh exchanges its validated witness without replacing the
+      // active mount. Watcher startup can happen during the very first turn.
+      if(!row.failed&&row.current.kind===candidate.kind&&!hasExtensions(row.current)&&!hasExtensions(candidate)){
+       row.current=candidate
+       return
+      }
+      row.applying=true
+      await Reflect.apply(update,mount,[candidate.inputs,candidate.directMcp])
+      original.assertCurrent();candidate.assertCurrent()
+      if(row.retired||row.mount!==mount||mount.update!==update)throw Error('Original Gateway plugin mount changed')
+      row.current=candidate;row.failed=false;return
      }catch(error){
       const message=String((error as Error)?.message??'')
       if(attempt<200&&/issued write needs reconciliation|prefix changed|writer dependency cleanup unresolved/i.test(message)){await new Promise(resolve=>setTimeout(resolve,25));continue}
       throw error
-     }
+     }finally{row.applying=false}
     }
    }).catch(error=>{row.failed=true;throw error})
    row.refresh=flight;void flight.finally(()=>{if(row.refresh===flight)row.refresh=undefined}).catch(()=>{})

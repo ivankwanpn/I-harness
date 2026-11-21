@@ -339,7 +339,7 @@ const english = {
   "執行中": "Running", "最後活動": "Last active", "沙箱": "Sandbox", "唯讀": "Read only",
   "可寫入工作區": "Workspace write", "完整存取": "Full access",
   "提示": "Prompt", "輸入提示…": "Describe a task…", "目前無法送出": "Cannot send right now",
-  "送出": "Send", "停止": "Stop", "語言": "Language",
+  "送出": "Send", "停止": "Stop", "停止執行": "Stop run", "語言": "Language",
   "搜尋設定": "Search settings", "基本設定": "Basic settings", "Agent 設定": "Agent settings", "本機資料": "Local data", "通知": "Notifications",
   "執行與權限": "Execution and permissions", "資源": "Resources", "資源分類": "Resource categories", "界面": "Interface", "視窗與輸入": "Window and input",
   "沒有符合的設定": "No matching settings", "正在讀取工作區功能…": "Loading workspace capabilities…",

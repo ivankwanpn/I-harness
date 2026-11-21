@@ -749,9 +749,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           void refreshDashboard(selectedWorkspaceId)
           void refreshChanges(selectedWorkspaceId)
         },
-        onCancel: () => {
+        onCancel: async () => {
           const scope = selection.current
-          void (async () => {
+          try {
             let result = await bridge.request({ kind: "session/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }) as { cancelled?: boolean; reason?: string }
             // Draft sessions created through durable input are not in the
             // server's prompt-flight registry. Abort their running input row.
@@ -760,7 +760,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
               if (running) result = await bridge.request({ kind: "desktop/session/input/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, inputId: running.id }) as { cancelled?: boolean; reason?: string }
             }
             if (selection.current === scope) { setTaskActionFailure(undefined); await refreshTasks(selectedWorkspaceId, selectedSessionId) }
-          })().catch((reason: unknown) => { if (selection.current === scope) setTaskActionFailure({ scope, message: reason instanceof Error ? reason.message : String(reason) }) })
+          } catch (reason) {
+            if (selection.current === scope) setTaskActionFailure({ scope, message: reason instanceof Error ? reason.message : String(reason) })
+          }
         },
         onCancelTask: (taskId: string) => {
           const scope = selection.current

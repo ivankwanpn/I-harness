@@ -33,6 +33,7 @@ it('adopts a supported refreshed command only after the same original mount upda
   let submitting: Promise<void> | undefined
   try {
    await Promise.race([entered.promise,refreshing.then(()=>{throw Error('Original refresh did not read MCP')})])
+   expect(()=>selection.current('main').assertCurrent()).not.toThrow()
    request = ''
    submitting=service.submit('main','queued during plugin refresh',new AbortController().signal)
    void submitting.catch(()=>{})
