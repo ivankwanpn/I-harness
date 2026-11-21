@@ -334,6 +334,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     // The frozen original delivery witness is issued by a private WeakMap;
     // revision closes only over its scalar, never a supplied callback.
     const expected=member<Readonly<JournalPrefix>>('prefix'),delivery=originalDeliveryObservation(original.delivery),fence=delivery.revision();
+    const requestInputRevision = original.requestInputRevision(expected)
     // This is only a batching prerequisite, never an authority certificate.
     const immutablePrefix=isStrictFactData(expected)&&Object.isFrozen(expected)&&Reflect.ownKeys(expected).length===3&&typeof expected.eventCount==='number'&&typeof expected.bodyBytes==='number'&&typeof expected.prefixDigest==='string'
     const construct=()=>{
@@ -361,7 +362,16 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     const readRecords=async(ordinals:readonly number[])=>{
       current();const scope=captureWriterDependencies(open(expected));debt.add(scope);activeDependencyScopes.add(scope);markBusy()
       let records:import('./types.ts').SessionEventView[]|undefined,failed=false,primary:unknown
-      try{records=[];for(const ordinal of ordinals){current(scope);scope.assertCurrent();const record=await scope.readEvent(ordinal);current(scope);scope.assertCurrent();if(record.seq!==ordinal)throw TypeError('Original indexed record required');records.push(freezeJsonData(structuredClone(record)))}}
+      try{
+        if(scope.readEvents){
+          current(scope);scope.assertCurrent()
+          const selected=await scope.readEvents(ordinals)
+          current(scope);scope.assertCurrent()
+          records=selected.map(record=>freezeJsonData(structuredClone(record)))
+        }else{
+          records=[];for(const ordinal of ordinals){current(scope);scope.assertCurrent();const record=await scope.readEvent(ordinal);current(scope);scope.assertCurrent();if(record.seq!==ordinal)throw TypeError('Original indexed record required');records.push(freezeJsonData(structuredClone(record)))}
+        }
+      }
       catch(error){failed=true;primary=error}
       try{await scope.close();activeDependencyScopes.delete(scope);debt.delete(scope)}catch(cleanup){activeDependencyScopes.delete(scope);const cause=failed?new AggregateError([primary,cleanup],'Delivery read and exact dependency cleanup failed'):cleanup;dependencyFailure={cause};signalUnavailable(cause,!sameHeldOwner());throw cause}
       if(failed){signalReady();throw primary};current();signalReady();return records!
@@ -388,6 +398,16 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     const ui=()=>{current();return uiScalars??=original.uiScalars()}
     const observation:ExecutionObservation=Object.freeze({identity,eventCount:expected.eventCount,formatVersion:member<number>('formatVersion'),...header?{header}:{},prefix:Object.freeze({...expected}),get hasConversationMessages(){return ui().hasConversationMessages},get turnCount(){return ui().turnCount},get todosRevision(){return ui().todosRevision},codeState(){if(this!==observation)throw TypeError('Original observation receiver required');current();const value=freezeJsonData(structuredClone(original.codeState()) as unknown) as ReturnType<ExecutionObservation['codeState']>;current();return value},projectionRevision:original.context.projectionRevision(),contextRevision:original.context.contextRevision(),scheduleRevision:original.context.scheduleRevision(),schedules,metadata,inbox,delivery:deliveryView,
       assertCurrent(){if(this!==observation)throw TypeError('Original observation receiver required');current()},
+      assertRequestInputCurrent() {
+        if (this !== observation) throw TypeError('Original observation receiver required')
+        runOriginalCurrentnessRead(assertHeld, () => {
+          assertCommittedRead()
+          bound.current()
+          if (requestInputRevision === undefined || delivery.revision() !== fence ||
+              original.requestInputRevision(member<Readonly<JournalPrefix>>('prefix')) !== requestInputRevision)
+            throw TypeError('Original request input observation expired')
+        })
+      },
       async recentNativeRecoveryRefs(){if(this!==observation)throw TypeError('Original observation receiver required');current();const selected=original.recentNativeRecoverySelection();if(!selected.length)return Object.freeze([]);const records=await readRecords(selected.map(value=>value.ordinal));current();const refs=records.map((event,index)=>{const expected=selected[index]!;if(event.type!=='context/result-ref'||event.seq!==expected.ordinal||canonicalJsonData(legacyResultMetadata(event.ref))!==canonicalJsonData(expected.ref))throw TypeError('Original native recovery reference changed');return freezeJsonData(structuredClone(event.ref))});current();return Object.freeze(refs)},
       hasVisibleResultRef(candidate:Readonly<{kind:'legacy';id:string}|{kind:'managed';ref:import('../results/types.ts').ManagedArtifactRef}>){if(this!==observation||!isStrictFactData(candidate))throw TypeError('Original result query required');if(candidate.kind==='legacy'){if(Reflect.ownKeys(candidate).length!==2||typeof candidate.id!=='string'||!candidate.id)throw TypeError('Closed legacy result query required')}else if(candidate.kind==='managed'){if(Reflect.ownKeys(candidate).length!==2||!validManagedArtifactRef(candidate.ref))throw TypeError('Closed managed result query required')}else throw TypeError('Original result query required');current();const found=original.hasVisibleResultRef(candidate);current();return found},
       async jobStatusEvents(documentJobIds:readonly string[]){if(this!==observation||!Array.isArray(documentJobIds)||!isStrictFactData(documentJobIds)||documentJobIds.some(id=>typeof id!=='string'||!id))throw TypeError('Original job query required');current();const selected=original.workflowJobOrdinals(documentJobIds);if(!selected.length)return Object.freeze([]);const records=await readRecords(selected.map(value=>value.ordinal));current();const events=records.map((event,index)=>{const expected=selected[index]!;if(event.type!=='job/status'||event.seq!==expected.ordinal||event.job.jobId!==expected.id)throw TypeError('Original job status changed');return freezeJsonData(structuredClone(event))});current();return Object.freeze(events)},
@@ -459,11 +479,20 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       current()
       return compatibility?.view.events[ordinal]??liveEvents.get(ordinal)?.deref()??event
     }
+    const readEvents=scope.readEvents && (async (ordinals: readonly number[]) => {
+      current()
+      const events=await scope.readEvents!(ordinals)
+      current()
+      return events.map((event,index)=>{
+        const ordinal=ordinals[index]!
+        return compatibility?.view.events[ordinal]??liveEvents.get(ordinal)?.deref()??event
+      })
+    })
     const flight:Promise<void>=Promise.resolve().then(()=>hydrationContext.run(flight,async()=>{
       let failed=false,primary:unknown
       try{
         current()
-        const archive=await original.prepare(read)
+        const archive=await original.prepare(read,readEvents)
         // This temporary lease only materializes the original cache. Every
         // caller obtains a distinct lease after this finite hydration joins.
         await archive.settle()
@@ -490,7 +519,10 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     actionCurrent();const observation=observe(),archive=await prepare();let active=true,settled=false,settling:Promise<void>|undefined
     const current=()=>{if(!active)throw TypeError('Original request preparation expired');actionCurrent();observation.assertCurrent();archive.assertCurrent()}
     try{current()}catch(primary){try{await archive.settle()}catch(cleanup){throw aggregateErrors([primary,cleanup],'Request preparation and original lease cleanup failed')}throw primary}
-    const request:PreparedExecutionRequest=Object.freeze({archive,observation,assertCurrent(){if(this!==request)throw TypeError('Original request receiver required');current()},settle(){if(this!==request)return Promise.reject(TypeError('Original request receiver required'));active=false;if(settled)return Promise.resolve();if(settling)return settling;const flight=archive.settle().then(()=>{settled=true});settling=flight;void flight.finally(()=>{if(settling===flight)settling=undefined}).catch(()=>{});return flight}})
+    const request:PreparedExecutionRequest=Object.freeze({archive,observation,assertCurrent(){if(this!==request)throw TypeError('Original request receiver required');current()},assertInputCurrent(){
+      if(this!==request||!active)throw TypeError('Original request preparation expired')
+      runOriginalCurrentnessRead(assertHeld,()=>{actionCurrent();observation.assertRequestInputCurrent()})
+    },settle(){if(this!==request)return Promise.reject(TypeError('Original request receiver required'));active=false;if(settled)return Promise.resolve();if(settling)return settling;const flight=archive.settle().then(()=>{settled=true});settling=flight;void flight.finally(()=>{if(settling===flight)settling=undefined}).catch(()=>{});return flight}})
     return request
   }
   return {

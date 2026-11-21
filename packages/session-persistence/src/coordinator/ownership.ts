@@ -208,6 +208,8 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
   const pendingOrderingIdentities = new Set<object>()
   const orderingDebt = new Set<ReturnType<typeof orderingReservation>>()
   const orderingAttempts = new Set<OwnershipCleanup>()
+  const acquisitionContext = new AsyncLocalStorage<object>()
+  let orderedAcquisition: { context: object; ids: readonly string[]; done: Promise<void> } | undefined
   type FiniteOrder = { origin: OriginalOrderingOrigin; ordinal: number; earlier: FiniteOrder[]; completion: PromiseWithResolvers<void>; started: boolean; exited: boolean; acknowledged: boolean; failure?: { cause: unknown } }
   const finiteOrders = new Map<OriginalOrderingOrigin, FiniteOrder>(), allFiniteOrders = new WeakMap<object, FiniteOrder>(), finiteContext = new AsyncLocalStorage<OriginalOrderingOrigin>()
   let orderOrdinal = 0
@@ -280,6 +282,12 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
   }
   async function retryResultOrdering() {
     for (const original of [...orderingAttempts]) { await original.close(); original.assertSettled(); orderingAttempts.delete(original) }
+  }
+  function assertOutsideOrderingParticipants(): void {
+    for (const participant of orderingParticipants.values()) {
+      if (participant.call('assertOutside') !== undefined) throw TypeError('Original ordering assertion must be synchronous')
+      participant.check()
+    }
   }
   function checkBundle(bundle: Bundle) {
     if (bundle.role !== 'session') throw Error('Original session bundle required')
@@ -403,7 +411,11 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     returned = resource; return resource
     } finally { done.resolve() }
   }
-  async function borrowBundle(id: string, document: boolean, retain?: (cleanup: OwnershipCleanup) => void, batchIds: readonly string[] = [id], batchCheck: () => void = () => {}, origin?: OriginalOrderingOrigin, prepared?: (keys: readonly string[], check: () => void) => Promise<void>): Promise<Claim> {
+  function borrowBundle(...args: Parameters<typeof acquireBundle>): Promise<Claim> {
+    if (args[1] || acquisitionContext.getStore()) return acquireBundle(...args)
+    return acquisitionContext.run({}, () => acquireBundle(...args))
+  }
+  async function acquireBundle(id: string, document: boolean, retain?: (cleanup: OwnershipCleanup) => void, batchIds: readonly string[] = [id], batchCheck: () => void = () => {}, origin?: OriginalOrderingOrigin, prepared?: (keys: readonly string[], check: () => void) => Promise<void>): Promise<Claim> {
     const held: Awaited<ReturnType<typeof borrowResource>>[] = []
     const acquisitions: OwnershipCleanup[] = []
     const done = Promise.withResolvers<void>(); let cleaned = false
@@ -436,14 +448,31 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
       if (predecessor) {
         // Waiting is retained before any ordering debt or namespace/native issue.
         orderingAttempts.add(originalCleanup)
-        for (const participant of orderingParticipants.values()) { if (participant.call('assertOutside') !== undefined) throw TypeError('Original ordering assertion must be synchronous'); participant.check() }
+        assertOutsideOrderingParticipants()
         await predecessor.join(); batchCheck()
+      }
+      // A disjoint acquisition can join valid work on the same ordering lane.
+      // A recursive or overlapping request cannot wait while holding its caller's lane.
+      while (orderedAcquisition) {
+        const preceding = orderedAcquisition
+        const requested = new Set(artifactScope(artifacts, batchIds, []).keys)
+        if (preceding.context === acquisitionContext.getStore() ||
+            artifactScope(artifacts, preceding.ids, []).keys.some(key => requested.has(key))) {
+          throw Error('Original result ordering unresolved')
+        }
+        assertOutsideOrderingParticipants()
+        orderingAttempts.add(originalCleanup)
+        await preceding.done
+        batchCheck()
       }
       if (orderingPending.size || orderingDebt.size) throw Error('Original result ordering unresolved')
       const incarnation = orderingIncarnation
-      for (const participant of orderingParticipants.values()) { if (participant.call('assertOutside') !== undefined) throw TypeError('Original ordering assertion must be synchronous'); participant.check() }
+      assertOutsideOrderingParticipants()
       freshAcquisitions++; fresh = true
-      if (orderingParticipants.size) orderingAttempts.add(originalCleanup)
+      if (orderingParticipants.size) {
+        orderingAttempts.add(originalCleanup)
+        orderedAcquisition = { context: acquisitionContext.getStore()!, ids: entries.map(entry => entry.id), done: done.promise }
+      }
       orderingCheck = () => {
         if (orderingIncarnation !== incarnation || orderingPending.size) throw Error('Original result ordering changed')
         for (const participant of orderingParticipants.values()) participant.check()
@@ -501,7 +530,11 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     completed = true; return result
     } finally {
       try { if (completed) orderingAttempts.delete(originalCleanup) }
-      finally { if (fresh) freshAcquisitions--; done.resolve() }
+      finally {
+        if (fresh) freshAcquisitions--
+        if (orderedAcquisition?.done === done.promise) orderedAcquisition = undefined
+        done.resolve()
+      }
     }
   }
   const borrowOwnership = (id: string) => borrowBundle(id, false)

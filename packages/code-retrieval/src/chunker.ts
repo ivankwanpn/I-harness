@@ -1,11 +1,17 @@
-import ts from 'typescript'
+import { createRequire } from 'node:module'
 import type { CodeFileSnapshot, CodeHit } from './types.ts'
+
+const require = createRequire(import.meta.url)
+let compiler: typeof import('typescript') | undefined
+
 export type Chunk = Omit<CodeHit,'generation'|'score'>
 /** Boundaries are UTF-16 offsets into unchanged admitted text. AST statements
  * only suggest cut points; every chunk is one contiguous slice. */
 export function* chunks(file: CodeFileSnapshot): Generator<Chunk> {
   const text=file.text, boundaries=new Set<number>()
   if(/\.[cm]?[jt]sx?$/i.test(file.path)) {
+    // Gateway startup and plain-text indexing can run without the JS/TS parser.
+    const ts = compiler ??= require('typescript') as typeof import('typescript')
     const ast=ts.createSourceFile(file.path,text,ts.ScriptTarget.Latest,false)
     for(const statement of ast.statements) boundaries.add(statement.end)
   }

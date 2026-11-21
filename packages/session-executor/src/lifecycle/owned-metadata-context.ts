@@ -1,4 +1,4 @@
-import {isOriginalExecutionObservation} from '@i-harness/core-session/internal/execution'
+import {isOriginalExecutionObservation,type ExecutionObservation} from '@i-harness/core-session/internal/execution'
 import {createTodoTool,isTodoSnapshot,renderTodoSnapshot,type TodoSnapshot} from '@i-harness/todo'
 import {applyGoalMutation,isGoalSnapshot,renderGoalContext,type GoalProjectionSnapshot} from '../../../goal/src/index.ts'
 import {isManagedExecutionAttachment,type ManagedExecutionAttachment} from '../../../session-persistence/src/execution-internal.ts'
@@ -8,8 +8,8 @@ import {committedFactSeqs,type CapturedActionFact,type ProducerFactOutcome} from
 /** Read-only snapshots and original fact admission, bound to one execution. */
 export function createOwnedMetadataContext(execution:ManagedExecutionAttachment) {
  if(!isManagedExecutionAttachment(execution))throw TypeError('Original execution attachment required')
- const capture=()=>{
-  const observation=execution.observe()
+ const capture=(observed?:ExecutionObservation)=>{
+  const observation=observed??execution.observe()
   if(!isOriginalExecutionObservation(observation)||observation.identity!==execution.identity)throw TypeError('Original execution observation required')
   observation.assertCurrent()
   const metadata=observation.metadata
@@ -18,7 +18,7 @@ export function createOwnedMetadataContext(execution:ManagedExecutionAttachment)
   observation.assertCurrent()
   return {observation,todo:metadata.todo.snapshot as TodoSnapshot,goal:metadata.goal.snapshot as GoalProjectionSnapshot}
  }
- const read=()=>{const {todo,goal}=capture();return {todo,goal}}
+ const read=(observation?:ExecutionObservation)=>{const {todo,goal}=capture(observation);return {todo,goal}}
  const pending=new Set<()=>Promise<void>>()
  let closing=false
  return Object.freeze({
@@ -47,7 +47,7 @@ export function createOwnedMetadataContext(execution:ManagedExecutionAttachment)
     const {goal}=read();return goal.kind==='present'?goal.value:null
    },
   }),
-  prompt(base:string){const {todo,goal}=read();const text=renderTodoSnapshot(todo.kind==='absent'?null:todo.items);const goalText=renderGoalContext(goal.kind==='absent'?null:goal.value);return `${text?`${base}\n\n${text}`:base}\n\n${goalText}`},
+  prompt(base:string,observation?:ExecutionObservation){const {todo,goal}=read(observation);const text=renderTodoSnapshot(todo.kind==='absent'?null:todo.items);const goalText=renderGoalContext(goal.kind==='absent'?null:goal.value);return `${text?`${base}\n\n${text}`:base}\n\n${goalText}`},
   async close(){closing=true;for(const close of [...pending])await close()},
  })
 }

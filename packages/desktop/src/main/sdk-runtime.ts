@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process"
+import { realpathSync } from "node:fs"
 import { mkdir } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -117,7 +118,9 @@ export function launchBundledGateway(
   sessionDir: string,
 ): LaunchedRuntime {
   const gatewayRoot = join(resourcesPath, "gateway")
-  const gatewayEntry = join(gatewayRoot, "cli", "src", "cli.js")
+  // Node resolves the module URL to the real entry path. Pass that same path
+  // to the CLI so its direct-launch check also works through a junction.
+  const gatewayEntry = realpathSync.native(join(gatewayRoot, "cli", "src", "cli.js"))
   const child = spawn(process.execPath, [gatewayEntry, "--session-dir", sessionDir], {
     cwd: workspace.path,
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
@@ -143,6 +146,9 @@ export function createWorkspaceRuntimeManager(options: {
   const runtimes = new Map<string, WorkspaceRuntime>()
   const pending = new Map<string, Promise<WorkspaceRuntime>>()
   const children = new Map<string, LaunchedRuntime>()
+  // Routing can be withdrawn before shutdown. Only the original OS exit
+  // releases ownership of the workspace's session directory.
+  const processOwners = new Map<string, LaunchedRuntime>()
   const generations = new Map<string, number>()
   type RecoveryState = { count: number; since: number; retryAt: number; timer?: NodeJS.Timeout }
   const restartWindow = new Map<string, RecoveryState>()
@@ -151,6 +157,7 @@ export function createWorkspaceRuntimeManager(options: {
   const lastUsed = new Map<string, number>()
   const closingClients = new WeakMap<HarnessClient, Promise<void>>()
   let closed = false
+  let closeFlight: Promise<void> | undefined
   let activityVersion = 0
   let scopeEpoch = 0
   let scopeSyncTail: Promise<void> = Promise.resolve()
@@ -158,10 +165,15 @@ export function createWorkspaceRuntimeManager(options: {
   function closeClient(client: HarnessClient): Promise<void> {
     let closing = closingClients.get(client)
     if (!closing) {
-      closing = client.close().catch(() => undefined)
+      closing = Promise.resolve().then(() => client.close())
       closingClients.set(client, closing)
     }
     return closing
+  }
+
+  async function stopChild(launched: LaunchedRuntime): Promise<void> {
+    await closeClient(launched.client)
+    await launched.exited
   }
 
   function assertCurrent(id: string, generation: number): void {
@@ -184,7 +196,16 @@ export function createWorkspaceRuntimeManager(options: {
     const sessionDir = join(options.sessionsRoot, workspace.id)
     await mkdir(sessionDir, { recursive: true })
     assertCurrent(workspace.id, generation)
+    const preceding = processOwners.get(workspace.id)
+    if (preceding !== undefined) {
+      await stopChild(preceding)
+      assertCurrent(workspace.id, generation)
+    }
     const launched = launch(workspace, sessionDir)
+    processOwners.set(workspace.id, launched)
+    void launched.exited.then(() => {
+      if (processOwners.get(workspace.id) === launched) processOwners.delete(workspace.id)
+    })
     lastUsed.set(workspace.id, Date.now())
     children.set(workspace.id, launched)
     try {
@@ -216,11 +237,11 @@ export function createWorkspaceRuntimeManager(options: {
       },()=>{void manager.invalidate!(workspace.id).catch(()=>{})})
       return { client: launched.client, info, sandbox, whenClosed: () => {
         const closing=closingClients.get(launched.client)
-        return closing ? closing.then(()=>launched.exited) : children.get(workspace.id)!==launched ? launched.exited : undefined
+        return closing ? closing.then(()=>launched.exited,()=>launched.exited) : children.get(workspace.id)!==launched ? launched.exited : undefined
       } }
     } catch (error) {
       if (children.get(workspace.id) === launched) children.delete(workspace.id)
-      await closeClient(launched.client)
+      await stopChild(launched).catch(() => undefined)
       throw error
     }
   }
@@ -261,7 +282,7 @@ export function createWorkspaceRuntimeManager(options: {
     async invalidate(id) {
       const runtime = runtimes.get(id)
       const starting = pending.get(id)
-      const child = children.get(id)
+      const child = processOwners.get(id)
       if (!runtime && !starting && !child) return
       const generation = generations.get(id) ?? 0
       const health = healthTimers.get(id)
@@ -272,9 +293,12 @@ export function createWorkspaceRuntimeManager(options: {
       pending.delete(id)
       children.delete(id)
       try {emit({ kind: "sdk/disconnected", workspaceId: id, message: "Project execution scope changed; reconnect to continue.", close: { generation, reason: "scope-changed" } })} catch { /* The original generation is fenced; failed forwarding cannot skip child cleanup. */ }
-      const client = child?.client ?? runtime?.client
-      if (client) await closeClient(client)
-      if (starting) await starting.catch(() => undefined)
+      try {
+        if (child) await stopChild(child)
+        else if (runtime) await closeClient(runtime.client)
+      } finally {
+        if (starting) await starting.catch(() => undefined)
+      }
     },
     refreshProjectContexts() {
       if (closed) return Promise.reject(new Error("runtime manager is closed"))
@@ -332,7 +356,7 @@ export function createWorkspaceRuntimeManager(options: {
             }
           } catch (error) {
             if (children.get(workspace.id)?.client === runtime.client) children.delete(workspace.id)
-            await closeClient(runtime.client)
+            await closeClient(runtime.client).catch(() => undefined)
             throw error
           }
           // No await between checking the epoch/generation and publication.
@@ -358,8 +382,9 @@ export function createWorkspaceRuntimeManager(options: {
               clearInterval(health)
               healthTimers.delete(workspace.id)
               healthFailures.delete(workspace.id)
-              emit({ kind: "sdk/disconnected", workspaceId: workspace.id, message: "Gateway health check failed twice; restarting.", close: { generation, reason: "unhealthy" } })
-              void runtime.client.close().catch(() => undefined)
+              try { emit({ kind: "sdk/disconnected", workspaceId: workspace.id, message: "Gateway health check failed twice; restarting.", close: { generation, reason: "unhealthy" } }) }
+              catch { /* View delivery cannot prevent process recovery. */ }
+              void closeClient(runtime.client).catch(() => undefined)
             })
           }, 20_000)
           health.unref()
@@ -378,7 +403,10 @@ export function createWorkspaceRuntimeManager(options: {
               const tail = launched.stderrTail?.().trim()
               const fatal = launched.fatal?.trim()
               const detail = `SDK subprocess exited (code ${exit.code ?? "?"}${exit.signal ? `, signal ${exit.signal}` : ""})${fatal ? `: ${fatal}` : tail ? `: ${tail.slice(-1800)}` : ""}`
-              if (!closed) emit({ kind: "sdk/disconnected", workspaceId: workspace.id, message: detail, close: { generation, reason: "subprocess-exited", ...(typeof exit.code === "number" ? { code: exit.code } : {}), ...(typeof exit.signal === "string" ? { signal: exit.signal } : {}), ...(tail ? { stderr: tail.slice(-1800) } : {}) } })
+              if (!closed) {
+                try { emit({ kind: "sdk/disconnected", workspaceId: workspace.id, message: detail, close: { generation, reason: "subprocess-exited", ...(typeof exit.code === "number" ? { code: exit.code } : {}), ...(typeof exit.signal === "string" ? { signal: exit.signal } : {}), ...(tail ? { stderr: tail.slice(-1800) } : {}) } }) }
+                catch { /* View delivery cannot prevent process recovery. */ }
+              }
               // Own the recovery here instead of leaving the renderer on a
               // dead transport until the user discovers Reconnect. A bounded
               // restart window prevents a crash loop from spawning forever.
@@ -470,32 +498,40 @@ export function createWorkspaceRuntimeManager(options: {
         generations.set(id, (generations.get(id) ?? 0) + 1)
         runtimes.delete(id)
         children.delete(id)
+        const child = processOwners.get(id)
         lastUsed.delete(id)
         const health = healthTimers.get(id)
         if (health !== undefined) { clearInterval(health); healthTimers.delete(id) }
         healthFailures.delete(id)
-        await closeClient(runtime.client)
+        if (child) await stopChild(child)
         retired += 1
       }
       return retired
     },
-    async close() {
-      if (closed) return
+    close() {
+      if (closeFlight) return closeFlight
       closed = true
-      for (const state of restartWindow.values()) if (state.timer) clearTimeout(state.timer)
-      restartWindow.clear()
-      for (const timer of healthTimers.values()) clearInterval(timer)
-      healthTimers.clear()
-      const closingIds = [...new Set([...runtimes.keys(), ...children.keys()])]
-      const clients = [...children.values()].map((launched) => launched.client)
-      const starters = [...pending.values()]
-      children.clear()
-      runtimes.clear()
-      pending.clear()
-      await Promise.allSettled(clients.map(closeClient))
-      await Promise.allSettled([...starters, scopeSyncTail])
-      for (const id of closingIds) { try { emit({ kind: "sdk/disconnected", workspaceId: id, message: "Runtime manager closed.", close: { generation: generations.get(id) ?? 0, reason: "manager-closed" } }) } catch { /* Diagnostics cannot fail owner close. */ } }
-      listeners.clear()
+      const flight = Promise.resolve().then(async () => {
+        for (const state of restartWindow.values()) if (state.timer) clearTimeout(state.timer)
+        restartWindow.clear()
+        for (const timer of healthTimers.values()) clearInterval(timer)
+        healthTimers.clear()
+        const owners = [...processOwners]
+        const closingIds = [...new Set([...runtimes.keys(), ...owners.map(([id]) => id)])]
+        const starters = [...pending.values()]
+        children.clear()
+        runtimes.clear()
+        pending.clear()
+        const stopped = await Promise.allSettled(owners.map(([, child]) => stopChild(child)))
+        await Promise.allSettled([...starters, scopeSyncTail])
+        const errors = stopped.flatMap(result => result.status === "rejected" ? [result.reason] : [])
+        if (errors.length) throw new AggregateError(errors, "Gateway shutdown incomplete")
+        for (const id of closingIds) { try { emit({ kind: "sdk/disconnected", workspaceId: id, message: "Runtime manager closed.", close: { generation: generations.get(id) ?? 0, reason: "manager-closed" } }) } catch { /* Diagnostics cannot fail owner close. */ } }
+        listeners.clear()
+      })
+      closeFlight = flight
+      void flight.catch(() => { if (closeFlight === flight) closeFlight = undefined })
+      return flight
     },
   }
   return manager

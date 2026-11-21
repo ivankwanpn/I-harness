@@ -9,7 +9,7 @@ export type RecordedCodeEvent = Extract<WireEvent, { type: "code/cell" | "code/o
 export type GenerationReading = NonNullable<Extract<WireEvent, { type: "step/end" }>["generation"]> & { measuredSteps: number }
 
 export type TimelineRow = (
-  | { id: string; kind: "message"; role: "user" | "assistant"; text: string; images?: ImageInput[]; transient?: true; interrupted?: true; generation?: GenerationReading }
+  | { id: string; kind: "message"; role: "user" | "assistant"; text: string; images?: ImageInput[]; transient?: true; interrupted?: true; generation?: GenerationReading; stepStartSeq?: number }
   | { id: string; kind: "tool"; name: string; args?: unknown; output?: unknown; envelope?: RecordedResultEnvelope; resultReceived?: true; isError?: true; dispatched?: true; cellId?: string; parentCallId?: string; resultRefs?: ToolResultReference[]; groupScope?: string }
   | { id: string; kind: "outcome"; flags: { refused?: true; truncated?: true; empty?: true } }
   | { id: string; kind: "failure"; failure: NonNullable<Extract<WireEvent, { type: "step/failed" }>["failure"]> }
@@ -28,12 +28,14 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
   const admittedInputs = new Map<string, Extract<WireEvent, { type: "agent/input/admitted" }>>()
   let promotedInput: Extract<WireEvent, { type: "agent/input/admitted" }> | undefined
   let streamIndex: number | undefined
+  let stepStartSeq: number | undefined
   let stepMessageIndex: number | undefined
   let groupScope: string | undefined
   let turn: TimelineRow["turn"]
   let truncatedStep = false
   const appendRow = (row: TimelineRow) => rows.push(turn ? { ...row, turn } : row)
   for (const [index, event] of events.entries()) {
+    if (event.type === "step/failed") stepStartSeq = undefined
     if (event.type === "turn/start") { groupScope = `turn:${event.seq ?? index}`; turn = { id: groupScope, complete: false }; truncatedStep = false; stepMessageIndex = undefined }
     if (event.type === "turn/end") { if (turn) turn.complete = true; turn = undefined; groupScope = undefined; promotedInput = undefined; truncatedStep = false; stepMessageIndex = undefined }
     if (event.type === "user/message" && event.internal) continue
@@ -111,6 +113,7 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
       // formatting it or mounting it in the generic activity disclosure.
       appendRow({ id: `event:${event.seq ?? index}`, kind: "other", label: event.type, title, codeActivity: event })
     } else if (event.type === "step/end") {
+      stepStartSeq = undefined
       const { generation } = event
       if (event.refused || event.truncated || event.empty) {
         appendRow({ id: `step:${event.seq ?? index}`, kind: "outcome", flags: {
@@ -155,10 +158,14 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
         kind: "message",
         role: event.type === "user/message" ? "user" : "assistant",
         text: event.text,
+        ...(event.type === "assistant/message" && stepStartSeq !== undefined ? { stepStartSeq } : {}),
         ...(event.type === "user/message" && event.images?.length ? { images: event.images } : {}),
         ...(turn ? { turn } : {}),
       }
-      if (event.type === "assistant/message") stepMessageIndex = streamIndex ?? rows.length
+      if (event.type === "assistant/message") {
+        stepMessageIndex = streamIndex ?? rows.length
+        stepStartSeq = undefined
+      }
       if (event.type === "assistant/message" && streamIndex !== undefined) rows[streamIndex] = message
       else appendRow(message)
       streamIndex = undefined
@@ -173,6 +180,7 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
     } else if (event.type === "turn/start" || event.type === "turn/end" || event.type === "step/start") {
       // Structural markers carry no readable content.
       streamIndex = undefined
+      stepStartSeq = event.type === "step/start" ? event.seq : undefined
       if (event.type === "step/start") { stepMessageIndex = undefined; truncatedStep = false }
     } else if (event.type === "step/failed" && event.failure && !truncatedStep) {
       if (stepMessageIndex !== undefined) {

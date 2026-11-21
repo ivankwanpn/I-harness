@@ -31,7 +31,7 @@ export function interestData(scope: InstructionScope, input: unknown): readonly 
   }
   // planDiscovery charges both slots BEFORE registering each local directory,
   // even above a later discovered Git boundary or on a subsequently limited target.
-  // C+2L<=256, G<=C => C+G+4L<=512 lexical roots; aliases at most double that.
+  // G+2L<=256 => G+3L<=384 candidate paths. Aliases at most double that.
   if (globals.size + 2 * local.size > 256) throw new Error('Instruction interest capacity exceeded')
   return frozen([...result.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, interest]) => interest))
 }
@@ -51,9 +51,11 @@ export async function resolveInterests(scope: InstructionScope, interests: reado
       aliases.set(key(lexical), { lexical, canonical: mapped, directory: key(lexical) === key(interest.directory) })
     }
   }
-  // Match W1 normalization exactly, including case-preserving roots and sorting.
-  // No routing ancestors are added here; W1 is their sole owner.
-  const roots = [...new Set([...aliases.values()].flatMap(alias => [alias.lexical, alias.canonical]).map(path => resolve(path.replace(/\\/g, '/'))))].sort()
+  // Candidate watches already cover ancestors through W1's shallow routing
+  // handles. A directory alias is needed for mapping changes, and adding it as
+  // a selection would also walk every unrelated descendant.
+  const roots = [...new Set([...aliases.values()].filter(alias => !alias.directory)
+    .flatMap(alias => [alias.lexical, alias.canonical]).map(path => resolve(path.replace(/\\/g, '/'))))].sort()
   if (roots.length > 1024) throw new Error('Instruction selection capacity exceeded')
   const selections: string[][] = []
   for (let offset = 0; offset < roots.length; offset += 256) selections.push(roots.slice(offset, offset + 256))

@@ -99,6 +99,7 @@ describe("Desktop runtime forwards interaction notifications", () => {
   it("emits desktop/interaction/request and /closed with the workspace id", async () => {
     const root = tempRoot()
     const listeners = new Set<(notification: { method: string; params?: unknown }) => void>()
+    const exited = Promise.withResolvers<void>()
     const client = {
       initialize: vi.fn(async (): Promise<ServerInfo> => ({
         name: "test", version: "0.1.0", protocolVersion: 3, capabilities: {},
@@ -108,11 +109,11 @@ describe("Desktop runtime forwards interaction notifications", () => {
         listeners.add(listener)
         return () => { listeners.delete(listener) }
       },
-      close: vi.fn(async () => {}),
+      close: vi.fn(async () => { exited.resolve() }),
     } as unknown as HarnessClient
     const manager = createWorkspaceRuntimeManager({
       sessionsRoot: join(root, "sessions"),
-      launch: () => ({ client, exited: new Promise(() => {}) }),
+      launch: () => ({ client, exited: exited.promise }),
     })
     const events: DesktopEvent[] = []
     manager.onEvent((event) => events.push(event))

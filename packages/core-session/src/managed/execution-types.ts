@@ -43,6 +43,8 @@ export interface ManagedExecutionOwner {
 export interface OriginalWriterDependencyScope {
   assertCurrent():void
   readEvent(ordinal:number):Promise<SessionEventView>
+  /** Selected records in request order from the same verified prefix. */
+  readEvents?(ordinals:readonly number[]):Promise<readonly SessionEventView[]>
   close():Promise<void>
 }
 /** Installed by the original held writer constructor, never the readonly
@@ -81,6 +83,8 @@ readonly schedules:Readonly<{kind:'unavailable';reason:'original-schedule-adapte
  admitted(inputId:string):Promise<DeepReadonly<Extract<SessionEventView,{type:'agent/input/admitted'}>>|undefined>;
  lastCancellationSeq(inputId:string):number|undefined}>
  assertCurrent():void
+ /** Checks already captured model input data across attempt bookkeeping. */
+ assertRequestInputCurrent():void
  recentNativeRecoveryRefs():Promise<DeepReadonly<readonly Extract<SessionEventView,{type:'context/result-ref'}>['ref'][]>>
  hasVisibleResultRef(candidate:Readonly<{kind:'legacy';id:string}|{kind:'managed';ref:import('../results/types.ts').ManagedArtifactRef}>):boolean
  jobStatusEvents(documentJobIds:readonly string[]):Promise<DeepReadonly<readonly Extract<SessionEventView,{type:'job/status'}>[]>>
@@ -101,6 +105,7 @@ export interface PreparedExecutionRequest {
  readonly archive:PreparedConversationArchive
  readonly observation:ExecutionObservation
  assertCurrent():void
+ assertInputCurrent():void
  settle():Promise<void>
 }
 export interface OriginalManagedReviewerContext {

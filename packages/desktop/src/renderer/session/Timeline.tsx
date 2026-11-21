@@ -1,4 +1,4 @@
-import { Children, isValidElement, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { Children, isValidElement, memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { ArrowDown, Brain, ChevronRight, CircleAlert } from "lucide-react"
 import { elementScroll, useVirtualizer } from "@tanstack/react-virtual"
 import Markdown from "react-markdown"
@@ -17,15 +17,17 @@ import { RecordedCodeActivity } from "./RecordedCodeActivity.tsx"
 import { SettingsDialog } from "../settings/SettingsDialog.tsx"
 import { GenerationSpeed, MessageActions } from "./MessageActions.tsx"
 import { useToolText } from "./tool-text.ts"
+import type { AssistantPreview } from "./event-window.ts"
 import "./timeline-polish.css"
 
-const MarkdownMessage = memo(function MarkdownMessage({ text }: { text: string }) {
+const MarkdownMessage = memo(function MarkdownMessage({ text, streaming = false }: { text: string; streaming?: boolean }) {
   const t = useText()
   const toolText = useToolText()
   return <Markdown remarkPlugins={[remarkGfm]} components={{
     a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
     img: ({ alt }) => <span className="muted">[{t("圖片")}: {alt}]</span>,
     pre: ({children}) => {
+      if (streaming) return <pre>{children}</pre>
       const code = Children.toArray(children).find(child => isValidElement<{children?:ReactNode;className?:string}>(child))
       if (!isValidElement<{children?:ReactNode;className?:string}>(code) || typeof code.props.children !== "string") return <pre>{children}</pre>
       const language = code.props.className?.match(/language-([^\s]+)/)?.[1]
@@ -33,6 +35,10 @@ const MarkdownMessage = memo(function MarkdownMessage({ text }: { text: string }
     },
   }}>{text}</Markdown>
 })
+
+function StreamingMarkdownMessage({ text }: { text: string }) {
+  return <MarkdownMessage text={useDeferredValue(text)} streaming />
+}
 
 function RowView({ row, open, toggle, running, page, setPage, navigation, onPreview, resultReader }: { resultReader?: RecordedResultReader; row: WorkItem; open: Map<string, boolean>; toggle(id: string, expanded?: boolean): void; running: boolean; page: number; setPage(page: number): void; navigation?: FileNavigation; onPreview(preview: { src: string; name: string }): void }) {
   const t = useText()
@@ -47,7 +53,7 @@ function RowView({ row, open, toggle, running, page, setPage, navigation, onPrev
   if (row.kind === "activity-group") return <ActivityGroup resultReader={resultReader} row={row} page={page} setPage={setPage} expanded={open.get(row.id) ?? row.rows.some((tool) => open.get(tool.id) === true)} isOpen={(id) => open.get(id) === true} toggle={toggle} navigation={navigation} onPreview={onPreview} />
   if (row.kind === "message") {
     return <div className={`timeline-message timeline-${row.role}`}>
-      {row.role === "assistant" ? <>
+      {row.role === "assistant" ? row.transient ? <StreamingMarkdownMessage text={row.text} /> : <>
         {row.interrupted ? <p className="timeline-partial-reply">{toolText("中斷前的回覆", "Response before interruption")}</p> : null}
         <MarkdownMessage text={row.text} /><MessageActions text={row.text} generation={row.generation} />
       </> : row.text}
@@ -85,15 +91,18 @@ function RowView({ row, open, toggle, running, page, setPage, navigation, onPrev
         {streaming ? <span className="timeline-reasoning-live">{toolText("思考中…", "Thinking…")}</span> : null}
         {reasoning ? <ChevronRight size={15} className="timeline-reasoning-chevron" aria-hidden="true" /> : null}
       </summary>
-      {expanded ? reasoning ? <div className="timeline-reasoning-body"><MarkdownMessage text={row.detail} /></div> : <pre className="tool-output">{row.detail}</pre> : null}
+      {expanded ? reasoning ? <div className="timeline-reasoning-body">{streaming ? <StreamingMarkdownMessage text={row.detail} /> : <MarkdownMessage text={row.detail} />}</div> : <pre className="tool-output">{row.detail}</pre> : null}
     </details>
   }
   return <ToolActivity resultReader={resultReader} name={row.name} args={row.args} output={row.output} envelope={row.envelope} resultReceived={row.resultReceived} isError={row.isError} dispatched={row.dispatched} cellId={row.cellId} parentCallId={row.parentCallId} resultRefs={row.resultRefs} expanded={open.get(row.id) === true} onToggle={() => toggle(row.id)} navigation={navigation} onPreview={onPreview} />
 }
 
 /** Only the visible rows are mounted, so a long session stays bounded. */
-export interface TimelineProps { resultReader?: RecordedResultReader; rows: TimelineRow[]; navigation?: FileNavigation; running?: boolean; targetSeq?: number; historical?: boolean; onTargetVisible?(seq: number): void }
-export function Timeline({ rows, navigation, running = false, targetSeq, historical = false, onTargetVisible, resultReader }: TimelineProps) {
+export interface TimelineProps { resultReader?: RecordedResultReader; rows: TimelineRow[]; assistantPreview?: AssistantPreview; navigation?: FileNavigation; running?: boolean; targetSeq?: number; historical?: boolean; onTargetVisible?(seq: number): void }
+function timelineKey(row: WorkItem): string {
+  return row.kind === "message" && row.stepStartSeq !== undefined ? `assistant:${row.stepStartSeq}` : row.id
+}
+export function Timeline({ rows, assistantPreview, navigation, running = false, targetSeq, historical = false, onTargetVisible, resultReader }: TimelineProps) {
   const t = useText()
   const tt = useToolText()
   const latestTurn = rows.at(-1)?.turn
@@ -102,6 +111,17 @@ export function Timeline({ rows, navigation, running = false, targetSeq, histori
   const grouped = useMemo(() => groupActivities(rows), [rows])
   const [open, setOpen] = useState(new Map<string, boolean>())
   const items = useMemo(() => workStages(grouped, open, running), [grouped, open, running])
+  // Streamed body text is a single tail item. A text update leaves the
+  // recorded projection, activity groups, and their measurements in place.
+  const previewItem: TimelineRow | undefined = assistantPreview && {
+    id: `assistant:${assistantPreview.stepStartSeq}`, stepStartSeq: assistantPreview.stepStartSeq,
+    kind: "message", role: "assistant", text: assistantPreview.text, transient: true,
+  }
+  const itemCount = items.length + (previewItem ? 1 : 0)
+  const previewStep = assistantPreview?.stepStartSeq
+  const itemAt = (index: number): WorkItem => items[index] ?? previewItem!
+  const itemKey = useCallback((index: number) => index < items.length
+    ? timelineKey(items[index]!) : `assistant:${previewStep}`, [items, previewStep])
   const [pages, setPages] = useState(new Map<string, number>())
   const toggle = (id: string, expanded?: boolean) => {
     pauseFollowing()
@@ -134,8 +154,8 @@ export function Timeline({ rows, navigation, running = false, targetSeq, histori
     }
   }, [])
   const virtualizer = useVirtualizer({
-    count: items.length,
-    getItemKey: (index) => items[index]!.id,
+    count: itemCount,
+    getItemKey: itemKey,
     getScrollElement: () => parentRef.current,
     estimateSize: () => 56,
     overscan: 8,
@@ -186,9 +206,9 @@ export function Timeline({ rows, navigation, running = false, targetSeq, histori
     return () => cancelAnimationFrame(frame)
   }, [items, target?.id, targetSeq, virtualizer, onTargetVisible])
   useEffect(() => {
-    if (!following.current || items.length === 0) return
+    if (!following.current || itemCount === 0) return
     followLatest()
-  }, [items, totalSize, followLatest])
+  }, [items, itemCount, totalSize, followLatest])
   useEffect(() => {
     const element = parentRef.current
     const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(followLatest)
@@ -258,10 +278,10 @@ export function Timeline({ rows, navigation, running = false, targetSeq, histori
       }}>
       <div className="timeline-inner" style={{ height: `${totalSize}px` }}>
         {virtualizer.getVirtualItems().map((item) => {
-          const row = items[item.index]!
+          const row = itemAt(item.index)
           return (
             <div
-              key={row.id}
+              key={timelineKey(row)}
               className="timeline-row"
               data-row-id={row.id}
               data-row-kind={row.kind}
@@ -285,7 +305,7 @@ export function Timeline({ rows, navigation, running = false, targetSeq, histori
       </div>
     </div>
     {liveGeneration ? <div className="timeline-activity-speed"><span>{tt("本輪已量測", "This turn so far")}</span><GenerationSpeed generation={liveGeneration} /></div> : null}
-    {!historical && showLatest && rows.length > 0 ? <button type="button" className="timeline-latest" onClick={() => {
+    {!historical && showLatest && itemCount > 0 ? <button type="button" className="timeline-latest" onClick={() => {
       following.current = true; setShowLatest(false); followLatest()
     }}><ArrowDown size={14} />{t("回到最新內容")}</button> : null}
     {preview ? <SettingsDialog title={preview.name} closeLabel={t("關閉")} initialFocusSelector=".settings-dialog-close" className="timeline-image-dialog" onClose={() => setPreview(undefined)}>

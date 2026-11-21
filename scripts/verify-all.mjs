@@ -28,7 +28,9 @@
 // failure mode this repo keeps shipping is a check that reports a clean result
 // about a question it never asked.)
 //
-// Usage: pnpm verify:all   (or: node scripts/verify-all.mjs)
+// Usage: pnpm verify:all
+// CI can run one named suite with --suite <name>, or e2e and reachability
+// with --integration alongside the existing typecheck and gateway jobs.
 
 import spawn from "cross-spawn"
 import { readFileSync, readdirSync, existsSync } from "node:fs"
@@ -37,8 +39,6 @@ import { fileURLToPath } from "node:url"
 import { testEnvironment } from "./test-env.mjs"
 
 const ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "..")
-// Isolated evidence/config directories for every suite (scripts/test-env.mjs).
-const TEST_ENV = testEnvironment()
 // The ESC is written as an escape sequence, never as a raw control byte: a
 // literal ESC in a source file is the same class of hazard as a stray CR.
 const ANSI = /\u001B\[[0-9;]*m/g
@@ -75,6 +75,40 @@ function expectedPopulation() {
   return [...new Set(dirs)].sort()
 }
 
+// The three longest measured packages each get an independent Windows runner.
+// Every current and future package with a test script has exactly one group.
+function suitePlan(expected) {
+  const anchors = {
+    gateway: "packages/desktop-gateway",
+    executor: "packages/session-executor",
+    "context-output": "packages/context-output",
+  }
+  const suites = Object.fromEntries(Object.entries(anchors).map(([name, path]) =>
+    [name, expected.filter(dir => dir === path)]))
+  suites.workspace = expected.filter(dir => !Object.values(anchors).includes(dir))
+  return suites
+}
+
+const expected = expectedPopulation()
+const suites = suitePlan(expected)
+const args = process.argv.slice(2)
+let suiteGroup
+let integrationOnly = false
+if (args.length === 1 && args[0] === "--list-suites") {
+  console.log(JSON.stringify(suites, null, 2))
+  process.exit(0)
+} else if (args.length === 1 && args[0] === "--integration") {
+  integrationOnly = true
+} else if (args.length === 2 && args[0] === "--suite" && Object.hasOwn(suites, args[1])) {
+  suiteGroup = args[1]
+} else if (args.length > 0) {
+  console.error("Usage: node scripts/verify-all.mjs [--suite <gateway|executor|context-output|workspace> | --integration | --list-suites]")
+  process.exit(1)
+}
+
+// Isolated evidence/config directories for every suite (scripts/test-env.mjs).
+const TEST_ENV = testEnvironment()
+
 /** Runs a step, streaming its output while capturing it (a step that takes
  *  minutes must not look like a hang). Returns { code, text }. */
 function run(cmd, args) {
@@ -96,70 +130,77 @@ function run(cmd, args) {
 const readings = {}
 let failed = false
 
-rule("prepare · test command argument handling")
-const runnerCheck = await run("node", ["--test", "scripts/test-env.test.mjs"])
-if (runnerCheck.code !== 0) {
-  console.error("Test command preparation failed; no suite result can be claimed.")
-  process.exit(1)
-}
-
-// A fresh checkout has no ignored Desktop worker payload. Build it before the
-// document-reader tests so results do not depend on a prior development build.
-rule("prepare · Desktop attachment reader")
-const preparation = await run("node", ["packages/desktop/scripts/build-attachment-reader.mjs"])
-readings.preparation = { code: preparation.code }
-if (preparation.code !== 0) {
-  console.error("Verification preparation failed; no test result can be claimed.")
-  process.exit(1)
-}
-
-// ── 1/7 · the recursive suite, captured so its POPULATION can be counted ──────
-rule("1/7 · pnpm -r --no-bail --no-sort --stream --workspace-concurrency=1 test --maxWorkers=2 --minWorkers=1")
-const expected = expectedPopulation()
-// Native integration fixtures have finite deadlines. Keep workspace suites
-// serial so another package's process workload cannot consume their budget.
-// pnpm's topological scheduler skips dependents of a failed project even with
-// --no-bail. Tests consume source exports; sorting adds no prerequisite here.
-// Disable that scheduler so a failure cannot hide the remaining test suites.
-const suite = await run("pnpm", ["-r", "--no-bail", "--no-sort", "--stream", "--workspace-concurrency=1", "test", "--maxWorkers=2", "--minWorkers=1", "--testTimeout=120000", "--hookTimeout=120000"])
-const reportedDirs = [...new Set([...suite.text.matchAll(/^(\S+) test:\s+Test Files /gm)].map((m) => m[1]))].sort()
-const verdicts = [...suite.text.matchAll(/^(\S+) test: (Done|Failed)$/gm)]
-const failedProjects = verdicts.filter((m) => m[2] === "Failed").map((m) => m[1]).sort()
-let passed = 0
-let skipped = 0
-let failedTests = 0
-for (const m of suite.text.matchAll(/^\S+ test:\s+Tests\s+(.*)$/gm)) {
-  const words = m[1].split(/\s+/)
-  for (let i = 0; i < words.length; i += 1) {
-    if (words[i + 1] === "passed") passed += Number(words[i])
-    if (words[i + 1] === "skipped") skipped += Number(words[i])
-    if (words[i + 1] === "failed") failedTests += Number(words[i])
+if (!integrationOnly) {
+  rule("prepare · test command argument handling")
+  const runnerCheck = await run("node", ["--test", "scripts/test-env.test.mjs"])
+  if (runnerCheck.code !== 0) {
+    console.error("Test command preparation failed; no suite result can be claimed.")
+    process.exit(1)
   }
-}
-readings.suite = { code: suite.code, passed, skipped, failed: failedTests }
-readings.population = { expected: expected.length, reported: reportedDirs.length }
-console.log(`\n   reading: exit ${suite.code} · ${passed} passed | ${skipped} skipped | ${failedTests} failed`)
-console.log(`   reading: ${reportedDirs.length} of ${expected.length} projects reported${failedProjects.length > 0 ? ` · FAILED: ${failedProjects.join(", ")}` : ""}`)
-if (suite.code !== 0) failed = true
 
-// ── 2/7 · the load-bearing half: a short population is NOT a total ───────────
-rule("2/7 · population")
-if (reportedDirs.length !== expected.length) {
-  const missing = expected.filter((d) => !reportedDirs.includes(d))
-  console.log(`   ✗ SHORT RUN: ${reportedDirs.length} of ${expected.length} projects reported.`)
-  console.log(`     never reported: ${missing.join(", ")}`)
-  console.log("     The totals above are a PREFIX, not a result. Fix the failing project and re-run.")
-  failed = true
-} else {
-  console.log(`   ✓ all ${expected.length} projects with a test script reported`)
-}
+  const projects = suiteGroup ? suites[suiteGroup] : expected
+  if (!projects.length) {
+    console.error("Verification selected no workspace test projects.")
+    process.exit(1)
+  }
 
-// ── 3/7 · typecheck ──────────────────────────────────────────────────────────
-rule("3/7 · pnpm typecheck")
-const types = await run("pnpm", ["typecheck"])
-readings.typecheck = { code: types.code }
-console.log(`\n   reading: exit ${types.code}`)
-if (types.code !== 0) failed = true
+  // Fresh checkouts need the ignored worker payload before Desktop tests.
+  if (projects.includes("packages/desktop")) {
+    rule("prepare · Desktop attachment reader")
+    const preparation = await run("node", ["packages/desktop/scripts/build-attachment-reader.mjs"])
+    if (preparation.code !== 0) {
+      console.error("Verification preparation failed; no test result can be claimed.")
+      process.exit(1)
+    }
+  }
+
+  rule(suiteGroup ? `workspace suite · ${suiteGroup}` : "1/7 · workspace suite")
+  // Keep native integration fixtures serial within each runner. Independent
+  // projects still report if an earlier package fails.
+  const filters = suiteGroup ? projects.flatMap(dir => ["--filter", `./${dir}`]) : []
+  const suite = await run("pnpm", ["-r", ...filters, "--no-bail", "--no-sort", "--stream", "--workspace-concurrency=1", "test", "--maxWorkers=2", "--minWorkers=1", "--testTimeout=120000", "--hookTimeout=120000"])
+  const reportedDirs = [...new Set([...suite.text.matchAll(/^(\S+) test:\s+Test Files /gm)].map(m => m[1]))].sort()
+  const failedProjects = [...suite.text.matchAll(/^(\S+) test: Failed$/gm)].map(m => m[1]).sort()
+  let passed = 0
+  let skipped = 0
+  let failedTests = 0
+  for (const m of suite.text.matchAll(/^\S+ test:\s+Tests\s+(.*)$/gm)) {
+    const words = m[1].split(/\s+/)
+    for (let i = 0; i < words.length; i += 1) {
+      if (words[i + 1] === "passed") passed += Number(words[i])
+      if (words[i + 1] === "skipped") skipped += Number(words[i])
+      if (words[i + 1] === "failed") failedTests += Number(words[i])
+    }
+  }
+  readings.suite = { code: suite.code, passed, skipped, failed: failedTests }
+  readings.population = { expected: projects.length, reported: reportedDirs.length }
+  console.log(`\n   reading: exit ${suite.code} · ${passed} passed | ${skipped} skipped | ${failedTests} failed`)
+  console.log(`   reading: ${reportedDirs.length} of ${projects.length} projects reported${failedProjects.length > 0 ? ` · FAILED: ${failedProjects.join(", ")}` : ""}`)
+  failed = suite.code !== 0 || failedProjects.length > 0 || failedTests > 0
+
+  rule(suiteGroup ? "suite population" : "2/7 · population")
+  const missing = projects.filter(dir => !reportedDirs.includes(dir))
+  const unexpected = reportedDirs.filter(dir => !projects.includes(dir))
+  if (missing.length || unexpected.length) {
+    console.log("   ✗ Suite reports differ from the planned workspace projects.")
+    if (missing.length) console.log(`     never reported: ${missing.join(", ")}`)
+    if (unexpected.length) console.log(`     unexpected: ${unexpected.join(", ")}`)
+    failed = true
+  } else {
+    console.log(`   ✓ all ${projects.length} planned projects reported`)
+  }
+
+  if (suiteGroup) {
+    rule(failed ? "WORKSPACE SUITE FAILED" : "WORKSPACE SUITE PASSED")
+    process.exit(failed ? 1 : 0)
+  }
+
+  rule("3/7 · pnpm typecheck")
+  const types = await run("pnpm", ["typecheck"])
+  readings.typecheck = { code: types.code }
+  console.log(`\n   reading: exit ${types.code}`)
+  if (types.code !== 0) failed = true
+}
 
 // ── 4/7 · the suite the recursive walk does not reach ────────────────────────
 rule("4/7 · pnpm e2e")
@@ -176,6 +217,11 @@ const gateLine = gate.text.match(/^reachability: (.*)$/m)
 readings.gate = { code: gate.code, line: gateLine?.[1] ?? "(no reading line)" }
 console.log(`\n   reading: exit ${gate.code} · ${readings.gate.line}`)
 if (gate.code !== 0) failed = true
+
+if (integrationOnly) {
+  rule(failed ? "INTEGRATION CHECKS FAILED" : "INTEGRATION CHECKS PASSED")
+  process.exit(failed ? 1 : 0)
+}
 
 rule("6/7 · package boundaries")
 const boundaries = await run("node", ["scripts/audit/check-package-boundaries.mjs", "--gate"])

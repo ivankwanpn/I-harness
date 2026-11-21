@@ -19,13 +19,13 @@ async function fixture(){
  const prefix=await backend.readJournalPrefix!('a',held)
  return {root,backend,held,prefix,path:join(root,'a.jsonl'),invalidate(){current=false},async close(){await claim.release();await Promise.all(ownership.releaseHeldLocks());await fs.rm(root,{recursive:true,force:true})}}
 }
-it('registers synchronously and reads selected dependencies on one original descriptor without public replay',async()=>{
- const f=await fixture();let opens=0
+it('verifies the complete prefix once for a batch and returns selected records in request order',async()=>{
+ const f=await fixture();let opens=0,reads=0
  vi.mocked(fs.readFile).mockClear()
- vi.mocked(fs.open).mockImplementation(async(...args)=>{if(args[0]===f.path)opens++;return originalOpen(...args)})
+ vi.mocked(fs.open).mockImplementation(async(...args)=>{const h=await originalOpen(...args);if(args[0]===f.path){opens++;const read=h.read.bind(h);h.read=(async(...args:any[])=>{reads++;return (read as any)(...args)}) as typeof h.read}return h})
  const scope=openOwnedExecutionDependencies(f.backend,'a',f.held,f.prefix)
  expect(opens).toBe(0)
- try{expect(await scope.readEvent(1)).toMatchObject({seq:1,type:'plan/mode',mode:'off'});expect(await scope.readEvent(0)).toMatchObject({seq:0,mode:'on'});expect(opens).toBe(1);expect(vi.mocked(fs.readFile).mock.calls.filter(args=>args[0]===f.path)).toEqual([])}finally{await scope.close();expect(()=>scope.assertCurrent()).toThrow();await f.close()}
+ try{expect(await scope.readEvents!([1,0])).toMatchObject([{seq:1,type:'plan/mode',mode:'off'},{seq:0,mode:'on'}]);expect(opens).toBe(1);expect(reads).toBe(1);expect(vi.mocked(fs.readFile).mock.calls.filter(args=>args[0]===f.path)).toEqual([])}finally{await scope.close();expect(()=>scope.assertCurrent()).toThrow();await f.close()}
 })
 it('keeps its opened extent fixed and rejects a concurrent append rather than adopting a new prefix',async()=>{
  const f=await fixture();let changed=false
@@ -44,7 +44,7 @@ it('refuses distinct original descriptor/path inode identities which collide as 
 it('does not hide a complete invalid later frame when reading an earlier dependency',async()=>{
  const f=await fixture();await fs.appendFile(f.path,'{"recordKind":"session/fact-batch","version":1}\n')
  const scope=openOwnedExecutionDependencies(f.backend,'a',f.held,f.prefix)
- try{await expect(scope.readEvent(0)).rejects.toThrow()}finally{await scope.close();await f.close()}
+ try{await expect(scope.readEvents!([0,1])).rejects.toThrow()}finally{await scope.close();await f.close()}
 })
 it('retains consumed close uncertainty and never retries a no-op as successful cleanup',async()=>{
  const f=await fixture();let closes=0

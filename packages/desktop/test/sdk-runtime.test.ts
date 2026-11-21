@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { HarnessClient, RpcNotification, ServerInfo } from "@i-harness/sdk"
-import { createWorkspaceRuntimeManager } from "../src/main/sdk-runtime.ts"
+import { createWorkspaceRuntimeManager, launchBundledGateway } from "../src/main/sdk-runtime.ts"
 import type { DesktopEvent } from "../src/shared/bridge.ts"
 import type { WorkspaceEntry } from "../src/main/workspaces.ts"
 import type { DesktopProjectContext } from "../src/main/project-runtime.ts"
@@ -20,6 +20,38 @@ function tempRoot(): string {
   return root
 }
 
+it("launches the bundled CLI through a junction using its original entry path", async () => {
+  const root = tempRoot()
+  const resources = join(root, "resources")
+  const linkedResources = join(root, "linked-resources")
+  const entryDir = join(resources, "gateway", "cli", "src")
+  mkdirSync(entryDir, { recursive: true })
+  writeFileSync(join(entryDir, "package.json"), JSON.stringify({ type: "module" }))
+  writeFileSync(join(entryDir, "cli.js"), `
+    import { createInterface } from "node:readline";
+    import { pathToFileURL } from "node:url";
+    if (pathToFileURL(process.argv[1]).href === import.meta.url) {
+      const lines = createInterface({input: process.stdin});
+      lines.on("line", line => {
+        const {id, method} = JSON.parse(line);
+        const result = method === "initialize"
+          ? {name: "joined-entry", version: "1.0.0", protocolVersion: 3, capabilities: {}}
+          : {ok: true};
+        if (id !== undefined) process.stdout.write(JSON.stringify({jsonrpc: "2.0", id, result}) + "\\n");
+        if (method === "shutdown") { lines.close(); process.stdin.pause(); }
+      });
+    }
+  `)
+  symlinkSync(resources, linkedResources, process.platform === "win32" ? "junction" : "dir")
+  const launch = launchBundledGateway(linkedResources, { id: "linked", label: "linked", path: root }, join(root, "sessions"))
+  try {
+    expect(await launch.client.initialize()).toMatchObject({ name: "joined-entry", protocolVersion: 3 })
+  } finally {
+    await launch.client.close()
+    await launch.exited
+  }
+})
+
 interface FakeClientOptions {
   info?: Partial<ServerInfo>
   sandbox?: unknown
@@ -31,7 +63,8 @@ interface FakeClientOptions {
 
 function fakeClient(options: FakeClientOptions = {}) {
   const listeners = new Set<(notification: RpcNotification) => void>()
-  const close = vi.fn(async () => {})
+  const exit = Promise.withResolvers<void>()
+  const close = vi.fn(async () => { exit.resolve() })
   const request = vi.fn(async (method: string, _params?: unknown): Promise<unknown> => {
     if (method === "desktop/sandbox/state") return options.sandbox
     if (method === "session/dashboard") {
@@ -62,6 +95,8 @@ function fakeClient(options: FakeClientOptions = {}) {
       close,
     } as unknown as HarnessClient,
     close,
+    exited: exit.promise,
+    exit: exit.resolve,
     initialize,
     request,
     listeners,
@@ -76,11 +111,7 @@ describe("Desktop SDK runtime manager", () => {
   it("single-flights concurrent gets and shuts each child down exactly once", async () => {
     const root = tempRoot()
     const host = fakeClient()
-    let exited: (() => void) | undefined
-    const launch = vi.fn(() => ({
-      client: host.client,
-      exited: new Promise<void>((resolve) => { exited = resolve }),
-    }))
+    const launch = vi.fn(() => host)
     const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(root, "sessions"), launch })
 
     const [first, second] = await Promise.all([manager.get(workspace()), manager.get(workspace())])
@@ -94,7 +125,6 @@ describe("Desktop SDK runtime manager", () => {
     await manager.close()
     await manager.close()
     expect(host.close).toHaveBeenCalledTimes(1)
-    exited?.()
   })
 
   it("requests the sandbox claim only when the host advertises the capability", async () => {
@@ -105,7 +135,7 @@ describe("Desktop SDK runtime manager", () => {
     })
     const manager = createWorkspaceRuntimeManager({
       sessionsRoot: join(root, "sessions"),
-      launch: () => ({ client: host.client, exited: new Promise(() => {}) }),
+      launch: () => host,
     })
 
     const runtime = await manager.get(workspace())
@@ -120,7 +150,7 @@ describe("Desktop SDK runtime manager", () => {
     const old = fakeClient({ info: { protocolVersion: 2 } })
     const oldManager = createWorkspaceRuntimeManager({
       sessionsRoot: join(root, "sessions-old"),
-      launch: () => ({ client: old.client, exited: new Promise(() => {}) }),
+      launch: () => old,
     })
     await expect(oldManager.get(workspace())).rejects.toThrow(/protocol/i)
     expect(old.close).toHaveBeenCalledTimes(1)
@@ -132,7 +162,7 @@ describe("Desktop SDK runtime manager", () => {
     })
     const bogusManager = createWorkspaceRuntimeManager({
       sessionsRoot: join(root, "sessions-bogus"),
-      launch: () => ({ client: bogus.client, exited: new Promise(() => {}) }),
+      launch: () => bogus,
     })
     await expect(bogusManager.get(workspace())).rejects.toThrow(/sandbox/i)
     expect(bogus.close).toHaveBeenCalledTimes(1)
@@ -142,21 +172,14 @@ describe("Desktop SDK runtime manager", () => {
   it("emits sdk/disconnected on child exit and restarts on the next get", async () => {
     const root = tempRoot()
     const hosts = [fakeClient(), fakeClient()]
-    const exits: Array<() => void> = []
     let call = 0
-    const launch = vi.fn(() => {
-      const host = hosts[call++]!
-      return {
-        client: host.client,
-        exited: new Promise<void>((resolve) => { exits.push(resolve) }),
-      }
-    })
+    const launch = vi.fn(() => hosts[call++]!)
     const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(root, "sessions"), launch })
     const events: DesktopEvent[] = []
     const off = manager.onEvent((event) => events.push(event))
 
     const first = await manager.get(workspace("ws-exit"))
-    exits[0]!()
+    hosts[0]!.exit()
     await new Promise((resolve) => setImmediate(resolve))
 
     expect(events.filter(event=>event.kind==='sdk/ready')).toEqual([{kind:'sdk/ready',method:'sdk/ready',workspaceId:'ws-exit',runtimeGeneration:0}])
@@ -174,7 +197,7 @@ describe("Desktop SDK runtime manager", () => {
   it("fences context diagnostic delivery by the actual runtime generation", async () => {
     const hosts = [fakeClient(), fakeClient()]
     let nextHost = 0
-    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => ({ client: hosts[nextHost++]!.client, exited: new Promise(() => {}) }) })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => hosts[nextHost++]! })
     const events: DesktopEvent[] = []
     manager.onEvent(event => events.push(event))
     const notify = (index: number) => { for (const listener of hosts[index]!.listeners) listener({ jsonrpc: "2.0", method: "desktop/context/diagnostic", params: { sessionId: "owned" } } as RpcNotification) }
@@ -196,7 +219,7 @@ describe("Desktop SDK runtime manager", () => {
     const host = fakeClient()
     const manager = createWorkspaceRuntimeManager({
       sessionsRoot: join(root, "sessions"),
-      launch: () => ({ client: host.client, exited: new Promise(() => {}) }),
+      launch: () => host,
     })
     const events: DesktopEvent[] = []
     manager.onEvent((event) => events.push(event))
@@ -252,7 +275,7 @@ describe("project scope publication", () => {
     })
     const manager = createWorkspaceRuntimeManager({
       sessionsRoot: join(tempRoot(), "sessions"), projectContexts: async () => scopes,
-      launch: () => ({ client: host.client, exited: new Promise(() => {}) }),
+      launch: () => host,
     })
     const starting = manager.get(workspace())
     await entered.promise
@@ -281,7 +304,7 @@ describe("project scope publication", () => {
     let launches = 0
     const manager = createWorkspaceRuntimeManager({
       sessionsRoot: join(tempRoot(), "sessions"),
-      launch: () => ({ client: launches++ === 0 ? first.client : next.client, exited: new Promise(() => {}) }),
+      launch: () => launches++ === 0 ? first : next,
     })
     const starting = manager.get(workspace())
     const outcome = starting.then(() => "published", () => "invalidated")
@@ -310,7 +333,7 @@ describe("project scope publication", () => {
       authority = (params as { projects: DesktopProjectContext[] }).projects
       return {}
     })
-    const launch = vi.fn(() => ({ client: host.client, exited: new Promise<void>(() => {}) }))
+    const launch = vi.fn(() => host)
     const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), projectContexts: async () => scopes, launch })
     await manager.get(workspace())
     hold = true
@@ -336,7 +359,7 @@ describe("project scope publication", () => {
     host.request.mockImplementation(async () => { entered.resolve(); await release.promise; return {} })
     const manager = createWorkspaceRuntimeManager({
       sessionsRoot: join(tempRoot(), "sessions"), projectContexts: async () => [],
-      launch: () => ({ client: host.client, exited: new Promise(() => {}) }),
+      launch: () => host,
     })
     const startup = manager.get(workspace()).then(() => "published", () => "closed")
     await entered.promise
@@ -365,7 +388,7 @@ describe("Desktop close-time active work", () => {
     const host = fakeClient({ info: { capabilities: workCapabilities } })
     let release!: (value: ServerInfo) => void
     host.initialize.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
-    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => ({ client: host.client, exited: new Promise(() => {}) }) })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => host })
     const starting = manager.get(workspace())
     expect(await manager.hasActiveWork()).toBe(true)
     await vi.waitFor(() => expect(release).toBeTypeOf("function"))
@@ -378,7 +401,7 @@ describe("Desktop close-time active work", () => {
     { running: true }, { queued: 1 }, { tasks: 1 },
   ])("keeps a host with active dashboard state %j", async (activity) => {
     const host = fakeClient({ info: { capabilities: workCapabilities }, dashboard: { sessions: [{ id: "s", live: true, ...activity }] } })
-    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => ({ client: host.client, exited: new Promise(() => {}) }) })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => host })
     await manager.get(workspace())
     expect(await manager.hasActiveWork()).toBe(true)
     await manager.close()
@@ -386,7 +409,7 @@ describe("Desktop close-time active work", () => {
 
   it("keeps a host waiting for an approval even when dashboard is idle", async () => {
     const host = fakeClient({ info: { capabilities: workCapabilities }, dashboard: { sessions: [{ id: "s", live: true, running: false }] }, pending: [{ requestId: "p", sessionId: "s" }] })
-    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => ({ client: host.client, exited: new Promise(() => {}) }) })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => host })
     await manager.get(workspace())
     expect(await manager.hasActiveWork()).toBe(true)
     expect(host.request).toHaveBeenCalledWith("desktop/interaction/pending", {}, 2_500)
@@ -395,7 +418,7 @@ describe("Desktop close-time active work", () => {
 
   it("allows an idle host to exit only after both authoritative reads succeed", async () => {
     const host = fakeClient({ info: { capabilities: workCapabilities }, dashboard: { sessions: [{ id: "s", live: true, running: false }] } })
-    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => ({ client: host.client, exited: new Promise(() => {}) }) })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => host })
     await manager.get(workspace())
     expect(await manager.hasActiveWork()).toBe(false)
     expect(host.request).toHaveBeenCalledWith("session/dashboard", {}, 2_500)
@@ -407,7 +430,7 @@ describe("Desktop close-time active work", () => {
     let release!: (value: unknown) => void
     const first = fakeClient({ info: { capabilities: workCapabilities }, dashboard: new Promise((resolve) => { release = resolve }) })
     const second = fakeClient({ info: { capabilities: workCapabilities } })
-    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: (entry) => ({ client: entry.id === "a" ? first.client : second.client, exited: new Promise(() => {}) }) })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: (entry) => entry.id === "a" ? first : second })
     await manager.get(workspace("a"))
     const closing = manager.hasActiveWork()
     await vi.waitFor(() => expect(first.request).toHaveBeenCalledWith("session/dashboard", {}, 2_500))
@@ -421,7 +444,7 @@ describe("Desktop close-time active work", () => {
   it("does not report idle when SDK activity arrives during close-time reads", async () => {
     let release!: (value: unknown) => void
     const host = fakeClient({ info: { capabilities: workCapabilities }, dashboard: new Promise((resolve) => { release = resolve }) })
-    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => ({ client: host.client, exited: new Promise(() => {}) }) })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => host })
     await manager.get(workspace())
     const closing = manager.hasActiveWork()
     await vi.waitFor(() => expect(host.request).toHaveBeenCalledWith("session/dashboard", {}, 2_500))
@@ -442,7 +465,7 @@ describe("Desktop close-time active work", () => {
     { failPending: true },
   ])("retains the host when close-time activity is unknown: %j", async (options) => {
     const host = fakeClient({ info: { capabilities: workCapabilities }, ...options })
-    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => ({ client: host.client, exited: new Promise(() => {}) }) })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => host })
     await manager.get(workspace())
     expect(await manager.hasActiveWork()).toBe(true)
     await manager.close()
@@ -451,7 +474,7 @@ describe("Desktop close-time active work", () => {
   it("retains a host when activity arrives during idle inspection", async () => {
     let release!: (value: unknown) => void
     const host = fakeClient({ info: { capabilities: workCapabilities }, dashboard: new Promise(resolve => { release = resolve }) })
-    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => ({ client: host.client, exited: new Promise(() => {}) }) })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => host })
     await manager.get(workspace())
     await new Promise(resolve => setTimeout(resolve, 5))
     const eviction = manager.evictIdle!(1)
@@ -464,7 +487,7 @@ describe("Desktop close-time active work", () => {
 
   it("retains idle lanes with owned schedules or background cleanup", async () => {
     const host = fakeClient({ info: { capabilities: workCapabilities }, dashboard: { sessions: [{ id: 's', live: true, running: false, active: true }] } })
-    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), 'sessions'), launch: () => ({ client: host.client, exited: new Promise(() => {}) }) })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), 'sessions'), launch: () => host })
     await manager.get(workspace())
     await new Promise(resolve => setTimeout(resolve, 5))
     expect(await manager.hasActiveWork()).toBe(true)
@@ -475,7 +498,11 @@ describe("Desktop close-time active work", () => {
   it("bounds restarts even when every child initializes successfully", async () => {
     vi.useFakeTimers()
     const exits: Array<() => void> = []
-    const launch = vi.fn(() => ({ client: fakeClient().client, exited: new Promise<void>(resolve => { exits.push(resolve) }) }))
+    const launch = vi.fn(() => {
+      const host = fakeClient()
+      exits.push(host.exit)
+      return host
+    })
     const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), 'sessions'), launch })
     try {
       await manager.get(workspace())
@@ -500,7 +527,7 @@ describe("Desktop close-time active work", () => {
     const launch = vi.fn(() => {
       const host = fakeClient()
       host.client.initialize = vi.fn(async () => { throw Error('fixture startup failed') })
-      return { client: host.client, exited: new Promise<void>(() => {}) }
+      return host
     })
     const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), 'sessions'), launch })
     try {
@@ -518,31 +545,102 @@ describe("Desktop close-time active work", () => {
     } finally { await manager.close(); expect(vi.getTimerCount()).toBe(0); vi.useRealTimers() }
   })
 
-  it('explicit recovery replaces an owned transport even before its child exits', async () => {
+  it('explicit recovery waits for the original process exit before launching its replacement', async () => {
     const first = fakeClient(), second = fakeClient()
-    const launch = vi.fn().mockReturnValueOnce({client:first.client,exited:new Promise<void>(()=>{})}).mockReturnValueOnce({client:second.client,exited:new Promise<void>(()=>{})})
-    const manager = createWorkspaceRuntimeManager({sessionsRoot:join(tempRoot(),'sessions'),launch})
+    first.close.mockResolvedValue(undefined)
+    const launch = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second)
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch })
     try {
       const original = await manager.get(workspace())
-      const recovered = await manager.recover!(workspace())
-      expect(first.close).toHaveBeenCalledOnce()
+      const recovery = manager.recover!(workspace())
+      await vi.waitFor(() => expect(first.close).toHaveBeenCalledOnce())
+      expect(launch).toHaveBeenCalledTimes(1)
+      first.exit()
+      const recovered = await recovery
       expect(recovered.client).not.toBe(original.client)
       expect(launch).toHaveBeenCalledTimes(2)
-    } finally { await manager.close() }
+    } finally { first.exit(); await manager.close() }
+  })
+
+  it("joins Quit calls while an idle eviction still owns its original process", async () => {
+    const host = fakeClient({ info: { capabilities: workCapabilities } })
+    host.close.mockResolvedValue(undefined)
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => host })
+    let eviction: Promise<number> | undefined
+    try {
+      await manager.get(workspace())
+      await new Promise(resolve => setTimeout(resolve, 5))
+      eviction = manager.evictIdle!(1)
+      await vi.waitFor(() => expect(host.close).toHaveBeenCalledOnce())
+      expect(manager.peek!(workspace().id)).toBeUndefined()
+
+      const closing = manager.close()
+      expect(manager.close()).toBe(closing)
+      const observed = await Promise.race([
+        closing.then(() => "completed"),
+        new Promise(resolve => setImmediate(() => resolve("waiting"))),
+      ])
+      expect(observed).toBe("waiting")
+      await expect(manager.get(workspace())).rejects.toThrow("runtime manager is closed")
+      host.exit()
+      expect(await eviction).toBe(1)
+      await closing
+      expect(host.close).toHaveBeenCalledOnce()
+    } finally {
+      host.exit()
+      await eviction
+      await manager.close()
+    }
+  })
+
+  it("retains an unconfirmed process after failed shutdown and completes Quit once it exits", async () => {
+    const host = fakeClient()
+    host.close.mockRejectedValue(new Error("original process termination failed"))
+    const launch = vi.fn(() => host)
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch })
+    try {
+      await manager.get(workspace())
+      await expect(manager.recover!(workspace())).rejects.toThrow("original process termination failed")
+      await expect(manager.get(workspace())).rejects.toThrow("original process termination failed")
+      expect(launch).toHaveBeenCalledTimes(1)
+      await expect(manager.close()).rejects.toThrow("Gateway shutdown incomplete")
+      host.exit()
+      await manager.close()
+      expect(host.close).toHaveBeenCalledOnce()
+    } finally {
+      host.exit()
+      await manager.close()
+    }
+  })
+
+  it("recovers a crashed process even when disconnected event delivery throws", async () => {
+    vi.useFakeTimers()
+    const first = fakeClient(), replacement = fakeClient()
+    const launch = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(replacement)
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch })
+    manager.onEvent(event => {
+      if (event.kind === "sdk/disconnected" && event.close?.reason === "subprocess-exited") throw new Error("window closed")
+    })
+    try {
+      await manager.get(workspace())
+      first.exit()
+      await vi.advanceTimersByTimeAsync(600)
+      expect((await manager.get(workspace())).client).toBe(replacement.client)
+      expect(launch).toHaveBeenCalledTimes(2)
+    } finally { await manager.close(); vi.useRealTimers() }
   })
 
   it("includes a structured fatal notification in the exit diagnostic", async () => {
     const host = fakeClient()
-    let exit!: () => void
     const manager = createWorkspaceRuntimeManager({
       sessionsRoot: join(tempRoot(), "sessions"),
-      launch: () => ({ client: host.client, exited: new Promise<void>((resolve) => { exit = resolve }) }),
+      launch: () => host,
     })
     const events: DesktopEvent[] = []
     manager.onEvent((event) => events.push(event))
     await manager.get(workspace("ws-fatal"))
     for (const listener of host.listeners) listener({ jsonrpc: "2.0", method: "desktop/gateway/fatal", params: { message: "boom", diagnostic: "boom-stack" } })
-    exit()
+    host.exit()
     await new Promise((resolve) => setImmediate(resolve))
     const disconnected = events.find((event) => event.kind === "sdk/disconnected")
     expect(disconnected !== undefined && "message" in disconnected ? disconnected.message : "").toContain("boom-stack")

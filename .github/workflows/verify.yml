@@ -52,13 +52,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify:gateway
 
-  full:
-    name: verify:all
+  full-suite:
+    name: Windows suite (${{ matrix.suite }})
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: windows-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [gateway, executor, context-output, workspace]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - uses: pnpm/action-setup@v4
         with:
           version: 10.34.5
@@ -67,4 +73,43 @@ jobs:
           node-version: 22.18.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: node scripts/verify-all.mjs
+      - run: node scripts/verify-all.mjs --suite "${{ matrix.suite }}"
+
+  full-integration:
+    name: Windows e2e and reachability
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/verify-all.mjs --integration
+
+  full:
+    name: verify:all
+    if: always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+    needs: [typecheck, compiled-gateway, full-suite, full-integration]
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check complete Windows verification
+        env:
+          TYPES: ${{ needs.typecheck.result }}
+          GATEWAY: ${{ needs['compiled-gateway'].result }}
+          SUITES: ${{ needs['full-suite'].result }}
+          INTEGRATION: ${{ needs['full-integration'].result }}
+        run: |
+          $results = @($env:TYPES, $env:GATEWAY, $env:SUITES, $env:INTEGRATION)
+          if ($results.Where({ $_ -ne 'success' }).Count -ne 0) {
+            throw "Verification incomplete for $env:GITHUB_SHA ($($results -join ', '))"
+          }
+          Write-Output "Verified $env:GITHUB_SHA"

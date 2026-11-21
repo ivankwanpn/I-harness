@@ -17,6 +17,72 @@ function setup(model: ModelClient) {
   return { session, seen, agent: createAgent(ctx, { session, tools, model, systemPrompt: "p" }) }
 }
 
+it("publishes the first assistant text before saving reasoning and batches later text during the attempt", async () => {
+  vi.useFakeTimers()
+  const finishing = Promise.withResolvers<void>()
+  const { agent, seen, session } = setup({ async *stream() {
+    yield { type: "reasoning", text: "think" }
+    yield { type: "text/chunk", text: "starting " }
+    yield { type: "text/chunk", text: "now" }
+    yield { type: "text/chunk", text: "!" }
+    await finishing.promise
+    yield { type: "text/chunk", text: " Done." }
+    yield { type: "end" }
+  } })
+  const running = agent.run("task")
+  try {
+    await vi.advanceTimersByTimeAsync(0)
+    const first = seen.find(event => event.type === "assistant/chunk")
+    const stepStart = session.events.findLast(event => event.type === "step/start")!
+    expect(first).toEqual({ type: "assistant/chunk", text: "starting ", stepStartSeq: stepStart.seq, offset: 0 })
+    expect(seen.indexOf(first!)).toBeLessThan(seen.findIndex(event => event.type === "reasoning"))
+    expect(session.events.some(event => event.type === "assistant/chunk" || event.type === "assistant/message")).toBe(false)
+    expect(seen.filter(event => event.type === "assistant/chunk")).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(seen.filter(event => event.type === "assistant/chunk").at(-1)).toMatchObject({ text: "now!", offset: 9, stepStartSeq: stepStart.seq })
+  } finally {
+    finishing.resolve()
+    await running
+  }
+  expect(deriveMessages(session).map(message => message.content)).toEqual(["task", "starting now! Done."])
+  expect(session.events.some(event => event.type === "assistant/chunk")).toBe(false)
+  expect(vi.getTimerCount()).toBe(0)
+})
+
+it("does not publish buffered assistant text after Stop or carry it into the next turn", async () => {
+  vi.useFakeTimers()
+  const stop = new AbortController()
+  const waiting = Promise.withResolvers<void>()
+  let round = 0
+  const { agent, seen, session } = setup({ async *stream() {
+    if (++round === 1) {
+      yield { type: "text/chunk", text: "partial " }
+      yield { type: "text/chunk", text: "body" }
+      await waiting.promise
+    } else yield { type: "text/chunk", text: "next reply" }
+    yield { type: "end" }
+  } })
+  const running = agent.run("first", stop.signal).catch(error => error)
+  try {
+    await vi.advanceTimersByTimeAsync(0)
+    stop.abort()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(seen.filter(event => event.type === "assistant/chunk")).toEqual([
+      expect.objectContaining({ text: "partial ", offset: 0 }),
+    ])
+  } finally {
+    stop.abort()
+    waiting.resolve()
+    expect(await running).toBe(stop.signal.reason)
+  }
+  await agent.followup("again")
+  const previews = seen.filter(event => event.type === "assistant/chunk")
+  expect(previews.at(-1)).toMatchObject({ text: "next reply", offset: 0 })
+  expect(new Set(previews.map(event => event.stepStartSeq)).size).toBe(2)
+  expect(session.events.filter(event => event.type === "assistant/message").map(event => event.text)).toEqual(["partial body", "next reply"])
+  expect(vi.getTimerCount()).toBe(0)
+})
+
 describe("live provider reasoning", () => {
   it("publishes the first delta immediately and batches more while the same block is still running", async () => {
     vi.useFakeTimers()

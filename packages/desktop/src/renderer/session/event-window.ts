@@ -1,7 +1,8 @@
 import type { HistoryRange } from "@i-harness/sdk"
-import { mergeReasoningChunks } from "./reasoning-progress.ts"
+import { mergeReasoningChunks, mergeTextFragments } from "./reasoning-progress.ts"
 
 export type WireEvent = HistoryRange["events"][number]
+export type AssistantPreview = Extract<WireEvent, { type: "assistant/chunk" }> & { stepStartSeq: number; offset: number }
 
 export interface EventWindow {
   /** Next unread seq — the replay checkpoint, never the last displayed seq. */
@@ -9,6 +10,8 @@ export interface EventWindow {
   events: WireEvent[]
   /** Events with no seq: display-only, never a checkpoint. */
   live: WireEvent[]
+  assistantPreview?: AssistantPreview
+  assistantBoundary?: number
   connection: "online" | "offline"
 }
 
@@ -38,14 +41,47 @@ function retainEvent(event: WireEvent): WireEvent {
   return rest
 }
 
-function settleLive(live: WireEvent[], incoming: readonly WireEvent[]): WireEvent[] {
+export function isAssistantPreview(event: WireEvent): event is AssistantPreview {
+  return event.type === "assistant/chunk" && event.seq === undefined &&
+    event.stepStartSeq !== undefined && Number.isSafeInteger(event.stepStartSeq) && event.stepStartSeq >= 0 &&
+    event.offset !== undefined && Number.isSafeInteger(event.offset) && event.offset >= 0 &&
+    typeof event.text === "string" && event.text.length > 0
+}
+
+function assistantBoundary(event: WireEvent): number {
+  switch (event.type) {
+    case "assistant/message":
+    case "step/start":
+    case "step/end":
+    case "step/failed":
+    case "turn/start":
+    case "turn/end":
+      return event.seq ?? -1
+    default:
+      return -1
+  }
+}
+
+export function updateAssistantPreview(current: AssistantPreview | undefined, event: WireEvent): AssistantPreview | undefined {
+  if (!isAssistantPreview(event)) return current && assistantBoundary(event) > current.stepStartSeq ? undefined : current
+  if (!current || event.stepStartSeq > current.stepStartSeq) return event
+  if (event.stepStartSeq < current.stepStartSeq) return current
+  return mergeTextFragments(current, event) ?? current
+}
+
+function settleLive(state: EventWindow, incoming: readonly WireEvent[]): Pick<EventWindow, "live" | "assistantPreview" | "assistantBoundary"> {
   const completed = new Set(incoming.flatMap((event) => event.type === "reasoning" && event.streamId ? [event.streamId] : []))
-  return live.filter((event) => event.type !== "reasoning/chunk" || !completed.has(event.streamId)).slice(-MAX_RETAINED_LIVE)
+  const boundary = incoming.reduce((latest, event) => Math.max(latest, assistantBoundary(event)), state.assistantBoundary ?? -1)
+  const preview = state.assistantPreview
+  // Preserve the reasoning input array when ordinary bookkeeping settles.
+  const live = completed.size === 0 ? state.live :
+    state.live.filter((event) => event.type !== "reasoning/chunk" || !completed.has(event.streamId))
+  return { live, assistantPreview: preview && boundary <= preview.stepStartSeq ? preview : undefined, assistantBoundary: boundary }
 }
 
 /** Transient block positions are measured against the durable sequence so a
  * delayed UI frame still places reasoning before later tool or message rows. */
-export function timelineEvents(state: EventWindow): WireEvent[] {
+export function timelineEvents(state: Pick<EventWindow, "events" | "live">): WireEvent[] {
   if (state.live.length === 0) return state.events
   const position = (event: WireEvent) => event.type === "reasoning/chunk" ? event.atSeq : event.seq ?? Number.POSITIVE_INFINITY
   return [...state.live, ...state.events].sort((a, b) => position(a) - position(b))
@@ -55,7 +91,7 @@ export function applyHistory(state: EventWindow, page: HistoryRange): EventWindo
   return {
     cursor: Math.max(state.cursor, page.nextSeq),
     events: capEvents(mergeBySeq(state.events, page.events.filter(event => (event as { type: string }).type !== "model/activity").map(retainEvent))),
-    live: settleLive(state.live, page.events),
+    ...settleLive(state, page.events),
     connection: "online",
   }
 }
@@ -63,6 +99,11 @@ export function applyHistory(state: EventWindow, page: HistoryRange): EventWindo
 export function applyNotification(state: EventWindow, event: WireEvent): EventWindow {
   if ((event as { type: string }).type === "model/activity") return state
   event = retainEvent(event)
+  if (isAssistantPreview(event)) {
+    if (state.connection === "offline" || (state.assistantBoundary ?? -1) > event.stepStartSeq) return state
+    const assistantPreview = updateAssistantPreview(state.assistantPreview, event)
+    return assistantPreview === state.assistantPreview ? state : { ...state, assistantPreview }
+  }
   if (event.type === "reasoning/chunk") {
     // The canonical notification may reach React before its buffered chunks.
     if (state.events.some((item) => item.type === "reasoning" && item.streamId === event.streamId)) return state
@@ -81,18 +122,18 @@ export function applyNotification(state: EventWindow, event: WireEvent): EventWi
     const live = [...state.live, event]
     return { ...state, live: live.length > MAX_RETAINED_LIVE ? live.slice(live.length - MAX_RETAINED_LIVE) : live }
   }
-  const live = settleLive(state.live, [event])
+  const live = settleLive(state, [event])
   const last = state.events[state.events.length - 1]
   // Streaming appends are the hot path: a strictly newer seq needs neither a
   // rebuild nor a sort, only the new array React needs to re-render.
   if (last?.seq === undefined || event.seq > last.seq) {
-    return { ...state, live, events: capEvents([...state.events, event]) }
+    return { ...state, ...live, events: capEvents([...state.events, event]) }
   }
-  return { ...state, live, events: capEvents(mergeBySeq(state.events, [event])) }
+  return { ...state, ...live, events: capEvents(mergeBySeq(state.events, [event])) }
 }
 
 export function markDisconnected(state: EventWindow): EventWindow {
-  return { ...state, connection: "offline" }
+  return { ...state, connection: "offline", assistantPreview: undefined, live: [] }
 }
 
 /** Historical paging has its own bounds; it never changes next-unread cursor. */

@@ -53,7 +53,9 @@ export type SessionEvent =
     // context snapshots, guard nudges): the projection keeps it, the TUI
     // scrollback skips it. Additive — old logs simply never carry it.
     | { type: "user/message"; seedInputContext?: { rawMessageSeq: number }; inputPreparation?: import('./input-preparation.ts').InputPreparationLink; provenance?: InputProvenance; text: string; seq?: number; input?: UserMessageInput; source?: { kind: "plugin"; plugin: string }; internal?: true; images?: ImageInput[]; imageInputId?: string; imageSummaries?: ImageSummary[] }
-    | { type: "assistant/chunk"; text: string; seq?: number }
+    // Live body chunks carry a step sequence and a UTF-16 offset within that
+    // step's preview. Existing history can also contain older chunk records.
+    | { type: "assistant/chunk"; text: string; stepStartSeq?: number; offset?: number; seq?: number }
     | { type: "assistant/message"; text: string; seq?: number; thinkingBlocks?: ProviderThinkingBlock[]; providerContinuation?: ProviderContinuation }
     | { type: "tool/call"; callId: string; name: string; args: unknown; seq?: number }
     // M4: the DISPATCH BOUNDARY. `tool/call` is written when the MODEL emits the

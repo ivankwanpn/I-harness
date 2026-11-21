@@ -1,5 +1,5 @@
 import { safeCompactionBlockedReason } from "@i-harness/desktop-gateway/src/context-diagnostics.ts"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ComposerPreparationError, retireSessionDraft } from "./session/Composer.tsx"
 import type { HistorySelection } from "./session/SessionSearch.tsx"
 import type { HistoryRequest } from "./session/SessionHistoryView.tsx"
@@ -25,7 +25,10 @@ import {
   emptyEventWindow,
   timelineEvents,
   markDisconnected,
+  isAssistantPreview,
+  updateAssistantPreview,
   MAX_RETAINED_EVENTS,
+  type AssistantPreview,
   type EventWindow,
   type WireEvent,
 } from "./session/event-window.ts"
@@ -47,6 +50,7 @@ import { createForkOperationController, createForkCallbackAdapters } from './ses
 
 const HISTORY_LIMIT = 500
 const HISTORY_MAX_PAGES = 40
+const historyOnly = (window: EventWindow): EventWindow => ({ ...window, live: [], assistantPreview: undefined })
 
 /** The renderer data layer: it owns the bridge, selection and refresh rules;
  * the workbench below renders exactly what it is told. */
@@ -80,8 +84,10 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [sandbox, setSandbox] = useState<SandboxState>()
   const [error, setError] = useState<string>()
   const [eventWindow, setEventWindow] = useState<EventWindow>(() => emptyEventWindow())
+  const [windowKey, setWindowKey] = useState<string>()
   const [historyLoading, setHistoryLoading] = useState(false)
   const eventWindowCache = useRef(new Map<string, EventWindow>())
+  const assistantPreviews = useRef(new Map<string, AssistantPreview>())
   const [optimistic, setOptimistic] = useState<{ scope: string; id: string; text: string }>()
   const [model, setModel] = useState<SessionModelState>()
   const [queue, setQueue] = useState<SessionQueueItem[]>()
@@ -117,8 +123,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   }, [selectedWorkspaceId, selectedSessionId, historyTarget])
   const [retryNonce, setRetryNonce] = useState(0)
   const cursorRef = useRef(0)
-  const chunkBuffer = useRef<WireEvent[]>([])
-  const chunkFrame = useRef<number | undefined>(undefined)
   const selection = useRef({ workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
   const restoredSelections = useRef(new Map<string, { workspaceId: string | undefined; sessionId: string | undefined }>())
   if (selection.current.workspaceId !== selectedWorkspaceId || selection.current.sessionId !== selectedSessionId) {
@@ -289,9 +293,12 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         : await loadHistory(request, { afterSeq, limit: HISTORY_LIMIT, maxPages: HISTORY_MAX_PAGES })
       if (selection.current !== scope) return
       setEventWindow((current) => {
+        if (selection.current !== scope) return current
+        const key = JSON.stringify([workspaceId, sessionId])
         const next = applyHistory(current, { events: load.events, nextSeq: load.cursor })
-        eventWindowCache.current.set(JSON.stringify([workspaceId, sessionId]), next)
-        return next
+        eventWindowCache.current.set(key, historyOnly(next))
+        const preview = assistantPreviews.current.get(key)
+        return preview ? applyNotification(next, preview) : next
       })
       setHistoryLoading(false)
       setHistoryError(undefined)
@@ -361,17 +368,31 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     return () => { active = false }
   }, [bridge, interactions.refresh, retryNonce, selectedWorkspaceId])
 
+  useEffect(() => {
+    const previews = assistantPreviews.current
+    return () => previews.clear()
+  }, [bridge, selectedWorkspaceId])
+
   // Subscribe BEFORE the first history read (spec §6): a live event that lands
   // during the read must not be lost.
   useEffect(() => {
     if (selectedWorkspaceId === undefined) return
+    const scope = selection.current
+    const workspace = workspaceSelection.current
+    let chunkBuffer: WireEvent[] = []
+    let chunkFrame: number | undefined
+    const clearChunks = () => {
+      if (chunkFrame !== undefined) cancelAnimationFrame(chunkFrame)
+      chunkFrame = undefined
+      chunkBuffer = []
+    }
     const refresh = createRefreshScheduler(() => Promise.allSettled([
       refreshDashboard(selectedWorkspaceId),
       ...(selectedSessionId ? [refreshTasks(selectedWorkspaceId, selectedSessionId)] : []),
     ]))
     const unsubscribe = bridge.onEvent((event) => {
       if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity") return
-      if (event.workspaceId !== selectedWorkspaceId) return
+      if (workspaceSelection.current !== workspace || event.workspaceId !== selectedWorkspaceId) return
       if (event.kind === "sdk/ready") {
         setRetryNonce(value => value + 1)
         executionRevision.current = undefined
@@ -382,6 +403,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         return
       }
       if (event.kind === "sdk/disconnected") {
+        clearChunks()
+        assistantPreviews.current.clear()
         executionRevision.current = undefined
         setConnection("offline")
         setEventWindow((current) => markDisconnected(current))
@@ -418,30 +441,46 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       if (event.method !== "session/event" && event.method !== "session/status") return
       const info = classifyNotification(event.method, event.params)
       if (info.kind === "ignore") return
+      const record = event.method === "session/event" ? (event.params as { event?: WireEvent }).event : undefined
+      if (record) {
+        const key = JSON.stringify([selectedWorkspaceId, info.sessionId])
+        const previous = assistantPreviews.current.get(key)
+        const preview = updateAssistantPreview(previous, record)
+        if (preview !== previous) {
+          if (preview) assistantPreviews.current.set(key, preview)
+          else assistantPreviews.current.delete(key)
+        }
+        if (isAssistantPreview(record)) {
+          if (preview && preview !== previous && info.sessionId === selectedSessionId && selection.current === scope) {
+            // The producer already paces text; show the first piece without an additional frame buffer.
+            setEventWindow(current => selection.current === scope ? applyNotification(current, preview) : current)
+          }
+          return
+        }
+      }
       if (info.sessionId !== selectedSessionId) {
         if (info.kind === "status") refresh.schedule()
         return
       }
+      if (selection.current !== scope) return
       if (info.kind === "chunk") {
-        const params = event.params as { event?: unknown }
-        if (params.event === undefined) return
-        chunkBuffer.current.push(params.event as WireEvent)
-        if (chunkFrame.current === undefined) {
-          chunkFrame.current = requestAnimationFrame(() => {
-            chunkFrame.current = undefined
-            const buffered = chunkBuffer.current.splice(0)
-            if (buffered.length === 0) return
-            setEventWindow((current) => buffered.reduce((next, item) => applyNotification(next, item), current))
+        if (!record) return
+        chunkBuffer.push(record)
+        if (chunkFrame === undefined) {
+          chunkFrame = requestAnimationFrame(() => {
+            const buffered = chunkBuffer
+            clearChunks()
+            if (buffered.length === 0 || selection.current !== scope) return
+            setEventWindow(current => selection.current === scope
+              ? buffered.reduce((next, item) => applyNotification(next, item), current) : current)
           })
         }
         return
       }
       if (info.kind === "durable") {
-        const params = event.params as { event?: unknown }
-        if (params.event !== undefined) {
-          setEventWindow((current) => applyNotification(current, params.event as WireEvent))
-          const type = (params.event as WireEvent).type
-          if ((type === "todo/write" || type === "goal/change") && workStateSupported.current) void refreshWorkState(selectedWorkspaceId, selectedSessionId)
+        if (record) {
+          setEventWindow(current => selection.current === scope ? applyNotification(current, record) : current)
+          if ((record.type === "todo/write" || record.type === "goal/change") && workStateSupported.current) void refreshWorkState(selectedWorkspaceId, selectedSessionId)
         }
         refresh.schedule()
         return
@@ -452,7 +491,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       if (executionRevision.current === undefined) setRunning(info.status === "queued")
       refresh.schedule()
     })
-    return () => { unsubscribe(); refresh.dispose() }
+    return () => { unsubscribe(); refresh.dispose(); clearChunks() }
   }, [bridge, interactions.update, refreshDashboard, refreshTasks, refreshWorkState, selectedSessionId, selectedWorkspaceId])
 
   const workStateEnabled = capabilities["desktop-work-state"]?.includes("1") === true
@@ -498,7 +537,10 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     let active = true
     const selectionKey = JSON.stringify([selectedWorkspaceId, selectedSessionId])
     const cached = eventWindowCache.current.get(selectionKey)
-    setEventWindow(cached ?? emptyEventWindow())
+    const window = cached ?? emptyEventWindow()
+    const preview = assistantPreviews.current.get(selectionKey)
+    setWindowKey(selectionKey)
+    setEventWindow(preview ? applyNotification(window, preview) : window)
     setHistoryLoading(cached === undefined)
     setModel(undefined)
     setQueue(undefined)
@@ -509,7 +551,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     setRunning(false)
     runningRevision.current++
     setQueueResumable(false)
-    chunkBuffer.current.length = 0
     // Start every selection read together. Waiting for history before the
     // model/interaction/task reads added their latencies to one another.
     const fail = (reason: unknown) => { if (active) setTaskError(reason instanceof Error ? reason.message : String(reason)) }
@@ -529,9 +570,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       if (!active) return
       if (opened?.history && Array.isArray(opened.history.events)) {
         setEventWindow((current) => {
+          if (!active) return current
           const next = applyHistory(current, { events: opened.history!.events, nextSeq: opened.history!.nextSeq })
-          eventWindowCache.current.set(selectionKey, next)
-          return next
+          eventWindowCache.current.set(selectionKey, historyOnly(next))
+          const live = assistantPreviews.current.get(selectionKey)
+          return live ? applyNotification(next, live) : next
         })
         setHistoryLoading(false)
         if (opened.historyError) setHistoryError(opened.historyError)
@@ -555,13 +598,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       .then(value => { if (active && version === modelRequest.current) setModel(value as SessionModelState) }).catch(fail)
     void interactions.refresh(selectedSessionId).catch(fail)
     void refreshTasks(selectedWorkspaceId, selectedSessionId).catch(fail)
-    return () => {
-      active = false
-      if (chunkFrame.current !== undefined) {
-        cancelAnimationFrame(chunkFrame.current)
-        chunkFrame.current = undefined
-      }
-    }
+    return () => { active = false }
   }, [bridge, interactions.refresh, pageHistory, refreshTasks, retryNonce, selectedSessionId, selectedWorkspaceId])
 
   useEffect(() => {
@@ -607,20 +644,27 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
 
   const gate = sendGate({ model, sandbox, connection }, t)
   const currentScope = JSON.stringify([selectedWorkspaceId, selectedSessionId])
+  const { events, live } = eventWindow
+  const conversationRows = useMemo(() => {
+    const rows = windowKey === currentScope ? projectTimeline(timelineEvents({ events, live })) : []
+    if (optimistic?.scope === currentScope) rows.push({ id: optimistic.id, kind: "message", role: "user", text: optimistic.text })
+    return rows
+  }, [currentScope, events, live, optimistic, windowKey])
   useEffect(() => {
     if (!optimistic) return
     if (optimistic.scope !== currentScope) { setOptimistic(undefined); return }
-    if (timelineEvents(eventWindow).some(event => event.type === "user/message" && event.text === optimistic.text)) { setOptimistic(undefined); return }
+    if (windowKey === currentScope && events.some(event => event.type === "user/message" && event.text === optimistic.text)) { setOptimistic(undefined); return }
     // A queued prompt has not become a durable user/message yet. Keep its local
     // row until the queue admits it instead of making it vanish on a timer.
     if (running || (queue ?? []).some(item => item.text === optimistic.text)) return
     const timer = setTimeout(() => setOptimistic(current => current?.id === optimistic.id ? undefined : current), 15_000)
     return () => clearTimeout(timer)
-  }, [optimistic, currentScope, eventWindow, running, queue])
+  }, [optimistic, currentScope, events, running, queue, windowKey])
   const conversation = selectedWorkspaceId === undefined || selectedSessionId === undefined
     ? undefined
     : {
-        rows: [...projectTimeline(timelineEvents(eventWindow)), ...(optimistic && optimistic.scope === currentScope ? [{ id: optimistic.id, kind: "message" as const, role: "user" as const, text: optimistic.text }] : [])],
+        rows: conversationRows,
+        assistantPreview: windowKey === currentScope ? eventWindow.assistantPreview : undefined,
         loading: historyLoading,
         canSend: gate.canSend && projectReady && !(operation?.busy && operation.kind !== "prompt"),
         projectReady,

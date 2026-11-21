@@ -3,6 +3,7 @@ import { act, cleanup, render, waitFor } from "@testing-library/react"
 import { StrictMode } from "react"
 import { afterEach, expect, it, vi } from "vitest"
 import type { WorkbenchProps } from "../src/renderer/shell/Workbench.tsx"
+import type { WireEvent } from "../src/renderer/session/event-window.ts"
 import type { DesktopBridge, DesktopRequest } from "../src/shared/bridge.ts"
 const captured = vi.hoisted(() => ({ props: undefined as WorkbenchProps | undefined }))
 vi.mock("../src/renderer/shell/Workbench.tsx", () => ({ Workbench: (props: WorkbenchProps) => { captured.props = props; return null } }))
@@ -466,6 +467,35 @@ it("ignores history from a session left while loading", async () => {
   await act(async () => { old.resolve({ events: [{ type: "user/message", seq: 0, text: "old session content" }], nextSeq: 1 }); await old.promise })
   expect(captured.props!.selectedSessionId).toBe("b")
   expect(captured.props!.conversation!.rows).toEqual([])
+})
+
+it("streams two active sessions independently and preserves the preview on selection changes", async () => {
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  fixture(() => undefined, listener => { emit = listener; return () => {} })
+  const notify = (sessionId: string, event: WireEvent) =>
+    act(() => emit({ kind: "sdk/notification", workspaceId: "w1", method: "session/event", params: { sessionId, event } }))
+  const chunk = (sessionId: string, offset: number, text: string) =>
+    notify(sessionId, { type: "assistant/chunk", stepStartSeq: 5, offset, text })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props!.conversation?.loading).toBe(false))
+  const rows = captured.props!.conversation!.rows
+  chunk("a", 0, "A starts")
+  chunk("b", 0, "B starts")
+  expect(captured.props!.conversation!.assistantPreview?.text).toBe("A starts")
+  expect(captured.props!.conversation!.rows).toBe(rows)
+  act(() => captured.props!.onSelectSession("b"))
+  expect(captured.props!.conversation!.assistantPreview?.text).toBe("B starts")
+  chunk("a", 8, " slowly")
+  chunk("b", 8, " here")
+  expect(captured.props!.conversation!.assistantPreview?.text).toBe("B starts here")
+  notify("b", { type: "assistant/message", text: "B starts here", seq: 6 })
+  expect(captured.props!.conversation!.assistantPreview).toBeUndefined()
+  expect(captured.props!.conversation!.rows).toEqual([expect.objectContaining({ text: "B starts here" })])
+  act(() => captured.props!.onSelectSession("a"))
+  expect(captured.props!.conversation!.assistantPreview?.text).toBe("A starts slowly")
+  act(() => emit({ kind: "sdk/disconnected", workspaceId: "w1", message: "test disconnect" }))
+  expect(captured.props!.conversation!.assistantPreview).toBeUndefined()
 })
 
 it("keeps the latest chosen file when an earlier diff arrives late", async () => {

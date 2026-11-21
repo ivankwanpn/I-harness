@@ -55,7 +55,7 @@ export function createManagedAdmission(host: ManagedAgentHost, context: ReturnTy
                     continue;
                 }
                 assertCurrentRepresentable(captured, initial);
-                const assess = (authorized = false, selected = initial, selectOutputCap = true) => context.budget.assess(selected, captured, captured.snapshot.surface.contextWindow, captured.snapshot.surface.maxOutputTokens, context.budgetConfig?.reserveRatio, authorized, selectOutputCap, context.pressurePolicy, authorized ? 'recovery' : 'main');
+                const assess = (authorized = false, selected = initial, selectOutputCap = true) => context.budget.assess(selected, captured, captured.snapshot.surface.contextWindow, captured.snapshot.surface.maxOutputTokens, context.budgetReserveRatio, authorized, selectOutputCap, context.pressurePolicy, authorized ? 'recovery' : 'main');
                 let assessed = assess();
                 if (assessed.decision.disposition === 'blocked')
                     throw Error(assessed.snapshot.coverage === 'incomplete' ? assessed.snapshot.reason : `Prepared request admission blocked: ${assessed.decision.reason}`);
@@ -105,7 +105,10 @@ export function createManagedAdmission(host: ManagedAgentHost, context: ReturnTy
                     continue;
                 }
                 captured = refreshed;
-                if (context.compactConfig && admission !== 'authorized') {
+                const pressure = assessed.decision.pressure;
+                // A current measured request below the soft threshold has no
+                // reduction to prepare. Unknown pressure still uses the probe.
+                if (context.hasCompact && admission !== 'authorized' && (needsReduction || pressure.kind !== 'known' || pressure.softNeeded)) {
                     let result;
                     try { result = await reduction({ signal, attempts, reason: needsReduction ? 'manual' : 'auto' }, undefined, scope); }
                     catch (error) {
@@ -142,11 +145,11 @@ export function createManagedAdmission(host: ManagedAgentHost, context: ReturnTy
                 validateBeforeTransport();
                 const execution = context.execution.candidate(prepared, captured, state, assessed.calibrated, current, () => context.budget.retire('execution-identity-changed'));
                 const control = generationRequestLease(owner.control(state.recoveryId ? 'recovery' : 'main', validateBeforeTransport), async () => {
-                    const next = await context.refresh(action, captured, signal);
+                    const next = await context.refresh(action, captured, signal, 'reservation');
                     if (!next)
                         return false;
                     captured = next;
-                    return current();
+                    return true;
                 });
                 return { prepared, captured, execution, control, validateBeforeTransport };
             }

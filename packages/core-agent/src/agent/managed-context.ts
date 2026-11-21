@@ -16,35 +16,47 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
     const execution = createExecutionOwner(), leases = new Set<PreparedExecutionRequest>(), accepted = new WeakSet<object>();
     const capturedEvidence = new WeakSet<object>();
     let active: {
+        action: ManagedAction<FactOutcome>;
         lease: PreparedExecutionRequest;
         evidence: RequestEvidence;
         hooks: object;
+        surfaceFingerprint: string;
     } | undefined;
     let facts: FactPorts<ProducerFactOutcome> | undefined, source: SettlementFacts<ProducerFactOutcome> | undefined;
     let config = { budget: host.budget, compact: host.compact, maxOutputTokens: host.maxOutputTokens }, metadataOverride: ContextBindingMetadata | undefined, hasMetadataOverride = false;
     let budgetOverride: import('@i-harness/llm-seam').ModelBudgetBinding | undefined, hasBudgetOverride = false;
     const binding = () => host.bindingForStep?.();
     const metadata = () => binding()?.contextMetadata ?? (hasMetadataOverride ? metadataOverride : typeof host.contextMetadata === 'function' ? host.contextMetadata() : host.contextMetadata);
-    const surface = () => { const inherited = binding(), bindingMetadata = metadata(); return { systemPrompt: typeof host.systemPrompt === 'function' ? host.systemPrompt() : host.systemPrompt, tools: host.modelToolSchemas?.() ?? host.tools.schemas(), reasoningEffort: inherited ? inherited.reasoningEffort : host.reasoningEffort, maxOutputTokens: inherited ? inherited.maxOutputTokens : config.maxOutputTokens, contextWindow: inherited ? inherited.contextWindow : bindingMetadata?.contextWindow ?? config.budget?.contextWindow ?? config.compact?.contextWindow, binding: bindingMetadata, budgetBinding: inherited ? inherited.budgetBinding : hasBudgetOverride ? budgetOverride : typeof host.budgetBinding === 'function' ? host.budgetBinding() : host.budgetBinding }; };
+    const surface = () => {
+        const inherited = binding(), bindingMetadata = metadata();
+        const { systemPrompt, tools } = host.modelSurface?.() ?? {
+            systemPrompt: typeof host.systemPrompt === 'function' ? host.systemPrompt() : host.systemPrompt,
+            tools: host.modelToolSchemas?.() ?? host.tools.schemas(),
+        };
+        return { systemPrompt, tools, reasoningEffort: inherited ? inherited.reasoningEffort : host.reasoningEffort, maxOutputTokens: inherited ? inherited.maxOutputTokens : config.maxOutputTokens, contextWindow: inherited ? inherited.contextWindow : bindingMetadata?.contextWindow ?? config.budget?.contextWindow ?? config.compact?.contextWindow, binding: bindingMetadata, budgetBinding: inherited ? inherited.budgetBinding : hasBudgetOverride ? budgetOverride : typeof host.budgetBinding === 'function' ? host.budgetBinding() : host.budgetBinding };
+    };
     const selected = () => ({ model: host.model, bindingIdentity: host.modelBindingIdentity?.(), executionIdentity: binding()?.executionIdentity ?? host.executionIdentity?.() ?? host.model.executionIdentity });
-    const current = (evidence: RequestEvidence, admitNewWork = true) => {
+    const current = (evidence: RequestEvidence, admitNewWork = true, requireArchive = false) => {
         try {
-            if (!active || active.evidence !== evidence)
+            const held = active;
+            if (!held || held.evidence !== evidence)
                 return false;
             if (admitNewWork) host.domain.assertCurrent();
             else host.execution.observe().assertCurrent();
-            active.lease.assertCurrent();
-            host.hooks.assertCurrent(active.hooks);
+            if (requireArchive) held.lease.assertCurrent();
+            else held.lease.assertInputCurrent();
+            host.hooks.assertCurrent(held.hooks);
             const now = selected();
-            if (projectionFingerprint(surface()) !== projectionFingerprint(evidence.snapshot.surface) || now.model !== evidence.model || now.bindingIdentity !== evidence.bindingIdentity)
+            if (now.model !== evidence.model || now.bindingIdentity !== evidence.bindingIdentity || projectionFingerprint(surface()) !== held.surfaceFingerprint)
                 return false;
             if (host.requestContext && !host.requestContext.current(evidence.instructions))
                 return false;
-            active.lease.assertCurrent();
-            host.hooks.assertCurrent(active.hooks);
+            if (requireArchive) held.lease.assertCurrent();
+            else held.lease.assertInputCurrent();
+            host.hooks.assertCurrent(held.hooks);
             if (admitNewWork) host.domain.assertCurrent();
             else host.execution.observe().assertCurrent();
-            return true;
+            return active === held && held.evidence === evidence;
         }
         catch {
             return false;
@@ -127,7 +139,7 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
                 lease.assertCurrent();
                 host.hooks.assertCurrent(hooks);
                 const prior = active;
-                active = { lease, evidence, hooks };
+                active = { action, lease, evidence, hooks, surfaceFingerprint: projectionFingerprint(result.snapshot.surface) };
                 capturedEvidence.add(evidence);
                 if (prior) {
                     await prior.lease.settle();
@@ -168,11 +180,23 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
             }
           }
         },
-        async refresh(action: ManagedAction<FactOutcome>, expected: RequestEvidence, signal: AbortSignal = action.signal) {
+        async refresh(action: ManagedAction<FactOutcome>, expected: RequestEvidence, signal: AbortSignal = action.signal, mode: 'input' | 'archive' | 'reservation' = 'input') {
             if (!capturedEvidence.has(expected))
                 throw TypeError('Original request evidence required');
             if (host.requestContext && !host.requestContext.current(expected.instructions))
                 return undefined;
+            signal.throwIfAborted();
+            // The original action and input proof remain live across a bind,
+            // budget checkpoint or attempt reservation. Raw archive consumers
+            // still need an observation of the exact journal prefix.
+            if (active?.action === action && active.evidence === expected) {
+                if (mode === 'reservation') {
+                    // Generation control checks the live surface at reserve
+                    // and issue; this refresh decides whether to reopen input.
+                    try { active.lease.assertInputCurrent(); return expected; }
+                    catch { /* Use the ordinary exact capture on a changed input. */ }
+                } else if (current(expected, true, mode === 'archive')) return expected;
+            }
             let next: RequestEvidence;
             try {
                 next = await this.capture(action, signal);
@@ -195,7 +219,7 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
             const retained = { ...next, instructions: expected.instructions };
             capturedEvidence.add(retained);
             active!.evidence = retained;
-            return current(retained) ? retained : undefined;
+            return current(retained, true, mode === 'archive') ? retained : undefined;
         },
         readBudget(): import('@i-harness/core-session').BudgetRead {
             try {
@@ -209,7 +233,7 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
         get budgetConfig() { if(!config.budget||!host.modelOverheadTokens)return config.budget;const overheadTokens=host.modelOverheadTokens();if(!Number.isSafeInteger(overheadTokens)||overheadTokens<0)throw RangeError('Invalid live model overhead');return {...config.budget,overheadTokens}; }, get hasCompact() { return !!config.compact; }, get compactConfig() { if(!config.compact||!host.modelOverheadTokens)return config.compact;const overheadTokens=host.modelOverheadTokens();if(!Number.isSafeInteger(overheadTokens)||overheadTokens<0)throw RangeError('Invalid live model overhead');return {...config.compact,overheadTokens}; }, get outputCap() { return surface().maxOutputTokens; },
         get pressurePolicy() { return config.compact ? resolveCompactSpec(config.compact, metadata()?.providerId, metadata()?.modelId) : undefined; },
         get archive() {
-            if (!active || !current(active.evidence))
+            if (!active || !current(active.evidence, true, true))
                 throw TypeError('Original request lease expired');
             return active.lease.archive;
         },

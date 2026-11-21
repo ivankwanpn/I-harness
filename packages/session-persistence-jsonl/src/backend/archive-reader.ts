@@ -7,7 +7,7 @@ const managed = (v: number) => [6, 7, 8, 9, 10, 11, 12, 13, 14].includes(v);
 type ArchivePrefix = { header: SessionMeta; birth: Buffer };
 const incompleteBirth = () => Object.assign(new Error('bootstrap-incomplete'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' });
 /** IO chunks are bounded; complete decoded events and the largest record remain materialized. */
-export async function readSessionArchive(handle: FileHandle, extent: number, prefixOnly = false, qualifyPrefix?: (prefix: ArchivePrefix) => Promise<void>, dependency?: { ordinal:number; prefix:Readonly<JournalPrefix>; assertCurrent():void }) {
+export async function readSessionArchive(handle: FileHandle, extent: number, prefixOnly = false, qualifyPrefix?: (prefix: ArchivePrefix) => Promise<void>, dependency?: { ordinals:ReadonlySet<number>; prefix:Readonly<JournalPrefix>; assertCurrent():void }) {
     let header: SessionMeta | undefined, parts: Buffer[] = [], partBytes = 0, legacyStopped = false;
     const events: SessionEvent[] = [], birth: Buffer[] = [];
     let needed = 0, ordinal = 0, decoder: ReturnType<typeof createJournalStreamDecoder> | undefined;
@@ -29,7 +29,7 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
             if(dependency&&!managed(header.formatVersion))throw Error('Owned dependency format unsupported');
             if (header.semanticSeed) needed = header.semanticSeed.seedLength ? 2 : 1;
             if (managed(header.formatVersion) && !prefixOnly)
-                decoder = createJournalStreamDecoder(header.journal!, header.formatVersion, unit => { for (const event of unit) {if(!dependency||ordinal===dependency.ordinal)events.push(event);ordinal++;} });
+                decoder = createJournalStreamDecoder(header.journal!, header.formatVersion, unit => { for (const event of unit) {if(!dependency||dependency.ordinals.has(ordinal))events.push(event);ordinal++;} });
             if (!needed && !prefixOnly) await qualifyPrefix?.({ header, birth: Buffer.concat(birth) });
             return;
         }
@@ -83,7 +83,7 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
         }
         if(dependency){
             const expected=dependency.prefix,actual=decoded?.prefix;
-            if(!actual||decoded?.torn||actual.eventCount!==expected.eventCount||actual.bodyBytes!==expected.bodyBytes||actual.prefixDigest!==expected.prefixDigest||events.length!==1)throw Error('Owned dependency prefix mismatch');
+            if(!actual||decoded?.torn||actual.eventCount!==expected.eventCount||actual.bodyBytes!==expected.bodyBytes||actual.prefixDigest!==expected.prefixDigest||events.length!==dependency.ordinals.size)throw Error('Owned dependency prefix mismatch');
             dependency.assertCurrent();
         }else if (managed(header.formatVersion) || events.some(e => e.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion, header);
     }

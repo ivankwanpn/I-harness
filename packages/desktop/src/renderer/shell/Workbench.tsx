@@ -58,6 +58,7 @@ import type { DesktopWorkStateView } from "@i-harness/desktop-gateway/src/work-s
 
 export interface ConversationView {
   rows: TimelineRow[]
+  assistantPreview?: import("../session/event-window.ts").AssistantPreview
   loading?: boolean
   canSend: boolean
   projectReady?: boolean
@@ -451,7 +452,7 @@ export function Workbench({
                   <span className="conversation-goal-phase">{t(conversation.workState.goal.phase === "paused" ? "已暫停" : conversation.workState.goal.phase === "complete" ? "已完成" : "進行中")}</span>
                 </div> : null}
                 {capabilities["desktop-work-state"]?.includes("1") ? <TodoProgress key={`todos:${selectedWorkspaceId}:${selectedSessionId}`} todos={conversation.workState?.todos} error={conversation.workStateError} onOpenTasks={openTodoEditor} /> : null}
-                {conversation.rows.length === 0
+                {conversation.rows.length === 0 && !conversation.assistantPreview
                   ? conversation.loading
                     ? <div className="conversation-skeleton" role="status" aria-label={t("正在載入會話…")}>
                         <div className="skeleton-line skeleton-line-user" />
@@ -460,7 +461,7 @@ export function Workbench({
                         <div className="skeleton-line skeleton-line-assistant" />
                       </div>
                     : <div className="empty-conversation"><div className="empty-introduction"><h1>{t("今天想完成甚麼？")}</h1><p>{t(displayProject ? "描述你的目標，從這個專案開始。" : "延續左側的會話，或開始一項新任務。")}</p></div></div>
-                  : <Timeline resultReader={resultReader} key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={conversation.rows} running={conversation.running} navigation={fileNavigation} />}
+                  : <Timeline resultReader={resultReader} key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={conversation.rows} assistantPreview={conversation.assistantPreview} running={conversation.running} navigation={fileNavigation} />}
                 <div className="conversation-dock">
                 {conversation.taskError && !(reviewOpen && workPaneTab === "tasks") ? <p role="alert" className="notice error-text" title={conversation.taskError}>{displayError(conversation.taskError).summary}</p> : null}
                 <PendingPanel key={`${selectedWorkspaceId}:${selectedSessionId}`} draftOwner={bridge} workspaceId={selectedWorkspaceId} pending={conversation.pending} onReply={conversation.onReply} />

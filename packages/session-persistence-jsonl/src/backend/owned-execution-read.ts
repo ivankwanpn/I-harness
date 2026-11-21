@@ -1,5 +1,5 @@
 import {isHeldFactOwner,type HeldFactOwner,type PersistenceBackend} from '@i-harness/session-persistence'
-import {validJournalPrefix,type JournalPrefix} from '@i-harness/core-session'
+import {validJournalPrefix,type JournalPrefix,type SessionEventView} from '@i-harness/core-session'
 import type {OriginalWriterDependencyScope} from '@i-harness/core-session/internal/execution'
 import type {createArchiveReadOwner} from './archive-read-owner.ts'
 import {readSessionArchive} from './archive-reader.ts'
@@ -18,9 +18,37 @@ export function associateOwnedExecutionReader(backend:PersistenceBackend,ports:{
   const check=()=>{ports.assertOriginal();if(Object.getOwnPropertyDescriptor(held,'assertHeld')?.value!==descriptor.value)throw TypeError('Changed held writer');assertHeld()}
   ports.register(id,held)
   const original=ports.archive.openHeld(ports.filePath(id),check)
+  const readEvents=async(ordinals:readonly number[]):Promise<readonly SessionEventView[]>=>{
+   original.assertCurrent()
+   if(!Array.isArray(ordinals)||types.isProxy(ordinals)||ordinals.length>expected.eventCount)throw RangeError('Invalid dependency selection')
+   const requested:number[]=[]
+   for(let index=0;index<ordinals.length;index++){
+    const field=Object.getOwnPropertyDescriptor(ordinals,index),ordinal=field?.value
+    if(!Number.isSafeInteger(ordinal)||ordinal<0||ordinal>=expected.eventCount)throw RangeError('Dependency ordinal out of bounds')
+    requested.push(ordinal)
+   }
+   const selected=new Set(requested)
+   if(selected.size!==requested.length)throw RangeError('Duplicate dependency ordinal')
+   if(!requested.length)return []
+   return original.read(async(handle,extent)=>{
+    await ports.assertNotDeleted('session',id);check()
+    const result=await readSessionArchive(handle,extent,false,birth=>ports.qualify(id,held,birth),{ordinals:selected,prefix:expected,assertCurrent:check})
+    if(result.header.sessionId!==id)throw Error('Owned dependency header mismatch')
+    const records=new Map(result.events.map(event=>[event.seq,event]))
+    await ports.assertNotDeleted('session',id);check()
+    return requested.map(ordinal=>{
+     const event=records.get(ordinal)
+     if(!event)throw Error('Owned dependency ordinal mismatch')
+     return event
+    })
+   })
+  }
   const scope:OriginalWriterDependencyScope=Object.freeze({assertCurrent(){if(this!==scope)throw TypeError('Foreign dependency receiver');original.assertCurrent()},async readEvent(ordinal:number){
-   if(this!==scope)throw TypeError('Foreign dependency receiver');original.assertCurrent();if(!Number.isSafeInteger(ordinal)||ordinal<0||ordinal>=expected.eventCount)throw RangeError('Dependency ordinal out of bounds')
-   return original.read(async(handle,extent)=>{await ports.assertNotDeleted('session',id);check();const result=await readSessionArchive(handle,extent,false,birth=>ports.qualify(id,held,birth),{ordinal,prefix:expected,assertCurrent:check});if(result.header.sessionId!==id)throw Error('Owned dependency header mismatch');await ports.assertNotDeleted('session',id);check();return result.events[0]!})
+   if(this!==scope)throw TypeError('Foreign dependency receiver')
+   return (await readEvents([ordinal]))[0]!
+  },readEvents(ordinals:readonly number[]){
+   if(this!==scope)throw TypeError('Foreign dependency receiver')
+   return readEvents(ordinals)
   },async close(){if(this!==scope)throw TypeError('Foreign dependency receiver');const errors:unknown[]=[];try{await original.close()}catch(error){errors.push(error)}try{await ports.settleBirth(id,held)}catch(error){errors.push(error)}if(errors.length===1)throw errors[0];if(errors.length)throw new AggregateError(errors,'Owned dependency cleanup unresolved')}})
   return scope
  })

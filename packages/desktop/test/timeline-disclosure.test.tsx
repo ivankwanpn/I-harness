@@ -7,6 +7,27 @@ import { Timeline } from "../src/renderer/session/Timeline.tsx"
 import { projectTimeline } from "../src/renderer/session/project.ts"
 afterEach(() => { cleanup(); viewport.visible = true; viewport.scroll.mockClear(); vi.useRealTimers() })
 
+it("renders Markdown before completion and settles in the same assistant row", () => {
+  const prefix = [{ type: "step/start" as const, seq: 5 }]
+  const rows = projectTimeline(prefix)
+  const view = render(<Timeline rows={rows} running assistantPreview={{
+    type: "assistant/chunk", stepStartSeq: 5, offset: 0, text: "First **paragraph**",
+  }} />)
+  const preview = screen.getByText("paragraph").closest(".timeline-row")
+  expect(screen.getByText("paragraph").tagName).toBe("STRONG")
+  expect(preview?.querySelector(".message-actions")).toBeNull()
+  view.rerender(<Timeline rows={rows} running assistantPreview={{
+    type: "assistant/chunk", stepStartSeq: 5, offset: 0, text: "First **paragraph**\n\nSecond paragraph",
+  }} />)
+  expect(screen.getByText("Second paragraph")).toBeTruthy()
+  view.rerender(<Timeline rows={projectTimeline([
+    ...prefix, { type: "assistant/message", text: "First **paragraph**\n\nSecond paragraph", seq: 6 },
+  ])} />)
+  expect(screen.getByText("paragraph").closest(".timeline-row")).toBe(preview)
+  expect(preview?.querySelector(".message-actions")).toBeTruthy()
+  expect(screen.getAllByText("Second paragraph")).toHaveLength(1)
+})
+
 it("does not jump to the end when the reader opens tool details", () => {
   vi.useFakeTimers()
   render(<Timeline rows={[{ id: "r", kind: "tool", name: "read", output: "details" }]} />)

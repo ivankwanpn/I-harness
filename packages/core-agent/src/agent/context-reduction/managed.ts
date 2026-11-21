@@ -120,16 +120,16 @@ export function createManagedReduction(host: ManagedAgentHost, context: ReturnTy
                     assertExecutionGeneration(host.execution, owner);
                     if (!selection.current())
                         throw Object.assign(Error('CONTEXT_INPUT_STALE'), { code: 'CONTEXT_INPUT_STALE' });
-                }), async () => !!await context.refresh(action, selected) && selection.current());
+                }), async () => !!await context.refresh(action, selected, undefined, 'archive') && selection.current());
                 const result = await host.summaryFactory!({ model, config: configuration.summarizationModel === selected.model ? { ...configuration, summarizationModel: model } : configuration, generation: control, async bindGeneration(prepared) {
                         assertExecutionGeneration(host.execution, owner);
                         await owner.bind(prepared, 'summary');
-                        if (!await context.refresh(action, selected))
+                        if (!await context.refresh(action, selected, undefined, 'archive'))
                             throw Object.assign(Error('CONTEXT_INPUT_STALE'), { code: 'CONTEXT_INPUT_STALE' });
                 }, async afterStream() {
                     // Attempt receipts advance the prefix; refresh only the
                     // same evidence before the summary checks its source again.
-                    if (!await context.refresh(action, selected) || !selection.current())
+                    if (!await context.refresh(action, selected, undefined, 'archive') || !selection.current())
                         throw Object.assign(Error('CONTEXT_INPUT_STALE'), { code: 'CONTEXT_INPUT_STALE' });
                 }, contextMetadata: selected.metadata, budgetBinding: surface.budgetBinding, maxOutputTokens: surface.maxOutputTokens, reasoningEffort: surface.reasoningEffort, flush: host.flush, telemetry: host.telemetry ? { close() {}, emit(event) { host.telemetry!.emit({ ...event, data: { ...event.data, sessionId: host.domain.sessionId } }) } } : undefined })(selection);
                 return result;

@@ -45,5 +45,11 @@ it("verify:all reports dependent projects after an earlier project fails and ret
     expect(result.stdout).toMatch(/suite\s+: exit 1 · 5 passed \| 0 skipped \| 1 failed/)
     expect(result.stdout).toContain("VERIFY:ALL FAILED")
     expect(result.stdout).not.toContain("SHORT RUN")
+    await put("packages/desktop-gateway/package.json", JSON.stringify({ name: "fixture-gateway", scripts: { test: "node test.mjs" } }))
+    await put("packages/desktop-gateway/test.mjs", "import {appendFileSync} from 'node:fs'; appendFileSync('../../ran.txt','gateway\\n'); console.log(' Test Files 1 passed (1)'); console.log('      Tests 1 passed');")
+    const { stdout } = await execute(process.execPath, [join(root, "scripts/verify-all.mjs"), "--suite", "gateway"], { cwd: root, timeout: 15000, windowsHide: true })
+    expect(stdout).toContain("WORKSPACE SUITE PASSED")
+    expect(stdout).toContain("all 1 planned projects reported")
+    expect((await readFile(join(root, "ran.txt"), "utf8")).trim().split(/\r?\n/)).toEqual(["a", "b", "c", "gateway"])
   } finally { await rm(root, { recursive: true, force: true }) }
 })

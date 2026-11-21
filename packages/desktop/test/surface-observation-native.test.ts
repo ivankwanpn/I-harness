@@ -33,8 +33,8 @@ it('retains disconnected native cleanup after client.close fulfills until the ex
     const manager = createWorkspaceRuntimeManager({ sessionsRoot: root, launch: () => ({ client: client as never, exited: exited.promise }) }), workspace = { id: 'w', label: 'fixture', path: root }, owner = createNativeSurfaceObservation(() => manager.get(workspace), id => manager.peek!(id), () => { });
     try {
         await owner.request({ kind: 'desktop/surface/subscribe', workspaceId: 'w', surface: 'execution', sessionId: 's' });
-        await manager.invalidate!('w');
-        expect(client.close).toHaveBeenCalledTimes(1);
+        const invalidating = manager.invalidate!('w');
+        await vi.waitFor(() => expect(client.close).toHaveBeenCalledTimes(1));
         const before = request.mock.calls.length;
         let settled = false;
         const closing = owner.close().then(() => { settled = true; });
@@ -43,7 +43,7 @@ it('retains disconnected native cleanup after client.close fulfills until the ex
         await expect(owner.request({ kind: 'desktop/surface/snapshot', workspaceId: 'w', subscriptionId: 'old-token', epoch: 'old-epoch' })).rejects.toThrow();
         expect(request.mock.calls).toHaveLength(before);
         exited.resolve();
-        await closing;
+        await Promise.all([closing, invalidating]);
         expect(settled).toBe(true);
         expect(request.mock.calls).toHaveLength(before);
     }

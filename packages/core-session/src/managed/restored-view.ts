@@ -170,6 +170,8 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
     record.installed = true;
     const owned = record;
     let revision = 0, installationBlocked = false;
+    let requestInputRevision = 0;
+    let installedPrefix = owned.source.prefix;
     let resident: {
         revision: number;
         payload: PreparedPayload;
@@ -188,6 +190,10 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
     };
     function appendStage(events:readonly SessionEventView[],validation:ReturnType<Candidate['index']['stage']>,discardValidation?:()=>void){
         const expected=revision,sources=owned.sources.stage(events),state=owned.state.stage(events),context=owned.context.stage(events),prune=owned.prune.stage(events),intake=owned.intake.stage(events);
+        // The captured model input is independent of attempt accounting.
+        // Raw archive observations still expire on every committed append.
+        const changesRequestInput = events.some(event => event.type !== 'context/budget' && event.type !== 'context/attempt'
+            && !(event.type === 'context/action' && (event.op === 'bind' || event.op === 'constrain' || event.op === 'local-invocation' || event.op === 'local-settle')));
         let installed=false,started=false,discarded=false,sourceDone=false,validationDone=false,sourcesDone=false,stateDone=false,contextDone=false,pruneDone=false,intakeDone=false,foldDone=false,foldFailed=false,codeDone=false;
         return {events,discard(){if(started)failure('CONVERSATION_RESTORATION_ISSUED_STAGE');discarded=true;discardValidation?.()},install(batch:EncodedFactBatch,receipt:FactReceipt){
             if(discarded)failure('CONVERSATION_RESTORATION_DISCARDED_STAGE');
@@ -203,10 +209,16 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
             if(!contextDone){context.commit();contextDone=true}
             if(!pruneDone){prune.commit();pruneDone=true}
             if(!intakeDone){intake.commit();intakeDone=true}
+            if (changesRequestInput) requestInputRevision++;
+            installedPrefix = owned.source.prefix;
             revision++;resident=undefined;installed=true;installationBlocked=false;
         }};
     }
     const result = {
+        requestInputRevision(prefix: typeof installedPrefix) {
+            check();
+            return prefix === installedPrefix ? requestInputRevision : undefined;
+        },
         /** Structural selection matches native recovery: local ref facts, rewind only. */
         recentNativeRecoverySelection(){check();const facts=owned.index.resultFacts(),visibility=historyVisibility(facts),selected: {ordinal:number;ref:import('../conversation/selected-results-types.ts').LegacyRef}[]=[];for(let i=facts.length-1;i>=0&&selected.length<12;i--){const fact=facts[i]!;if(fact.type==='context/result-ref'&&fact.legacyResult&&visibility.branch(fact))selected.push({ordinal:fact.index,ref:fact.legacyResult})}selected.reverse();return selected},
         reviewerOrdinals(){check();const facts=owned.index.resultFacts(),count=owned.index.eventCount;let latestUser:number|undefined;for(let i=facts.length-1;i>=0;i--)if(facts[i]!.type==='user/message'){latestUser=facts[i]!.index;break}return {tail:Array.from({length:Math.min(12,count)},(_,index)=>count-Math.min(12,count)+index),latestUser}},
@@ -246,7 +258,7 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
                     for (const call of item.calls) if (call.result) wanted.add(call.result.eventIndex);
                 }
                 const calls = new Set([...wanted].flatMap(index => facts[index]?.type === 'tool/result' && facts[index]?.callId ? [facts[index]!.callId!] : []));
-                const substitutes = await preparePruneSubstitutes(prune, selectPruneDependencies(prune, calls), async index => { current(); const event = await read(index); current(); return event; });
+                const substitutes = await preparePruneSubstitutes(prune, selectPruneDependencies(prune, calls).keys(), async index => { current(); const event = await read(index); current(); return event; });
                 current();
                 const full = new Map<number, SessionEventView>();
                 if (manifestEvent) full.set(manifestIndex, manifestEvent);
@@ -286,7 +298,7 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
         },
         // The held execution owner may supply its operation-local dependency
         // reader. The public archive facade never forwards an incoming reader.
-        async prepare(readEvent?: (ordinal: number) => Promise<SessionEventView>): Promise<PreparedConversationArchive> {
+        async prepare(readEvent?: (ordinal: number) => Promise<SessionEventView>, readEvents?: (ordinals: readonly number[]) => Promise<readonly SessionEventView[]>): Promise<PreparedConversationArchive> {
             check();
             const expected = revision, current = () => {
                 check();
@@ -296,7 +308,7 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
             if (!resident || resident.revision !== revision) {
                 let settleStarted = false;
                 try {
-                    const payload = await hydratePreparation(owned, current, undefined, readEvent);
+                    const payload = await hydratePreparation(owned, current, undefined, readEvent, readEvents);
                     settleStarted = true;
                     await owned.source.settle();
                     current();
@@ -394,7 +406,7 @@ type PreparedPayload = {
     coordinates: ReturnType<Candidate['sources']['read']>;
     state: object;
 };
-async function hydratePreparation(owned: Candidate, current: () => void, prospective?:{history:ReturnType<Candidate['index']['history']>;coordinates:ReturnType<Candidate['sources']['read']>;prune:ReturnType<Candidate['prune']['read']>;read:(index:number)=>Promise<SessionEventView>}, readEvent?: (ordinal:number)=>Promise<SessionEventView>): Promise<PreparedPayload> {
+async function hydratePreparation(owned: Candidate, current: () => void, prospective?:{history:ReturnType<Candidate['index']['history']>;coordinates:ReturnType<Candidate['sources']['read']>;prune:ReturnType<Candidate['prune']['read']>;read:(index:number)=>Promise<SessionEventView>}, readEvent?: (ordinal:number)=>Promise<SessionEventView>, readEvents?: (ordinals: readonly number[]) => Promise<readonly SessionEventView[]>): Promise<PreparedPayload> {
     current();
     const history = prospective?.history??owned.index.history(), facts = owned.index.resultFacts(), coordinates = prospective?.coordinates??owned.sources.read(), pruneView = prospective?.prune??owned.prune.read();
     const wanted = new Set<number>(), callIds = new Set<string>();
@@ -419,13 +431,26 @@ async function hydratePreparation(owned: Candidate, current: () => void, prospec
             callIds.add(fact.callId);
     }
     const prunedCalls = selectPruneDependencies(pruneView, callIds);
+    const prefetched = new Map<number, SessionEventView>();
+    const preload = async (indices: Iterable<number>) => {
+        if (!readEvents) return;
+        const missing = [...new Set(indices)].filter(index => !prefetched.has(index));
+        if (!missing.length) return;
+        current();
+        const events = await readEvents(missing);
+        current();
+        missing.forEach((index, position) => prefetched.set(index, events[position]!));
+    };
+    if (readEvents) await preload([...wanted, ...prunedCalls.values()]);
     const read = async (index: number) => {
+        const captured = prefetched.get(index);
+        if (captured) return captured;
         current();
         const event = await (prospective?prospective.read(index):readEvent?readEvent(index):owned.source.readEvent(index));
         current();
         return event;
     };
-    const substitutes = await preparePruneSubstitutes(pruneView, prunedCalls, read);
+    const substitutes = await preparePruneSubstitutes(pruneView, prunedCalls.keys(), read);
     const full = new Map<number, SessionEventView>(), pruned = new Map<number, PreparedPrunedResult>();
     for (const index of wanted) {
         const event = await read(index), substitute = event.type === 'tool/result' ? substitutes.get(event.callId) : undefined;
@@ -435,17 +460,22 @@ async function hydratePreparation(owned: Candidate, current: () => void, prospec
             full.set(index, event);
     }
     // Selected preparation text/provenance must use actual original bodies.
-    for (const event of [...full.values()])
-        if (event.type === 'user/message' && event.inputPreparation) {
-            const resultIndex = event.inputPreparation.resultSeq;
-            const result = full.get(resultIndex) ?? await read(resultIndex);
-            full.set(resultIndex, result);
-            if (result.type === 'agent/input/preparation') {
-                const admission = result.admissionSeq;
-                if (!full.has(admission))
-                    full.set(admission, await read(admission));
-            }
+    const preparations = [...full.values()].flatMap(event =>
+        event.type === 'user/message' && event.inputPreparation ? [event.inputPreparation.resultSeq] : []);
+    if (readEvents) await preload(preparations);
+    const admissions = new Set<number>();
+    for (const resultIndex of preparations) {
+        const result = full.get(resultIndex) ?? await read(resultIndex);
+        full.set(resultIndex, result);
+        if (result.type === 'agent/input/preparation' && !full.has(result.admissionSeq)) {
+            if (readEvents) admissions.add(result.admissionSeq);
+            else full.set(result.admissionSeq, await read(result.admissionSeq));
         }
+    }
+    if (readEvents) await preload(admissions);
+    for (const admission of admissions)
+        full.set(admission, await read(admission));
+    current();
     return { full, pruned, substitutes, coordinates, state: owned.state.read() };
 }
 function issuePreparation(owned: Candidate, payload: PreparedPayload, current: () => void, leases: Set<PreparedConversationArchive>): PreparedConversationArchive {

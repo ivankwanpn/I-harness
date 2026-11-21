@@ -86,11 +86,11 @@ export async function preparePruneSubstitutes(view: ConversationPruneDependencyV
 }
 
 /** Distinguish legitimately unpruned calls before any payload acquisition. */
-export function selectPruneDependencies(view: ConversationPruneDependencyView, selectedCallIds: Iterable<string>): ReadonlySet<string> {
+export function selectPruneDependencies(view: ConversationPruneDependencyView, selectedCallIds: Iterable<string>): ReadonlyMap<string, number> {
   const state = pruneViews.get(view)
   const check = () => { if (!state || !state.current()) throw new TypeError('Invalid or stale prune dependency view') }
-  check(); const selected = new Set<string>()
-  for (const callId of selectedCallIds) { check(); if (state!.positions.has(callId)) selected.add(callId) }
+  check(); const selected = new Map<string, number>()
+  for (const callId of selectedCallIds) { check(); const position = state!.positions.get(callId); if (position) selected.set(callId, position.eventIndex) }
   check(); return selected
 }
 

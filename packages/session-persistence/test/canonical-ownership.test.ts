@@ -12,6 +12,71 @@ import {createOwnership,captureHeldOwnershipClaim} from '../src/coordinator/owne
 beforeEach(()=>{native.keys.clear();native.held.clear();native.acquired=[];native.released=[];native.refuse=undefined;native.refuseRelease=undefined})
 function identity(){let current=true;const capture=(p:string)=>({kind:'ready' as const,key:path.resolve('C:\\store',p),assertCurrent(){if(!current)throw Error('retired namespace')}});return{session:(id:string)=>capture(id+'.jsonl'),document:(key:string)=>capture(key+'.doc.jsonl'),taskForParent:(id:string)=>capture('task-'+id+'.doc.jsonl'),prepareSession:async()=>{},prepareDocument:async()=>{},assertOriginal(){},settleResources(){},retire(){current=false}}}
 const make=(port=identity())=>{const backend={lockRoot:'fixture'};associations.set(backend,port);return{port,owner:createOwnership(backend,{lock:{enabled:true}})}}
+it('waits for a disjoint session acquisition to release its live ordering reservation', async () => {
+  const { owner } = make()
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  let reservations = 0
+  owner.beginResultOrderingRegistration({}).commit({
+    assertOutside() {},
+    reserve(retain) {
+      const ordinal = ++reservations
+      const reservation = {
+        async join() {
+          if (ordinal === 1) {
+            entered.resolve()
+            await release.promise
+          }
+        },
+        assertSettled() {},
+        async close() {},
+      }
+      retain(reservation)
+      return reservation
+    },
+  })
+  const first = owner.pinOwnership('first')
+  await entered.promise
+  const second = owner.pinOwnership('second')
+  void second.catch(() => undefined)
+  try {
+    await Promise.resolve()
+    expect(reservations).toBe(1)
+    expect(native.acquired).toEqual([])
+    release.resolve()
+    const claims = await Promise.all([first, second])
+    for (const claim of claims) claim.assertHeld()
+    expect(reservations).toBe(2)
+    await Promise.all(claims.map(claim => claim.release()))
+    expect(native.held.size).toBe(0)
+  } finally {
+    release.resolve()
+    await Promise.allSettled([first, second])
+    await Promise.all(owner.releaseHeldLocks())
+  }
+})
+
+it('refuses a recursive acquisition of a separate session from its active ordering callback', async () => {
+  const { owner } = make()
+  owner.beginResultOrderingRegistration({}).commit({
+    assertOutside() {},
+    reserve(retain) {
+      const reservation = {
+        async join() {
+          await expect(owner.pinOwnership('recursive')).rejects.toThrow('Original result ordering unresolved')
+        },
+        assertSettled() {},
+        async close() {},
+      }
+      retain(reservation)
+      return reservation
+    },
+  })
+  const outer = await owner.pinOwnership('outer')
+  await outer.release()
+  expect(native.held.size).toBe(0)
+})
+
 it('does not publish a reusable claim while original ordering close remains unknown',async()=>{
  const {owner}=make(),entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>();let closes=0
  owner.beginResultOrderingRegistration({}).commit({assertOutside(){},reserve(retain){const original={async join(){},assertSettled(){},async close(){if(++closes===1){entered.resolve();await leave.promise;throw undefined}}};retain(original);return original}})

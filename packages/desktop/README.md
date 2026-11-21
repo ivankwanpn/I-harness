@@ -23,22 +23,22 @@ pnpm --filter @i-harness/desktop dist
 pnpm --filter @i-harness/desktop installer
 ```
 
-Standard builds write to `packages/desktop/release/`. The **0.1.14** build collects the app and installer in the same directory.
+Standard builds write to `packages/desktop/release/`. The **0.1.15** build collects the app and installer in the same directory.
 
 ```text
 release/
   I-harness/
     I-harness.exe
     resources/
-  I-harness-0.1.14.zip
-  I-harness-Setup-0.1.14.exe
-  I-harness-Setup-0.1.14.exe.sha256
-  I-harness-Setup-0.1.14.installer-build.json
+  I-harness-0.1.15.zip
+  I-harness-Setup-0.1.15.exe
+  I-harness-Setup-0.1.15.exe.sha256
+  I-harness-Setup-0.1.15.installer-build.json
 ```
 
 The portable and installed app carry Electron, gateway dependencies and their loader; end users do not install a separate Node runtime. Keep the portable executable and resources together. Build outputs are ignored by Git; downloadable packages belong in [GitHub Releases](https://github.com/ivankwanpn/I-harness/releases).
 
-Release versions are recorded in [release notes](../../docs/releases/v0.1.14.md) and immutable Git tags. `IH_DESKTOP_RELEASE_LABEL` selects an isolated build directory when needed. Published Setup and ZIP files are accompanied by `SHA256SUMS.txt` and a release manifest.
+Release versions are recorded in [release notes](../../docs/releases/v0.1.15.md) and immutable Git tags. `IH_DESKTOP_RELEASE_LABEL` selects an isolated build directory when needed. Published Setup and ZIP files are accompanied by `SHA256SUMS.txt` and a release manifest.
 
 Installer behavior and compiler requirements are documented in [installer/README.md](installer/README.md).
 

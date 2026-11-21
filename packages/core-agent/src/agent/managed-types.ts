@@ -39,6 +39,7 @@ export interface ManagedAgentDeps extends Omit<AgentDeps,'session'|'factOwner'|'
   *  turn action records it durably, replacing the legacy assembly producer. */
  readonly sandboxMode?:()=>'read-only'|'workspace-write'|'danger-full-access'
  prepareModelSurface?:(signal:AbortSignal)=>Promise<void>
+ modelSurface?(): { systemPrompt: string; tools: import('@i-harness/llm-seam').ToolSchema[] }
  modelCallOrigin:object
  generationFactory:ManagedGenerationFactory
  inputPreparationFactory?:(action:ManagedAction<FactOutcome>)=>ManagedInputPreparation

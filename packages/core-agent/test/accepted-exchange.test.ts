@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { createSession, projectConversation, Inbox } from "@i-harness/core-session"
+import { createSession, projectConversation, Inbox, subscribe, type SessionEvent } from "@i-harness/core-session"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createAgent } from "../src/index.ts"
 import { mkdtemp } from 'node:fs/promises'
@@ -150,8 +150,13 @@ it("acceptance flush rejection prevents preparation and approval", async () => {
 })
 it.each([false, true])("retry before acceptance retains one logical action and changes physical attempts (content=%s)", async content => {
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
+  const previews: Extract<SessionEvent, { type: "assistant/chunk" }>[] = []
+  subscribe(session, event => { if (event.type === "assistant/chunk") previews.push(event) })
   const agent = createAgent(ctx, { session, tools, systemPrompt: "", model: { async *stream() {
-    if (content) yield { type: "text/chunk", text: "discard me" }
+    if (content) {
+      yield { type: "text/chunk", text: "discard me" }
+      yield { type: "text/chunk", text: " queued" }
+    }
     yield { type: "retry", retry: { requestId: "request", phase: "waiting", attempt: 1, delayMs: 0, code: "SERVER", ...(content ? { discardOutput: true as const } : {}) } }
     yield { type: "retry", retry: { requestId: "request", phase: "attempting", attempt: 1, delayMs: 0, code: "SERVER" } }
     yield { type: "retry", retry: { requestId: "request", phase: "recovered", attempt: 1, delayMs: 0, code: "SERVER" } }
@@ -162,6 +167,10 @@ it.each([false, true])("retry before acceptance retains one logical action and c
   expect(starts).toHaveLength(2)
   expect(starts[0]!.actionId).toBe(starts[1]!.actionId)
   expect(starts[0]!.attemptId).not.toBe(starts[1]!.attemptId)
+  expect(previews).toEqual([
+    ...(content ? [{ type: "assistant/chunk", stepStartSeq: starts[0]!.seq, offset: 0, text: "discard me" }] : []),
+    { type: "assistant/chunk", stepStartSeq: starts[1]!.seq, offset: 0, text: "accepted" },
+  ])
   expect(session.events.filter(event => event.type === "model/exchange-accepted")).toEqual([expect.objectContaining({ stepStartSeq: starts[1]!.seq, actionId: starts[1]!.actionId, attemptId: starts[1]!.attemptId })])
   expect(JSON.stringify(projectConversation(session).items.flatMap(item => item.messages))).not.toContain("discard me")
 })

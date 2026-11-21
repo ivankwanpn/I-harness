@@ -1,5 +1,5 @@
 import { onExecutionEvent } from '@i-harness/core-plugin'
-import { assertManagedActionLifetimeCurrent } from '@i-harness/core-session/internal/execution'
+import { assertManagedActionLifetimeCurrent, isOriginalExecutionObservation, type ExecutionObservation } from '@i-harness/core-session/internal/execution'
 import { committedFactSeqs, type CapturedActionFact, type ProducerFactOutcome } from '@i-harness/core-session'
 import { PLAN_MODE_SYSTEM_PROMPT } from '../../plan-mode/src/index.ts'
 import type { ManagedRegistryConstruction } from '../../session-executor/src/managed-assembly.ts'
@@ -10,9 +10,10 @@ export async function mountOwnedPlan(original: ManagedRegistryConstruction, init
  const lifetime = Object.getOwnPropertyDescriptor(original,'assertLifetimeCurrent')?.value
  if (typeof lifetime !== 'function') throw TypeError('Original construction lifetime required')
  let closing = false
- const projection = () => {
+ const projection = (observed?: ExecutionObservation) => {
   original.assertLifetimeCurrent()
-  const observation = original.execution.observe()
+  const observation = observed ?? original.execution.observe()
+  if(!isOriginalExecutionObservation(observation)||observation.identity!==original.execution.identity)throw TypeError('Original plan observation required')
   const plan = observation.plan()
   observation.assertCurrent()
   original.assertLifetimeCurrent()
@@ -56,5 +57,5 @@ export async function mountOwnedPlan(original: ManagedRegistryConstruction, init
  original.tools.register({name:'exit_plan_mode', description:'Signal that the plan is complete and plan mode should end. No arguments.', inputSchema:{type:'object',properties:undefined,required:undefined},isReadOnly:true,
   async execute(_args, exec) { const selected=capture(); if (!selected.plan.active) return {active:false}; await change(selected,'off',exec.abortSignal); return {active:true} }})
  onExecutionEvent(original.ctx,'tools/pre-execute',call => {const name=(call as {name?:string})?.name; if(read().active && (!name || original.tools.get(name)?.isReadOnly!==true)) throw Object.assign(new Error('Plan Mode permits only read-only tools'),{policyRefusal:true}); return call})
- return Object.freeze({read, prompt:()=>projection().plan.active ? PLAN_MODE_SYSTEM_PROMPT : ''})
+ return Object.freeze({read, prompt:(observation?:ExecutionObservation)=>projection(observation).plan.active ? PLAN_MODE_SYSTEM_PROMPT : ''})
 }

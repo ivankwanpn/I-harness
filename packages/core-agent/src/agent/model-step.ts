@@ -39,6 +39,32 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
   let thinkingBlocks: Extract<LLMStreamEvent, { type: "end" }>["thinkingBlocks"]
   let providerContinuation: Extract<LLMStreamEvent, { type: "end" }>["providerContinuation"]
   const stepReasoning = createStepReasoning(deps, reasoning, abort, () => stepStartSeq)
+  let previewOffset = 0
+  let previewTimer: ReturnType<typeof setTimeout> | undefined
+  let previewParts: string[] = []
+  let previewError: { cause: unknown } | undefined
+  const clearPreviewTimer = () => {
+    if (previewTimer !== undefined) clearTimeout(previewTimer)
+    previewTimer = undefined
+  }
+  const flushPreview = () => {
+    clearPreviewTimer()
+    if (previewParts.length === 0) return
+    const text = previewParts.join("")
+    previewParts = []
+    if (abort?.aborted) return
+    const offset = previewOffset
+    previewOffset += text.length
+    stream.publish({ type: "assistant/chunk", stepStartSeq, offset, text })
+  }
+  const publishText = (text: string) => {
+    previewParts.push(text)
+    if (previewOffset === 0) flushPreview()
+    else if (previewTimer === undefined) previewTimer = setTimeout(() => {
+      try { flushPreview() }
+      catch (cause) { previewError = { cause } }
+    }, 50)
+  }
   let modelActivity: ModelActivityInfo | undefined
   let modelFailed = false
   let providerEnded = false
@@ -53,6 +79,8 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
   }
   async function settleFailedAttempt(error?: unknown) {
     modelFailed = true
+    clearPreviewTimer()
+    previewParts = []
     const failedBatch = [...batch], failedText = stepText
     const nativeThinking = thinkingBlocks, nativeContinuation = providerContinuation
     // Retain all local outcomes before the first awaited save. If an audit
@@ -95,7 +123,12 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
       const originalFailure = ev.type === "retry" && ev.retry.phase === "waiting" ? consumeRetryFailure(ev) : undefined
       try {
         stepReasoning.checkPublication()
+        if (previewError) throw previewError.cause
         if (providerEnded && ["text/chunk", "tool_call", "reasoning"].includes(ev.type)) throw Object.assign(new Error("Model produced content after completion"), { code: "MODEL_RESPONSE_INCOMPLETE" })
+        // Live text can precede the durable reasoning acknowledgement. The
+        // canonical attempt still observes the original write order.
+        if (ev.type === "text/chunk" && ev.text.length > 0) publishText(ev.text)
+        if (ev.type === "end" || ev.type === "tool_call") flushPreview()
         // Failed reasoning belongs to the cached settlement, not a preliminary
         // save that could be recaptured by the outer failure/finalization path.
         if (ev.type !== "reasoning" && ev.type !== "activity" && !settlingRetry) await stepReasoning.flush()
@@ -128,6 +161,7 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
             firstOutputAt = undefined
             streamEndedAt = undefined
             stepText = ""
+            previewOffset = 0
             toolCallsThisStep = 0
             batch.length = 0
             receipt = undefined
@@ -200,6 +234,8 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
       throw error
     },
     async settle() {
+      clearPreviewTimer()
+      previewParts = []
       if (modelActivity && modelActivity.phase !== "settled") {
         stream.publish({ type: "model/activity", version: 1, ts: Date.now(), activity: { ...modelActivity, phase: "settled", outcome: abort?.aborted ? "cancelled" : modelFailed ? "failed" : "completed" } })
       }

@@ -16,7 +16,8 @@ it('actual discovery charges 128 local ancestors before the nearer Git boundary 
     expect(plan.interests).toHaveLength(128)
     expect((await discover(scope, plan)).slots).toHaveLength(2)
     const observation = await resolveInterests(scope, interestData(scope, plan.interests))
-    expect(observation.selections).toHaveLength(2); expect(observation.selections.flat()).toHaveLength(512)
+    expect(observation.selections).toHaveLength(2); expect(observation.selections.flat()).toHaveLength(384)
+    expect(observation.selections.flat()).not.toContain(temp.root)
     const limited = planDiscovery(scope, [{ path: join(deepest, 'extra'), kind: 'directory' }])
     expect(limited.targets[0].limited).toBe(true); expect(limited.interests).toHaveLength(128)
   } finally { await temp.remove() }
@@ -35,7 +36,7 @@ it('mixed global/local exhaustion and malformed inputs cannot exceed the charged
   } finally { await temp.remove() }
 })
 
-it('1024 verified lexical/canonical roots become exactly four 256-root selections', async () => {
+it('768 verified candidate paths become three selections while retaining directory aliases', async () => {
   const temp = await temporary(), actual = join(temp.root, 'actual'), alias = join(temp.root, 'alias')
   const watch = new ControlledWatch(), owner = createInstructionObservationOwner(watch)
   try {
@@ -46,12 +47,13 @@ it('1024 verified lexical/canonical roots become exactly four 256-root selection
     const plan = planDiscovery(scope, targets)
     expect(plan.interests).toHaveLength(128)
     const resolved = await resolveInterests(scope, interestData(scope, plan.interests))
-    expect(resolved.selections.map(selection => selection.length)).toEqual([256, 256, 256, 256])
+    expect(resolved.selections.map(selection => selection.length)).toEqual([256, 256, 256])
+    expect(resolved.aliases.filter(entry => entry.directory)).toHaveLength(128)
     const acquire = watch.acquire.getMockImplementation()!
     watch.acquire.mockImplementation(options => { const lease = acquire(options); queueMicrotask(() => watch.sources.find(source => source === lease)!.reset()); return lease })
     const port = owner.port(scope).subscribe(() => {})
     expect((await port.update(plan.interests)).available).toBe(true)
-    expect(watch.acquire).toHaveBeenCalledTimes(4)
+    expect(watch.acquire).toHaveBeenCalledTimes(3)
     expect(watch.sources.every(source => source.selection.persistent === false && source.subscribe.mock.calls.length === 1)).toBe(true)
   } finally { await owner.close(); await temp.remove() }
 })
@@ -60,8 +62,8 @@ it('two-shard replacement retains old coverage until both new outcomes and never
   const temp = await temporary(), watch = new ControlledWatch(), owner = createInstructionObservationOwner(watch)
   try {
     const scope: InstructionScope = { cwd: temp.root, roots: [temp.root], globalSources: [], enabled: true, maxBytes: 24000 }
-    const a = planDiscovery(scope, Array.from({ length: 70 }, (_, i) => ({ path: join(temp.root, `a${i}`), kind: 'directory' as const }))).interests
-    const b = planDiscovery(scope, Array.from({ length: 70 }, (_, i) => ({ path: join(temp.root, `b${i}`), kind: 'directory' as const }))).interests
+    const a = planDiscovery(scope, Array.from({ length: 90 }, (_, i) => ({ path: join(temp.root, `a${i}`), kind: 'directory' as const }))).interests
+    const b = planDiscovery(scope, Array.from({ length: 90 }, (_, i) => ({ path: join(temp.root, `b${i}`), kind: 'directory' as const }))).interests
     const acquire = watch.acquire.getMockImplementation()!
     let automatic = true
     watch.acquire.mockImplementation(options => { const lease = acquire(options); if (automatic) queueMicrotask(() => watch.sources.find(source => source === lease)!.reset()); return lease })

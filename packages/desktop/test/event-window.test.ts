@@ -21,6 +21,35 @@ function page(events: WireEvent[], nextSeq: number): HistoryRange {
 }
 
 describe("Desktop event window", () => {
+  it("coalesces live assistant text and drops delayed chunks once its durable reply arrives", () => {
+    let state = applyHistory(emptyEventWindow(), page([{ type: "step/start", seq: 5 }], 6))
+    const history = state.events
+    for (const [offset, text] of [[0, "start "], [6, "answer"], [4, "t answer"]] as const) {
+      state = applyNotification(state, { type: "assistant/chunk", stepStartSeq: 5, offset, text })
+    }
+    expect(state.assistantPreview).toEqual({ type: "assistant/chunk", stepStartSeq: 5, offset: 0, text: "start answer" })
+    expect(state.events).toBe(history)
+    expect(state.live).toEqual([])
+    expect(state.cursor).toBe(6)
+    const completed = event(6, "start answer")
+    state = applyNotification(state, completed)
+    expect(state.assistantPreview).toBeUndefined()
+    expect(applyNotification(state, { type: "assistant/chunk", stepStartSeq: 5, offset: 12, text: "late" })).toBe(state)
+    expect(timelineEvents(state).at(-1)).toEqual(completed)
+  })
+
+  it("retires a failed assistant preview while admitting the new attempt on the same session", () => {
+    let state = applyHistory(emptyEventWindow(), page([{ type: "step/start", seq: 5 }], 6))
+    state = applyNotification(state, { type: "assistant/chunk", stepStartSeq: 5, offset: 0, text: "old" })
+    state = applyHistory(state, page([{ type: "step/failed", seq: 6 }, { type: "step/start", seq: 7 }], 8))
+    state = applyNotification(state, { type: "assistant/chunk", stepStartSeq: 5, offset: 3, text: "stale" })
+    state = applyNotification(state, { type: "assistant/chunk", stepStartSeq: 7, offset: 0, text: "retry" })
+    expect(state.assistantPreview).toEqual({ type: "assistant/chunk", stepStartSeq: 7, offset: 0, text: "retry" })
+    state = markDisconnected(state)
+    expect(state.assistantPreview).toBeUndefined()
+    expect(applyNotification(state, { type: "assistant/chunk", stepStartSeq: 7, offset: 5, text: "late" })).toBe(state)
+  })
+
   it("coalesces long live reasoning blocks without losing their prefix or advancing the durable cursor", () => {
     let state = applyHistory(emptyEventWindow(), page([{ type: "step/start", seq: 0 }], 1))
     for (let offset = 0; offset < MAX_RETAINED_LIVE + 25; offset++) {

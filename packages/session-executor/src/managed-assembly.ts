@@ -103,6 +103,7 @@ export interface ManagedRegistryConstruction {
 export interface OwnedDefaultSurface {
  systemPrompt():string
  modelToolSchemas():import('@i-harness/llm-seam').ToolSchema[]
+ modelSurface?: ManagedAgentHost['modelSurface']
  modelOverheadTokens():number
  prepareInput(text:string):Promise<string>
  reconcileAuthority():Promise<void>
@@ -165,7 +166,7 @@ function finish(options:ManagedExecutionRuntimeOptions,prepared:ReturnType<typeo
  const overhead=options.contextWindow===undefined||surface?.prepareModelSurface?undefined:modelOverheadTokens()
  const compact=composeCompactConfig(options.compact,options.contextWindow,overhead,diagnosticsFor('mount'))
  const inputs=receivedExecutionInputsFor(execution)
- const agent=createManagedAgent(ctx,{execution,domain:origin.domain,hooks:captureExecutionHookChannel(ctx),modelCallOrigin:origin.bind(pair.registry,pair.driver),tools:pair.registry,get model(){return model},systemPrompt:surface?()=>surface.systemPrompt():options.systemPrompt,modelToolSchemas,modelOverheadTokens,...surface?.prepareModelSurface?{prepareModelSurface:(signal:AbortSignal)=>surface.prepareModelSurface!(signal)}:{},
+ const agent=createManagedAgent(ctx,{execution,domain:origin.domain,hooks:captureExecutionHookChannel(ctx),modelCallOrigin:origin.bind(pair.registry,pair.driver),tools:pair.registry,get model(){return model},systemPrompt:surface?()=>surface.systemPrompt():options.systemPrompt,modelToolSchemas,modelOverheadTokens,...surface?.modelSurface?{modelSurface:()=>surface.modelSurface!()}:{} ,...surface?.prepareModelSurface?{prepareModelSurface:(signal:AbortSignal)=>surface.prepareModelSurface!(signal)}:{},
   ...(options.contextWindow!==undefined?{budget:{contextWindow:options.contextWindow,overheadTokens:overhead}}:{}),...(compact?{compact}:{}),summaryFactory,...(options.autoCompactionEnabled!==undefined?{autoCompactionEnabled:options.autoCompactionEnabled}:{}),maxOutputTokens:options.maxOutputTokens,requestContext,
   modelActionTimeoutMs:options.modelActionTimeoutMs,modelActionMaxAttempts:options.modelActionMaxAttempts,get reasoningEffort(){return reasoningEffort},maxParallelToolCalls:options.maxParallelToolCalls,budgetBinding:options.budgetBinding,contextMetadata:options.contextMetadata,telemetry:options.telemetry,modelBindingIdentity:()=>model,...(options.sandbox!==undefined?{sandboxMode:()=>options.sandbox!}:{}),
   stepInputs:{claimAtStepBoundary:(facts,prepare,claim)=>inputs.inbox.claimAtStepBoundary(facts,prepare,claim)},
@@ -224,24 +225,41 @@ export async function createManagedExecutionRuntimeWithRegistry(options:Omit<Man
  if(defaultSurface){
   const originalSurface=defaultSurface,names=['systemPrompt','modelToolSchemas','modelOverheadTokens','prepareInput','reconcileAuthority'] as const
   if(types.isProxy(originalSurface))throw TypeError('Original default surface required')
-  const methods=names.map(name=>Object.getOwnPropertyDescriptor(originalSurface,name)),prepareSurface=Object.getOwnPropertyDescriptor(originalSurface,'prepareModelSurface')
-  if(prepareSurface&&(!('value'in prepareSurface)||typeof prepareSurface.value!=='function'||types.isProxy(prepareSurface.value)))throw TypeError('Original model surface preparation required')
-  if(methods.some(field=>!field||!('value' in field)||typeof field.value!=='function'||types.isProxy(field.value)))throw TypeError('Original default surface methods required')
-  const checkMethods=()=>{for(let i=0;i<names.length;i++)if(Object.getOwnPropertyDescriptor(originalSurface,names[i]!)?.value!==methods[i]!.value)throw Error('Original default surface changed');const now=Object.getOwnPropertyDescriptor(originalSurface,'prepareModelSurface');if(Boolean(now)!==Boolean(prepareSurface)||now&&(!('value'in now)||now.value!==prepareSurface?.value))throw Error('Original model surface preparation changed')}
+  const optional = ['modelSurface', 'prepareModelSurface'] as const
+  const fields = [...names, ...optional].map(name => [name, Object.getOwnPropertyDescriptor(originalSurface, name)] as const)
+  const valid = (field: PropertyDescriptor | undefined) => field && 'value' in field && typeof field.value === 'function' && !types.isProxy(field.value)
+  if (fields.some(([name, field]) => (field || !optional.some(key => key === name)) && !valid(field)))
+    throw TypeError('Original default surface methods required')
+  const method = Object.fromEntries(fields.map(([name, field]) => [name, field?.value]))
+  const checkMethods = () => {
+    for (const [name, field] of fields) {
+      const current = Object.getOwnPropertyDescriptor(originalSurface, name)
+      if (Boolean(current) !== Boolean(field) || current && (!('value' in current) || current.value !== field?.value))
+        throw Error('Original default surface changed')
+    }
+  }
   const check=()=>{assertCurrent();checkMethods()}
- const readProjection=(index:number)=>{
+ const readProjection=(name:'systemPrompt'|'modelToolSchemas'|'modelOverheadTokens'|'modelSurface')=>{
   assertLifetimeCurrent()
   const observation=prepared.execution.observe()
   observation.assertCurrent()
   checkMethods()
-  const value=Reflect.apply(methods[index]!.value,originalSurface,[])
+  const value=Reflect.apply(method[name],originalSurface,[])
   checkMethods()
   observation.assertCurrent()
   assertLifetimeCurrent()
   return value
  }
- const call=(index:number,...args:unknown[])=>{check();return Reflect.apply(methods[index]!.value,originalSurface,args)}
-  defaultSurface=Object.freeze({systemPrompt:()=>readProjection(0) as string,modelToolSchemas:()=>readProjection(1) as import('@i-harness/llm-seam').ToolSchema[],modelOverheadTokens:()=>readProjection(2) as number,async prepareInput(text:string){const value=await call(3,text);check();return value as string},async reconcileAuthority(){await call(4);check()},...prepareSurface?{async prepareModelSurface(signal:AbortSignal){check();await Reflect.apply(prepareSurface.value,originalSurface,[signal]);check()}}:{}})
+ const call=(name:'prepareInput'|'reconcileAuthority'|'prepareModelSurface',...args:unknown[])=>{check();return Reflect.apply(method[name],originalSurface,args)}
+  defaultSurface=Object.freeze({
+    systemPrompt:()=>readProjection('systemPrompt') as string,
+    modelToolSchemas:()=>readProjection('modelToolSchemas') as import('@i-harness/llm-seam').ToolSchema[],
+    modelOverheadTokens:()=>readProjection('modelOverheadTokens') as number,
+    ...method.modelSurface ? { modelSurface:()=>readProjection('modelSurface') as ReturnType<NonNullable<OwnedDefaultSurface['modelSurface']>> } : {},
+    async prepareInput(text:string){const value=await call('prepareInput',text);check();return value as string},
+    async reconcileAuthority(){await call('reconcileAuthority');check()},
+    ...method.prepareModelSurface ? {async prepareModelSurface(signal:AbortSignal){await call('prepareModelSurface',signal);check()}} : {},
+  })
  }
  assertCurrent();captureExecutionHookChannel(prepared.ctx).capture()
  const resolved=await options.resolveModel()

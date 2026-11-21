@@ -55,6 +55,15 @@ export async function openCommitExecution(sessionId: string, log: CommitLog, dep
       return {
         assertCurrent,
         async readEvent(ordinal: number) { assertCurrent(); const event = log.view().entries[ordinal]; if (!event) throw new FactRecoveryRequiredError(); return event as unknown as SessionEventView },
+        async readEvents(ordinals: readonly number[]) {
+          assertCurrent()
+          const { entries } = log.view()
+          return ordinals.map(ordinal => {
+            const event = entries[ordinal]
+            if (!event) throw new FactRecoveryRequiredError()
+            return event as unknown as SessionEventView
+          })
+        },
         async close() { /* no retained resources */ },
       }
     },
