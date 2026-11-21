@@ -32,8 +32,8 @@ it('joins only the held original other-source issued batch and rechecks strict r
  cut.run=async next=>{writes++;const outcome=await next();entered.resolve();await release.promise;return outcome}
  const admission=f.action.facts.metadata.admit({type:'plan/mode',mode:'on'});await entered.promise
  expect(()=>f.parent.assertCurrent()).toThrow();let joined=false
- const joining=f.parent.joinIssuedWriter().then(()=>{joined=true});await Promise.resolve();expect(joined).toBe(false)
- release.resolve();expect(await admission).toMatchObject({kind:'committed'});await joining;f.parent.assertCurrent();expect(writes).toBe(1);await f.close()
+ const joining=f.parent.joinIssuedWriter(()=>{f.parent.assertCurrent();joined=true});await Promise.resolve();expect(joined).toBe(false)
+ release.resolve();expect(await admission).toMatchObject({kind:'committed'});await joining;expect(joined).toBe(true);expect(writes).toBe(1);await f.close()
 })
 it('refuses its own issued source without waiting for the producer or discovering sources',async()=>{
  const f=await fixture(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
@@ -51,7 +51,7 @@ it('retains an unknown original fact until its own reconciliation proves it',asy
  const f=await fixture();let writes=0
  cut.run=async next=>{writes++;const outcome=await next() as import('../src/coordinator/fact-types.ts').BackendFactOutcome;if(outcome.kind!=='committed')throw Error('expected real commit');return {kind:'unknown',key:outcome.receipt.key}}
  const fact=f.action.facts.metadata.admit({type:'plan/mode',mode:'on'}),outcome=await fact
- expect(outcome.kind).toBe('unknown');await expect(f.parent.joinIssuedWriter()).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'});expect(writes).toBe(1);await expect(f.parent.acquireWriter()).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'});await expect(f.parent.acquireWriter()).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+ const read=vi.fn();expect(outcome.kind).toBe('unknown');await expect(f.parent.joinIssuedWriter(read)).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'});expect(read).not.toHaveBeenCalled();expect(writes).toBe(1);await expect(f.parent.acquireWriter()).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'});await expect(f.parent.acquireWriter()).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
  if(outcome.kind!=='unknown')throw Error('missing unknown');expect(await f.document.reconcile(outcome.key)).toMatchObject({kind:'committed'});await f.parent.joinIssuedWriter();expect(writes).toBe(1);await f.close()
 })
 

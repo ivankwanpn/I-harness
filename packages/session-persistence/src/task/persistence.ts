@@ -232,9 +232,12 @@ export class TaskPersistence {
         throw failure
       }
       if (!closed) { if (closeAttempted) await operation.retryClose(); else { closeAttempted = true; await operation.close() }; closed = true; result = write.outcome() ?? result }
-      if(required)await owned.operations.joinRequiredWriter(parent!)
-      if (!abandoned) assertHandoff()
-      else if (handoffFailure) throw handoffFailure.cause
+      const check = () => {
+        if (!abandoned) assertHandoff()
+        else if (handoffFailure) throw handoffFailure.cause
+      }
+      if (required) await owned.operations.joinRequiredWriter(parent!, check)
+      else check()
     }
     const run = async () => {
       if (this.#pending[0] !== handle || this.#debt && this.#debt !== handle) throw this.#debt&&this.#debt!==handle?earlierSaveFailure(this.#debt,this.#debtCause):new Error('Earlier owned task save requires resolution')
@@ -254,8 +257,8 @@ export class TaskPersistence {
         if(required)await owned.operations.joinRequiredWriter(parent!)
         write = operation.stageWrite(observed.witness, snapshot)
         await finish(false)
-        if(required)await owned.operations.joinRequiredWriter(parent!)
-        assertHandoff()
+        if (required) await owned.operations.joinRequiredWriter(parent!, assertHandoff)
+        else assertHandoff()
         if (!hold) { this.#pending.shift(); consumerRetired = true }
       } catch (error) {
         failed = true; primaryFailure = error; let failure: unknown = error
@@ -305,7 +308,7 @@ export class TaskPersistence {
       },
       retry() {
         if (this !== handle) return Promise.reject(new TypeError('Invalid task save receiver'))
-        if (!retryFlight) { const retirement = abandoned ? retireFlight : undefined; retryFlight = Promise.resolve().then(async () => { await done.catch(() => {}); if (retirement) await retirement.catch(() => {}); if (!entered) { await run(); if(owner.#debt===handle){owner.#debt=undefined;owner.#debtCause=undefined};if(abandoned)retireHead();return }; if (!write) { if (beginCleanup) await beginCleanup.retry(); else if (operation && !closed) { await operation.retryClose(); closed = true }; throw primaryFailure }; if (result?.kind === 'conflict' || result?.kind === 'not-issued') { if (operation && !closed) { await operation.retryClose(); closed = true }; throw primaryFailure }; await finish(true); if (!abandoned) assertHandoff(); if (owner.#debt === handle) { owner.#debt = undefined; owner.#debtCause = undefined }; if (abandoned) retireHead(); else if (!hold && owner.#pending[0] === handle) { owner.#pending.shift(); consumerRetired = true } }); void retryFlight.then(() => { retryFlight = undefined }, () => { retryFlight = undefined }) }
+        if (!retryFlight) { const retirement = abandoned ? retireFlight : undefined; retryFlight = Promise.resolve().then(async () => { await done.catch(() => {}); if (retirement) await retirement.catch(() => {}); if (!entered) { await run(); if(owner.#debt===handle){owner.#debt=undefined;owner.#debtCause=undefined};if(abandoned)retireHead();return }; if (!write) { if (beginCleanup) await beginCleanup.retry(); else if (operation && !closed) { await operation.retryClose(); closed = true }; throw primaryFailure }; if (result?.kind === 'conflict' || result?.kind === 'not-issued') { if (operation && !closed) { await operation.retryClose(); closed = true }; throw primaryFailure }; await finish(true); if (!abandoned && !required) assertHandoff(); if (owner.#debt === handle) { owner.#debt = undefined; owner.#debtCause = undefined }; if (abandoned) retireHead(); else if (!hold && owner.#pending[0] === handle) { owner.#pending.shift(); consumerRetired = true } }); void retryFlight.then(() => { retryFlight = undefined }, () => { retryFlight = undefined }) }
         return retryFlight
       }, outcome() { if (this !== handle) throw new TypeError('Invalid task save receiver'); return result },
     })

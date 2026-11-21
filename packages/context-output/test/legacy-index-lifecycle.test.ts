@@ -395,10 +395,10 @@ it('keeps one exclusive preparation generation across actual reset, stage and re
     expect(f.sourceCalls()).toBe(sourceCalls)
     expect((await f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, await f.observation())).text).toContain('VISIBLE')
   } finally { resume.resolve(); await Promise.allSettled([preparing, clearing]); vi.restoreAllMocks(); await f.close() }
-}, 15000)
+}, 60_000)
 
-// Actual fork, expiry, quota reconfiguration and native recapture take ~6.5s
-// in isolation; this one multi-phase fixture needs more than the 5s default.
+// Windows CI exceeded 15s while the other worker ran the scale suite.
+// Keep the fork, expiry and native recapture in a single fixture.
 it('describes and funds the actual tracked recapture allocation without reviving historical target authority', async () => {
   const f = await legacyFixture(), clock = vi.spyOn(Date, 'now')
   try {
@@ -416,7 +416,7 @@ it('describes and funds the actual tracked recapture allocation without reviving
     expect(await physicalBytes(directory)).toBeLessThanOrEqual(full + 128 * 1024)
     describe.mockRestore()
   } finally { clock.mockRestore(); vi.restoreAllMocks(); await f.close() }
-}, 15000)
+}, 60_000)
 
 
 it('keeps a consumed native close uncertain and retains the original lifetime without a no-op disposal proof', async () => {

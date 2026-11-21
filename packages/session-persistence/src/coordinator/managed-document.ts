@@ -26,7 +26,7 @@ import { ownBackendOutcome, sameBatchKey } from './fact-outcome.ts';
 import { createActionCaptures } from './action-captures.ts';
 import type { createProcessReadLatches } from './process-read-latches.ts';
 type TaskMetadataUpdate={before(meta:unknown):void;after(meta:unknown):void;finish(success:boolean):void}
-type RequiredTaskParentReadiness={captureWriterRecovery?(cause:unknown):(()=>boolean)|undefined;assertOriginal():void;assertCurrent():void;assertTask14Ready():void;joinIssuedWriter():Promise<void>;acquireWriter():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>>}
+type RequiredTaskParentReadiness={captureWriterRecovery?(cause:unknown):(()=>boolean)|undefined;assertOriginal():void;assertCurrent():void;assertTask14Ready():void;joinIssuedWriter(read?:()=>void):Promise<void>;acquireWriter():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>>}
 
 type TaskParentReadiness=Readonly<{view:SessionView;assertCurrent():void;assertOriginal():void;assertTask14Ready():void}>
 type Ticket = {
@@ -99,7 +99,7 @@ export function originalManagedExecution(document:ManagedDocument,ownership:Owne
 export function managedExecutionStatus(document: ManagedDocument): 'available' | 'unavailable' | 'retired' {
     return executionStatuses.get(document)?.() ?? 'unavailable';
 }
-const readyOwners = new WeakMap<object, { ownership: Ownership; ownerToken(): HeldFactOwner['owner']; invalidateMetadata(revision:object):void; captureTaskParent():TaskParentReadiness;beginTaskMetadata():TaskMetadataUpdate; capture(): ManagedReadyObservation; captureOriginalReady(): (() => void) | undefined; retainSelected(onRevoke:()=>void):SelectedSourceRead; captureRequiredParent(source: import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>): Readonly<{captureWriterRecovery?(cause:unknown):(()=>boolean)|undefined;view:SessionView;assertCurrent():void;assertOriginal():void;assertTask14Ready():void;joinIssuedWriter():Promise<void>;acquireWriter():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>>}>; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void; assertOriginal():void; assertTask14Ready(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
+const readyOwners = new WeakMap<object, { ownership: Ownership; ownerToken(): HeldFactOwner['owner']; invalidateMetadata(revision:object):void; captureTaskParent():TaskParentReadiness;beginTaskMetadata():TaskMetadataUpdate; capture(): ManagedReadyObservation; captureOriginalReady(): (() => void) | undefined; retainSelected(onRevoke:()=>void):SelectedSourceRead; captureRequiredParent(source: import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>): Readonly<RequiredTaskParentReadiness & {view:SessionView}>; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void; assertOriginal():void; assertTask14Ready(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
 /** Same original document/ownership lookup; no incoming token or callback is enrolled. */
 export function originalManagedDocumentOwner(document: ManagedDocument, ownership: Ownership): HeldFactOwner['owner'] {
   const execution = privateExecutionOwners.get(document)
@@ -956,10 +956,16 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
           }
           return joinableWriter()?.settlement.promise;
         };
-        const joinIssuedWriter = async () => {
-          const waiting = writerSettlement();
-          if (waiting) await waiting;
+        const joinIssuedWriter = async (read?: () => void) => {
+          for (;;) {
+            const waiting = writerSettlement();
+            if (!waiting) break;
+            await waiting;
+          }
+          // Use the committed cut in this same continuation before another
+          // journal batch can start.
           check();
+          read?.();
         };
         const result=Object.freeze({...extra,captureWriterRecovery(cause:unknown){
           if(this!==result)throw new TypeError('Invalid required parent');
@@ -994,7 +1000,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
             park(){if(this!==lease)throw new TypeError('Invalid original writer exclusion');writer.release()},
             release(){if(this!==lease)throw new TypeError('Invalid original writer exclusion');retired=true;writer.release()},
           });await lease.resume();return lease
-        },async joinIssuedWriter(){if(this!==result)throw new TypeError('Invalid required parent');await joinIssuedWriter()},assertCurrent(){if(this!==result)throw new TypeError('Invalid required parent');check()},assertTask14Ready(){if(this!==result)throw new TypeError('Invalid required parent');check();if(formatVersion!==14)throw new FactRecoveryRequiredError()}});return result;
+        },joinIssuedWriter(read?:()=>void){if(this!==result)throw new TypeError('Invalid required parent');return joinIssuedWriter(read)},assertCurrent(){if(this!==result)throw new TypeError('Invalid required parent');check()},assertTask14Ready(){if(this!==result)throw new TypeError('Invalid required parent');check();if(formatVersion!==14)throw new FactRecoveryRequiredError()}});return result;
     }
     function privateTaskParent(source:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>):RequiredTaskParentReadiness;
     function privateTaskParent():Omit<TaskParentReadiness,'view'>;

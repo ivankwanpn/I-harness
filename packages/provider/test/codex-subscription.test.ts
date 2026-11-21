@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest"
-import { buildModelClient } from "../src/index.ts"
 import "../../llm-openai/test/fixtures/mock-system-fetch.ts"
+import { buildModelClient } from "../src/index.ts"
 
 afterEach(() => vi.unstubAllGlobals())
 

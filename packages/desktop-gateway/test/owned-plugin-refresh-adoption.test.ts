@@ -1,4 +1,4 @@
-import {expect,it} from 'vitest'
+import {expect,it,vi} from 'vitest'
 import {mkdtemp,mkdir,writeFile,unlink} from 'node:fs/promises'
 import {join} from 'node:path'
 import {fileURLToPath} from 'node:url'
@@ -23,6 +23,26 @@ it('adopts a supported refreshed command only after the same original mount upda
  const model=controlledModel(async function*(value){request=JSON.stringify(value);yield {type:'end'}})
  const options:SessionServiceOptions={workspace,coordinator,managedRuntime:{systemPrompt:'system',tools:[],async mountDefaultSurface(original,live){registry=original.tools;const catalog=createOwnedPluginCatalog({ctx:original.ctx,tools:original.tools,roles:createRoleRegistry(),workspace,globalSkillDir:config,report(){},mcpDeps:{async connect(){return {async listTools(){return {tools:[{name:'echo',inputSchema:{type:'object'}}]}},async callTool(){return {content:[]}},async listResources(){return []},async readResource(){return {}},async close(){}}}}});const mount=createOwnedPluginMount({ctx:original.ctx,sessionId:original.domain.sessionId,startSource:'startup',workspace,configDir:config,report(){},catalog});original.retain(()=>mount.close());const selected=selection.current(original.domain.sessionId);selected.assertCurrent();await mount.update(selected.inputs,selected.directMcp);selected.assertCurrent();selection.bind(original,mount);return {systemPrompt:()=> 'system',modelToolSchemas:live.modelToolSchemas,modelOverheadTokens:()=>10,prepareInput:text=>mount.expand(text),async reconcileAuthority(){original.assertCurrent()}}}},model,contextWindow:32000,maxOutputTokens:128}
  enrollFirstPartySelection(Object.freeze({options,prepare:selection.prepare,refresh:selection.refresh,release:selection.release}));const service=createSessionService(options),observer=plugins.bindRefresh(()=>service.refreshExtensions());mcp.bindRefresh(()=>plugins.refresh())
- try{await service.submit('main','hello',new AbortController().signal);await mkdir(join(workspace,'commands'),{recursive:true});await writeFile(join(workspace,'commands','greet.md'),'---\ndescription: greet\n---\nhello $ARGUMENTS');await plugins.refresh();await service.submit('main','/greet world',new AbortController().signal);expect(request).toContain('hello world');const hookDir=join(workspace,'.i-harness','hooks');await mkdir(hookDir,{recursive:true});const hook=join(hookDir,'hooks.json');await writeFile(hook,'not json');await expect(plugins.refresh()).rejects.toThrow();await expect(service.submit('main','blocked',new AbortController().signal)).rejects.toThrow(/refresh requires recovery/);await unlink(hook);await plugins.refresh();await service.submit('main','/greet again',new AbortController().signal);expect(request).toContain('hello again');await plugins.mutate({action:'source/add',source:fileURLToPath(new URL('../../plugin-registry/test/fixtures/marketplace-a',import.meta.url))});await service.submit('main','/greet mutation',new AbortController().signal);expect(request).toContain('hello mutation');await mcp.mutate({action:'save',revision:0,config:{serverName:'direct',transport:'stdio',command:'fixture',args:[]}});await mcp.mutate({action:'enable',name:'direct'});expect((await mcp.state()).applyError).toBeUndefined();expect(registry.get('mcp__direct__echo')).toBeDefined();await service.submit('main','/greet mcp',new AbortController().signal);expect(request).toContain('hello mcp');await mcp.mutate({action:'disable',name:'direct'});expect((await mcp.state()).applyError).toBeUndefined();expect(registry.get('mcp__direct__echo')).toBeUndefined()}
+ try{
+  await service.submit('main','hello',new AbortController().signal)
+  await plugins.refresh()
+  const entered=Promise.withResolvers<void>(), resume=Promise.withResolvers<void>()
+  const snapshot = mcp.snapshot.bind(mcp)
+  const held = vi.spyOn(mcp,'snapshot').mockImplementationOnce(async()=>{entered.resolve();await resume.promise;return snapshot()})
+  const refreshing=service.refreshExtensions()
+  let submitting: Promise<void> | undefined
+  try {
+   await Promise.race([entered.promise,refreshing.then(()=>{throw Error('Original refresh did not read MCP')})])
+   request = ''
+   submitting=service.submit('main','queued during plugin refresh',new AbortController().signal)
+   void submitting.catch(()=>{})
+   await new Promise(resolve=>setImmediate(resolve))
+   expect(request).toBe('')
+   resume.resolve()
+   await submitting
+   expect(request).toContain('queued during plugin refresh')
+  } finally {resume.resolve();await Promise.allSettled([refreshing,submitting]);held.mockRestore()}
+  await mkdir(join(workspace,'commands'),{recursive:true});await writeFile(join(workspace,'commands','greet.md'),'---\ndescription: greet\n---\nhello $ARGUMENTS');await plugins.refresh();await service.submit('main','/greet world',new AbortController().signal);expect(request).toContain('hello world');const hookDir=join(workspace,'.i-harness','hooks');await mkdir(hookDir,{recursive:true});const hook=join(hookDir,'hooks.json');await writeFile(hook,'not json');await expect(plugins.refresh()).rejects.toThrow();await expect(service.submit('main','blocked',new AbortController().signal)).rejects.toThrow(/refresh requires recovery/);await unlink(hook);await plugins.refresh();await service.submit('main','/greet again',new AbortController().signal);expect(request).toContain('hello again');await plugins.mutate({action:'source/add',source:fileURLToPath(new URL('../../plugin-registry/test/fixtures/marketplace-a',import.meta.url))});await service.submit('main','/greet mutation',new AbortController().signal);expect(request).toContain('hello mutation');await mcp.mutate({action:'save',revision:0,config:{serverName:'direct',transport:'stdio',command:'fixture',args:[]}});await mcp.mutate({action:'enable',name:'direct'});expect((await mcp.state()).applyError).toBeUndefined();expect(registry.get('mcp__direct__echo')).toBeDefined();await service.submit('main','/greet mcp',new AbortController().signal);expect(request).toContain('hello mcp');await mcp.mutate({action:'disable',name:'direct'});expect((await mcp.state()).applyError).toBeUndefined();expect(registry.get('mcp__direct__echo')).toBeUndefined()
+ }
  finally{await observer.close();await service.close();await plugins.close();await watch.close();await coordinator.close()}
 },30000)

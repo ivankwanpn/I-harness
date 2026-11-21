@@ -396,6 +396,23 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const managedCompatible=(id:string)=>!completeSelections.has(id)&&hooks.size===0&&(firstParty?firstPartySelections.get(id)?.kind==='managed':supportsManagedServiceOptions(opts))
   const validatingFirstParty=new Set<string>()
   const validateFirstParty=(id:string)=>{const selected=firstPartySelections.get(id);if(selected?.kind!=='managed')return;if(validatingFirstParty.has(id))throw Error('First-party currentness cannot reenter service');validatingFirstParty.add(id);try{selected.assertCurrent()}finally{validatingFirstParty.delete(id)}}
+  async function waitForFirstPartyRefresh(id: string, signal?: AbortSignal) {
+    for (;;) {
+      const refresh = extensionRefreshes.get(id)
+      if (firstPartySelections.get(id)?.kind !== 'managed' || !refresh) break
+      signal?.throwIfAborted()
+      // The selection still owns its failure. Joining the original flight
+      // lets a ready mount accept input and preserves a failed mount's error.
+      const settled = refresh.catch(() => undefined)
+      if (!signal) { await settled; continue }
+      const aborted = Promise.withResolvers<never>()
+      const onAbort = () => aborted.reject(signal.reason)
+      signal.addEventListener('abort', onAbort, { once: true })
+      try { await Promise.race([settled, aborted.promise]) }
+      finally { signal.removeEventListener('abort', onAbort) }
+    }
+    validateFirstParty(id)
+  }
   const releaseFirstParty=async(id:string)=>{if(!firstPartyRetained.has(id))return;await firstParty?.release?.(id);firstPartyRetained.delete(id)}
   const firstPartyContext=new AsyncLocalStorage<{active:boolean}>()
   async function prepareFirstParty(id:string){
@@ -858,8 +875,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return pending
   }
 
-  async function receivedInputFor(sessionId: string): Promise<Pick<AsyncInbox, 'pending' | 'admit' | 'cancel'>> {
-    const managed=await managedInputFor(sessionId)
+  async function receivedInputFor(sessionId: string, signal?: AbortSignal): Promise<Pick<AsyncInbox, 'pending' | 'admit' | 'cancel'>> {
+    const managed=await managedInputFor(sessionId,undefined,signal)
     if(managed)return managed.inbox
     await writableSessionFor(sessionId)
     assertWritableOpen(sessionId)
@@ -868,15 +885,15 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return { pending: () => inbox.pending(), admit: (input, signal) => inbox.admit(input, signal), cancel: (id, reason) => inbox.cancel(id, reason) }
   }
 
-  async function managedInputFor(sessionId:string,requirements?:{completePreparation?:boolean;supplementalContext?:boolean}){
+  async function managedInputFor(sessionId:string,requirements?:{completePreparation?:boolean;supplementalContext?:boolean},signal?:AbortSignal){
     assertWritableOpen(sessionId)
     if(!requirements?.completePreparation)await prepareFirstParty(sessionId)
     if(requirements?.completePreparation){selectComplete(sessionId);return undefined}
     if(privateEntries.has(sessionId)&&!managedCompatible(sessionId))throw Error('Private entry cannot switch to Session-shaped compatibility')
     if(!managedCompatible(sessionId)){selectComplete(sessionId);return undefined}
     if(!privateCache)throw Error('Managed runtime requires original coordinator')
-    validateFirstParty(sessionId);privateEntries.add(sessionId)
-    const entry=await privateCache.get(sessionId);assertWritableOpen(sessionId);validateFirstParty(sessionId)
+    await waitForFirstPartyRefresh(sessionId,signal);assertWritableOpen(sessionId);privateEntries.add(sessionId)
+    const entry=await privateCache.get(sessionId);await waitForFirstPartyRefresh(sessionId,signal);assertWritableOpen(sessionId)
     return Object.freeze({inbox:entry.inputs.inbox,observe(){assertWritableOpen(sessionId);return entry.execution.observe()}})
   }
 
@@ -1284,7 +1301,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     })
   }
   function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions, deliveryOwner?: SessionAssembly): Promise<void> {
-    const run=async()=>{if(!options?.prepareInput&&!deliveryOwner)await prepareFirstParty(sessionId);validateFirstParty(sessionId);return submitUnfenced(sessionId,prompt,signal,options,deliveryOwner)}
+    const run=async()=>{if(!options?.prepareInput&&!deliveryOwner)await prepareFirstParty(sessionId);await waitForFirstPartyRefresh(sessionId,signal);return submitUnfenced(sessionId,prompt,signal,options,deliveryOwner)}
     return opts.sessionOperation ? opts.sessionOperation.run(sessionId, run) : run()
   }
   function submitUnfenced(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions, deliveryOwner?: SessionAssembly): Promise<void> {
@@ -1372,7 +1389,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         if(managedCompatible(sessionId)){
           const stop=managedStopReceipts.get(sessionId);await awaitDeliveryStop(sessionId);if(stop&&managedStopReceipts.get(sessionId)===stop){managedStopReceipts.delete(sessionId);managedCodeStops.delete(sessionId)}
           if(options?.prepareInput||deliveryOwner)throw Error('Session-shaped input preparation requires complete compatibility before private acquisition')
-          const inbox=await receivedInputFor(sessionId)
+          const inbox=await receivedInputFor(sessionId,controller.signal)
           if(options?.admittedInputId){
             let lastEpoch:number|undefined
             for(;;){
@@ -1389,7 +1406,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           let runtime:ManagedRuntime | undefined
           let preparationReady=false
           preparedManaged=await prepareExecutionInput({execution:entry.execution,sessionId,inputId:id,signal:controller.signal,start:managedStart,
-            ready:async()=>{runtime=await getManagedRuntime(sessionId);controller.signal.throwIfAborted();assertWritableOpen(sessionId);preparationReady=true},
+            ready:async()=>{runtime=await getManagedRuntime(sessionId);await waitForFirstPartyRefresh(sessionId,controller.signal);controller.signal.throwIfAborted();assertWritableOpen(sessionId);preparationReady=true},
             retain:close=>{let entries=managedIngress.get(sessionId);if(!entries){entries=new Set();managedIngress.set(sessionId,entries)}entries.add(close);closeManaged=async()=>{try{await close()}catch(error){failedClose.add(sessionId);throw error}entries!.delete(close);if(!entries!.size)managedIngress.delete(sessionId)}},
             cancel:inputId=>preparationReady&&!closed&&!closing.has(sessionId)?inbox.cancel(inputId,'input preparation did not reach promotion'):Promise.resolve(false),transform:async text=>runtime?.prepareInput?runtime.prepareInput(text):text,openBeforeReady:opts.earlyGenerationOpen===true,timeoutMs:opts.modelActionTimeoutMs,maxAttempts:opts.modelActionMaxAttempts,passiveGeneration:opts.passiveGeneration})
           try{controller.signal.throwIfAborted();assertWritableOpen(sessionId);record.state='queued';await runtime!.lane.runAdmitted(id,controller.signal,{generation:preparedManaged.generation,preparation:preparedManaged.preparation})}
@@ -1998,7 +2015,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     close,
   }
   const readOriginalRuntime=(id:string)=>{if(!privateEntries.has(id))return undefined;const runtime=managedRuntimes.get(id);if(!runtime||closed||closing.has(id))return undefined;const check=()=>{if(closed||closing.has(id)||managedRuntimes.get(id)!==runtime)throw Error('Original managed runtime retired');runtime.domain.assertCurrent()};check();return Object.freeze({execution:runtime.execution,domain:runtime.domain,tools:runtime.tools,assertCurrent:check})}
-  associateOriginalManagedExecution(service,{read(id){if(!privateEntries.has(id))return undefined;if(closed||closing.has(id)||!privateCache)throw Error('Original managed execution unavailable');const execution=privateCache.current(id);if(!execution)throw Error('Original managed execution unavailable');return execution},runtime:readOriginalRuntime,async acquireChild(id){if(closed||!privateCache)throw Error('Original managed execution unavailable');const entry=await privateCache.get(id);if(closed){await privateCache.close(id);throw Error('Original managed execution unavailable')}let released=false;return Object.freeze({execution:entry.execution,async release(){if(released)return;released=true;await privateCache!.close(id)}})},async prepareRuntime(id){await prepareFirstParty(id);if(!managedCompatible(id)){if(privateEntries.has(id))throw Error('Private entry cannot switch to Session-shaped compatibility');return undefined}validateFirstParty(id);await getManagedRuntime(id);validateFirstParty(id);return readOriginalRuntime(id)},retain(id,execution,cleanup){if(!privateEntries.has(id)||closed||closing.has(id)||!privateCache)throw Error('Original managed execution unavailable');privateCache.retain(id,execution,cleanup)}})
+  associateOriginalManagedExecution(service,{read(id){if(!privateEntries.has(id))return undefined;if(closed||closing.has(id)||!privateCache)throw Error('Original managed execution unavailable');const execution=privateCache.current(id);if(!execution)throw Error('Original managed execution unavailable');return execution},runtime:readOriginalRuntime,async acquireChild(id){if(closed||!privateCache)throw Error('Original managed execution unavailable');const entry=await privateCache.get(id);if(closed){await privateCache.close(id);throw Error('Original managed execution unavailable')}let released=false;return Object.freeze({execution:entry.execution,async release(){if(released)return;released=true;await privateCache!.close(id)}})},async prepareRuntime(id){await prepareFirstParty(id);if(!managedCompatible(id)){if(privateEntries.has(id))throw Error('Private entry cannot switch to Session-shaped compatibility');return undefined}await waitForFirstPartyRefresh(id);await getManagedRuntime(id);await waitForFirstPartyRefresh(id);return readOriginalRuntime(id)},retain(id,execution,cleanup){if(!privateEntries.has(id)||closed||closing.has(id)||!privateCache)throw Error('Original managed execution unavailable');privateCache.retain(id,execution,cleanup)}})
   associateOriginalManagedRewind(service,id=>{
     if(!privateEntries.has(id))return undefined
     const runtime=managedRuntimes.get(id),row=managedRewinds.get(id)

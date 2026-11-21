@@ -287,7 +287,13 @@ it("refreshes after atomic state replacement and recreation", async () => {
     await writeFile(join(root, "plugins", "state.json"), state)
     await vi.waitFor(() => { expect(calls).toBeGreaterThan(after); expect(missing).toBe(false) }, { timeout: 5000 })
     // Fixed ancestor routing must recover after the selected parent is replaced.
-    await rename(directory, join(root, "retired"))
+    for (let attempt = 0; ; attempt++) {
+      try { await rename(directory, join(root, "retired")); break }
+      catch (error) {
+        if (process.platform !== 'win32' || !['EPERM', 'EBUSY'].includes((error as NodeJS.ErrnoException).code ?? '') || attempt === 19) throw error
+        await new Promise(resolve => setTimeout(resolve, 50))
+      }
+    }
     await vi.waitFor(() => expect(missing).toBe(true), { timeout: 5000 })
     // The original lock owner may recreate its parent while reading defaults.
     await mkdir(directory, { recursive: true }); await writeFile(path, state)

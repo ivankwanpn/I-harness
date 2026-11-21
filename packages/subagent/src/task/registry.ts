@@ -656,9 +656,11 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     }
     const settleSave=async()=>{
       if(!save||saved)return
-      if(attempted)await save.retry();else{attempted=true;await save.done}
-      await ownedTask.operations.joinRequiredWriter(parent!);check()
-      save.assertHandoff();save.release();saved=true
+      const original = save
+      if(attempted)await original.retry();else{attempted=true;await original.done}
+      await ownedTask.operations.joinRequiredWriter(parent!,()=>{
+        check();original.assertHandoff();original.release();saved=true
+      })
     }
     const source=action.registerSettlementSource(async()=>{
       await publicationReady.promise
@@ -707,7 +709,11 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     let parent:object|undefined
     const readyParent=ownedTask.operations.requiredParent(ownedTask.document,source).then(original=>{parent=original;return original})
     const checkData=()=>{if(!isInstalledRequiredTaskData(ownedTask.operations,opts.stateId!,installedData)||currentState.records!==records||currentState.notifications!==notifications||currentState.phase==='poisoned'||records.get(task.id)!==task)throw Error('Original required Task incarnation replaced');source.assertHeld()}
-    const joinWriter=async()=>{const original=await readyParent;checkData();await ownedTask.operations.joinRequiredWriter(original);checkData()};
+    const afterWriter=async(read:()=>void)=>{
+      const original=await readyParent
+      checkData()
+      await ownedTask.operations.joinRequiredWriter(original,read)
+    }
     const checkOriginal=()=>{checkData();if(!parent)throw Error('Original required parent pending');ownedTask.operations.assertOriginalRequiredParent(parent,opts.stateId!)};
     const check=()=>{checkData();if(!parent)throw Error('Original required parent pending');ownedTask.operations.assertTaskV3Parent(parent,opts.stateId!)}
     let save:import('./persistence.ts').OwnedTaskSave|undefined,flight:Promise<Readonly<TaskRecord>>|undefined,ackFlight:Promise<Readonly<TaskRecord>>|undefined,revision:string|undefined,consumed=false,released=false,saveAttempted=false
@@ -715,7 +721,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     let prelude:import('./persistence.ts').OwnedTaskSave|undefined,preludeFlight:Promise<void>|undefined,preludeAttempted=false,preludeAcknowledged=false
     const settlePrelude=():Promise<void>=>{
       if(!prelude||preludeAcknowledged)return Promise.resolve();if(preludeFlight)return preludeFlight
-      const pending=(async()=>{if(preludeAttempted)await prelude!.retry();else{preludeAttempted=true;await prelude!.done};await joinWriter();check();prelude!.assertHandoff();prelude!.release();preludeAcknowledged=true})()
+      const pending=(async()=>{if(preludeAttempted)await prelude!.retry();else{preludeAttempted=true;await prelude!.done};await afterWriter(()=>{check();prelude!.assertHandoff();prelude!.release();preludeAcknowledged=true})})()
       preludeFlight=pending;void pending.catch(()=>{if(preludeFlight===pending)preludeFlight=undefined});return pending
     }
     requiredClaimRoutes.set(task,()=>{
@@ -740,12 +746,15 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       const pending=(async()=>{
         await settlePrelude()
         if(saveAttempted)await save!.retry();else{saveAttempted=true;try{await save!.done}catch(error){if(preludeAcknowledged&&save!.outcome()===undefined)await save!.retry();else throw error}}
-        await joinWriter();check();save!.assertHandoff();if(!consumed){save!.release();consumed=true}
-        if(saveIdentity&&!sameRetention(saveIdentity,task)||sealedTerminal&&terminalFingerprint(sealedTerminal)!==terminalFingerprint(task))throw Error('Original required Task terminal changed after capture')
-        if(task.result?.kind==='retained'&&task.result.envelope.retention.kind==='unavailable'){task.retention='failed';task.retentionError=task.result.envelope.retention.reason}else if(task.result?.kind==='pending')throw Error('Original required Task result pending');else{task.retention='durable';delete task.retentionError}
-        acknowledgedRetention.set(task,saveIdentity!);retentionSaves.delete(task);capturedRetention.delete(task)
-        projection=captureTaskSnapshot({...sealedTerminal!,...(task.retention!==undefined?{retention:task.retention}:{}),...(task.retentionError!==undefined?{retentionError:task.retentionError}:{})}) as Readonly<TaskRecord>
-        publish(task);return projection
+        await afterWriter(()=>{
+          check();save!.assertHandoff();if(!consumed){save!.release();consumed=true}
+          if(saveIdentity&&!sameRetention(saveIdentity,task)||sealedTerminal&&terminalFingerprint(sealedTerminal)!==terminalFingerprint(task))throw Error('Original required Task terminal changed after capture')
+          if(task.result?.kind==='retained'&&task.result.envelope.retention.kind==='unavailable'){task.retention='failed';task.retentionError=task.result.envelope.retention.reason}else if(task.result?.kind==='pending')throw Error('Original required Task result pending');else{task.retention='durable';delete task.retentionError}
+          acknowledgedRetention.set(task,saveIdentity!);retentionSaves.delete(task);capturedRetention.delete(task)
+          projection=captureTaskSnapshot({...sealedTerminal!,...(task.retention!==undefined?{retention:task.retention}:{}),...(task.retentionError!==undefined?{retentionError:task.retentionError}:{})}) as Readonly<TaskRecord>
+          publish(task)
+        })
+        return projection!
       })();ackFlight=pending;void pending.catch(()=>{if(ackFlight===pending)ackFlight=undefined});return pending
     }
     let stopFlight:Promise<void>|undefined
@@ -773,11 +782,13 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         checkData();
         return ownedTask.operations.captureRequiredWriterRecovery(parent,cause);
       },
-      async waitProjectionCurrent(){if(this!==result||!consumed||released)throw Error('Original Task projection unavailable');await joinWriter();result.assertProjectionCurrent()},
-      assertProjectionCurrent(){if(this!==result||!consumed||released)throw Error('Original Task projection unavailable');check();if(saveIdentity&&!sameRetention(saveIdentity,task)||sealedTerminal&&terminalFingerprint(sealedTerminal)!==terminalFingerprint(task))throw Error('Original Task projection changed')},
+      async waitProjectionCurrent(){if(this!==result||!consumed||released)throw Error('Original Task projection unavailable');await afterWriter(()=>{check();result.assertProjectionCurrent()})},
+      // Projection reads the acknowledged Task record. The original parent
+      // and record must still match even when another journal batch starts.
+      assertProjectionCurrent(){if(this!==result||!consumed||released)throw Error('Original Task projection unavailable');checkOriginal();if(saveIdentity&&!sameRetention(saveIdentity,task)||sealedTerminal&&terminalFingerprint(sealedTerminal)!==terminalFingerprint(task))throw Error('Original Task projection changed')},
       async release(){if(this!==result)throw Error('Invalid required Task receiver');if(!consumed)throw Error('Original required Task acknowledgment unavailable');if(!released){await ownedTask.operations.releaseRequiredParent(parent!);released=true;requiredTerminalRoutes.delete(task);requiredClaimRoutes.delete(task);requiredTasks.delete(task)}}
     })
-    try{await readyParent;check();return result}catch(error){requiredTerminalRoutes.delete(task);requiredClaimRoutes.delete(task);throw error}
+    try{await afterWriter(check);return result}catch(error){requiredTerminalRoutes.delete(task);requiredClaimRoutes.delete(task);throw error}
   },{recover:recoverCanonicalPublications,closeAfter:closeOwnedLoad,notification:captureNotificationProgress,children:canonicalChildren,runtimeData:captureRuntimeData,auxiliaryData:()=>captureRuntimeData(isOriginalTaskDataIncarnation)})
   if (ownedTask && opts.launchContext) {
    const launchHooks:Parameters<typeof createTaskLaunchPort>[2]={

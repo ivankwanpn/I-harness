@@ -2,10 +2,10 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, expect, it, vi } from "vitest"
+import "../../llm-openai/test/fixtures/mock-system-fetch.ts"
 import { SettingsStore } from "@i-harness/settings"
 import { createCredentialStore } from "@i-harness/credentials"
 import { createProviderRegistry } from "@i-harness/provider"
-import "../../llm-openai/test/fixtures/mock-system-fetch.ts"
 import { createProviderRuntime } from "../src/index.ts"
 
 const roots: string[] = []

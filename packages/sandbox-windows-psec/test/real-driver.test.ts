@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { describe, expect, expectTypeOf, it } from "vitest"
+import { describe, expect, expectTypeOf, it, vi } from "vitest"
 import { launchExecution, createExecutionSupervisor } from "@i-harness/exec"
 import type { CompiledSandboxPolicy, ProcessSpec } from "@i-harness/sandbox"
 import { createWindowsPsecBackend, createWindowsUnrestrictedBackend, type WindowsExecutionBackend } from "../src/index.ts"
@@ -42,13 +42,17 @@ describe.skipIf(process.platform !== "win32")("real Windows helper through publi
     if (engine === "psec") {
       const probe = await f.backend.probe()
       // The helper can be valid while the Windows host lacks PSEC. In that
-      // case exercise the public refusal and ensure no authority is consumed.
+      // case exercise the public refusal before any process is prepared.
       if (probe.availability === "unavailable") {
         expect(probe.assurance).toBe("experimental")
-        let authorityChecks = 0
-        await expect(launchExecution({ backend: f.backend, spec: f.spec, policy: f.policy,
-          requirements: f.requirements, validateAuthority: () => { authorityChecks++ } })).rejects.toThrow(/missing backend requirements: availability/)
-        expect(authorityChecks).toBe(0)
+        const validateAuthority = vi.fn()
+        const prepare = vi.spyOn(f.backend, "prepare")
+        try {
+          await expect(launchExecution({ backend: f.backend, spec: f.spec, policy: f.policy,
+            requirements: f.requirements, validateAuthority })).rejects.toThrow(/missing backend requirements: availability/)
+          expect(validateAuthority).toHaveBeenCalledExactlyOnceWith(f.policy)
+          expect(prepare).not.toHaveBeenCalled()
+        } finally { prepare.mockRestore() }
         return
       }
     }
