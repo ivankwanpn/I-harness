@@ -1,9 +1,5 @@
-// BUG-1 (m49 audit) — the install module. Importing this module installs the
-// warning filter as a SIDE EFFECT, and it must be imported BEFORE anything
-// imports `node:sqlite`: ESM evaluates dependencies before the importing
-// module body, so putting `import "./warning.ts"` first in session-query's
-// entry modules guarantees the filter is in place before node:sqlite's
-// evaluation triggers its ExperimentalWarning on Node 22.
+// Session query installs this filter before loading node:sqlite, which emits
+// its ExperimentalWarning during initialization on some Node 22 versions.
 //
 // The filter is the capture-and-redrive form (see below): Node's default
 // warning printer is itself a bootstrap `process.on("warning")` listener, so
@@ -39,7 +35,7 @@ const suppressed = new WeakSet<object>()
 
 /**
  * Install the once-per-process warning filter. Idempotent. Returns a disposer
- * (tests only; the module side effect never disposes) that UNINSTALLS it: the
+ * (used by tests) that uninstalls it: the
  * filter handler is removed and the captured listeners are re-added in their
  * original order, so the process is back to its pre-install wiring. Disposing
  * clears the idempotence guard — installing again afterwards re-filters.
@@ -76,8 +72,3 @@ export function suppressSqliteExperimentalWarning(opts: SuppressOptions = {}): (
     for (const listener of captured) proc.on("warning", listener)
   }
 }
-
-// The side effect: any consumer of this package gets the filter installed
-// automatically — the only ordering guarantee that holds regardless of which
-// entry (CLI, web, TUI embedded backend, test harness) imports first.
-suppressSqliteExperimentalWarning()

@@ -1,6 +1,6 @@
 // Install the filter before the first CommonJS load of the SQLite built-in.
 // In early Node 22 builds a static ESM import can warn during linking.
-import "../warning.ts"
+import { suppressSqliteExperimentalWarning } from "../warning.ts"
 import { createRequire } from "node:module"
 import type { DatabaseSync } from "node:sqlite"
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
@@ -8,6 +8,7 @@ import { dirname } from "node:path"
 import { foreignIndex } from "./contracts.ts"
 import { INDEX_DB_APPLICATION_ID, INDEX_DB_SCHEMA_VERSION, runSchemaSetup } from "./schema.ts"
 
+suppressSqliteExperimentalWarning()
 const requireBuiltin = createRequire(import.meta.url)
 export function openNativeDatabase(path: string, options: ConstructorParameters<typeof DatabaseSync>[1] = {}): DatabaseSync {
   const sqlite: typeof import("node:sqlite") = requireBuiltin("node:sqlite")
