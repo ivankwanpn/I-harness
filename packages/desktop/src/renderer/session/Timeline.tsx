@@ -41,7 +41,7 @@ function StreamingMarkdownMessage({ text }: { text: string }) {
   return <MarkdownMessage text={useDeferredValue(text)} streaming />
 }
 
-function ReasoningRow({ label, text, streaming, expanded, onToggle }: { label: string; text: string; streaming: boolean; expanded: boolean; onToggle(): void }) {
+function ReasoningRow({ label, text, streaming, expanded, onToggle }: { label: string; text: string; streaming: boolean; expanded: boolean; onToggle(): boolean }) {
   const tt = useToolText()
   const bodyId = useId()
   const textForRender = useDeferredValue(text)
@@ -63,8 +63,8 @@ function ReasoningRow({ label, text, streaming, expanded, onToggle }: { label: s
 
   return <div className="timeline-reasoning" data-streaming={streaming || undefined}>
     <button type="button" className="timeline-reasoning-trigger" aria-expanded={expanded} aria-controls={bodyId} onClick={() => {
-      if (!expanded) { followsEnd.current = true; revealOnOpen.current = true }
-      onToggle()
+      const keepFollowing = onToggle()
+      if (!expanded) { followsEnd.current = true; revealOnOpen.current = !keepFollowing }
     }}>
       <Brain size={14} aria-hidden="true" />
       <span className="timeline-reasoning-label">{heading}</span>
@@ -81,7 +81,7 @@ function ReasoningRow({ label, text, streaming, expanded, onToggle }: { label: s
   </div>
 }
 
-function RowView({ row, open, toggle, activeReasoningId, page, setPage, navigation, onPreview, resultReader }: { resultReader?: RecordedResultReader; row: WorkItem; open: Map<string, boolean>; toggle(id: string, expanded?: boolean): void; activeReasoningId?: string; page: number; setPage(page: number): void; navigation?: FileNavigation; onPreview(preview: { src: string; name: string }): void }) {
+function RowView({ row, open, toggle, activeReasoningId, page, setPage, navigation, onPreview, resultReader }: { resultReader?: RecordedResultReader; row: WorkItem; open: Map<string, boolean>; toggle(id: string, expanded?: boolean): boolean; activeReasoningId?: string; page: number; setPage(page: number): void; navigation?: FileNavigation; onPreview(preview: { src: string; name: string }): void }) {
   const t = useText()
   const toolText = useToolText()
   const english = useLocale(state => state.locale) === "en"
@@ -137,6 +137,9 @@ export interface TimelineProps { resultReader?: RecordedResultReader; rows: Time
 function timelineKey(row: WorkItem): string {
   return row.kind === "message" && row.stepStartSeq !== undefined ? `assistant:${row.stepStartSeq}` : row.id
 }
+function withinReasoningScroll(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(".timeline-reasoning-body") !== null
+}
 export function Timeline({ rows, assistantPreview, navigation, running = false, targetSeq, historical = false, onTargetVisible, resultReader }: TimelineProps) {
   const t = useText()
   const tt = useToolText()
@@ -162,17 +165,20 @@ export function Timeline({ rows, assistantPreview, navigation, running = false, 
     ? timelineKey(items[index]!) : `assistant:${previewStep}`, [items, previewStep])
   const [pages, setPages] = useState(new Map<string, number>())
   const toggle = (id: string, expanded?: boolean) => {
-    pauseFollowing()
-    setOpen((previous) => {
-    const next = new Map(previous)
     const group = items.find((item) => item.id === id)
-    const current = previous.get(id) ?? (group?.kind === "work-stage" ? group.active : (group?.kind === "activity-group" && group.rows.some((tool) => previous.get(tool.id) === true)))
-    const willOpen = expanded ?? !current
-    next.set(id, willOpen)
-    if (willOpen && group?.kind === "other" && group.label === "reasoning" && group.turn) next.set(`work:${group.turn.id}`, true)
-    while (next.size > 2000) next.delete(next.keys().next().value!)
-    return next
+    const reasoning = group?.kind === "other" && group.label === "reasoning"
+    const keepFollowing = (reasoning || group?.kind === "work-stage") && following.current && !historical && targetSeq === undefined
+    if (!keepFollowing) pauseFollowing()
+    setOpen((previous) => {
+      const next = new Map(previous)
+      const current = previous.get(id) ?? (group?.kind === "work-stage" ? group.active : (group?.kind === "activity-group" && group.rows.some((tool) => previous.get(tool.id) === true)))
+      const willOpen = expanded ?? !current
+      next.set(id, willOpen)
+      if (willOpen && reasoning && group.turn) next.set(`work:${group.turn.id}`, true)
+      while (next.size > 2000) next.delete(next.keys().next().value!)
+      return next
     })
+    return keepFollowing
   }
   const parentRef = useRef<HTMLDivElement>(null)
   const following = useRef(!historical && targetSeq === undefined)
@@ -279,12 +285,18 @@ export function Timeline({ rows, assistantPreview, navigation, running = false, 
       followFrame.current = undefined
     }
   }, [followLatest, historical, targetSeq])
+  const canReturnLatest = !historical && showLatest && itemCount > 0
   return (
-    <div className="timeline-region" data-live-generation={liveGeneration ? "" : undefined}>
+    <div className="timeline-region">
     <div ref={parentRef} className="timeline" data-testid="timeline" tabIndex={0} aria-label={t("會話內容")}
-      onWheel={event => { if (event.deltaY < 0) pauseFollowing(); else if (event.deltaY > 0) readingDirection.current = "down" }}
-      onTouchStart={event => { touchY.current = event.touches[0]?.clientY }}
+      onWheel={event => {
+        if (withinReasoningScroll(event.target)) return
+        if (event.deltaY < 0) pauseFollowing()
+        else if (event.deltaY > 0) readingDirection.current = "down"
+      }}
+      onTouchStart={event => { touchY.current = withinReasoningScroll(event.target) ? undefined : event.touches[0]?.clientY }}
       onTouchMove={event => {
+        if (withinReasoningScroll(event.target)) return
         const current = event.touches[0]?.clientY
         if (current !== undefined && touchY.current !== undefined && current < touchY.current) readingDirection.current = "down"
         else pauseFollowing()
@@ -292,6 +304,7 @@ export function Timeline({ rows, assistantPreview, navigation, running = false, 
       }}
       onPointerDown={event => { if (event.target === event.currentTarget) { pointerReading.current = true; pauseFollowing() } }}
       onKeyDown={event => {
+        if (event.target !== event.currentTarget) return
         if (["ArrowUp", "PageUp", "Home"].includes(event.key) || event.shiftKey && event.key === " ") pauseFollowing()
         else if (["ArrowDown", "PageDown", "End"].includes(event.key) || !event.shiftKey && event.key === " ") readingDirection.current = "down"
       }}
@@ -344,10 +357,12 @@ export function Timeline({ rows, assistantPreview, navigation, running = false, 
         })}
       </div>
     </div>
-    {liveGeneration ? <div className="timeline-activity-speed"><span>{tt("本輪已量測", "This turn so far")}</span><GenerationSpeed generation={liveGeneration} /></div> : null}
-    {!historical && showLatest && itemCount > 0 ? <button type="button" className="timeline-latest" onClick={() => {
-      following.current = true; setShowLatest(false); followLatest()
-    }}><ArrowDown size={14} />{t("回到最新內容")}</button> : null}
+    {canReturnLatest || liveGeneration ? <div className="timeline-controls">
+      {canReturnLatest ? <button type="button" className="timeline-latest" onClick={() => {
+        following.current = true; setShowLatest(false); followLatest()
+      }}><ArrowDown size={14} aria-hidden="true" />{t("回到最新內容")}</button> : null}
+      {liveGeneration ? <div className="timeline-activity-speed"><span>{tt("本輪已量測", "This turn so far")}</span><GenerationSpeed generation={liveGeneration} /></div> : null}
+    </div> : null}
     {preview ? <SettingsDialog title={preview.name} closeLabel={t("關閉")} initialFocusSelector=".settings-dialog-close" className="timeline-image-dialog" onClose={() => setPreview(undefined)}>
       <img src={preview.src} alt={preview.name} />
     </SettingsDialog> : null}

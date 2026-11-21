@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
-const virtual = vi.hoisted(() => ({ scrollToIndex: vi.fn(), scrollToOffset: vi.fn(), getTotalSize: () => 2000, getVirtualItems: () => [], measureElement: vi.fn(), scrollToFn: undefined as undefined | ((offset: number, options: { adjustments?: number }, instance: { scrollElement: HTMLElement }) => void) }))
+const virtual = vi.hoisted(() => ({ showItems: false, itemCount: 0, scrollToIndex: vi.fn(), scrollToOffset: vi.fn(), getTotalSize: () => 2000, getVirtualItems: () => virtual.showItems ? Array.from({ length: virtual.itemCount }, (_, index) => ({ index, start: index * 56 })) : [], measureElement: vi.fn(), scrollToFn: undefined as undefined | ((offset: number, options: { adjustments?: number }, instance: { scrollElement: HTMLElement }) => void) }))
 vi.mock("@tanstack/react-virtual", () => ({
   elementScroll: (offset: number, options: { adjustments?: number }, instance: { scrollElement: HTMLElement }) => {
     const element = instance.scrollElement
     element.scrollTop = Math.max(0, Math.min(offset + (options.adjustments ?? 0), element.scrollHeight - element.clientHeight))
   },
-  useVirtualizer: (options: { scrollToFn?: typeof virtual.scrollToFn }) => { virtual.scrollToFn = options.scrollToFn; return virtual },
+  useVirtualizer: (options: { count: number; scrollToFn?: typeof virtual.scrollToFn }) => { virtual.itemCount = options.count; virtual.scrollToFn = options.scrollToFn; return virtual },
 }))
 import { Timeline } from "../src/renderer/session/Timeline.tsx"
 beforeEach(() => {
@@ -20,7 +20,7 @@ beforeEach(() => {
     }
   })
 })
-afterEach(() => { cleanup(); vi.useRealTimers(); virtual.scrollToIndex.mockClear(); virtual.scrollToOffset.mockClear(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.useRealTimers(); virtual.showItems = false; virtual.scrollToIndex.mockClear(); virtual.scrollToOffset.mockClear(); vi.unstubAllGlobals() })
 it("follows new content only while the reader stays at the bottom", () => {
   vi.useFakeTimers()
   const rows = [{ id: "a", kind: "message" as const, role: "assistant" as const, text: "First" }]
@@ -55,6 +55,54 @@ it("keeps the physical bottom when the current assistant message grows before it
   act(() => vi.runOnlyPendingTimers())
   expect(element.scrollTop).toBe(2800)
   expect(screen.queryByRole("button", { name: "回到最新內容" })).toBeNull()
+})
+
+it("keeps a following conversation at the bottom through reasoning disclosure and local scrolling", () => {
+  vi.useFakeTimers()
+  virtual.showItems = true
+  const reasoning = { id: "reasoning", kind: "other" as const, label: "reasoning", detail: "Checking the workspace", transient: true as const }
+  const view = render(<Timeline rows={[reasoning]} running />)
+  const timeline = screen.getByTestId("timeline")
+  Object.defineProperties(timeline, { scrollHeight: { configurable: true, value: 2000 }, clientHeight: { configurable: true, value: 400 } })
+  act(() => vi.runOnlyPendingTimers())
+  const toggle = screen.getByRole("button", { name: "思考中…" })
+  fireEvent.click(toggle)
+  Object.defineProperty(timeline, "scrollHeight", { configurable: true, value: 2450 })
+  act(() => vi.runOnlyPendingTimers())
+  expect(timeline.scrollTop).toBe(2050)
+  fireEvent.wheel(screen.getByRole("region", { name: "思考過程" }), { deltaY: -180 })
+  Object.defineProperty(timeline, "scrollHeight", { configurable: true, value: 2600 })
+  view.rerender(<Timeline rows={[{ ...reasoning, detail: "Checking the workspace\n\nReading the source files" }]} running />)
+  act(() => vi.runOnlyPendingTimers())
+  expect(timeline.scrollTop).toBe(2200)
+  expect(screen.queryByRole("button", { name: "回到最新內容" })).toBeNull()
+  fireEvent.click(toggle)
+  Object.defineProperty(timeline, "scrollHeight", { configurable: true, value: 2000 })
+  act(() => vi.runOnlyPendingTimers())
+  expect(timeline.scrollTop).toBe(1600)
+})
+
+it("lets a reader above the bottom open reasoning until they use the separate return control", () => {
+  vi.useFakeTimers()
+  virtual.showItems = true
+  const reasoning = { id: "reasoning", kind: "other" as const, label: "reasoning", detail: "Checking the workspace", transient: true as const }
+  const view = render(<Timeline rows={[reasoning]} running />)
+  const timeline = screen.getByTestId("timeline")
+  Object.defineProperties(timeline, { scrollHeight: { configurable: true, value: 2000 }, clientHeight: { configurable: true, value: 400 } })
+  act(() => vi.runOnlyPendingTimers())
+  fireEvent.wheel(timeline, { deltaY: -550 })
+  timeline.scrollTop = 1050
+  fireEvent.scroll(timeline)
+  fireEvent.click(screen.getByRole("button", { name: "思考中…" }))
+  Object.defineProperty(timeline, "scrollHeight", { configurable: true, value: 2600 })
+  view.rerender(<Timeline rows={[{ ...reasoning, detail: "New reasoning while reading" }]} running />)
+  act(() => vi.runOnlyPendingTimers())
+  expect(timeline.scrollTop).toBe(1050)
+  const goLatest = screen.getByRole("button", { name: "回到最新內容" })
+  expect(goLatest.closest(".timeline-controls")?.previousElementSibling).toBe(timeline)
+  fireEvent.click(goLatest)
+  act(() => vi.runOnlyPendingTimers())
+  expect(timeline.scrollTop).toBe(2200)
 })
 
 it("pauses on an upward wheel gesture and keeps the reader's position through later text growth", () => {
