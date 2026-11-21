@@ -47,17 +47,23 @@ function ReasoningRow({ label, text, streaming, expanded, onToggle }: { label: s
   const textForRender = useDeferredValue(text)
   const body = useRef<HTMLDivElement>(null)
   const followsEnd = useRef(true)
+  const revealOnOpen = useRef(false)
   const summary = streaming && !expanded ? reasoningPreview(textForRender) : undefined
   const heading = streaming ? tt("思考中…", "Thinking…") : label
 
   useLayoutEffect(() => {
     const element = body.current
-    if (element && expanded && streaming && followsEnd.current) element.scrollTop = element.scrollHeight
+    if (!element || !expanded) return
+    if (revealOnOpen.current) {
+      revealOnOpen.current = false
+      element.scrollIntoView?.({ block: "nearest", inline: "nearest" })
+    }
+    if (streaming && followsEnd.current) element.scrollTop = element.scrollHeight
   }, [expanded, streaming, textForRender])
 
   return <div className="timeline-reasoning" data-streaming={streaming || undefined}>
     <button type="button" className="timeline-reasoning-trigger" aria-expanded={expanded} aria-controls={bodyId} onClick={() => {
-      if (!expanded) followsEnd.current = true
+      if (!expanded) { followsEnd.current = true; revealOnOpen.current = true }
       onToggle()
     }}>
       <Brain size={14} aria-hidden="true" />

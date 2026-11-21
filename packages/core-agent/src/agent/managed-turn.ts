@@ -355,7 +355,13 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
                     lifecycle.deferredFailure = undefined;
                     await closeGeneration(generation, 'accepted');
                     accepted = true;
-                    if(step!.batch.length)for(;;){const wait=getManagedExecutionAdmissionWait(host.domain,action,signal);if(!wait)break;await wait}
+                    // Even a text-only exchange records its original
+                    // acceptance. A background Code result can own a live read.
+                    for (;;) {
+                        const wait = getManagedExecutionAdmissionWait(host.domain, action, signal);
+                        if (!wait) break;
+                        await wait;
+                    }
                     const witnesses = step!.batch.map(call => callWitnesses.get(call)!), acceptedWitness = { capture: acceptedCapture, outcome: result.outcome }, token = invocation.accepted(acceptedWitness, witnesses);
                     invocation.closed(token);
                     if (candidate!.captured.instructions && step!.receipt)
@@ -442,14 +448,11 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
                 // Background publication can start during closeStep or an
                 // awaited stop hook. Join its genuine finite cleanup before
                 // the next fresh hook boundary; never repeat a hook or model.
-                const waitStopAdmission = async () => {
-                    for (;;) {
-                        const wait = getManagedExecutionAdmissionWait(host.domain, action, generation.signal);
-                        if (!wait) return;
-                        await wait;
-                    }
-                };
-                await waitStopAdmission();
+                for (;;) {
+                    const wait = getManagedExecutionAdmissionWait(host.domain, action, generation.signal);
+                    if (!wait) break;
+                    await wait;
+                }
                 assertManagedActionCurrent(host.domain,action);
                 const stopSurface=host.hooks.capture(),header=host.execution.observe().header;
                 let agentType:string|undefined;
@@ -460,11 +463,19 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
                         reason?: unknown;
                     };
                 } | undefined;
-                await waitStopAdmission();
+                for (;;) {
+                    const wait = getManagedExecutionAdmissionWait(host.domain, action, generation.signal);
+                    if (!wait) break;
+                    await wait;
+                }
                 assertManagedActionCurrent(host.domain,action);
                 if(stopInput.domain!==host.domain||stopInput.sessionId!==host.domain.sessionId)throw TypeError('Original runtime stop identity required');
                 const hookVerdict=await host.hooks.beforeStop(stopInput,stopSurface);
-                await waitStopAdmission();
+                for (;;) {
+                    const wait = getManagedExecutionAdmissionWait(host.domain, action, generation.signal);
+                    if (!wait) break;
+                    await wait;
+                }
                 assertManagedActionCurrent(host.domain,action);
                 const reason=[verdict?.continuation?.reason,hookVerdict?.reason].filter(value=>typeof value==='string'&&value.trim()).join('\n\n');
                 signal.throwIfAborted();

@@ -278,6 +278,7 @@ it.each(['body', 'leaf', 'reserve', 'quota'] as const)('non-metadata stage never
 import { nativeFixture } from '../../exec/test/native-fixture.ts'
 it.each(['cancel-before-continuation', 'cancel-during-continuation', 'timeout-during-continuation'] as const)('original exec live cancellation gate: %s', async control => {
   const f = await writerFixture(), controller = new AbortController()
+  const timeout = control === 'timeout-during-continuation'
   let attempts = 0, continued = 0
   const continuation = f.sink.continueFailedWrite!
   f.sink.continueFailedWrite = async function (...args) { continued++; return continuation.apply(this, args) }
@@ -288,7 +289,7 @@ it.each(['cancel-before-continuation', 'cancel-during-continuation', 'timeout-du
     if (attempts === 1) { if (control === 'cancel-before-continuation') controller.abort(); throw f.cause }
     if (attempts === 2) {
       if (control === 'cancel-during-continuation') controller.abort()
-      else if (control === 'timeout-during-continuation') await new Promise(done => setTimeout(done, 80))
+      else if (timeout) await vi.advanceTimersByTimeAsync(40)
     }
   }
   let capture!: ReturnType<typeof createExecFrameCapture>
@@ -297,13 +298,14 @@ it.each(['cancel-before-continuation', 'cancel-during-continuation', 'timeout-du
     observe: capture => capture.settle(), settle: capture => capture.settle(),
   } })
   try {
-    const result = await native.exec.run({ argv: ['controlled-native-gate'], abortSignal: controller.signal, ...(control === 'timeout-during-continuation' ? { timeoutMs: 40 } : {}) })
+    if (timeout) vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const result = await native.exec.run({ argv: ['controlled-native-gate'], abortSignal: controller.signal, ...(timeout ? { timeoutMs: 40 } : {}) })
     expect(result.exitCode).toBe(0)
     expect(result.timedOut).toBe(control === 'timeout-during-continuation')
     expect(continued).toBe(control === 'cancel-before-continuation' ? 0 : 1)
     expect(await capture.settle()).toMatchObject({ kind: 'ready', dependency: { retention: { kind: 'artifact', ref: { completeness: 'producer-incomplete' } } } })
     expect(native.counts()).toEqual({ launches: 1, terminations: 1, releases: 1 })
-  } finally { native.finish(); fault.rename = undefined; await native.exec.dispose(); await f.close() }
+  } finally { if (timeout) vi.useRealTimers(); native.finish(); fault.rename = undefined; await native.exec.dispose(); await f.close() }
 })
 it.each(['closing', 'deleted', 'producer'] as const)('gate loss during genuine lease retirement denies Written after physical application: %s', async control => {
   const f = await writerFixture(), acquire = locking.acquireSessionLock

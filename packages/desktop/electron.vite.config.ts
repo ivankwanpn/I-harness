@@ -6,7 +6,7 @@ import { copyFileSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   main: {
     plugins: [{
       name: "desktop-model-catalog",
@@ -20,6 +20,8 @@ export default defineConfig({
       },
     }],
     build: {
+      // The dev script prepares the attachment worker before Vite starts.
+      emptyOutDir: command !== "serve",
       externalizeDeps: { exclude: ["@i-harness/sdk", "@i-harness/fs-search", "@i-harness/usage-stats", "@i-harness/desktop-gateway"] },
       rollupOptions: { external: ["koffi"] },
     },
@@ -32,4 +34,4 @@ export default defineConfig({
     },
   },
   renderer: { plugins: [react(), tailwindcss(), devCspPlugin] },
-})
+}))

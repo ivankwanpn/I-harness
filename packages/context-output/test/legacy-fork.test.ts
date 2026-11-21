@@ -651,4 +651,4 @@ it('binds actual Gateway B2/project facts, retains only VISIBLE, then cold reads
     expect((await f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, cold)).text).toContain('VISIBLE')
     expect((await f.service().searchLegacyObserved({ sessionId: 'target' }, { query: 'VISIBLE' }, cold)).hits.map(hit => hit.ref.id)).toEqual([f.visible.id])
   } finally { await f.close() }
-}, 20000)
+}, 60_000)

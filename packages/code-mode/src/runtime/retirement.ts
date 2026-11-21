@@ -71,7 +71,8 @@ export function createRetirement(options: CodeModeRuntimeOptions, errorCap: numb
         }
         const bounded = error === undefined ? undefined : diagnostic(error, errorCap);
         const joinTermination = !!cell.instructionReplan || !!cell.origin.instructionOrigin;
-        if (joinTermination) cell.terminalReceiptPending = true;
+        const joinOutput = cell.pendingOutputReceipts > 0;
+        if (joinTermination || joinOutput) cell.terminalReceiptPending = true;
         cell.status = status;
         if (status === 'terminated') { cell.instructionReplan = undefined; cell.replanTerminalStarted = false; }
         cell.error = bounded?.text;
@@ -116,7 +117,16 @@ export function createRetirement(options: CodeModeRuntimeOptions, errorCap: numb
               if (!receipt) committed();
               return receipt;
             };
-            const pending = joinTermination ? cell.stop!.then(publish, cause => { throw Object.assign(new FactRecoveryRequiredError(), { cause }); }) : publish();
+            // An observer of Stop must see output already accepted by the
+            // host, even if the terminal state was set before its write ACK.
+            const pending = joinTermination || joinOutput ? (async () => {
+                if (joinTermination) {
+                    try { await cell.stop }
+                    catch (cause) { throw Object.assign(new FactRecoveryRequiredError(), { cause }); }
+                }
+                if (joinOutput) await cell.admission;
+                return publish();
+            })() : publish();
             if (pending)
                 track(Promise.resolve(pending).catch(failed).finally(() => cell.wake?.()), cell);
             else
