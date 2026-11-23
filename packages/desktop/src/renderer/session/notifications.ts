@@ -25,3 +25,11 @@ export function classifyNotification(method: string, params: unknown): Notificat
   if (type === "model/activity") return { kind: "ignore" }
   return type === "assistant/chunk" || type === "reasoning/chunk" ? { kind: "chunk", sessionId } : { kind: "durable", sessionId }
 }
+
+const dashboardEvents = new Set(["turn/start", "turn/end", "session/title", "step/failed", "job/status", "rewind/point"])
+export function affectsSessionDashboard(method: string, params: unknown): boolean {
+  if (method === "session/status" || method === "session/execution-state" || method === "desktop/session/navigation/changed") return true
+  if (method !== "session/event") return false
+  const type = (params as { event?: { type?: unknown } } | null)?.event?.type
+  return typeof type === "string" && dashboardEvents.has(type)
+}

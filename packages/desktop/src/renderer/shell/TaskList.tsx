@@ -1,6 +1,5 @@
 import type { SessionDashboardResult } from "@i-harness/sdk"
-import { useLocale, useText, type Message } from "../design/i18n.ts"
-import { relativeActivity } from "./relative-activity.ts"
+import { useText } from "../design/i18n.ts"
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { MoreHorizontal, Pin } from "lucide-react"
 import { SessionActions, type SessionAction, type SessionNavigation } from "./SessionActions.tsx"
@@ -22,16 +21,12 @@ export interface TaskListProps {
   onManageSessions?(sessionId?: string, scope?: TaskRowScope): void
   showBatchManagement?: boolean
   onSelect(sessionId: string, scope?: TaskRowScope): void
-  /** A synthetic New Session row keeps the composer draft visible in the list. */
-  onNewSession?(): void
-  newSessionActive?: boolean
   filter?: string
 }
 
 /** Sessions with only the fields the host actually reported — never invented. */
-export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, workspaceId, rowScopes, navigation, onManage, onCopyId, onOpenFolder, onManageArchived, onManageSessions, showBatchManagement = true, onNewSession, newSessionActive, filter }: TaskListProps) {
+export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, workspaceId, rowScopes, navigation, onManage, onCopyId, onOpenFolder, onManageArchived, onManageSessions, showBatchManagement = true, filter }: TaskListProps) {
   const t = useText()
-  const locale = useLocale((state) => state.locale)
   const [menu, setMenu] = useState<{ id: string; workspaceId?: string; source?: TaskRowScope; x: number; y: number; element: HTMLElement }>()
   const [busy, setBusy] = useState<Record<string, boolean>>({})
   const locks = useRef(new Set<string>())
@@ -61,35 +56,19 @@ export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, wor
   }
   const needle = filter?.trim().toLowerCase() ?? ""
   const visibleSessions = needle ? dashboard.sessions.filter(row => (row.title ?? "").toLowerCase().includes(needle) || row.id.toLowerCase().includes(needle)) : dashboard.sessions
-  const now = Date.now()
-  const hasDates = visibleSessions.some(row => row.updatedAt !== undefined)
-  const dayLabel = (updatedAt: number | undefined): Message => {
-    if (updatedAt === undefined) return "更早"
-    const date = new Date(updatedAt), today = new Date(now)
-    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
-    if (date.getTime() >= start) return "今天"
-    if (date.getTime() >= start - 86_400_000) return "昨天"
-    return "更早"
-  }
-  if (dashboard.sessions.length === 0 && !onNewSession) {
+  if (dashboard.sessions.length === 0) {
     return <><p className="notice">{t("尚無會話")}</p>{onManageArchived ? <button type="button" className="session-archived-button" onClick={onManageArchived}>{t("管理已封存會話")}</button> : null}</>
   }
-  if (visibleSessions.length === 0 && (!onNewSession || needle)) return <p className="notice">{t("沒有符合的會話")}</p>
+  if (visibleSessions.length === 0) return <p className="notice">{t("沒有符合的會話")}</p>
+  const ordered = [...visibleSessions].sort((a, b) => Number(navigation?.[b.id]?.pinned === true) - Number(navigation?.[a.id]?.pinned === true) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
   return (
-    <>{dashboard.sessions.length === 0 ? <p className="notice">{t("尚無會話")}</p> : null}{onManageSessions && showBatchManagement ? <button type="button" className="session-archived-button" onClick={() => onManageSessions()}>{t("批次管理會話")}</button> : null}<ul className="session-list">
-      {onNewSession && !needle ? <li className="session-list-row session-new-row">
-        <button type="button" className="row-button" aria-current={newSessionActive ? "true" : undefined} onClick={onNewSession}>
-          <span className="row-title">{t("新會話")}</span>
-          <span className="row-meta">{t("描述你的目標，從這裡開始。")}</span>
-        </button>
-      </li> : null}
-      {(() => { let previous: string | undefined; return [...visibleSessions].sort((a, b) => Number(navigation?.[b.id]?.pinned === true) - Number(navigation?.[a.id]?.pinned === true) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0)).map((row) => {
-        const pinned = navigation?.[row.id]?.pinned === true
-        const bucketLabel = pinned ? "置頂" as const : dayLabel(row.updatedAt)
-        const bucket = pinned ? "pinned" : bucketLabel
-        const label = hasDates && bucket !== previous ? <li key={`group:${bucket}`} className="session-group-label" role="presentation">{t(bucketLabel)}</li> : null
-        previous = bucket
-        return <>{label}<li key={row.id} className="session-list-row" onContextMenu={(event) => { if (canManage) { event.preventDefault(); const element = event.currentTarget.querySelector<HTMLButtonElement>(".row-button")!; showMenu(row.id, element, event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined) } }}>
+    <>{onManageSessions && showBatchManagement ? <button type="button" className="session-archived-button" onClick={() => onManageSessions()}>{t("批次管理會話")}</button> : null}<ul className="session-list">
+      {ordered.map(row => {
+        const metadata = navigation?.[row.id]
+        const title = row.title ?? t("未命名會話")
+        const count = attentionCounts?.[row.id] ?? 0
+        const attention = count > 0 ? `${t("待人處理")} · ${count}` : undefined
+        return <li key={row.id} className="session-list-row" onContextMenu={(event) => { if (canManage) { event.preventDefault(); const element = event.currentTarget.querySelector<HTMLButtonElement>(".row-button")!; showMenu(row.id, element, event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined) } }}>
           <button
             type="button"
             className="row-button"
@@ -97,13 +76,17 @@ export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, wor
             onClick={() => { const scope = rowScopes?.[row.id]; if (scope) onSelect(scope.sessionId, scope); else onSelect(row.id) }}
             onKeyDown={(event) => { if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) { event.preventDefault(); showMenu(row.id, event.currentTarget) } }}
           >
-            <span className="row-title">{navigation?.[row.id]?.unread ? <span className="session-unread-dot" aria-label={t("未讀")} /> : null}{navigation?.[row.id]?.pinned ? <Pin size={12} aria-label={t("已釘選")} /> : null}<span className="row-label">{row.title ?? t("未命名會話")}</span></span>
-            {(attentionCounts?.[row.id] ?? 0) > 0 ? <span className="attention-badge">{t("待人處理")} · {attentionCounts![row.id]}</span> : null}
-            <span className="row-meta">{[row.running === true ? t("執行中") : "", row.updatedAt === undefined ? "" : `${t("最後活動")} ${relativeActivity(row.updatedAt, locale)}`, row.turnCount === undefined ? "" : `${row.turnCount} ${t("回合")}`, row.queued === undefined || row.queued === 0 ? "" : `${t("佇列")} ${row.queued}`, row.tasks === undefined || row.tasks === 0 ? "" : `${t("任務")} ${row.tasks}`, row.modelLabel ?? ""].filter(Boolean).join(" · ")}</span>
+            <span className="row-title">
+              {metadata?.unread ? <span role="img" className="session-unread-dot" aria-label={t("未讀")} title={t("未讀")} /> : null}
+              {metadata?.pinned ? <Pin size={12} role="img" aria-label={t("已釘選")} /> : null}
+              <span className="row-label" title={title}>{title}</span>
+            </span>
+            {row.running ? <span role="img" className="session-running-indicator" aria-label={t("執行中")} title={t("執行中")} /> : null}
+            {attention ? <span role="img" className="attention-badge" aria-label={attention} title={attention}>{count}</span> : null}
           </button>
-          {canManage ? <button type="button" className="session-row-more" disabled={busy[actionKey(row.id)] === true} aria-label={t("更多會話操作 {title}", { title: row.title ?? t("未命名會話") })} aria-haspopup="menu" aria-expanded={active?.id === row.id} onClick={(event) => { if (active?.id === row.id) setMenu(undefined); else showMenu(row.id, event.currentTarget) }}><MoreHorizontal size={16} /></button> : null}
-        </li></>
-      }) })()}
+          {canManage ? <button type="button" className="session-row-more" disabled={busy[actionKey(row.id)] === true} aria-label={t("更多會話操作 {title}", { title })} aria-haspopup="menu" aria-expanded={active?.id === row.id} onClick={(event) => { if (active?.id === row.id) setMenu(undefined); else showMenu(row.id, event.currentTarget) }}><MoreHorizontal size={16} /></button> : null}
+        </li>
+      })}
     </ul>
     {onManageArchived ? <button type="button" className="session-archived-button" onClick={onManageArchived}>{t("管理已封存會話")}</button> : null}
     {active && menu ? <SessionActions key={JSON.stringify([activeScope?.workspaceId ?? workspaceId, activeScope?.sessionId ?? active.id])} session={activeScope ? { ...active, id: activeScope.sessionId, pending: attentionCounts?.[active.id] ?? 0 } : { ...active, pending: attentionCounts?.[active.id] ?? 0 }} navigation={navigation?.[active.id]} anchor={menu}

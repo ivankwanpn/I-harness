@@ -216,6 +216,36 @@ it.each([undefined, "destination"])("settles async authoritative ownership %s de
   expect(captured.props!.projectContext).toMatchObject({ status: "ready", projectId: owner })
 })
 
+it("confirms the selected session's project while the workspace dashboard is still loading", async () => {
+  const listing = Promise.withResolvers<unknown>()
+  fixture(request => {
+    if (request.kind === "session/dashboard") return listing.promise
+    if (request.kind === "desktop/capabilities") return Promise.resolve({ "desktop-project-scope": ["1"] })
+    if (request.kind === "desktop/session/project/state") return Promise.resolve({ sessionId: request.sessionId, projectId: "project" })
+    if (request.kind === "projects/list") return Promise.resolve([{ id: "project", name: "Product", workspaceIds: ["w1"] }])
+    if (request.kind === "session/model/state") return Promise.resolve({ status: "ready", providerId: "p", modelId: "m", label: "model" })
+  })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props?.projectContext).toMatchObject({ status: "ready", projectId: "project" }))
+  expect(captured.props?.conversation?.canSend).toBe(true)
+  await act(async () => { listing.reject(new Error("Conversation list unavailable")) })
+  expect(captured.props?.connection).toBe("online")
+  expect(captured.props?.conversation?.canSend).toBe(true)
+})
+
+it("opens only the selected conversation's history when a workspace has multiple saved conversations", async () => {
+  const request = fixture(input => input.kind === "session/dashboard" ? Promise.resolve({ sessions: [
+    { id: "a", live: false }, { id: "b", live: false }, { id: "c", live: false },
+  ] }) : undefined)
+  await waitFor(() => expect(captured.props?.dashboard?.sessions).toHaveLength(3))
+  expect(request).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "session/history" }))
+  act(() => captured.props!.onSelectSession("b"))
+  await waitFor(() => expect(request).toHaveBeenCalledWith(expect.objectContaining({ kind: "session/history", sessionId: "b" })))
+  expect(request).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "session/history", sessionId: "a" }))
+  expect(request).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "session/history", sessionId: "c" }))
+})
+
 it("does not replace failed saved ownership with a folder-derived project", async () => {
   fixture(request => request.kind === "projects/list" ? Promise.resolve([{ id: "A", name: "A", workspaceIds: ["w1"] }])
     : request.kind === "desktop/capabilities" ? Promise.resolve({ "desktop-project-scope": ["1"] })

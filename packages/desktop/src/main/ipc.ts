@@ -516,7 +516,10 @@ export async function dispatchDesktopRequest(
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const workspace = dependencies.catalog.get(workspaceId)
       if (!workspace) throw Error('Unknown workspace')
+      // An explicitly selected workspace may already be starting. Let its
+      // gateway list the histories so the app's main process stays responsive.
       const ready = dependencies.runtimes.peek?.(workspaceId)
+        ?? await dependencies.runtimes.pendingRuntime?.(workspaceId)?.catch(() => undefined)
       if (!ready && dependencies.sessionCatalog) return dependencies.sessionCatalog.dashboard(workspace)
       return await (ready ?? await runtimeForKnownWorkspace(workspaceId, dependencies)).client.dashboard()
     }
@@ -550,19 +553,14 @@ export async function dispatchDesktopRequest(
       const queueRead = runtime.info.capabilities["desktop-input"]?.includes("1")
         ? runtime.client.request("desktop/session/input/state", { sessionId })
         : runtime.client.request("session/queue", { sessionId })
-      const [tail, queue, dashboard] = await Promise.allSettled([
+      const [tail, queue] = await Promise.allSettled([
         runtime.client.history(sessionId, { afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: 500 }),
         queueRead,
-        runtime.client.dashboard(),
       ])
       const queueRows = queue.status === "fulfilled"
         ? (Array.isArray(queue.value) ? queue.value as Array<{ state?: string }> : (queue.value as { items?: Array<{ state?: string }> } | undefined)?.items ?? [])
         : []
-      const summary = dashboard.status === "fulfilled"
-        ? (dashboard.value.sessions as Array<{ id: string }>).find(row => row.id === sessionId)
-        : undefined
       return {
-        summary: summary ?? { id: sessionId },
         ...(tail.status === "fulfilled" ? { history: tail.value } : {}),
         ...(tail.status === "rejected" ? { historyError: tail.reason instanceof Error ? tail.reason.message : String(tail.reason) } : {}),
         queue: queueRows,

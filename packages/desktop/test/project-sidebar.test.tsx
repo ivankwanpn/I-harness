@@ -45,7 +45,7 @@ describe("project conversation sidebar", () => {
   it("honors a valid project creation target even when the current conversation has no selected storage folder", async () => {
     const { props } = fixture()
     render(<ProjectSidebar {...props} selectedWorkspaceId={undefined} selectedSessionId={undefined} canCreate />)
-    const create = await screen.findByRole("button", { name: /新會話/ }) as HTMLButtonElement
+    const create = await screen.findByRole("button", { name: "在 Product 開啟新會話" }) as HTMLButtonElement
     expect(create.disabled).toBe(false)
     fireEvent.click(create)
     expect(props.onCreateSession).toHaveBeenCalledWith("w1", "p1")
@@ -77,6 +77,16 @@ describe("project conversation sidebar", () => {
     expect(props.onSelectWorkspace).not.toHaveBeenCalled()
   })
 
+  it("keeps the ungrouped section closed while the selected conversation's owner is pending", async () => {
+    const { props } = fixture()
+    const view = render(<ProjectSidebar {...props} />)
+    await screen.findByText("Current chat")
+    view.rerender(<ProjectSidebar {...props} selectedProjectId={undefined} projectSelectionPending />)
+    expect(screen.getByRole("button", { name: "未分類會話" }).getAttribute("aria-expanded")).toBe("false")
+    view.rerender(<ProjectSidebar {...props} selectedProjectId={undefined} selectedWorkspaceId="wu" />)
+    expect(screen.getByRole("button", { name: "未分類會話" }).getAttribute("aria-expanded")).toBe("true")
+  })
+
   it("uses the latest parent dashboard for the selected folder", async () => {
     const { props } = fixture()
     const view = render(<ProjectSidebar {...props} />)
@@ -84,6 +94,44 @@ describe("project conversation sidebar", () => {
     view.rerender(<ProjectSidebar {...props} dashboard={dashboard("Latest selected chat")} />)
     expect(screen.getByText("Latest selected chat")).toBeTruthy()
     expect(screen.queryByText("Current chat")).toBeNull()
+  })
+
+  it("waits for a newly listed conversation's ownership without showing a grouping failure", async () => {
+    const updated = { sessions: [
+      { id: "s1", title: "Current chat", live: false },
+      { id: "s2", title: "New chat", live: false },
+    ] }
+    const owner = { projectId: "p1", pinned: false, unread: false }
+    let paired = false
+    const { props } = fixture(request => {
+      if (request.kind === "session/dashboard" && request.workspaceId === "w1") { paired = true; return updated }
+      if (request.kind === "desktop/session/navigation/state") return paired ? { s1: owner, s2: owner } : { s1: owner }
+    })
+    const singleFolder = { ...props, workspaces: [workspaces[0]!] }
+    const view = render(<ProjectSidebar {...singleFolder} />)
+    await screen.findByText("Current chat")
+    view.rerender(<ProjectSidebar {...singleFolder} dashboard={updated} />)
+    expect(screen.queryByText("會話分組狀態無法確認")).toBeNull()
+    expect(screen.queryByText("New chat")).toBeNull()
+    await screen.findByText("New chat")
+    expect(screen.queryByText("會話分組狀態無法確認")).toBeNull()
+  })
+
+  it("lets slow ownership refreshes finish across polling ticks", async () => {
+    vi.useFakeTimers()
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible")
+    try {
+      let finish!: (result: unknown) => void
+      const slowDashboard = new Promise<unknown>(resolve => { finish = resolve })
+      const { props, bridge } = fixture(request => request.kind === "session/dashboard" ? slowDashboard : undefined)
+      render(<ProjectSidebar {...props} workspaces={[workspaces[0]!]} dashboard={undefined} />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(11_000) })
+      const reads = vi.mocked(bridge.request).mock.calls.filter(([request]) => request.kind === "session/dashboard")
+      expect(reads).toHaveLength(1)
+      await act(async () => { finish(dashboard("Slow chat")); await slowDashboard })
+      expect(screen.getByText("Slow chat")).toBeTruthy()
+      expect(screen.queryByText("會話分組狀態無法確認")).toBeNull()
+    } finally { visibility.mockRestore(); vi.useRealTimers() }
   })
 
   it("retains the last supplied member dashboard when selection moves to another folder in the same project", async () => {
@@ -141,7 +189,10 @@ describe("project conversation sidebar", () => {
     const { props, bridge, emit } = fixture()
     render(<ProjectSidebar {...props} />)
     await screen.findByText("Chat w2")
+    await screen.findByText("Current chat")
     const count = () => (bridge.request as ReturnType<typeof vi.fn>).mock.calls.filter(([request]) => request.kind === "session/dashboard" && request.workspaceId === "w2").length
+    const unrelatedOwners = () => vi.mocked(bridge.request).mock.calls.filter(([request]) => request.kind === "desktop/session/navigation/state" && request.workspaceId === "wu").length
+    const initialUnrelatedOwners = unrelatedOwners()
     expect(count()).toBe(1)
     emit({ kind: "sdk/notification", workspaceId: "unopened", method: "session/status", params: { sessionId: "s1", status: "idle" } })
     emit({ kind: "sdk/notification", workspaceId: "w2", method: "session/event", params: { sessionId: "s1", event: { type: "assistant/chunk", text: "stream" } } })
@@ -149,6 +200,7 @@ describe("project conversation sidebar", () => {
     expect(count()).toBe(1)
     emit({ kind: "sdk/notification", workspaceId: "w2", method: "session/status", params: { sessionId: "s1", status: "idle" } })
     await waitFor(() => expect(count()).toBe(2))
+    expect(unrelatedOwners()).toBe(initialUnrelatedOwners)
   })
 
   it("routes session mutations to their folder and refreshes its navigation", async () => {
@@ -261,8 +313,8 @@ it("distinguishes duplicate native conversation IDs across member folders for se
   const other = await screen.findByText("Chat w2")
   expect(current.closest("button")?.getAttribute("aria-current")).toBe("true")
   expect(other.closest("button")?.getAttribute("aria-current")).toBeNull()
-  expect(within(current.closest("li")! as HTMLElement).getByText("待人處理 · 2")).toBeTruthy()
-  expect(within(other.closest("li")! as HTMLElement).queryByText("待人處理 · 2")).toBeNull()
+  expect(within(current.closest("li")! as HTMLElement).getByRole("img", { name: "待人處理 · 2" })).toBeTruthy()
+  expect(within(other.closest("li")! as HTMLElement).queryByRole("img", { name: "待人處理 · 2" })).toBeNull()
   fireEvent.click(other)
   expect(props.onSelectSession).toHaveBeenCalledWith("w2", "s1", "p1")
   await waitFor(() => expect(props.onManageSession).toHaveBeenCalledWith("w2", "s1", "read"))

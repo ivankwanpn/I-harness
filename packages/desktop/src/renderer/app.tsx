@@ -38,7 +38,7 @@ import type { InteractionReply } from "./interaction/PendingPanel.tsx"
 import type { ReviewChanges, ReviewText } from "./review/ReviewPane.tsx"
 import { pendingForSession, type PendingInteraction } from "./interaction/pending.ts"
 import { usePendingInteractions } from "./interaction/use-pending-interactions.ts"
-import { classifyNotification } from "./session/notifications.ts"
+import { affectsSessionDashboard, classifyNotification } from "./session/notifications.ts"
 import { projectTimeline } from "./session/project.ts"
 import { sendGate } from "./session/send-gate.ts"
 import { Workbench } from "./shell/Workbench.tsx"
@@ -197,12 +197,13 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     return () => { active = false }
   }, [bridge])
 
-  const selectedBinding = projectBinding?.workspaceId === selectedWorkspaceId && projectBinding?.sessionId === selectedSessionId && !projectBinding?.error ? projectBinding : undefined
+  const currentBinding = projectBinding?.workspaceId === selectedWorkspaceId && projectBinding?.sessionId === selectedSessionId ? projectBinding : undefined
+  const selectedBinding = currentBinding?.error ? undefined : currentBinding
   const activeProjectId = selectedSessionId
     ? projects?.find(project => project.id === selectedBinding?.projectId)?.id
     : projects?.find(project => project.id === selectedProjectId)?.id
   const projectScopeSupported = capabilities["desktop-project-scope"]?.includes("1") === true
-  const projectReady = !projectScopeSupported || !!(projectBinding && projectBinding.workspaceId === selectedWorkspaceId && projectBinding.sessionId === selectedSessionId && !projectBinding.error)
+  const projectReady = capabilitiesReady && (!projectScopeSupported || selectedBinding !== undefined)
   useEffect(() => {
     if (!projects || !selectedWorkspaceId || !workspaces.some(workspace => workspace.id === selectedWorkspaceId)) return
     if (selectedSessionId && (!capabilitiesReady || projectScopeSupported && !selectedBinding)) return
@@ -370,6 +371,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     const current = () => active && workspaceSelection.current === capabilityScope && disconnectRevision.current === lastDisconnect
     setCapabilitySnapshot(undefined)
     setSandbox(undefined)
+    setError(undefined)
     // Checking an existing runtime doesn't start another one or delay the bootstrap reads.
     void bridge.request({ kind: "desktop/runtime/status", workspaceId: selectedWorkspaceId }).then(value => {
       if (current() && (value as { ready?: boolean } | undefined)?.ready === true) {
@@ -382,37 +384,35 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     const restoredSelection = restoredSelections.current.get(selectedWorkspaceId) ?? selection.current
     restoredSelections.current.set(selectedWorkspaceId, restoredSelection)
     const dashboardVersion = ++dashboardRequest.current
-    void (async () => {
-      try {
-        const [dashboardResult, capabilitiesResult, sandboxResult] = await Promise.all([
-          bridge.request({ kind: "session/dashboard", workspaceId: selectedWorkspaceId }),
-          bridge.request({ kind: "desktop/capabilities", workspaceId: selectedWorkspaceId }),
-          bridge.request({ kind: "workspace/sandbox/state", workspaceId: selectedWorkspaceId }),
-        ])
-        if (!current()) return
-        if (dashboardVersion >= dashboardApplied.current) {
-          dashboardApplied.current = dashboardVersion
-          const initialDashboard = dashboardResult as SessionDashboardResult
-          setDashboard(initialDashboard)
-          if (!reconciledWorkspaces.current.has(selectedWorkspaceId)
-            && selection.current === restoredSelection && restoredSelection.sessionId
-            && !initialDashboard.listingUnavailable
-            && !initialDashboard.sessions.some((row) => row.id === restoredSelection.sessionId)) {
-            setSelectedSessionId(undefined)
-          }
-          if (!initialDashboard.listingUnavailable) reconciledWorkspaces.current.add(selectedWorkspaceId)
-        }
-        setCapabilitySnapshot({ workspaceId: selectedWorkspaceId, value: (capabilitiesResult ?? {}) as Record<string, string[]> })
-        setSandbox(sandboxResult as SandboxState | undefined)
-        setConnection("online")
-        setError(undefined)
-        if ((capabilitiesResult as Record<string, string[]> | undefined)?.["desktop-interaction"]?.includes("1")) {
-          void interactions.refresh().catch((reason: unknown) => { if (current()) setError(String(reason)) })
-        }
-      } catch (reason) {
-        if (current()) { setConnection("offline"); setError(reason instanceof Error ? reason.message : String(reason)) }
+    const reportFailure = (reason: unknown) => { if (current()) setError(reason instanceof Error ? reason.message : String(reason)) }
+    // Capability negotiation enables the selected conversation's owner read.
+    // The workspace listing can independently replay large saved histories.
+    void bridge.request({ kind: "desktop/capabilities", workspaceId: selectedWorkspaceId }).then(value => {
+      if (!current()) return
+      const confirmed = (value ?? {}) as Record<string, string[]>
+      setCapabilitySnapshot({ workspaceId: selectedWorkspaceId, value: confirmed })
+      setConnection("online")
+      if (confirmed["desktop-interaction"]?.includes("1")) void interactions.refresh().catch(reportFailure)
+    }).catch(reason => {
+      if (current()) setConnection("offline")
+      reportFailure(reason)
+    })
+    void bridge.request({ kind: "workspace/sandbox/state", workspaceId: selectedWorkspaceId }).then(value => {
+      if (current()) setSandbox(value as SandboxState | undefined)
+    }).catch(reportFailure)
+    void bridge.request({ kind: "session/dashboard", workspaceId: selectedWorkspaceId }).then(value => {
+      if (!current() || dashboardVersion < dashboardApplied.current) return
+      dashboardApplied.current = dashboardVersion
+      const initialDashboard = value as SessionDashboardResult
+      setDashboard(initialDashboard)
+      if (!reconciledWorkspaces.current.has(selectedWorkspaceId)
+        && selection.current === restoredSelection && restoredSelection.sessionId
+        && !initialDashboard.listingUnavailable
+        && !initialDashboard.sessions.some((row) => row.id === restoredSelection.sessionId)) {
+        setSelectedSessionId(undefined)
       }
-    })()
+      if (!initialDashboard.listingUnavailable) reconciledWorkspaces.current.add(selectedWorkspaceId)
+    }).catch(reportFailure)
     return () => { active = false }
   }, [bridge, interactions.refresh, retryNonce, selectedWorkspaceId])
 
@@ -434,10 +434,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       chunkFrame = undefined
       chunkBuffer = []
     }
-    const refresh = createRefreshScheduler(() => Promise.allSettled([
-      refreshDashboard(selectedWorkspaceId),
-      ...(selectedSessionId ? [refreshTasks(selectedWorkspaceId, selectedSessionId)] : []),
-    ]))
+    const refreshList = createRefreshScheduler(() => refreshDashboard(selectedWorkspaceId))
+    const refreshTurn = selectedSessionId ? createRefreshScheduler(() => refreshTasks(selectedWorkspaceId, selectedSessionId)) : undefined
+    const refresh = () => { refreshList.schedule(); refreshTurn?.schedule() }
     const unsubscribe = bridge.onEvent((event) => {
       if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity") return
       if (workspaceSelection.current !== workspace || event.workspaceId !== selectedWorkspaceId) return
@@ -448,7 +447,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           disconnected.current = undefined
           setRetryNonce(value => value + 1)
           executionRevision.current = undefined
-          refresh.schedule()
+          refresh()
           if (selectedSessionId) void pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
         }
         return
@@ -459,6 +458,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         clearChunks()
         assistantPreviews.current.clear()
         executionRevision.current = undefined
+        setCapabilitySnapshot(undefined)
+        setSandbox(undefined)
         setConnection("offline")
         setEventWindow((current) => markDisconnected(current))
         return
@@ -468,14 +469,14 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         if (!state || typeof state.sessionId !== "string" || typeof state.running !== "boolean"
           || typeof state.queued !== "number" || !Number.isSafeInteger(state.queued) || state.queued < 0
           || typeof state.revision !== "number" || !Number.isSafeInteger(state.revision) || state.revision < 1) return
-        if (state.sessionId !== selectedSessionId) { refresh.schedule(); return }
+        if (state.sessionId !== selectedSessionId) { refreshList.schedule(); return }
         if (executionRevision.current !== undefined && state.revision <= executionRevision.current) return
         executionRevision.current = state.revision
         runningRevision.current++
         // Invalidate queue/task reads started before the authoritative event.
         tasksRequest.current++
         setRunning(state.running)
-        refresh.schedule()
+        refresh()
         return
       }
       if (event.method === "desktop/interaction/request") {
@@ -491,6 +492,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         interactions.update(requestId)
         return
       }
+      if (event.method === "desktop/session/navigation/changed") { refreshList.schedule(); return }
       if (event.method !== "session/event" && event.method !== "session/status") return
       const info = classifyNotification(event.method, event.params)
       if (info.kind === "ignore") return
@@ -512,7 +514,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         }
       }
       if (info.sessionId !== selectedSessionId) {
-        if (info.kind === "status") refresh.schedule()
+        if (affectsSessionDashboard(event.method, event.params)) refreshList.schedule()
         return
       }
       if (selection.current !== scope) return
@@ -535,16 +537,17 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           setEventWindow(current => selection.current === scope ? applyNotification(current, record) : current)
           if ((record.type === "todo/write" || record.type === "goal/change") && workStateSupported.current) void refreshWorkState(selectedWorkspaceId, selectedSessionId)
         }
-        refresh.schedule()
+        refreshTurn?.schedule()
+        if (affectsSessionDashboard(event.method, event.params)) refreshList.schedule()
         return
       }
       runningRevision.current++
       // Legacy transport status describes one request; service state describes
       // every submission, including a following turn already running.
       if (executionRevision.current === undefined) setRunning(info.status === "queued")
-      refresh.schedule()
+      refresh()
     })
-    return () => { unsubscribe(); refresh.dispose(); clearChunks() }
+    return () => { unsubscribe(); refreshList.dispose(); refreshTurn?.dispose(); clearChunks() }
   }, [bridge, interactions.update, refreshDashboard, refreshTasks, refreshWorkState, selectedSessionId, selectedWorkspaceId])
 
   const workStateEnabled = capabilities["desktop-work-state"]?.includes("1") === true
@@ -608,7 +611,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     // model/interaction/task reads added their latencies to one another.
     const fail = (reason: unknown) => { if (active) setTaskError(reason instanceof Error ? reason.message : String(reason)) }
     type OpenResult = {
-      summary?: { id: string }
       history?: HistoryRange
       historyError?: string
       queue?: SessionQueueItem[]
@@ -653,25 +655,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     void refreshTasks(selectedWorkspaceId, selectedSessionId).catch(fail)
     return () => { active = false }
   }, [bridge, interactions.refresh, pageHistory, refreshTasks, retryNonce, selectedSessionId, selectedWorkspaceId])
-
-  useEffect(() => {
-    if (!selectedWorkspaceId || !dashboard || dashboard.listingUnavailable) return
-    let cancelled = false
-    // Warm the first few conversation tails while the user is still looking at
-    // the list; the click then restores a ready window instead of a skeleton.
-    for (const row of dashboard.sessions.slice(0, 20)) {
-      const key = JSON.stringify([selectedWorkspaceId, row.id])
-      if (eventWindowCache.current.has(key)) continue
-      void bridge.request({ kind: "session/history", workspaceId: selectedWorkspaceId, sessionId: row.id, afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: 500 })
-        .then(value => {
-          if (cancelled) return
-          const range = value as HistoryRange
-          if (!Number.isSafeInteger(range.nextSeq) || !Array.isArray(range.events)) return
-          eventWindowCache.current.set(key, applyHistory(emptyEventWindow(), { events: range.events, nextSeq: range.nextSeq }))
-        }).catch(() => { /* prefetch is best effort */ })
-    }
-    return () => { cancelled = true }
-  }, [bridge, dashboard, selectedWorkspaceId])
 
   useEffect(() => {
     if (!selectedWorkspaceId || !selectedSessionId || operation?.kind !== "model" || operation.busy) return
@@ -723,7 +706,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         loading: historyLoading,
         canSend: gate.canSend && projectReady && !(operation?.busy && operation.kind !== "prompt"),
         projectReady,
-        sendReason: !projectReady ? projectBinding?.error ?? t("正在套用專案資料夾…") : operation?.kind === "compact" && operation.busy ? t("正在壓縮上下文") : gate.reason,
+        sendReason: !projectReady ? currentBinding?.error ?? t("正在套用專案資料夾…") : operation?.kind === "compact" && operation.busy ? t("正在壓縮上下文") : gate.reason,
         running: running || sending,
         modelLabel: model?.status === "ready" ? model.label : undefined,
         modelState: model,
@@ -874,7 +857,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       selectedProjectId={activeProjectId}
       projectContext={selectedSessionId
         ? !capabilitiesReady ? { status: "loading" }
-          : !projectScopeSupported || projectError || projectBinding?.workspaceId === selectedWorkspaceId && projectBinding?.sessionId === selectedSessionId && projectBinding.error ? { status: "unavailable" }
+          : !projectScopeSupported || projectError || currentBinding?.error ? { status: "unavailable" }
           : !selectedBinding || projects === undefined ? { status: "loading" }
           : { status: "ready", projectId: selectedBinding.projectId, projectName: projects.find(project => project.id === selectedBinding.projectId)?.name }
         : projects === undefined ? { status: projectError ? "unavailable" : "loading" }

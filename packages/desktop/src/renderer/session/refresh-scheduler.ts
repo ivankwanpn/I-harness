@@ -4,7 +4,7 @@ export function createRefreshScheduler(refresh: () => Promise<unknown>, delay = 
   let running = false
   let dirty = false
   let disposed = false
-  const schedule = () => {
+  const schedule = (wait = delay) => {
     if (disposed) return
     dirty = true
     if (running || timer !== undefined) return
@@ -16,10 +16,11 @@ export function createRefreshScheduler(refresh: () => Promise<unknown>, delay = 
         running = false
         if (dirty) schedule()
       })
-    }, delay)
+    }, wait)
   }
   return {
     schedule,
+    poll() { if (!running && timer === undefined) schedule() },
     dispose() {
       disposed = true
       dirty = false

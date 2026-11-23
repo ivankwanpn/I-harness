@@ -36,6 +36,7 @@ import { createSdkServer } from "@i-harness/sdk/server"
 import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
 import { commitModelSwitch } from "./model-switch.ts"
 import { createSessionManagement } from "./session-management.ts"
+import { createJsonlDashboardSummaryCache, describeSession } from "./session-dashboard-summary.ts"
 import { createGatewayForkHost } from './fork-session.ts'
 import { assertOutsideForkController } from '../../session-persistence/src/fork-controller.ts'
 import { createContextPicker } from "./context-picker.ts"
@@ -183,6 +184,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const compactionSignals = new Map<string, AbortSignal>()
   const isConversation = createConversationVisibility(coordinator)
   const fence = createSessionManagementFence()
+  const savedDashboardSummary = createJsonlDashboardSummaryCache()
   let management: ReturnType<typeof createSessionManagement>
   const drainSession = async (id: string) => { await service.closeSession(id); await approvals.flush() }
   const projects = createProjectScopeBroker(coordinator, options.workspace, createSessionRuntimeVisibility(coordinator), { fence, assertIdle: id => management.assertIdle(id), drainSession,
@@ -691,20 +693,25 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
           if (meta.archived || !await isConversation(id, meta)) return undefined
           conversation = true; title = meta.title
           const execution=originalManagedExecutionFor(service,id)
-          let committedTitle: ReturnType<typeof deriveSessionTitle> = null
           let turnCount: number
           if (execution) {
             const observation = execution.observe()
             turnCount = observation.turnCount
             const projection = observation.metadata.title
-            if (projection.kind === 'available' && isOwnedTitleSnapshot(projection.snapshot)) committedTitle = projection.snapshot.title
+            if (projection.kind === 'available' && isOwnedTitleSnapshot(projection.snapshot)) {
+              const committedTitle = projection.snapshot.title
+              if (committedTitle && (committedTitle.source === 'user' || title === undefined)) title = committedTitle.title
+            }
             observation.assertCurrent()
           } else {
-            const session = service.liveSession(id) ?? (await (coordinator.snapshot?.(id) ?? coordinator.load(id))).session
-            turnCount = session.events.filter(event => event.type === 'turn/end').length
-            committedTitle = deriveSessionTitle(session)
+            const live = service.liveSession(id)
+            const load = async () => (await (coordinator.snapshot?.(id) ?? coordinator.load(id))).session
+            const summary = live ? describeSession(live, title)
+              : commitLogStore ? describeSession(await load(), title)
+                : await savedDashboardSummary(options.sessionDir, id, title, load)
+            title = summary.title
+            turnCount = summary.turnCount
           }
-          if (committedTitle && (committedTitle.source === 'user' || title === undefined)) title = committedTitle.title
           return { id, turnCount, updatedAt: profile.updatedAt, ...(title === undefined ? {} : { title }) }
         } catch {
           return conversation ? { id, ...(title ? { title } : {}) } : undefined

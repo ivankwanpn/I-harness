@@ -4,7 +4,7 @@ import type { WorkspaceEntry } from "../../main/workspaces.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import type { SessionAction } from './SessionActions.tsx'
 import { useCallback, useEffect, useState } from "react"
-import { ChevronRight, FolderOpen, Pin, Settings, SlidersHorizontal } from "lucide-react"
+import { ChevronRight, FolderOpen, Pin, Plus, Settings, SlidersHorizontal } from "lucide-react"
 import { useText, useLocale } from "../design/i18n.ts"
 import { Button } from "../vendor/opencode/Button.tsx"
 import { createRefreshScheduler } from "../session/refresh-scheduler.ts"
@@ -21,6 +21,7 @@ export interface ProjectSidebarProps {
   selectedProjectId?: string
   selectedWorkspaceId?: string
   selectedSessionId?: string
+  projectSelectionPending?: boolean
   dashboard?: SessionDashboardResult
   attentionBySession?: Record<string, number>
   canCreate: boolean
@@ -42,70 +43,75 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
   const t = useText()
   const en = useLocale(state => state.locale) === "en"
   const { projects, workspaces, selectedProjectId, selectedWorkspaceId, selectedSessionId, bridge } = props
-  const [workspaceOwners, setWorkspaceOwners] = useState<Record<string, (string | undefined)[]>>({})
-  const onOwners = useCallback((workspaceId: string, owners: (string | undefined)[]) => {
-    setWorkspaceOwners(previous => JSON.stringify(previous[workspaceId]) === JSON.stringify(owners) ? previous : { ...previous, [workspaceId]: owners })
+  const [ownerStates, setOwnerStates] = useState<Record<string, { owners: (string | undefined)[]; error?: string }>>({})
+  const onOwners = useCallback((workspaceId: string, owners: (string | undefined)[], error?: string) => {
+    setOwnerStates(previous => {
+      const saved = previous[workspaceId]
+      if (saved && saved.error === error && JSON.stringify(saved.owners) === JSON.stringify(owners)) return previous
+      return { ...previous, [workspaceId]: { owners, error } }
+    })
   }, [])
   const [search, setSearch] = useState("")
-  const [ownerError, setOwnerError] = useState<string>()
   const workspaceKey = JSON.stringify(workspaces.map(row => row.id))
   useEffect(() => {
     let active = true
-    let version = 0
-    async function readOwners() {
-      const own = ++version
-      // Cold folders use the native committed catalog without starting a gateway.
-      const targets = workspaces
-      if (targets.length === 0) { setOwnerError(undefined); return }
-      const results = await Promise.allSettled(targets.map(async workspace => {
-        const rows = await bridge.request({ kind: "desktop/session/navigation/state", workspaceId: workspace.id })
+    const ids = new Set(workspaces.map(workspace => workspace.id))
+    setOwnerStates(previous => {
+      const entries = Object.entries(previous)
+      return entries.every(([id]) => ids.has(id)) ? previous : Object.fromEntries(entries.filter(([id]) => ids.has(id)))
+    })
+    async function readOwners(workspaceId: string) {
+      try {
+        // Cold folders use the native committed catalog without starting a gateway.
+        const rows = await bridge.request({ kind: "desktop/session/navigation/state", workspaceId })
         if (!isSessionNavigationState(rows)) throw new Error(en ? "Conversation ownership is unavailable" : "會話分組狀態無法確認")
-        return { workspaceId: workspace.id, owners: [...new Set(Object.values(rows).flatMap(row => confirmedSessionNavigation(row) ? [row.projectId] : []))] }
-      }))
-      if (!active || own !== version) return
-      setWorkspaceOwners(previous => {
-        const next = { ...previous }
-        results.forEach((result, index) => { if (result.status === "fulfilled") next[result.value.workspaceId] = result.value.owners; else if (targets[index]) next[targets[index]!.id] = [] })
-        return next
-      })
-      const failed = results.find(result => result.status === "rejected")
-      setOwnerError(failed?.status === "rejected" ? String(failed.reason) : undefined)
+        if (active) onOwners(workspaceId, [...new Set(Object.values(rows).flatMap(row => confirmedSessionNavigation(row) ? [row.projectId] : []))])
+      } catch (error) { if (active) onOwners(workspaceId, [], String(error)) }
     }
-    const refresh = createRefreshScheduler(readOwners)
-    const unsubscribe = bridge.onEvent(event => { if (event.kind === "sdk/notification" && (event.method === "desktop/session/navigation/changed" || event.method === "session/status")) refresh.schedule() })
-    void readOwners()
-    return () => { active = false; version++; refresh.dispose(); unsubscribe() }
-  }, [bridge, workspaceKey, props.revision, en, selectedWorkspaceId])
+    const refreshers = new Map([...ids].map(id => [id, createRefreshScheduler(() => readOwners(id))]))
+    const unsubscribe = bridge.onEvent(event => {
+      if (event.kind === "sdk/notification" && event.method === "desktop/session/navigation/changed") refreshers.get(event.workspaceId)?.schedule()
+    })
+    for (const refresh of refreshers.values()) refresh.schedule(0)
+    return () => { active = false; for (const refresh of refreshers.values()) refresh.dispose(); unsubscribe() }
+  }, [bridge, workspaceKey, props.revision, en, onOwners])
+  const ownerError = workspaces.map(workspace => ownerStates[workspace.id]?.error).find(error => error !== undefined)
   const assigned = new Set(projects.flatMap((project) => project.workspaceIds))
   const knownProjectIds = new Set(projects.map(project => project.id))
-  const unassigned = workspaces.filter((workspace) => !assigned.has(workspace.id) || workspaceOwners[workspace.id]?.some(id => id === undefined || !knownProjectIds.has(id)))
+  const unassigned = workspaces.filter((workspace) => !assigned.has(workspace.id) || ownerStates[workspace.id]?.owners.some(id => id === undefined || !knownProjectIds.has(id)))
   const managementWorkspace = workspaces.find(workspace => workspace.id === selectedWorkspaceId) ?? workspaces[0]
   const effectiveProjectId = selectedProjectId && knownProjectIds.has(selectedProjectId) ? selectedProjectId : undefined
-  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set(selectedWorkspaceId || selectedProjectId ? [projectKey(effectiveProjectId)] : []))
+  const hasProjectSelection = !props.projectSelectionPending && !!(selectedWorkspaceId || selectedProjectId)
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set(hasProjectSelection ? [projectKey(effectiveProjectId)] : []))
 
   useEffect(() => {
-    if (selectedProjectId || selectedWorkspaceId) setExpandedProjects((current) => new Set(current).add(projectKey(effectiveProjectId)))
-  }, [selectedProjectId, selectedWorkspaceId, effectiveProjectId])
+    if (!hasProjectSelection) return
+    const key = projectKey(effectiveProjectId)
+    setExpandedProjects(current => current.has(key) ? current : new Set(current).add(key))
+  }, [hasProjectSelection, selectedWorkspaceId, effectiveProjectId])
 
-  function toggle(setter: (update: (current: Set<string>) => Set<string>) => void, key: string) {
-    setter((current) => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next })
+  function toggleProject(key: string) {
+    setExpandedProjects(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next })
+  }
+
+  function createControl(folder: WorkspaceEntry | undefined, project?: ProjectEntry) {
+    const create = props.onCreateSession
+    if (!props.canCreate || !create || !folder) return null
+    const label = t("在 {name} 開啟新會話", { name: project?.name ?? t("未分類會話") })
+    return <button type="button" className="project-sidebar-new" aria-label={label} title={label}
+      onClick={() => { setExpandedProjects(current => new Set(current).add(projectKey(project?.id))); create(folder.id, project?.id) }}>
+      <Plus size={15} aria-hidden="true" />
+    </button>
   }
 
   function renderSessions(folders: WorkspaceEntry[], project?: ProjectEntry) {
     if (folders.length === 0) return <p className="notice project-sidebar-empty">{t("尚未加入資料夾")}</p>
-    const selected = project?.id === effectiveProjectId
-    // The list can include moved storage roots. Creation uses a live project member.
-    const creationFolder = project
-      ? folders.find(folder => folder.id === project.primaryWorkspaceId && project.workspaceIds.includes(folder.id))
-        ?? project.workspaceIds.map(id => folders.find(folder => folder.id === id)).find(Boolean)
-      : folders.find(folder => folder.id === selectedWorkspaceId) ?? folders[0]
+    const selected = hasProjectSelection && project?.id === effectiveProjectId
     return <ProjectSessions bridge={bridge} revision={props.revision} workspaces={folders} projectId={project?.id} onOwners={onOwners}
       memberWorkspaceIds={new Set(project?.workspaceIds ?? [])} assignedWorkspaceIds={assigned} knownProjectIds={knownProjectIds}
       selectedWorkspaceId={selected ? selectedWorkspaceId : undefined} selectedSessionId={selected ? selectedSessionId : undefined}
       dashboard={selected ? props.dashboard : undefined} attentionBySession={selected ? props.attentionBySession : undefined}
-      onSelectSession={props.onSelectSession} onManageSession={props.onManageSession} onManageArchived={props.onManageArchived} onManageSessions={props.onManageSessions} filter={search}
-      onNewSession={props.canCreate && props.onCreateSession && creationFolder ? () => props.onCreateSession!(creationFolder.id, project?.id) : undefined}
-      newSessionActive={selected && selectedSessionId === undefined} />
+      onSelectSession={props.onSelectSession} onManageSession={props.onManageSession} onManageArchived={props.onManageArchived} onManageSessions={props.onManageSessions} filter={search} />
   }
 
   return <nav className="sidebar project-sidebar" aria-label={t("專案")}>
@@ -120,24 +126,32 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
       {[...projects].sort((a, b) => Number(b.pinned === true) - Number(a.pinned === true)).map((project) => {
         const key = projectKey(project.id)
         const expanded = expandedProjects.has(key) || search.trim() !== ""
-        const members = workspaces.filter(workspace => project.workspaceIds.includes(workspace.id) || workspaceOwners[workspace.id]?.includes(project.id))
+        const members = workspaces.filter(workspace => project.workspaceIds.includes(workspace.id) || ownerStates[workspace.id]?.owners.includes(project.id))
+        // Moved history can appear in this project while its original folder
+        // remains outside the project's new-conversation scope.
+        const creationFolders = project.workspaceIds.map(id => workspaces.find(workspace => workspace.id === id)).filter(row => row !== undefined)
+        const creationFolder = creationFolders.find(folder => folder.id === project.primaryWorkspaceId) ?? creationFolders[0]
         return <li key={project.id}>
           <div className={`project-sidebar-project-row${project.id === effectiveProjectId ? " is-selected" : ""}`}>
             <button type="button" className="project-sidebar-expander" aria-expanded={expanded} aria-label={t(expanded ? "收合專案 {name}" : "展開專案 {name}", { name: project.name })}
-              onClick={() => toggle(setExpandedProjects, key)}><ChevronRight size={14} aria-hidden="true" /></button>
+              onClick={() => toggleProject(key)}><ChevronRight size={14} aria-hidden="true" /></button>
             <button type="button" className="project-sidebar-project-select" aria-current={project.id === effectiveProjectId ? "true" : undefined}
               onClick={() => { setExpandedProjects((current) => new Set(current).add(key)); props.onSelectProject(project.id) }}>
               <FolderOpen size={15} aria-hidden="true" /><span className="project-sidebar-project-name">{project.name}</span>
             </button>
             {project.pinned ? <Pin size={12} className="project-sidebar-pin" aria-label={t("已釘選")} /> : null}
+            {createControl(creationFolder, project)}
           </div>
           {expanded ? renderSessions(members, project) : null}
         </li>
       })}
       {unassigned.length === 0 ? null : <li className="project-sidebar-unassigned">
-        <button type="button" className="project-sidebar-unassigned-toggle" aria-expanded={expandedProjects.has(projectKey())} onClick={() => toggle(setExpandedProjects, projectKey())}>
-          <ChevronRight size={14} aria-hidden="true" /><span>{t("未分類會話")}</span>
-        </button>
+        <div className="project-sidebar-project-row">
+          <button type="button" className="project-sidebar-unassigned-toggle" aria-expanded={expandedProjects.has(projectKey()) || search.trim() !== ""} onClick={() => toggleProject(projectKey())}>
+            <ChevronRight size={14} aria-hidden="true" /><span>{t("未分類會話")}</span>
+          </button>
+          {createControl(unassigned.find(folder => folder.id === selectedWorkspaceId) ?? unassigned[0])}
+        </div>
         {expandedProjects.has(projectKey()) || search.trim() !== "" ? renderSessions(unassigned) : null}
       </li>}
     </ul>

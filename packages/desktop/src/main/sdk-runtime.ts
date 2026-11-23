@@ -52,6 +52,7 @@ export function captureChildStream(stream: NodeJS.ReadableStream | null | undefi
 
 export interface WorkspaceRuntimeManager {
   peek?(workspaceId: string): WorkspaceRuntime | undefined
+  pendingRuntime?(workspaceId: string): Promise<WorkspaceRuntime> | undefined
   invalidate?(workspaceId: string): Promise<void>
   /** Publish current native folder authority to ready and starting gateways. */
   refreshProjectContexts?(): Promise<void>
@@ -279,6 +280,7 @@ export function createWorkspaceRuntimeManager(options: {
       return manager.get(workspace)
     },
     peek: (id) => runtimes.get(id),
+    pendingRuntime: (id) => pending.get(id),
     async invalidate(id) {
       const runtime = runtimes.get(id)
       const starting = pending.get(id)

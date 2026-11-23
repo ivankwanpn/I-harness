@@ -57,6 +57,18 @@ function fixture() {
 }
 
 describe("Desktop scoped IPC", () => {
+  it("opens the selected history and queue without scanning the workspace dashboard", async () => {
+    const f = fixture()
+    const dashboard = vi.fn(async () => ({ sessions: [] }))
+    f.setRuntime({ client: { history: f.history, request: f.request, dashboard }, info: { capabilities: { "desktop-input": ["1"] } } })
+    f.request.mockResolvedValue({ items: [], resumable: true })
+    await expect(dispatchDesktopRequest({ kind: "desktop/session/open", workspaceId: ENTRY.id, sessionId: "s" }, f.dependencies))
+      .resolves.toMatchObject({ history: { events: [], nextSeq: 0 }, queue: [], running: false, queueResumable: true })
+    expect(f.history).toHaveBeenCalledWith("s", { afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: 500 })
+    expect(f.request).toHaveBeenCalledWith("desktop/session/input/state", { sessionId: "s" })
+    expect(dashboard).not.toHaveBeenCalled()
+  })
+
   it("reports whether a known workspace already has a ready runtime without starting one", async () => {
     const f = fixture()
     const peek = vi.fn<NonNullable<DesktopIpcDependencies["runtimes"]["peek"]>>().mockReturnValueOnce(undefined)

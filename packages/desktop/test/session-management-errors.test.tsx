@@ -23,13 +23,15 @@ it.each(["zh-TW", "en"] as const)("explains the pending rewind blocker without I
   expect(alert.textContent).toContain(locale === "en" ? "rewind recording" : "回復記錄")
   expect(alert.textContent).toContain(locale === "en" ? "retry" : "重試")
 })
-it("keeps a New session row visible and active", () => {
-  const create = vi.fn()
-  render(<TaskList dashboard={{ sessions: [{ id: "s", title: "First", live: false, turnCount: 1 }] }} onSelect={() => {}} onNewSession={create} newSessionActive />)
-  const row = screen.getByRole("button", { name: /新會話/ })
-  expect(row.getAttribute("aria-current")).toBe("true")
-  fireEvent.click(row)
-  expect(create).toHaveBeenCalledOnce()
+it("shows an active session in a single row with accessible status indicators", () => {
+  render(<TaskList dashboard={{ sessions: [{ id: "s", title: "First", live: true, running: true, turnCount: 1, updatedAt: Date.now() }] }}
+    selectedId="s" attentionCounts={{ s: 2 }} navigation={{ s: { pinned: true, unread: true } }} onSelect={() => {}} />)
+  expect(screen.getByRole("button").getAttribute("aria-current")).toBe("true")
+  expect(screen.getByRole("img", { name: "執行中" })).toBeTruthy()
+  expect(screen.getByRole("img", { name: "待人處理 · 2" })).toBeTruthy()
+  expect(screen.getByRole("img", { name: "已釘選" })).toBeTruthy()
+  expect(screen.getByRole("img", { name: "未讀" })).toBeTruthy()
+  expect(screen.queryByText(/最後活動|回合/)).toBeNull()
 })
 
 it("keeps archive available while a conversation has pending messages", () => {
@@ -46,13 +48,9 @@ it("disables archive while a turn is running", () => {
   expect(archive.disabled).toBe(true)
   expect(archive.title).toContain("先停止目前回合")
 })
-it("groups sessions by relative day and filters by title", () => {
+it("filters the compact conversation list by title", () => {
   const now = Date.now()
-  render(<TaskList dashboard={{ sessions: [{ id: "a", title: "Alpha", live: false, updatedAt: now }, { id: "b", title: "Beta", live: false, updatedAt: now - 86_400_000 }] }} onSelect={() => {}} />)
-  expect(screen.getByText("今天")).toBeTruthy()
-  expect(screen.getByText("昨天")).toBeTruthy()
-  cleanup()
-  render(<TaskList dashboard={{ sessions: [{ id: "a", title: "Alpha", live: false, updatedAt: now }, { id: "b", title: "Beta", live: false, updatedAt: now }] }} filter="alp" onSelect={() => {}} />)
+  render(<TaskList dashboard={{ sessions: [{ id: "a", title: "Alpha", live: false, updatedAt: now }, { id: "b", title: "Beta", live: false, updatedAt: now - 86_400_000 }] }} filter="alp" onSelect={() => {}} />)
   expect(screen.queryByText("Beta")).toBeNull()
   expect(screen.getByText("Alpha")).toBeTruthy()
 })

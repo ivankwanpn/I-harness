@@ -9,6 +9,7 @@ import { taskDocumentStorageContract } from '../../subagent/src/task/storage-con
 import { createDesktopSessionCatalog } from '../src/main/session-catalog.ts'
 import { dispatchDesktopRequest, type DesktopIpcDependencies } from '../src/main/ipc.ts'
 import { navigationDocumentKey, projectBindingDocumentKey } from '../../desktop-gateway/src/session-navigation.ts'
+import { createJsonlDashboardSummaryCache } from '../../desktop-gateway/src/session-dashboard-summary.ts'
 
 const roots: string[] = []
 afterEach(async () => {
@@ -82,3 +83,47 @@ it.each(['jsonl', 'commit-log'] as const)('reads cold %s navigation and titles a
   await expect(sessionCatalog.navigation(workspaces[0]!)).rejects.toThrow('closed')
   expect(JSON.parse(await readFile(join(root, 'settings.json'), 'utf8'))).toEqual({ sessionStore: kind })
 }, 30000)
+
+it('shares a JSONL listing summary for an unchanged file, then reads its newer committed title', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-desktop-catalog-')); roots.push(root)
+  const cache = createJsonlDashboardSummaryCache()
+  const file = join(root, 'session.jsonl')
+  await writeFile(file, 'original')
+  let name = 'First committed title'
+  const load = vi.fn(async () => ({ formatVersion: 1, events: [
+    { type: 'session/title', source: 'user', title: name, messageSeqs: [] },
+    { type: 'turn/end' },
+  ] } as const))
+  const summary = () => cache(root, 'session', 'Header title', load)
+  await expect(Promise.all([summary(), summary()])).resolves.toEqual([
+    { title: name, turnCount: 1 }, { title: name, turnCount: 1 },
+  ])
+  await expect(summary()).resolves.toMatchObject({ title: name })
+  expect(load).toHaveBeenCalledOnce()
+  name = 'New committed title'
+  await writeFile(file, 'updated file')
+  await expect(summary()).resolves.toEqual({ title: name, turnCount: 1 })
+  expect(load).toHaveBeenCalledTimes(2)
+})
+
+it('joins an already starting workspace dashboard and falls back to committed data if it fails', async () => {
+  const workspace = { id: 'one', path: 'D:/one', label: 'One' }
+  const startup = Promise.withResolvers<unknown>()
+  const liveDashboard = vi.fn(async () => ({ sessions: [{ id: 'live', live: true }] }))
+  const diskDashboard = vi.fn(async () => ({ sessions: [{ id: 'saved', live: false }] }))
+  const get = vi.fn()
+  const pendingRuntime = vi.fn(() => startup.promise)
+  const dependencies = {
+    catalog: { get: () => workspace }, runtimes: { get, peek: () => undefined, pendingRuntime },
+    sessionCatalog: { dashboard: diskDashboard },
+  } as unknown as DesktopIpcDependencies
+  const request = () => dispatchDesktopRequest({ kind: 'session/dashboard', workspaceId: workspace.id }, dependencies)
+  const pending = request()
+  expect(diskDashboard).not.toHaveBeenCalled()
+  startup.resolve({ client: { dashboard: liveDashboard } })
+  await expect(pending).resolves.toMatchObject({ sessions: [{ id: 'live' }] })
+  expect(diskDashboard).not.toHaveBeenCalled()
+  pendingRuntime.mockImplementation(() => Promise.reject(new Error('Gateway failed')))
+  await expect(request()).resolves.toMatchObject({ sessions: [{ id: 'saved' }] })
+  expect(get).not.toHaveBeenCalled()
+})

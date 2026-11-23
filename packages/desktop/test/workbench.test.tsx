@@ -183,9 +183,9 @@ describe("Desktop workbench shell", () => {
     bridge.request = vi.fn(async request => request.kind === "session/dashboard" ? { sessions: [] } : {})
     render(<Workbench bridge={bridge} projects={projects} workspaces={[ENTRY, firstMember, primary]} selectedProjectId="current" selectedWorkspaceId={ENTRY.id}
       selectedSessionId="saved" capabilities={{ "session-create": ["1"] }} onSelectWorkspace={onSelectWorkspace} onSelectSession={() => {}} />)
-    fireEvent.click(screen.getByRole("button", { name: "展開專案 Other project" }))
     const group = screen.getByRole("button", { name: "Other project" }).closest("li")!
-    fireEvent.click(await within(group).findByRole("button", { name: /新會話/ }))
+    expect(within(group).getByRole("button", { name: "展開專案 Other project" }).getAttribute("aria-expanded")).toBe("false")
+    fireEvent.click(within(group).getByRole("button", { name: "在 Other project 開啟新會話" }))
     expect(onSelectWorkspace).toHaveBeenLastCalledWith(primary.id, "other")
     fireEvent.click(screen.getByRole("button", { name: "新增會話" }))
     expect(onSelectWorkspace).toHaveBeenLastCalledWith(ENTRY.id, "current")
@@ -335,18 +335,19 @@ describe("Desktop workbench shell", () => {
     expect(create.hasAttribute("disabled")).toBe(false)
   })
 
-  it("shows last activity only when the host reported it", async () => {
+  it("orders sessions by last activity without adding date sections to the project", async () => {
     render(
       <Harness dashboard={{
         sessions: [
-          { id: "session-a", live: true },
-          { id: "session-b", live: true, updatedAt: Date.UTC(2026, 0, 2, 3, 4, 5) },
+          { id: "session-a", title: "較早", live: false, updatedAt: Date.UTC(2026, 0, 1) },
+          { id: "session-b", title: "較新", live: false, updatedAt: Date.UTC(2026, 0, 2) },
         ],
       }} />,
     )
 
-    await screen.findAllByText("未命名會話")
-    await waitFor(() => expect(Array.from(document.querySelectorAll(".row-meta")).filter(row => row.textContent?.includes("最後活動"))).toHaveLength(1))
+    await screen.findByRole("button", { name: "較新" })
+    expect(Array.from(document.querySelectorAll(".session-list .row-label")).map(row => row.textContent)).toEqual(["較新", "較早"])
+    expect(screen.queryByText(/最後活動/)).toBeNull()
   })
 
   it("offers a retry when a load failed", () => {
