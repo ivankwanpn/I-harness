@@ -11,9 +11,30 @@ export function attachCloseLifecycle(window: BrowserWindow, options: {
 }): () => void {
   let pending: object | undefined
   let allowingClose = false
-  const cancel = () => { pending = undefined }
+  let retry: ReturnType<typeof setTimeout> | undefined
+  const cancel = () => { clearTimeout(retry); retry = undefined; pending = undefined }
+  async function inspect(request: object) {
+    if (pending !== request || window.isDestroyed() || options.quitState() !== "running") return
+    let active = true
+    try { active = await options.hasActiveWork() }
+    catch { /* Retain the host until its owners can confirm it is idle. */ }
+    if (pending !== request || window.isDestroyed() || options.quitState() !== "running") return
+    if (active) {
+      // Only a dismissed window with an outstanding close request rechecks.
+      // A turn can be visible in history before its input finalizers settle.
+      retry = setTimeout(() => { retry = undefined; void inspect(request) }, 3000)
+      retry.unref()
+      return
+    }
+    pending = undefined
+    allowingClose = true
+    try { window.close() }
+    catch (error) { console.warn("Could not close the idle workbench window.", error) }
+    finally { allowingClose = false }
+  }
   window.on("restore", cancel)
   window.on("show", cancel)
+  window.on("closed", cancel)
   window.on("close", (event) => {
     const quit = options.quitState()
     if (quit === "ready" || allowingClose) return
@@ -24,15 +45,7 @@ export function attachCloseLifecycle(window: BrowserWindow, options: {
       if (options.trayAvailable()) window.hide()
       else window.minimize()
     } catch (error) { console.warn("Could not dismiss the workbench window.", error) }
-    void Promise.resolve().then(() => options.hasActiveWork()).catch(() => true).then((active) => {
-      if (request !== pending) return
-      pending = undefined
-      if (active || window.isDestroyed() || options.quitState() !== "running") return
-      allowingClose = true
-      try { window.close() }
-      catch (error) { console.warn("Could not close the idle workbench window.", error) }
-      finally { allowingClose = false }
-    })
+    void inspect(request)
   })
   return cancel
 }

@@ -17,6 +17,21 @@ class WindowStub extends EventEmitter {
 }
 
 describe("Desktop close lifecycle", () => {
+  it.each([false, true])("finishes the pending close after background work settles, reopened=%s", async reopened => {
+    vi.useFakeTimers()
+    try {
+      const window = new WindowStub()
+      const hasActiveWork = vi.fn().mockResolvedValueOnce(true).mockResolvedValue(false)
+      attachCloseLifecycle(window as unknown as BrowserWindow, { hasActiveWork, trayAvailable: () => true, quitState: () => "running" })
+      window.close()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(window.destroyed).toBe(false)
+      if (reopened) window.emit("show")
+      await vi.advanceTimersByTimeAsync(6000)
+      expect(window.destroyed).toBe(!reopened)
+      expect(hasActiveWork).toHaveBeenCalledTimes(reopened ? 1 : 2)
+    } finally { vi.useRealTimers() }
+  })
   it("hides active work with a tray and keeps the window alive", async () => {
     const window = new WindowStub()
     const hasActiveWork = vi.fn(async () => true)
