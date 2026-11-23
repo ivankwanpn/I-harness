@@ -98,7 +98,7 @@ The project also provides a **CLI, SDK and ACP** for integrating agents into oth
 
 ## Run from source
 
-Development requires **Node.js ≥ 22.18 and pnpm ≥ 10**. Desktop distributions currently target Windows x64.
+Development and CI use **Node.js 24.22.3 LTS** and **pnpm 10.34.5**. The supported Node range is `^24.22.3 || >=26.13.1`. Desktop distributions currently target Windows x64.
 
 ```powershell
 git clone https://github.com/ivankwanpn/I-harness.git

@@ -25,7 +25,7 @@ jobs:
           version: 10.34.5
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.18.0
+          node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify:test-runner
@@ -47,7 +47,7 @@ jobs:
           version: 10.34.5
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.18.0
+          node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify:gateway
@@ -70,7 +70,7 @@ jobs:
           version: 10.34.5
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.18.0
+          node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: node scripts/verify-all.mjs --suite "${{ matrix.suite }}"
@@ -89,7 +89,7 @@ jobs:
           version: 10.34.5
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.18.0
+          node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: node scripts/verify-all.mjs --integration

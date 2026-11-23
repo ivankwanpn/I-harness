@@ -15,6 +15,52 @@ import {
 import { createDesktopRouter, createGatewayWrite } from "../src/router.ts"
 import type { DesktopHandlers } from "../src/types.ts"
 
+it("observes overlapping Gateway requests and background work without listing saved sessions", async () => {
+  const frames: RpcMessage[] = []
+  const send = (frame: RpcMessage) => { frames.push(frame) }
+  const held = Promise.withResolvers<void>()
+  const background = vi.fn(() => false)
+  const sidebar = Promise.withResolvers<{sessions: []}>()
+  const listSessions = vi.fn(() => sidebar.promise)
+  const service = createSessionService({ workspace: process.cwd(), modelPolicy: "required" })
+  const projection = Promise.withResolvers<void>()
+  const contextState = vi.fn<typeof service.contextState>(async () => {
+    await projection.promise
+    return { kind: "unavailable", reason: "Fixture" }
+  })
+  const tasks = vi.fn(async () => { await projection.promise; return [] })
+  const handlers: DesktopHandlers = { hasActiveWork: background, sessionReload: () => held.promise }
+  const base = createSdkServer({ ...service, contextState, tasksAsync: tasks }, { listSessions, onWrite: createGatewayWrite(send, handlers) })
+  const router = createDesktopRouter(base, send, handlers)
+  let id = 0
+  const call = async (method: string, params: unknown = {}) => {
+    const request = ++id
+    await router.handleLine(encodeFrame(makeRequest(request, method, params)))
+    return frames.find(frame => "id" in frame && frame.id === request)
+  }
+  try {
+    expect(await call("desktop/runtime/activity")).toMatchObject({ error: { code: INVALID_REQUEST } })
+    expect(await call("initialize")).toMatchObject({ result: { capabilities: { "desktop-runtime-activity": ["1"] } } })
+    expect(await call("desktop/runtime/activity")).toMatchObject({ result: { active: false } })
+    const reload = call("desktop/session/reload", { sessionId: "session" })
+    expect(await call("desktop/runtime/activity")).toMatchObject({ result: { active: true } })
+    held.resolve(); await reload
+    background.mockReturnValueOnce(true).mockImplementationOnce(() => { throw new Error("unknown") })
+    expect(await call("desktop/runtime/activity")).toMatchObject({ result: { active: true } })
+    expect(await call("desktop/runtime/activity")).toMatchObject({ result: { active: true } })
+    expect(await call("desktop/runtime/activity")).toMatchObject({ result: { active: false } })
+    expect(listSessions).not.toHaveBeenCalled()
+    const rendering = call("session/dashboard")
+    const details = [call("session/context", {sessionId:"session"}), call("session/tasks", {sessionId:"session"})]
+    expect(contextState).toHaveBeenCalledOnce()
+    expect(tasks).toHaveBeenCalledOnce()
+    expect(await call("desktop/runtime/activity")).toMatchObject({ result: { active: false } })
+    sidebar.resolve({ sessions: [] }); await rendering
+    projection.resolve(); await Promise.all(details)
+    expect(listSessions).toHaveBeenCalledTimes(1)
+  } finally { held.resolve(); projection.resolve(); sidebar.resolve({ sessions: [] }); await router.close(); await service.close() }
+})
+
 it("awaits terminal settlement and returns an async cleanup failure", async () => {
   const sent: RpcMessage[] = []
   const service = createSessionService({ workspace: process.cwd(), modelPolicy: "required" })

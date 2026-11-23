@@ -6,8 +6,16 @@ import type { createNotificationHistory } from "./notification-history.ts"
 
 export function attachNativeWindow(window: BrowserWindow, preferences: ReturnType<typeof createLocalPreferences>, options: { notifications?: ReturnType<typeof createNotificationHistory> } = {}) {
   function windowState() { return { maximized: window.isMaximized() } }
+  let savedOnClose = false
+  const reopened = () => { savedOnClose = false }
+  window.on("restore", reopened)
+  window.on("show", reopened)
   window.on("close", () => {
-    try { preferences.update({ bounds: window.getNormalBounds(), maximized: window.isMaximized() }) }
+    if (savedOnClose && (!window.isVisible() || window.isMinimized())) return
+    try {
+      preferences.update({ bounds: window.getNormalBounds(), maximized: window.isMaximized() })
+      savedOnClose = true
+    }
     catch (error) { console.warn("Unable to save window preferences", error instanceof Error ? error.message : String(error)) }
   })
   const seen = new Set<string>()

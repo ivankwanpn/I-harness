@@ -12,7 +12,7 @@ const outputRelative = relative(repoRoot, output)
 if (!outputRelative || outputRelative.startsWith("..") || isAbsolute(outputRelative)) throw new Error("attachment output must be a child directory of the workspace")
 const out = join(output, "main"), pdf = runtimePackageRoot("pdfjs-dist", packageRoot)
 mkdirSync(out, { recursive: true })
-await build({ entryPoints: [join(packageRoot, "src/main/attachment-reader-worker.ts")], outfile: join(out, "attachment-reader-worker.mjs"), bundle: true, platform: "node", format: "esm", target: "node22", external: ["@napi-rs/canvas"], banner: { js: 'import { createRequire as __readerCreateRequire } from "node:module"; const require = __readerCreateRequire(import.meta.url);' } })
+await build({ entryPoints: [join(packageRoot, "src/main/attachment-reader-worker.ts")], outfile: join(out, "attachment-reader-worker.mjs"), bundle: true, platform: "node", format: "esm", target: "node24", external: ["@napi-rs/canvas"], banner: { js: 'import { createRequire as __readerCreateRequire } from "node:module"; const require = __readerCreateRequire(import.meta.url);' } })
 cpSync(join(pdf, "legacy/build/pdf.worker.mjs"), join(out, "pdf.worker.mjs"))
 for (const asset of ["cmaps", "standard_fonts", "wasm"]) cpSync(join(pdf, asset), join(out, asset), { recursive: true })
 // PDF.js's supported Node build loads DOM primitives from optional native canvas

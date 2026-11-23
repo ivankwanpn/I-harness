@@ -27,6 +27,13 @@ it('actual before-quit entry retains current debt, restores a zero-window failur
   const first={preventDefault:vi.fn()};fixture.events.get('before-quit')!(first)
   await vi.waitFor(()=>expect(fixture.manager.close).toHaveBeenCalledTimes(1));await vi.waitFor(()=>expect(fixture.windows).toHaveLength(2));expect(fixture.quit).not.toHaveBeenCalled();expect(first.preventDefault).toHaveBeenCalledOnce()
   failManager=false;fixture.events.get('before-quit')!({preventDefault:vi.fn()});await vi.waitFor(()=>expect(fixture.manager.close).toHaveBeenCalledTimes(2));await new Promise(resolve=>setImmediate(resolve));expect(fixture.quit).not.toHaveBeenCalled()
+  const repeated={preventDefault:vi.fn()}
+  fixture.events.get('before-quit')!(repeated)
+  expect(repeated.preventDefault).toHaveBeenCalledOnce()
+  expect(fixture.manager.close).toHaveBeenCalledTimes(2)
   exited.resolve();await vi.waitFor(()=>expect(fixture.quit).toHaveBeenCalledOnce());expect(request.mock.calls.filter(([method])=>method==='desktop/surface/subscribe')).toHaveLength(1);expect(fixture.record).toHaveBeenCalled()
+  const drained={preventDefault:vi.fn()}
+  fixture.events.get('before-quit')!(drained)
+  expect(drained.preventDefault).not.toHaveBeenCalled()
  }finally{failManager=false;current=undefined;exited.resolve();const {closeDesktopSurfaceWindows}=await import('../src/main/ipc.ts');await closeDesktopSurfaceWindows();error.mockRestore()}
 },60000)

@@ -185,6 +185,7 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
   }
   return {
     read, mutate,
+    hasActiveWork: () => goalRuns.size > 0,
     async cancel(id: string) {
       const running=goalRuns.get(id);if(!running)return
       stopGoal(id)

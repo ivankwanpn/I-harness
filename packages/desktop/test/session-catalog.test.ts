@@ -35,7 +35,7 @@ it.each(['jsonl', 'commit-log'] as const)('reads cold %s navigation and titles a
     return kind === 'jsonl' ? createJsonlTaskTransitionCoordinator(path, { lock }, taskDocumentStorageContract)
       : asSessionCoordinator(createJsonlCommitCoordinator(path, { lock }), { taskDocument: { validator: taskDocumentStorageContract, empty: taskDocumentStorageContract.empty } })
   })
-  const sessionCatalog = createDesktopSessionCatalog(sessionsRoot)
+  const sessionCatalog = createDesktopSessionCatalog(sessionsRoot, new URL('./helpers/session-catalog-worker.mjs', import.meta.url))
   const get = vi.fn(async () => { throw Error('Cold navigation must not launch execution') })
   const liveDashboard = vi.fn(async () => ({ active: true, sessions: [{ id: 'live', live: true, active: true }] }))
   let live = false
@@ -126,4 +126,29 @@ it('joins an already starting workspace dashboard and falls back to committed da
   pendingRuntime.mockImplementation(() => Promise.reject(new Error('Gateway failed')))
   await expect(request()).resolves.toMatchObject({ sessions: [{ id: 'saved' }] })
   expect(get).not.toHaveBeenCalled()
+})
+
+it('rejects interrupted queries, reopens a fresh reader and drains work admitted before close', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-desktop-catalog-')); roots.push(root)
+  const entry = join(root, 'reader.mjs')
+  await writeFile(entry, `
+    import { parentPort } from 'node:worker_threads'
+    parentPort.on('message', ({ id, request }) => {
+      if (request.method === 'navigation') process.exit(17)
+      parentPort.postMessage({ id, value: { sessions: [] } })
+      if (request.method === 'close') parentPort.close()
+    })
+  `)
+  const catalog = createDesktopSessionCatalog(root, entry)
+  const workspace = { id: 'cold', path: root, label: 'Cold' }
+  try {
+    const interrupted = await Promise.allSettled([catalog.navigation(workspace), catalog.navigation(workspace)])
+    for (const result of interrupted) expect(result).toMatchObject({ status: 'rejected', reason: Error('Session catalog worker exited (17)') })
+    const admitted = catalog.dashboard(workspace)
+    const closing = catalog.close()
+    expect(catalog.close()).toBe(closing)
+    await expect(catalog.dashboard(workspace)).rejects.toThrow('closed')
+    await expect(admitted).resolves.toEqual({ sessions: [] })
+    await closing
+  } finally { await catalog.close() }
 })

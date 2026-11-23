@@ -114,16 +114,23 @@ export function ProjectSessions(props: ProjectSessionsProps) {
       if (affectsSessionDashboard(event.method, event.params)) refreshers.get(event.workspaceId)?.schedule()
     })
     for (const refresh of refreshers.values()) refresh.schedule(0)
-    // Reconcile low-frequency changes that have no live notification (for
-    // example an empty durable draft created before its first send).
-    const timer = window.setInterval(() => {
+    // Native session changes publish notifications. Reconcile out-of-process
+    // changes when the user returns to this window.
+    const refreshOnReturn = () => {
       if (document.visibilityState === "hidden") return
-      // Poll only the active workspace; polling every workspace kept every
-      // gateway alive and defeated idle eviction.
       const id = supplied.current.workspaceId
-      if (id) refreshers.get(id)?.poll()
-    }, 5000)
-    return () => { active.current = false; epoch.current++; window.clearInterval(timer); for (const refresh of refreshers.values()) refresh.dispose(); unsubscribe() }
+      if (id) refreshers.get(id)?.schedule()
+    }
+    window.addEventListener("focus", refreshOnReturn)
+    document.addEventListener("visibilitychange", refreshOnReturn)
+    return () => {
+      active.current = false
+      epoch.current++
+      window.removeEventListener("focus", refreshOnReturn)
+      document.removeEventListener("visibilitychange", refreshOnReturn)
+      for (const refresh of refreshers.values()) refresh.dispose()
+      unsubscribe()
+    }
   }, [bridge, workspaceKey, read, props.revision])
 
   useEffect(() => {

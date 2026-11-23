@@ -651,6 +651,8 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     try{await work}catch{/* The service preserves job error/outcome for its UI. */}finally{if(refreshing===work)refreshing=undefined}
   }
   return{workspaceId:workspaceKey,workspaceKey,humanSessionId,contextOutput,codeRetrieval,sourceFor,prepareBootstrapTransfer,prepareTaskChildTransfer,prepareTaskChild,observations,withResultObservation,withLegacyReadObservation,acquireSelectedSourceObservation,createSelectedSourceHolder,
+    hasActiveWork: () => refreshing !== undefined || selectedSources.size > 0 || selectedAcquisitions.size > 0
+      || selectedCleanupDebt.size > 0 || codeRetrieval.hasActiveWork(),
     async configureReferences(next:NativeReferenceSource[]){
       if(JSON.stringify(references)===JSON.stringify(next))return
       // Visibility changes before awaiting drainage, so old snippets cannot

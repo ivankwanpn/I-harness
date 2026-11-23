@@ -1,6 +1,8 @@
 import { afterEach, expect, it } from "vitest"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
+import { once } from "node:events"
+import { Worker } from "node:worker_threads"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -21,7 +23,7 @@ afterEach(() => {
   }
 })
 
-it("resolves the production main bundle from the shipped app layout without workspace packages", () => {
+it("resolves the production main bundle and reads cold history from the shipped app layout", async () => {
   const root = mkdtempSync(join(tmpdir(), "ih-desktop-main-")); roots.push(root)
   writeFileSync(join(root, ".test-owner"), owner)
   const app = join(root, "resources/app"), main = join(app, "out/main"), report = join(root, "main-imports.json")
@@ -77,4 +79,21 @@ console.log(JSON.stringify(results));
   }
   console.info("Production main external imports:", externalImports)
   expect(resolutions.filter(result => result.error), JSON.stringify(resolutions, null, 2)).toEqual([])
+  const sessions = join(root, "sessions")
+  mkdirSync(sessions)
+  writeFileSync(join(sessions, "cold.jsonl"), [
+    JSON.stringify({ formatVersion: 1, sessionId: "cold", createdAt: "", title: "Portable history" }),
+    JSON.stringify({ type: "turn/start" }), JSON.stringify({ type: "turn/end" }), "",
+  ].join("\n"))
+  const worker = new Worker(join(main, "session-catalog-worker.js"), {
+    env: { ...process.env, IH_CONFIG_DIR: root, IH_SESSION_STORE: "jsonl", NODE_PATH: "" }, execArgv: [],
+  })
+  try {
+    const reply = once(worker, "message")
+    worker.postMessage({ id: 1, request: { method: "dashboard", root: sessions } })
+    expect(await reply).toMatchObject([{ id: 1, value: { sessions: [{ id: "cold", title: "Portable history", turnCount: 1 }] } }])
+    const exiting = once(worker, "exit")
+    worker.postMessage({ id: 2, request: { method: "close" } })
+    expect(await exiting).toEqual([0])
+  } finally { await worker.terminate() }
 }, 45_000)

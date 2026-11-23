@@ -38,13 +38,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
 const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"))
 const APP_VERSION = process.env.IH_APP_VERSION ?? pkg.version ?? "0.1.0"
-// M55 version pin: the SHIPPED runtime must satisfy the DECLARED engines floor
-// (package.json engines.node >= 22.18 — required by node:sqlite's readOnly,
-// packages/session-query/src/index.ts:90). 22.23.2 is the latest 22.x LTS
-// (Jod) as of the pin; its NODE_MODULE_VERSION is 127 — the same ABI as the
-// previous 22.16.0 pin, so the native prebuilds (node-pty/koffi) still load.
-// Keep in sync with scripts/verify-installer.mjs (NODE_RUNTIME_VERSION).
-const NODE_RUNTIME_VERSION = process.env.IH_NODE_VERSION ?? "22.23.2"
+const NODE_RUNTIME_VERSION = process.env.IH_NODE_VERSION ?? readFileSync(join(repoRoot, ".node-version"), "utf8").trim()
 const NODE_ZIP_URL = `https://nodejs.org/dist/v${NODE_RUNTIME_VERSION}/node-v${NODE_RUNTIME_VERSION}-win-x64.zip`
 const NSIS_VERSION = process.env.IH_NSIS_VERSION ?? "3.11"
 const NSIS_ZIP_URL =

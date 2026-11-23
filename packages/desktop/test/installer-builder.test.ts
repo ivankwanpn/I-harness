@@ -27,7 +27,7 @@ function fixture(version: unknown = sourceManifest.version) {
     "d3dcompiler_47.dll", "dxcompiler.dll", "dxil.dll", "ffmpeg.dll", "icudtl.dat",
     "resources.pak", "v8_context_snapshot.bin", "snapshot_blob.bin", "vk_swiftshader.dll",
     "vulkan-1.dll", "LICENSE", "LICENSES.chromium.html", "locales/en-US.pak",
-    "resources/app/out/main/index.js", "resources/app/out/preload/index.cjs",
+    "resources/app/out/main/index.js", "resources/app/out/main/session-catalog-worker.js", "resources/app/out/preload/index.cjs",
     "resources/app/out/model-catalog.json", "resources/app/out/main/model-catalog.json",
     "resources/app/out/renderer/index.html", "resources/app/out/main/attachment-reader-worker.mjs",
     "resources/app/out/main/pdf.worker.mjs", "resources/app/out/main/cmaps/fixture.bcmap",
@@ -220,12 +220,12 @@ it("rejects a gateway whose declared required dependency was not shipped", () =>
   expect(result.stderr).toContain("@i-harness/sdk")
 })
 
-it("rejects a payload missing the shipped attachment worker", () => {
+it.each(["attachment-reader-worker.mjs", "session-catalog-worker.js"])("rejects a payload missing the shipped %s", (file) => {
   const { app } = fixture()
-  unlinkSync(join(app, "resources/app/out/main/attachment-reader-worker.mjs"))
+  unlinkSync(join(app, "resources/app/out/main", file))
   const result = validate(app)
   expect(result.status).not.toBe(0)
-  expect(result.stderr).toContain("attachment-reader-worker.mjs")
+  expect(result.stderr).toContain(file)
 })
 
 it("rejects linked payload directories rather than silently shipping files from outside the payload", () => {

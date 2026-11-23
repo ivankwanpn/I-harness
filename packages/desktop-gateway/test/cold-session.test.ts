@@ -10,6 +10,7 @@ import { createDesktopHost } from "../src/host.ts"
 import * as agentSettingsModule from "../src/agent-settings.ts"
 import * as subagentSettingsModule from "../src/subagent-settings.ts"
 import * as pluginsModule from "../src/plugins.ts"
+import * as settingsModule from "@i-harness/settings"
 import { toJSONL, type SessionEvent } from '@i-harness/core-session'
 
 it('cold-reads format7 replacement source/history and context without preparing a provider or changing bytes', async () => {
@@ -74,6 +75,53 @@ it.each([false, true])("reads cold history without executing a model and restore
     }
   } finally { await host.close(); await rm(root, { recursive: true, force: true }) }
 })
+
+it("leaves locked policy readers idle under watch coverage, and retries a failed settings change", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-policy-watch-")), workspace = join(root, "workspace")
+  await mkdir(workspace)
+  const settingsPath = join(root, "settings.json")
+  await writeFile(settingsPath, "{}")
+  const watch = settingsModule.watchSettings
+  let monitor: ReturnType<typeof watch> | undefined
+  const observer = vi.spyOn(settingsModule, "watchSettings").mockImplementation((paths, ...args) => {
+    const handle = watch(paths, ...args)
+    if (paths === settingsPath) monitor = handle
+    return handle
+  })
+  let reads = 0, failNext = false
+  const create = agentSettingsModule.createAgentSettings
+  const reader = vi.spyOn(agentSettingsModule, "createAgentSettings").mockImplementation((...args) => {
+    const original = create(...args)
+    return { ...original, async sync() {
+      reads++
+      if (failNext) { failNext = false; throw new Error("Injected transient read error") }
+      return original.sync()
+    } }
+  })
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+  const frames: RpcMessage[] = []
+  let host: Awaited<ReturnType<typeof createDesktopHost>> | undefined
+  try {
+    host = await createDesktopHost({ workspace, sessionDir: join(root, "sessions"), settingsPath, onWrite: frame => frames.push(frame) })
+    await host.handleLine(JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize",params:{}}))
+    await monitor!.ready
+    await vi.waitFor(() => expect(monitor!.getState().kind).toBe("covered"))
+    const baseline = reads
+    await new Promise(done => setTimeout(done, 2200))
+    expect(reads).toBe(baseline)
+    failNext = true
+    await writeFile(settingsPath, JSON.stringify({ sandboxMode: "read-only" }))
+    let id = 2
+    await vi.waitFor(async () => {
+      await host!.handleLine(JSON.stringify({jsonrpc:"2.0",id:++id,method:"desktop/sandbox/state",params:{}}))
+      expect(frames.find(frame => "id" in frame && frame.id === id)).toMatchObject({result:{mode:"read-only"}})
+      expect(reads).toBeGreaterThanOrEqual(baseline + 2)
+    }, {timeout:5000})
+    expect(warn).toHaveBeenCalled()
+  } finally {
+    try { await host?.close() } finally { observer.mockRestore(); reader.mockRestore(); warn.mockRestore(); await rm(root,{recursive:true,force:true}) }
+  }
+}, 20_000)
 
 it("waits for both owned policy refreshes before closing even when one refresh rejects", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-cold-policy-close-"))

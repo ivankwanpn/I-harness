@@ -4,8 +4,10 @@ import { createDesktopTerminal } from "../src/terminal.ts"
 it.skipIf(process.platform !== "win32")("human desktop terminal uses its own supervised ConPTY", async () => {
   const desktop = createDesktopTerminal(process.cwd())
   try {
+    expect(desktop.hasActiveWork()).toBe(false)
     const opened = await desktop.request("desktop/terminal/open", { shell: "cmd", cols: 90, rows: 28 }) as { id: string; pid: number }
     expect(opened.pid).toBeGreaterThan(0)
+    expect(desktop.hasActiveWork()).toBe(true)
     const resized = await desktop.request("desktop/terminal/resize", { id: opened.id, cols: 100, rows: 30 }) as unknown as { cols: number; rows: number; ownerSessionId: string }
     expect(resized).toMatchObject({ cols: 100, rows: 30, ownerSessionId: "desktop-user" })
     await desktop.request("desktop/terminal/write", { id: opened.id, data: "echo DESKTOP_NATIVE_CONTROL\r" })
@@ -20,5 +22,6 @@ it.skipIf(process.platform !== "win32")("human desktop terminal uses its own sup
     expect(output).toContain("DESKTOP_NATIVE_CONTROL")
     const final = await desktop.request("desktop/terminal/close", { id: opened.id }) as unknown as { settlement: { kind: string; treeEmpty: boolean; ioSettled: boolean; resourcesReleased: boolean } }
     expect(final.settlement).toMatchObject({ kind: "settled", treeEmpty: true, ioSettled: true, resourcesReleased: true })
+    expect(desktop.hasActiveWork()).toBe(false)
   } finally { await desktop.close() }
 }, 25_000)

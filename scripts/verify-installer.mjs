@@ -36,9 +36,7 @@ import { spawn, spawnSync } from "node:child_process"
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"))
 const APP_VERSION = process.env.IH_APP_VERSION ?? pkg.version ?? "0.1.0"
-// M55: keep in sync with scripts/build-installer.mjs (NODE_RUNTIME_VERSION) —
-// this asserts the INSTALLED node.exe reports exactly this version.
-const NODE_RUNTIME_VERSION = process.env.IH_NODE_VERSION ?? "22.23.2"
+const NODE_RUNTIME_VERSION = process.env.IH_NODE_VERSION ?? readFileSync(join(repoRoot, ".node-version"), "utf8").trim()
 
 const buildDir = join(repoRoot, "build")
 const stagingDir = join(repoRoot, "installer", "staging")

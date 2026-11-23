@@ -189,6 +189,7 @@ describe("Desktop SDK runtime manager", () => {
     const second = await manager.recover!(workspace("ws-exit"))
     expect(launch).toHaveBeenCalledTimes(2)
     expect(second.client).not.toBe(first.client)
+    expect(events.filter(event => event.kind === "sdk/ready").map(event => event.runtimeGeneration)).toEqual([0, 1])
 
     off()
     await manager.close()
@@ -426,6 +427,46 @@ describe("Desktop close-time active work", () => {
     await manager.close()
   })
 
+  it.each(["idle", "busy", "unknown", "access-during-recheck"] as const)("rechecks an idle close after a concurrent runtime lookup: %s", async outcome => {
+    const first = Promise.withResolvers<unknown>(), second = Promise.withResolvers<unknown>()
+    const host = fakeClient({ info: { capabilities: { "desktop-runtime-activity": ["1"] } } })
+    host.request.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => host })
+    try {
+      await manager.get(workspace())
+      const closing = manager.hasActiveWork()
+      await manager.get(workspace()) // a passive post-turn read obtained the existing client
+      first.resolve({ active: false })
+      await vi.waitFor(() => expect(host.request).toHaveBeenCalledTimes(2))
+      if (outcome === "access-during-recheck") await manager.get(workspace())
+      if (outcome === "unknown") second.reject(new Error("gateway unavailable"))
+      else second.resolve({ active: outcome === "busy" })
+      expect(await closing).toBe(outcome !== "idle")
+      expect(host.request).toHaveBeenCalledTimes(2)
+    } finally { first.resolve({ active: false }); second.resolve({ active: false }); await manager.close() }
+  })
+
+  it.each([
+    [{ active: false }, false],
+    [{ active: true }, true],
+    [{}, true],
+    [{ active: "idle" }, true],
+  ] as const)("uses the gateway activity probe for close and eviction: %j", async (response, keep) => {
+    const host = fakeClient({ info: { capabilities: { "desktop-runtime-activity": ["1"] } } })
+    host.request.mockImplementation(async method => {
+      if (method !== "desktop/runtime/activity") throw Error("Unexpected history or interaction query")
+      return response
+    })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => host })
+    try {
+      await manager.get(workspace())
+      await new Promise(resolve => setTimeout(resolve, 5))
+      expect(await manager.hasActiveWork()).toBe(keep)
+      expect(await manager.evictIdle!(1)).toBe(keep ? 0 : 1)
+      expect(host.request.mock.calls).toEqual(Array(2).fill(["desktop/runtime/activity", {}, 2_500]))
+    } finally { await manager.close() }
+  })
+
   it("does not report idle if another workspace starts during the SDK reads", async () => {
     let release!: (value: unknown) => void
     const first = fakeClient({ info: { capabilities: workCapabilities }, dashboard: new Promise((resolve) => { release = resolve }) })
@@ -461,14 +502,82 @@ describe("Desktop close-time active work", () => {
     { dashboard: { sessions: [{ id: "s" }] } },
     { dashboard: { sessions: [{ id: "s", live: true }] } },
     { dashboard: { sessions: [{ id: "s", live: "yes" }] } },
+    { dashboard: { sessions: [{ id: "s", live: false, queued: -1 }] } },
+    { dashboard: { sessions: [{ id: "s", live: false, running: "unknown" }] } },
     { failDashboard: true },
     { failPending: true },
   ])("retains the host when close-time activity is unknown: %j", async (options) => {
     const host = fakeClient({ info: { capabilities: workCapabilities }, ...options })
     const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => host })
     await manager.get(workspace())
-    expect(await manager.hasActiveWork()).toBe(true)
-    await manager.close()
+    try {
+      expect(await manager.hasActiveWork()).toBe(true)
+      await new Promise(resolve => setTimeout(resolve, 5))
+      expect(await manager.evictIdle!(1)).toBe(0)
+    } finally { await manager.close() }
+  })
+
+  it("can retire an idle workspace while another workspace streams", async () => {
+    const checking = Promise.withResolvers<unknown>()
+    const idle = fakeClient({ info: { capabilities: workCapabilities }, dashboard: checking.promise })
+    const busy = fakeClient({ info: { capabilities: workCapabilities }, dashboard: { active: true, sessions: [] } })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: ws => ws.id === "idle" ? idle : busy })
+    try {
+      await Promise.all([manager.get(workspace("idle")), manager.get(workspace("busy"))])
+      await new Promise(resolve => setTimeout(resolve, 5))
+      const sweep = manager.evictIdle!(1)
+      await vi.waitFor(() => expect(idle.request).toHaveBeenCalledWith("session/dashboard", {}, 2_500))
+      for (const listener of busy.listeners) listener({ jsonrpc: "2.0", method: "session/event", params: { sessionId: "b", event: { type: "assistant/chunk", text: "reply" } } })
+      checking.resolve({ sessions: [] })
+      expect(await sweep).toBe(1)
+      expect(idle.close).toHaveBeenCalledOnce()
+      expect(busy.close).not.toHaveBeenCalled()
+    } finally { checking.resolve({ sessions: [] }); await manager.close() }
+  })
+
+  it("avoids duplicate idle inspections and observes a same-timestamp use of the inspected workspace", async () => {
+    vi.useFakeTimers()
+    const checked = Promise.withResolvers<unknown>()
+    const host = fakeClient({ info: { capabilities: workCapabilities }, dashboard: checked.promise })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => host })
+    try {
+      await manager.get(workspace())
+      // Keep the clock fixed so a request cannot be distinguished by comparing timestamps.
+      vi.setSystemTime(Date.now() + 1_000)
+      const first = manager.evictIdle!(1)
+      await expect(manager.evictIdle!(1)).resolves.toBe(0)
+      // Simulate the system clock returning to its previous reading.
+      vi.setSystemTime(Date.now() - 1_000)
+      await manager.get(workspace())
+      checked.resolve({ sessions: [] })
+      expect(await first).toBe(0)
+      expect(host.close).not.toHaveBeenCalled()
+      expect(host.request.mock.calls.filter(([method]) => method === "session/dashboard")).toHaveLength(1)
+    } finally { checked.resolve({ sessions: [] }); await manager.close(); vi.useRealTimers() }
+  })
+
+  it("gives a restarted child its own health budget and withdraws an unhealthy connection until OS exit", async () => {
+    vi.useFakeTimers()
+    const first = fakeClient(), second = fakeClient()
+    second.close.mockResolvedValue(undefined)
+    const launch = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second)
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch })
+    try {
+      await manager.get(workspace())
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(first.request).toHaveBeenCalledWith("ping", {}, 10_000)
+      first.exit()
+      await vi.advanceTimersByTimeAsync(600)
+      const replacement = await manager.get(workspace())
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(manager.peek!(workspace().id)).toBe(replacement)
+      expect(second.close).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(second.close).toHaveBeenCalledOnce()
+      expect(manager.peek!(workspace().id)).toBeUndefined()
+      await expect(manager.get(workspace())).rejects.toThrow(/recovery/)
+      expect(launch).toHaveBeenCalledTimes(2)
+    } finally { second.exit(); await manager.close(); vi.useRealTimers() }
   })
 
   it("retains a host when activity arrives during idle inspection", async () => {

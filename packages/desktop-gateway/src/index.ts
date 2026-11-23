@@ -17,3 +17,4 @@ export type { ContextSubsystemRequest } from "./context-subsystems.ts"
 export type { SessionBatchCommand } from "./session-management.ts"
 /** Native committed navigation reads without constructing an execution host. */
 export { createCommittedSessionCatalog } from './session-catalog.ts'
+export type { SessionNavigation } from './session-navigation.ts'

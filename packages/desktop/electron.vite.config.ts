@@ -23,7 +23,13 @@ export default defineConfig(({ command }) => ({
       // The dev script prepares the attachment worker before Vite starts.
       emptyOutDir: command !== "serve",
       externalizeDeps: { exclude: ["@i-harness/sdk", "@i-harness/fs-search", "@i-harness/usage-stats", "@i-harness/desktop-gateway"] },
-      rollupOptions: { external: ["koffi"] },
+      rollupOptions: {
+        input: {
+          index: fileURLToPath(new URL("./src/main/index.ts", import.meta.url)),
+          "session-catalog-worker": fileURLToPath(new URL("./src/main/session-catalog-worker.ts", import.meta.url)),
+        },
+        external: ["koffi"],
+      },
     },
   },
   // Electron sandboxed preload scripts cannot use ESM; emit one CJS bundle.

@@ -21,9 +21,24 @@ function forkFixtures() {
   }
 }
 function idleService() {
-  return { onAssembly: () => () => {}, activitySessionIds: () => [], hasAssembly: () => false, queueState: () => ({ running: false, queued: 0 }), tasks: () => [] } as unknown as SessionService
+  return { onAssembly: () => () => {}, activitySessionIds: () => [], inspectActivity: () => ({ active: false }), hasAssembly: () => false, queueState: () => ({ running: false, queued: 0 }), tasks: () => [] } as unknown as SessionService
 }
 const phases = [1, 2].flatMap(version => ['prepare', 'begin', 'retry'].map(phase => ({ version, phase })))
+
+it("inspects live owners without listing saved sessions and retains unknown owners", async () => {
+  const service = idleService()
+  service.activitySessionIds = () => ["background"]
+  const server = createSdkServer(service, { listSessions: async () => { throw Error("Unexpected history listing") } })
+  try {
+    expect(server.hasActiveWork()).toBe(false)
+    service.inspectActivity = () => ({ live: true, active: true, running: false, tasks: 1, queued: 0 })
+    expect(server.hasActiveWork()).toBe(true)
+    service.inspectActivity = () => { throw Error("Unavailable") }
+    expect(server.hasActiveWork()).toBe(true)
+    service.inspectActivity = undefined
+    expect(server.hasActiveWork()).toBe(true)
+  } finally { await server.close() }
+})
 
 it.each(phases)('reports held v$version fork $phase activity and returns to idle without dashboard self-activity', async ({ version, phase }) => {
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
@@ -46,9 +61,11 @@ it.each(phases)('reports held v$version fork $phase activity and returns to idle
       : { operation: version === 1 ? f.legacyOperation : f.selectedOperation }
     work = call((version === 1 ? 'session/fork/' : 'session/fork/results/') + phase, params)
     await entered.promise
+    expect(server.hasActiveWork()).toBe(true)
     for (let i = 0; i < 2; i++) expect((await call('session/dashboard')).result).toEqual({ sessions: [], active: true })
     release.resolve()
     expect(await work).toHaveProperty('result')
+    expect(server.hasActiveWork()).toBe(false)
     for (let i = 0; i < 3; i++) expect((await call('session/dashboard')).result).toEqual({ sessions: [], active: false })
   } finally { release.resolve(); await work; await server.close() }
 })

@@ -8,7 +8,7 @@ zip (tree-sitter V8 included; downloads from nodejs.org at build time) + two
 ## Requirements (build machine)
 
 - **Windows** (x64) — the installer targets `$PROGRAMFILES64\I-harness`.
-- **Node.js >= 22** to run the build scripts (the repo already requires this).
+- **Node.js 24.22.3 LTS** to run the build scripts, as pinned in the repository's `.node-version`.
 - **Network for the first run only**: the Node runtime zip (~35 MB) and the
   portable NSIS compiler zip (~2.4 MB) are downloaded once into `build/` and
   cached thereafter.
@@ -33,10 +33,10 @@ What it does (each step cached/skip-if-not-needed):
    > deleted `tui`) prints the usage on stderr and exits 1.
 
 2. **Node runtime** — ensures `build/node-win-x64/node.exe`; downloads
-   `https://nodejs.org/dist/v22.23.2/node-v22.23.2-win-x64.zip`
+   `https://nodejs.org/dist/v24.22.3/node-v24.22.3-win-x64.zip`
    (override: `IH_NODE_VERSION`) and ships only `node.exe` + `*.dll` + `LICENSE`
-   (npm is stripped). The pin must satisfy the root `engines.node >= 22.18`
-   floor; a stale cached runtime (a different version) is re-staged.
+   (npm is stripped). The CLI installer and CI read the same `.node-version`
+   pin. A cached runtime with a different version is re-staged.
 3. **Staging** — copies payload → `installer/staging/dist`, runtime →
    `installer/staging/node`, writes `installer/staging/i-harness.cmd` and
    `ih.cmd` (`installer/staging/` is **gitignored** — it is a build artifact:

@@ -112,6 +112,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     return { accepted: true as const, inputId: persisted.inputId, delivery: persisted.delivery }
   }
   return {
+    hasActiveWork: () => gates.size > 0 || scheduled.size > 0 || jobs.size > 0,
     admit(id: string, raw: { text: string; delivery: "queue" | "steer"; context?: string; images?: ImageInput[]; clientToken?: string; inputId?: string; start?: boolean }) {
       return serial(id, async () => {
         if (closed) throw new Error("Input service closed")

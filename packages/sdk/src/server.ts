@@ -194,6 +194,8 @@ export interface RewindServiceSurface {
 }
 
 export interface SdkServer {
+  /** In-memory process liveness for hosts deciding whether to shut down. */
+  hasActiveWork?(): boolean
   /** Handle one incoming line; returns the RESPONSE line (null when the line
    * produced no response — malformed lines, notifications, fire-and-forget).
    * Async methods (session/prompt) resolve their response late; notifications
@@ -220,7 +222,7 @@ interface Inflight {
   controller: AbortController
 }
 
-export function createSdkServer(service: SessionService, opts: SdkServerOptions = {}): SdkServer {
+export function createSdkServer(service: SessionService, opts: SdkServerOptions = {}): SdkServer & { hasActiveWork(): boolean } {
   const notifiers = new Set<(message: RpcNotification) => void>()
   const knownSessions = new Set<string>()
   const preparingSessions = new Map<string, Promise<boolean>>()
@@ -715,7 +717,10 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
               if (typeof service.awaitDeliveryStop !== 'function') throw new Error('Cancellation settlement unavailable')
               // A provider stream that ignores abort must not hang the cancel RPC:
               // the UI can then offer Force stop instead of waiting forever.
-              await Promise.race([service.awaitDeliveryStop(sessionId), new Promise<void>(resolve => setTimeout(resolve, 2500))])
+              let deadline: ReturnType<typeof setTimeout> | undefined
+              try {
+                await Promise.race([service.awaitDeliveryStop(sessionId), new Promise<void>(resolve => { deadline = setTimeout(resolve, 2500) })])
+              } finally { clearTimeout(deadline) }
               return makeSuccess(id, response)
             }
             // Explicit legacy compatibility: FIFO abort has no delivery owner.
@@ -1021,6 +1026,13 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   }
 
   return {
+    hasActiveWork() {
+      if (closed || ownedRequestActivity() || preparingSessions.size || preparingHistorySessions.size) return true
+      if (!service.activitySessionIds || !service.inspectActivity) return true
+      try {
+        return service.activitySessionIds().some(id => service.inspectActivity!(id)?.active !== false)
+      } catch { return true }
+    },
     async handleLine(line, controls): Promise<string | null> {
       if (closed) return null
       const message = decodeFrame(line)

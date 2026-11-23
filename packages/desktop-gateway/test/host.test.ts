@@ -28,6 +28,9 @@ describe("Desktop host sandbox configuration", () => {
     const host = await createDesktopHost({ ...f, onWrite: frame => f.frames.push(frame) })
     try {
       await host.handleLine(encodeFrame(makeRequest(800, "initialize", {})))
+      expect(f.frames.find(frame => "id" in frame && frame.id === 800)).toMatchObject({ result: { capabilities: { "desktop-runtime-activity": ["1"] } } })
+      await host.handleLine(encodeFrame(makeRequest(803, "desktop/runtime/activity", {})))
+      expect(f.frames.find(frame => "id" in frame && frame.id === 803)).toMatchObject({ result: { active: false } })
       await host.handleLine(encodeFrame(makeRequest(801, "desktop/coding-plans/state", {})))
       const reply = f.frames.find(frame => "id" in frame && frame.id === 801)
       expect(isRpcSuccess(reply)).toBe(true)

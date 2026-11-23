@@ -9,7 +9,7 @@ import { projectRuntimeContexts } from "./project-runtime.ts"
 import { createLocalPreferences } from "./local-preferences.ts"
 import { attachNativeWindow } from "./native-window.ts"
 import { createBrowserSurface } from "./browser-surface.ts"
-import { attachCloseLifecycle } from "./close-lifecycle.ts"
+import { attachCloseLifecycle, type DesktopQuitState } from "./close-lifecycle.ts"
 import { createDesktopTray } from "./tray.ts"
 import { createGlobalProviderSettings } from "./global-provider-settings.ts"
 import { createNotificationHistory } from "./notification-history.ts"
@@ -24,7 +24,7 @@ app.setPath("userData", resolveDesktopProfilePath(app.getPath("appData"), app.ge
 
 let catalog: WorkspaceCatalog | undefined
 let runtimes: WorkspaceRuntimeManager | undefined
-let quitting = false
+let quitState: DesktopQuitState = "running"
 let drainNativeSettings: (() => Promise<void>) | undefined
 let restoreWindowAfterFailedQuit: (()=>void) | undefined
 
@@ -58,7 +58,7 @@ app.whenReady().then(() => {
   if (Number.isFinite(idleMs) && idleMs > 0 && Number.isFinite(sweepMs) && sweepMs > 0) {
     const idleSweep = setInterval(() => { void manager.evictIdle?.(idleMs).catch(() => undefined) }, sweepMs)
     idleSweep.unref()
-    app.once("before-quit", () => clearInterval(idleSweep))
+    app.once("will-quit", () => clearInterval(idleSweep))
   }
   const usageWarnings = createUsageWarnings(join(app.getPath("userData"), "usage-recording-warnings.json"))
   const stopUsageWarnings = manager.onEvent(usageWarnings.observe)
@@ -83,16 +83,18 @@ app.whenReady().then(() => {
   }
   const applicationInfo = () => ({ version: app.getVersion(), electron: process.versions.electron, node: process.versions.node, platform: process.platform, arch: process.arch, packaged: app.isPackaged, updateSupported: false })
   let mainWindow: BrowserWindow | undefined
+  let cancelPendingClose: (() => void) | undefined
   let tray: Tray | undefined
   const openWindow = (): void => {
     const window = createDesktopWindow(localPreferences.get())
     mainWindow = window
-    attachCloseLifecycle(window, {
+    // Capture the user's window bounds before the close handler hides or minimizes it.
+    const native = attachNativeWindow(window, localPreferences, { notifications })
+    cancelPendingClose = attachCloseLifecycle(window, {
       hasActiveWork: () => manager.hasActiveWork(),
       trayAvailable: () => tray !== undefined,
-      isQuitting: () => quitting,
+      quitState: () => quitState,
     })
-    const native = attachNativeWindow(window, localPreferences, { notifications })
     const browser = createBrowserSurface(window)
     const unregister = registerDesktopIpc(window, {
       catalog: workspaces,
@@ -123,7 +125,9 @@ app.whenReady().then(() => {
     window.on("closed", () => { void unregister().catch(error=>diagnostics.recordRequestFailure('desktop',undefined,error,'runtime/error')); if (mainWindow === window) mainWindow = undefined })
   }
   const showWindow = (): void => {
+    if (quitState !== "running") return
     if (!mainWindow || mainWindow.isDestroyed()) { openWindow(); return }
+    cancelPendingClose?.()
     if (mainWindow.isMinimized()) mainWindow.restore()
     mainWindow.show(); mainWindow.focus()
   }
@@ -134,7 +138,7 @@ app.whenReady().then(() => {
     catch (error) { console.warn("Desktop tray unavailable; active work will remain in the taskbar", error) }
   }
   app.on("activate", () => {
-    if (process.platform === "darwin" && BrowserWindow.getAllWindows().length === 0) openWindow()
+    if (process.platform === "darwin") showWindow()
   })
 })
 
@@ -144,8 +148,17 @@ app.on("window-all-closed", () => {
 
 // Every SDK child belongs to this process: close them before the app goes away.
 app.on("before-quit", (event) => {
-  if (quitting || runtimes === undefined) return
+  if (quitState === "ready" || runtimes === undefined) return
   event.preventDefault()
-  quitting = true
-  void (drainNativeSettings ? drainNativeSettings() : runtimes.close()).then(() => app.quit(),error=>{quitting=false;console.error('Desktop cleanup incomplete; retry Quit to settle the original owners.',error);try{restoreWindowAfterFailedQuit?.()}catch(restoreError){console.error('Desktop window restoration failed.',restoreError)}})
+  if (quitState === "draining") return
+  quitState = "draining"
+  void (drainNativeSettings ? drainNativeSettings() : runtimes.close()).then(() => {
+    quitState = "ready"
+    app.quit()
+  }, error => {
+    quitState = "running"
+    console.error("Desktop cleanup incomplete; retry Quit to settle the original owners.", error)
+    try { restoreWindowAfterFailedQuit?.() }
+    catch (restoreError) { console.error("Desktop window restoration failed.", restoreError) }
+  })
 })

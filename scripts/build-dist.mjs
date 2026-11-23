@@ -7,7 +7,7 @@
  * 1. esbuild bundle — apps/cli/src/index.ts  →  <out>/ih.mjs
  *    AND packages/sandbox-windows-acl/src/runner.ts → <out>/runner.mjs (the
  *    confinement runner as a sibling bundle — the sandbox seam re-enters it
- *    in dist; platform node, format esm, target node22; the workspace TS
+ *    in dist; platform node, format esm, target node24; the workspace TS
  *    graph is inlined; the three NATIVES are marked external because their
  *    native binaries cannot live inside the bundle: node-pty, koffi,
  *    @vscode/ripgrep. They resolve from <out>/node_modules at runtime.)
@@ -37,7 +37,7 @@ const MANIFEST_PATH = join(ROOT, "installer", "dist-package.json")
 const NATIVES = ["node-pty", "koffi", "@vscode/ripgrep"]
 const EXTERNALS = [...NATIVES]
 const STORE_DIR = join(ROOT, "node_modules", ".pnpm")
-const TARGET_NODE = "node22"
+const TARGET_NODE = "node24"
 
 function fail(msg) {
   console.error(`\n[build-dist] FAIL: ${msg}\n`)

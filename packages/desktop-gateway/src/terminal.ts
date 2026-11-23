@@ -20,6 +20,7 @@ export function createDesktopTerminal(workspace: string, environment: Partial<Sh
   // native cleanup has not been proven. A successful close drains both owners.
   const openReservations = new Set<symbol>()
   return {
+    hasActiveWork: () => openReservations.size > 0 || service.list().some(row => row.status !== "exited" || row.settlement?.kind !== "settled"),
     async request(method: string, input: unknown) {
       if (closed || closing) throw new Error("Terminal service is closed")
       const params = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {}

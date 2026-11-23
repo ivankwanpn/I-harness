@@ -35,6 +35,7 @@ export interface OpenAiManagementState {
   models?: CodexModel[]
 }
 export interface CodexManagement {
+  hasActiveLogin(): boolean
   state(): Promise<OpenAiManagementState>
   start(): Promise<void>
   cancel(): Promise<void>
@@ -66,7 +67,7 @@ interface Document {
 }
 interface Login {
   id: string; expiresAt: number; controller: AbortController
-  userCode?: string; deviceAuthId?: string; timer?: NodeJS.Timeout; task?: Promise<void>
+  userCode?: string; deviceAuthId?: string; timer?: NodeJS.Timeout
 }
 const ISSUER = "https://auth.openai.com"
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -132,6 +133,7 @@ export function createCodexManagement(options: CodexManagementOptions): CodexMan
   const fetcher = options.trustedTestDependencies?.fetch ?? transport!.fetch
   const now = options.trustedTestDependencies?.now ?? Date.now
   let initialized: Promise<void> | undefined, pending: Login | undefined, closed = false, message: string | undefined
+  const polls = new Set<Promise<void>>()
   const initialize = () => initialized ??= protectChatGptDirectory(directory)
   async function read(): Promise<Document> {
     try {
@@ -334,6 +336,7 @@ export function createCodexManagement(options: CodexManagementOptions): CodexMan
   }
   const liveExecutionEpoch = createLiveExecutionEpoch()
   const service: CodexManagement = {
+    hasActiveLogin: () => pending !== undefined || polls.size > 0,
     state: () => locked(async doc => {
       const p = doc.profile
       const active = doc.attempt && doc.attempt.expiresAt > now()
@@ -369,7 +372,11 @@ export function createCodexManagement(options: CodexManagementOptions): CodexMan
         const interval = options.trustedTestDependencies?.pollIntervalMs ?? (Number.isFinite(rawInterval) && rawInterval > 0 ? Math.max(1000, rawInterval * 1000) : 5000)
         login.timer = setTimeout(() => { if (pending === login) { message = "OpenAI device sign-in expired. Please try again."; login.controller.abort() } }, Math.max(1, login.expiresAt - now()))
         login.timer.unref()
-        login.task = poll(login, interval)
+        // Cancellation can release the user-visible attempt before its final
+        // credential write settles. Keep that work joined to this process.
+        const job = poll(login, interval)
+        polls.add(job)
+        void job.finally(() => polls.delete(job)).catch(() => {})
       } catch (e) {
         await finishLogin(login)
         throw e instanceof ManagementError ? e : fail("OpenAI management sign-in could not start")
@@ -470,8 +477,7 @@ export function createCodexManagement(options: CodexManagementOptions): CodexMan
       try { if (pending) {
         const login = pending; login.controller.abort(); if (login.timer) clearTimeout(login.timer); pending = undefined
         await locked(async doc => { if (doc.attempt?.id === login.id) { delete doc.attempt; await save(doc) } })
-        await login.task
-      } } finally { await transport?.close() }
+      } } finally { await Promise.allSettled(polls); await transport?.close() }
     },
   }
   return service

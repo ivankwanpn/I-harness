@@ -117,7 +117,7 @@ describe("project conversation sidebar", () => {
     expect(screen.queryByText("會話分組狀態無法確認")).toBeNull()
   })
 
-  it("lets slow ownership refreshes finish across polling ticks", async () => {
+  it("keeps a visible idle project quiet and reconciles it once when the user returns", async () => {
     vi.useFakeTimers()
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible")
     try {
@@ -131,6 +131,15 @@ describe("project conversation sidebar", () => {
       await act(async () => { finish(dashboard("Slow chat")); await slowDashboard })
       expect(screen.getByText("Slow chat")).toBeTruthy()
       expect(screen.queryByText("會話分組狀態無法確認")).toBeNull()
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+      const listReads = () => vi.mocked(bridge.request).mock.calls.filter(([request]) => request.kind === "session/dashboard").length
+      expect(listReads()).toBe(1)
+      await act(async () => {
+        window.dispatchEvent(new Event("focus"))
+        document.dispatchEvent(new Event("visibilitychange"))
+        await vi.advanceTimersByTimeAsync(250)
+      })
+      expect(listReads()).toBe(2)
     } finally { visibility.mockRestore(); vi.useRealTimers() }
   })
 

@@ -1,5 +1,5 @@
 /** CPU must belong to this worker, never to every thread in the host process.
- * Node 22.18 lacks threadCpuUsage: retain a conservative local wall fallback.
+ * Use the local wall clock if native thread accounting is unavailable.
  * Select once before execution; a later clock failure fails the cell closed. */
 function localClock() {
   const thread = process.threadCpuUsage

@@ -51,6 +51,7 @@ export interface InteractionBridgeOptions {
 }
 
 export interface InteractionBridge {
+  hasPending(): boolean
   attach(assembly: SessionAssembly): void
   /** Attach to the original managed context; remembered rules require their
    * own authority adapter and cannot be silently omitted. */
@@ -215,6 +216,7 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void, 
   }
 
   const bridge: InteractionBridge = {
+    hasPending: () => waiting.size > 0,
     attach(assembly) {
       if (closed || assembly.sessionId === undefined) return
       const sessionId = assembly.sessionId

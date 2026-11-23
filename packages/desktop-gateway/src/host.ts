@@ -558,6 +558,9 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const agentProcesses = createAgentProcesses(coordinator, service, { runRead: createAgentProcessReadRunner({ coordinator, service, isConversation, fence, resultReadScopeFor: projects.resultReadScopeFor, readResultPage: conversationRead }) })
   const resources = createDesktopResources(options.workspace, () => plugins.inputs(), { configDir: dirname(settingsPath), refresh: () => service.refreshExtensions() })
   const handlers: DesktopHandlers = {
+    hasActiveWork: (): boolean => base.hasActiveWork() || interaction.hasPending() || input.hasActiveWork()
+      || workflow.hasActiveWork() || terminal.hasActiveWork() || nativeContext.hasActiveWork()
+      || ownedIndexJobs.hasActiveWork() || codexAccounts.hasActiveLogin(),
     workspace: options.workspace, autoTitle, modelRetry: createModelRetrySettings(settingsPath), modelWait: createModelWaitSettings(settingsPath), codeSettings, approvalRules, usageStats,
     assertSession: async id => { const { meta } = await coordinator.profile(id); if (!await isConversation(id, meta)) throw new Error("Conversation unavailable") },
     executionObservation,
@@ -730,18 +733,35 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     if (!shutdownRequested) await mcp.refresh().catch(() => { /* Settings surfaces expose live refresh failures. */ })
   }, { service: instructionWatch })
   let policySync: Promise<void> | undefined
+  let policyChanged = false
+  let retryPolicy = false
   const syncPolicy = () => {
-    if (shutdownRequested || policySync) return
-    // Both reads own settings file leases. An early failure must not release
-    // shutdown's ownership of the other read while it can still create a lock.
-    const job = Promise.allSettled([agentSettings.sync(), subagents.state(),contextSubsystems.sync().then(()=>nativeContext.syncAutoRefresh())]).then((results) => {
-      const failure = results.find((result) => result.status === "rejected")
-      if (failure?.status === "rejected") console.warn(`[desktop] agent settings refresh failed: ${failure.reason instanceof Error ? failure.reason.message : String(failure.reason)}`)
-    })
+    if (shutdownRequested) return
+    policyChanged = true
+    if (policySync) return
+    const job = (async () => {
+      do {
+        policyChanged = false
+        // Keep every lease joined even if another consumer rejects. A change
+        // during this batch gets a trailing read of the latest settings.
+        const results = await Promise.allSettled([
+          agentSettings.sync(), subagents.state(),
+          contextSubsystems.sync().then(() => nativeContext.syncAutoRefresh()),
+        ])
+        retryPolicy = results.some(result => result.status === "rejected")
+        if (retryPolicy) console.warn("[desktop] agent settings refresh failed")
+      } while (policyChanged && !shutdownRequested)
+    })()
     policySync = job
-    void job.finally(() => { if (policySync === job) policySync = undefined })
+    void job.finally(() => {
+      if (policySync === job) policySync = undefined
+      if (policyChanged) syncPolicy()
+    }).catch(() => { retryPolicy = true })
   }
-  const policyTimer = setInterval(syncPolicy, 1000)
+  const policyWatcher = watchSettings(settingsPath, syncPolicy, { service: instructionWatch })
+  const policyTimer = setInterval(() => {
+    if (!policySync && (retryPolicy || policyWatcher.getState().kind !== "covered")) syncPolicy()
+  }, 1000)
   policyTimer.unref?.()
   syncPolicy()
   return {
@@ -765,6 +785,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         }
         if (pluginFenceFailure) failures.push({ name: "plugin observer fence", cause: pluginFenceFailure.cause })
         await once("trust watcher fence", () => trustWatcher.dispose())
+        await once("policy watcher fence", () => policyWatcher.dispose())
         await once("policy timer", () => clearInterval(policyTimer))
         await once("interaction", () => interaction.close())
 
@@ -796,8 +817,9 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         // A refresh may await creating session assemblies. Fence early, but
         // join only after their owners can settle shutdown dependencies.
         await once("trust watcher", () => trustWatcher.close())
+        await once("policy watcher", () => policyWatcher.close())
         if (cleaned.has('session service')) await once('instructions', () => instructionEnvironment.close())
-        if (cleaned.has('trust watcher') && cleaned.has('instructions') && cleaned.has('plugins') && cleaned.has('plugin observer')) await once('instruction watch', () => instructionWatch.close())
+        if (cleaned.has('trust watcher') && cleaned.has('policy watcher') && cleaned.has('instructions') && cleaned.has('plugins') && cleaned.has('plugin observer')) await once('instruction watch', () => instructionWatch.close())
         await once("policy refresh", async () => { await policySync })
         await once("memory", () => memory.close())
         if (forksJoined&&cleaned.has("session service")&&cleaned.has('native context')) await once("coordinator", () => closeCoordinatorWithRetainedCleanupOperation(coordinator, cleanupOperation))

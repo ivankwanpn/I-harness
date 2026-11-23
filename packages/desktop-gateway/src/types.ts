@@ -28,6 +28,7 @@ export interface SandboxState {
 }
 
 export interface DesktopHandlers {
+  hasActiveWork?(): boolean
   usageStats?: Pick<import("@i-harness/usage-stats").UsageStore, "query" | "setPricing"> & {queryV2?(query:import('../../usage-stats/src/observation-snapshot-types.ts').ObservationQuery):Promise<import('../../usage-stats/src/observation-snapshot-types.ts').UsageSnapshotV2>}
   wslSettings?: ReturnType<typeof import("./wsl-settings.ts").createWslSettings>
   contextSubsystems?: ReturnType<typeof import("./context-subsystems.ts").createContextSubsystemSettings>

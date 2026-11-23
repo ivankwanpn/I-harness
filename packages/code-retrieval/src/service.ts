@@ -6,7 +6,7 @@ import { createIndexJobs } from './service/index-job.ts'
 import { createSearch } from './service/search.ts'
 import { createStatus } from './service/status.ts'
 
-export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRetrievalService {
+export function createCodeRetrievalService(options:CodeRetrievalOptions) {
   identity(options.workspaceId,'workspace ID')
   const config=configuration(options.config??{})
   const store=new Store(options.root,options.workspaceId)
@@ -17,5 +17,5 @@ export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRet
   const search=createSearch(options,store,lifetime,indexJobs.startIndex,jobId=>service.wait(jobId),telemetry)
   const service:CodeRetrievalService={status:telemetry.status,startIndex:indexJobs.startIndex,search,wait:indexJobs.wait,
     configure:lifetime.configure,cancel:lifetime.cancel,clear:lifetime.clear,close:lifetime.close}
-  return service
+  return Object.assign(service, { hasActiveWork: () => lifetime.activeJobs > 0 || lifetime.stopping > 0 })
 }

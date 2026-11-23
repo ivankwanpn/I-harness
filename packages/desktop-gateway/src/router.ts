@@ -8,6 +8,7 @@ import {
   makeFailure,
   makeSuccess,
   METHOD_NOT_FOUND,
+  type RpcRequest,
 } from "@i-harness/sdk"
 import type { SdkServer } from "@i-harness/sdk/server"
 import type { DesktopHandlers, GatewayWrite } from "./types.ts"
@@ -37,6 +38,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
       return
     }
     const capabilities = { ...frame.result.capabilities }
+    if (handlers.hasActiveWork) capabilities["desktop-runtime-activity"] = ["1"]
     if (handlers.contextPicker) capabilities["desktop-context-picker"] = ["1"]
     if (handlers.projectFiles) capabilities["desktop-project-files"] = ["1"]
     if (handlers.projectContentSearch) capabilities["desktop-project-content-search"] = ["1"]
@@ -100,6 +102,15 @@ function isInitializeResult(value: unknown): value is {
     && !Array.isArray(record.capabilities)
 }
 
+// Closing a window may drop its outstanding observations. In particular a
+// slow automatic sidebar refresh must never keep an otherwise idle app alive.
+// All other RPCs conservatively retain the host until their handlers settle.
+const passiveRequests = new Set([
+  "ping", "session/list", "session/dashboard", "session/history", "session/queue", "session/context", "session/tasks",
+  "desktop/interaction/pending", "desktop/session/navigation/state", "desktop/session/project/state",
+  "desktop/session/input/state", "desktop/sandbox/state",
+])
+
 export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handlers: DesktopHandlers, internalIds: Set<string> = new Set()): {
   handleLine(line: string): Promise<void>
   close(): Promise<void>
@@ -107,6 +118,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
   let initialized = false
   let closed = false
   let closing: Promise<void> | undefined
+  let requestsInFlight = 0
   const forkRequestContext = new AsyncLocalStorage<{ active: boolean }>()
   const activePrompts = new Map<string, number>()
   const compacting = new Map<string, AbortController>()
@@ -116,12 +128,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
   const forkSources = new Map<string, { identity: string; flight: Promise<unknown> }>()
   const surfaces = handlers.executionObservation ? createSurfaceSubscriptions(handlers.executionObservation, notice => send({jsonrpc:'2.0',method:'desktop/surface/changed',params:notice})) : undefined
 
-  return {
-    async handleLine(line) {
-      if (closed) return
-      const message = decodeFrame(line)
-      if (!message || !isRpcRequest(message)) return
-
+  async function dispatch(line: string, message: RpcRequest) {
       if (message.method === "initialize") {
         const replyLine = await base.handleLine(line)
         const reply = replyLine === null ? undefined : decodeFrame(replyLine)
@@ -757,6 +764,28 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       }
 
       send(makeFailure(message.id, METHOD_NOT_FOUND, `unknown method: ${message.method}`))
+  }
+
+  return {
+    async handleLine(line) {
+      if (closed) return
+      const message = decodeFrame(line)
+      if (!isRpcRequest(message)) return
+      if (message.method === "desktop/runtime/activity" && handlers.hasActiveWork && initialized) {
+        const params = asRecord(message.params)
+        if (message.params !== undefined && (!params || Object.keys(params).length > 0)) {
+          send(makeFailure(message.id, INVALID_PARAMS, "Runtime activity accepts no parameters"))
+          return
+        }
+        let active = true
+        try { active = requestsInFlight > 0 || handlers.hasActiveWork() !== false }
+        catch { /* An unavailable owner keeps its process. */ }
+        send(makeSuccess(message.id, { active }))
+        return
+      }
+      if (passiveRequests.has(message.method)) return dispatch(line, message)
+      requestsInFlight++
+      try { await dispatch(line, message) } finally { requestsInFlight-- }
     },
     close() {
       if (forkRequestContext.getStore()?.active) return Promise.reject(new Error('Gateway fork callback cannot close its own request'))

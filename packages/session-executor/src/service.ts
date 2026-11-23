@@ -807,6 +807,11 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
 
   function liveContextState(sessionId: string): SessionContextState | undefined {
+    const managed = managedRuntimes.get(sessionId)
+    if (managed) {
+      const budget = managed.agent.contextBudget?.()
+      if (budget?.kind === "ready") return contextStateFromBudget(budget)
+    }
     const assembly = assemblies.get(sessionId)
     if (assembly) return contextStateFromBudget(assembly.agent.contextBudget?.() ?? { kind: "unavailable", reason: "Live Agent context budget reader is unavailable" })
     for (const parent of assemblies.values()) {
@@ -1920,7 +1925,11 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       return report
     },
     hasAssembly: (sessionId) => assemblies.has(sessionId),
-    activitySessionIds: () => [...new Set([...assemblies.keys(), ...managedRuntimes.keys(), ...creating.keys(), ...chains.keys(), ...closing.keys(), ...failedClose])],
+    activitySessionIds: () => [...new Set([
+      ...assemblies.keys(), ...managedRuntimes.keys(), ...creating.keys(), ...chains.keys(), ...closing.keys(), ...failedClose,
+      ...loadingWriters.keys(), ...firstPartyFlights.keys(), ...notificationAdmissions.keys(), ...managedPrepubSettlers.keys(),
+      ...deliveryStops.keys(), ...managedStopReceipts.keys(), ...managedCodeStops.keys(),
+    ])],
     inspectActivity(sessionId) {
       const assembly = assemblies.get(sessionId), runtime = managedRuntimes.get(sessionId)
       const state = queueState(sessionId)
@@ -1931,7 +1940,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         resources ||= managedShellOwners.get(sessionId)?.service.listJobs().some(job => job.status === 'running') ?? false
         if (assembly) {
           const live = assembly.liveResources?.()
-          resources = !!(live?.codeCells.length || live?.backgroundJobs?.length || assembly.backgroundJobs?.().some(job => job.status === 'running'))
+          resources ||= !!(live?.codeCells.length || live?.terminals.some(terminal => terminal.status === 'running') || live?.backgroundJobs?.length || assembly.backgroundJobs?.().some(job => job.status === 'running'))
           resources ||= foldScheduleEvents(assembly.session.events, assembly.session.header?.seedLength ?? 0).active.length > 0
         }
         if (runtime && opts.managedRuntime?.originalSchedule) {
@@ -1944,7 +1953,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         || managedStopReceipts.get(sessionId)?.acknowledged === false
         || !!codeStop && (!codeStop.settled || codeStop.failed)
       const pending = (creating.has(sessionId) && !assembly && !runtime)
-        || firstPartyFlights.has(sessionId) || chains.has(sessionId) || closing.has(sessionId)
+        || loadingWriters.has(sessionId) || firstPartyFlights.has(sessionId) || chains.has(sessionId) || closing.has(sessionId)
         || failedClose.has(sessionId) || notificationAdmissions.has(sessionId)
         || managedPrepubSettlers.has(sessionId) || stopPending
       return { live: !!assembly || !!runtime, ...state, tasks, active: state.running || state.queued > 0 || tasks > 0 || resources || pending }

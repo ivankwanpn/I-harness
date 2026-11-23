@@ -108,12 +108,14 @@ it("restarts a paused Goal while the old aborted provider request is still settl
   const workflow = createDesktopWorkflow(coordinator, service, { onRunningChanged: (_id, value) => states.push(value) })
   try {
     const first = await workflow.mutate("s", { action: "goal", operation: "create", request: { objective: "Verify done" }, start: true })
+    expect(workflow.hasActiveWork()).toBe(true)
     await vi.waitFor(() => expect(calls).toBe(1))
     const paused = await workflow.mutate("s", { action: "goal", operation: "pause", request: { ref: first.goal! } })
     await workflow.mutate("s", { action: "goal", operation: "resume", request: { ref: paused.goal! }, start: true })
     release()
     await vi.waitFor(async () => expect((await workflow.read("s")).goal?.phase).toBe("complete"))
     await vi.waitFor(() => expect(states.at(-1)).toBe(false))
+    expect(workflow.hasActiveWork()).toBe(false)
     expect(calls).toBe(3)
     expect(states).toEqual([true, true, false])
   } finally { release(); await workflow.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }

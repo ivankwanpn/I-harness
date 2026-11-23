@@ -112,7 +112,7 @@ Desktop 提供繁體中文／英文、明暗主題、字體大小設定與通知
 
 ## 從原始碼執行
 
-開發環境需要 **Node.js ≥ 22.18、pnpm ≥ 10**；Desktop 發行包目前以 Windows x64 為目標。
+開發與 CI 使用 **Node.js 24.22.3 LTS** 和 **pnpm 10.34.5**。支援的 Node 版本範圍為 `^24.22.3 || >=26.13.1`。Desktop 發行包目前以 Windows x64 為目標。
 
 ```powershell
 git clone https://github.com/ivankwanpn/I-harness.git

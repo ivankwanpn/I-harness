@@ -25,7 +25,8 @@ it('inspects a held managed request without claiming a legacy assembly',async()=
  const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
  await coordinator.create({sessionId:'main'})
  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
- const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[]},model:controlledModel(async function*(){entered.resolve();await release.promise;yield {type:'text/chunk',text:'done'};yield {type:'end'}}),contextWindow:4096,maxOutputTokens:128})
+ const loadMeta=vi.fn(async(id:string)=>(await coordinator.profile(id)).meta)
+ const service=createSessionService({workspace:root,coordinator,loadMeta,managedRuntime:{systemPrompt:'system',tools:[]},model:controlledModel(async function*(){entered.resolve();await release.promise;yield {type:'text/chunk',text:'done'};yield {type:'end'}}),contextWindow:4096,maxOutputTokens:128})
  const turn=service.submit('main','held',new AbortController().signal)
  try{
   await entered.promise
@@ -33,6 +34,10 @@ it('inspects a held managed request without claiming a legacy assembly',async()=
   expect(service.inspectActivity!('main')).toMatchObject({live:true,running:true,active:true})
   release.resolve();await turn
   expect(service.inspectActivity!('main')).toMatchObject({live:true,running:false,active:false})
+  loadMeta.mockClear()
+  const budget=await service.contextState('main')
+  expect(budget.observation ?? budget.snapshot).toBeDefined()
+  expect(loadMeta).not.toHaveBeenCalled()
  }finally{release.resolve();await turn.catch(()=>{});await service.close();await coordinator.close()}
 },30000)
 

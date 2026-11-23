@@ -4,7 +4,7 @@ The Windows desktop app for I-harness projects. For downloads and first-run setu
 
 ## Development
 
-From the repository root, with Node.js >=22.18 and pnpm >=10:
+Run these commands from the repository root with the pinned Node.js 24.22.3 LTS and pnpm 10.34.5.
 
 ```powershell
 pnpm install --frozen-lockfile

@@ -17,6 +17,8 @@ afterEach(() => vi.useRealTimers())
 function fixture(initialMaximized = false) {
   const events = new EventEmitter()
   let maximized = initialMaximized
+  let visible = true
+  let minimized = false
   let destroyed = false
   const controls: string[] = []
   const deliveries: { channel: string; event: DesktopEvent }[] = []
@@ -25,6 +27,7 @@ function fixture(initialMaximized = false) {
   const window = {
     on: events.on.bind(events), removeListener: events.removeListener.bind(events),
     isMaximized: () => maximized, isDestroyed: () => destroyed,
+    isVisible: () => visible, isMinimized: () => minimized,
     getNormalBounds: () => ({ x: 10, y: 20, width: 800, height: 600 }),
     minimize: () => { controls.push("minimize") },
     maximize: () => { controls.push("maximize"); maximized = true; events.emit("maximize") },
@@ -51,9 +54,26 @@ function fixture(initialMaximized = false) {
     request: (request: unknown) => handler({ sender: window.webContents }, request),
     foreignRequest: (request: unknown) => handler({ sender: {} }, request),
     externalState(value: boolean) { maximized = value; events.emit(value ? "maximize" : "unmaximize") },
+    dismiss() { minimized = true; visible = false; maximized = false },
+    reopen() { minimized = false; visible = true; events.emit("restore") },
     destroy() { destroyed = true },
   }
 }
+
+it("keeps pre-dismissal bounds on the automatic follow-up close and saves a restored window again", () => {
+  const f = fixture(true)
+  try {
+    f.events.emit("close")
+    f.dismiss()
+    f.events.emit("close")
+    expect(f.updates).toHaveLength(1)
+    expect(f.updates[0]).toMatchObject({ maximized: true })
+    f.reopen()
+    f.events.emit("close")
+    expect(f.updates).toHaveLength(2)
+    expect(f.updates[1]).toMatchObject({ maximized: false })
+  } finally { f.unregister() }
+})
 
 it("reads the owned BrowserWindow state independently from saved preferences and caller workspace fields", async () => {
   const f = fixture(false)

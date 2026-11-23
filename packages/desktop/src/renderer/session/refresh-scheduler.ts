@@ -20,7 +20,6 @@ export function createRefreshScheduler(refresh: () => Promise<unknown>, delay = 
   }
   return {
     schedule,
-    poll() { if (!running && timer === undefined) schedule() },
     dispose() {
       disposed = true
       dirty = false

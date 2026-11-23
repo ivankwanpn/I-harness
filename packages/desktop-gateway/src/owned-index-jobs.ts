@@ -14,6 +14,7 @@ export function createOwnedIndexJobs(original:ManagedRegistryConstruction,task:R
  const close=async()=>{closing=true;const failures:unknown[]=[],drains:Promise<void>[]=[];for(const job of jobs.values())try{if(!job.terminal&&!job.cancelled){job.cancel();job.cancelled=true}drains.push(job.done)}catch(error){failures.push(error)};const settled=await Promise.allSettled(drains);for(const item of settled)if(item.status==='rejected')failures.push(item.reason);if(failures.length)throw new AggregateError(failures,'Index job cleanup incomplete')}
  original.retain(close)
  return Object.freeze({
+  hasActiveWork:()=>jobs.size>0,
   owns(sessionId:string){check();if(closing)return false;const found=sessionId===original.domain.sessionId||[...Reflect.apply(entries,table,[]).values()].some(entry=>entry.sessionId===sessionId&&entry.status==='running');check();return found},
   register(input:{id:string;kind:string;label:string;cancel:()=>void}){
    check();if(closing)throw Error('Background job owner is unavailable')
@@ -46,6 +47,7 @@ export function createOwnedIndexJobs(original:ManagedRegistryConstruction,task:R
 export function createOwnedIndexJobBindings() {
  const owners=new Map<string,ReturnType<typeof createOwnedIndexJobs>>()
  return Object.freeze({
+  hasActiveWork:()=>[...owners.values()].some(owner=>owner.hasActiveWork()),
   mount(original:ManagedRegistryConstruction,task:RegisterSubagentResult){
    const id=original.domain.sessionId
    if(owners.has(id))throw Error('Index job owner already mounted')

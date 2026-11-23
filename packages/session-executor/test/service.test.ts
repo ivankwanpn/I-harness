@@ -91,6 +91,10 @@ describe("createSessionService", () => {
       const assembly = await service.assemblyFor("live")
       expect(service.liveAssembly("live")).toBe(assembly)
       expect(service.inspectActivity!("live")).toMatchObject({live:true,running:false,active:false})
+      const terminal = { id: "term", command: "fixture", pid: 1, status: "running" as const, cols: 80, rows: 24, beganAt: new Date().toISOString() }
+      assembly.liveResources = () => ({ codeCells: [], terminals: [terminal] })
+      expect(service.activitySessionIds!()).toContain("live")
+      expect(service.inspectActivity!("live")?.active).toBe(true)
       await service.closeSession("live")
       expect(service.liveAssembly("live")).toBeUndefined()
       expect(resolve).toHaveBeenCalledTimes(1)
