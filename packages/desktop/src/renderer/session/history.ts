@@ -14,6 +14,18 @@ export interface HistoryLoad {
   startSeq?: number
 }
 
+/** Read the page immediately before the current window. Older gateways fall
+ * back to a forward read from the preceding window's expected start. */
+export async function loadEarlierHistory(
+  request: (params: HistoryPageRequest) => Promise<HistoryRange>,
+  beforeSeq: number,
+  limit: number,
+): Promise<HistoryRange> {
+  const page = await request({ afterSeq: 0, beforeSeq, limit })
+  if (Number.isSafeInteger(page.startSeq) || page.events.length === 0 || beforeSeq <= limit) return page
+  return await request({ afterSeq: beforeSeq - limit, limit })
+}
+
 /** Tail read: one request returns the newest bounded window plus the durable
  * head, instead of probing and then re-snapshotting the full log page by page. */
 export async function loadRecentHistory(

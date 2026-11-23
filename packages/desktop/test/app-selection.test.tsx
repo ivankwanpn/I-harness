@@ -12,7 +12,7 @@ import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 import { writeDraft, readDraft } from "../src/renderer/session/Composer.tsx"
 import { preparedFork, readyFork } from './helpers/fork-contract.ts'
 import type { ForkOperation } from '@i-harness/sdk/fork'
-afterEach(() => { cleanup(); useUiStore.setState({ selectedWorkspaceId: undefined, selectedSessionId: undefined, providerRevision: 0, surface: "conversation" }) })
+afterEach(() => { cleanup(); captured.props = undefined; localStorage.removeItem("ih:last-workspace"); useUiStore.setState({ selectedWorkspaceId: undefined, selectedSessionId: undefined, providerRevision: 0, surface: "conversation" }) })
 
 function defer() { let resolve!: (value: unknown) => void; const promise = new Promise<unknown>((done) => { resolve = done }); return { promise, resolve } }
 it('both actual App fork callbacks join one preparation and one held operation before navigation', async () => {
@@ -443,6 +443,87 @@ function fixture(override: (request: DesktopRequest) => Promise<unknown> | undef
   render(strict ? <StrictMode><App bridge={bridge} /></StrictMode> : <App bridge={bridge} />)
   return request
 }
+
+it("starts in the remembered project without opening the first folder's runtime", async () => {
+  localStorage.setItem("ih:last-workspace", JSON.stringify({ workspaceId: "w2", projectId: "p2" }))
+  const request = fixture(input => {
+    if (input.kind === "workspace/list") return Promise.resolve([{ id: "w1", path: "D:/a", label: "A" }, { id: "w2", path: "D:/b", label: "B" }])
+    if (input.kind === "projects/list") return Promise.resolve([{ id: "p1", name: "First", workspaceIds: ["w1"] }, { id: "p2", name: "Last used", workspaceIds: ["w2"] }])
+    return undefined
+  })
+  await waitFor(() => expect(captured.props).toMatchObject({ selectedWorkspaceId: "w2", selectedProjectId: "p2", connection: "online" }))
+  expect(request.mock.calls.map(([input]) => input).filter(input => input.kind === "desktop/capabilities")).toEqual([{ kind: "desktop/capabilities", workspaceId: "w2" }])
+})
+
+it("keeps the first ready event in the original bootstrap and refreshes after a real disconnect", async () => {
+  const waiting = defer()
+  const listeners = new Set<Parameters<DesktopBridge["onEvent"]>[0]>()
+  const emit = (event: Parameters<Parameters<DesktopBridge["onEvent"]>[0]>[0]) => { for (const listener of [...listeners]) listener(event) }
+  let capabilitiesReads = 0
+  fixture(input => input.kind === "desktop/capabilities" && ++capabilitiesReads === 1 ? waiting.promise : undefined,
+    listener => { listeners.add(listener); return () => { listeners.delete(listener) } })
+  await waitFor(() => expect(capabilitiesReads).toBe(1))
+  act(() => emit({ kind: "sdk/ready", method: "sdk/ready", workspaceId: "w1", runtimeGeneration: 0 }))
+  expect(captured.props?.connection).toBe("online")
+  expect(capabilitiesReads).toBe(1)
+  await act(async () => waiting.resolve({}))
+  act(() => emit({ kind: "sdk/disconnected", workspaceId: "w1", message: "Backend exited" }))
+  expect(captured.props?.connection).toBe("offline")
+  act(() => emit({ kind: "sdk/ready", method: "sdk/ready", workspaceId: "w1", runtimeGeneration: 1 }))
+  await waitFor(() => expect(capabilitiesReads).toBe(2))
+  await waitFor(() => expect(captured.props?.connection).toBe("online"))
+})
+
+it("recognizes a warm workspace while refreshing its project data", async () => {
+  const delayedCapabilities = defer()
+  const request = fixture(input => {
+    if (input.kind === "workspace/list") return Promise.resolve([{ id: "w1", path: "D:/a", label: "A" }, { id: "w2", path: "D:/b", label: "B" }])
+    if (input.kind === "projects/list") return Promise.resolve([{ id: "p1", name: "First", workspaceIds: ["w1"] }, { id: "p2", name: "Other", workspaceIds: ["w2"] }])
+    if (input.kind === "desktop/runtime/status" && input.workspaceId === "w2") return Promise.resolve({ ready: true })
+    if (input.kind === "desktop/capabilities" && input.workspaceId === "w2") return delayedCapabilities.promise
+    return undefined
+  })
+  await waitFor(() => expect(captured.props).toMatchObject({ selectedWorkspaceId: "w1", connection: "online" }))
+  act(() => captured.props!.onSelectProject!("p2"))
+  await waitFor(() => expect(captured.props).toMatchObject({ selectedWorkspaceId: "w2", selectedProjectId: "p2", connection: "online", capabilitiesReady: false }))
+  expect(request).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "desktop/runtime/recover" }))
+  await act(async () => delayedCapabilities.resolve({}))
+  expect(captured.props?.capabilitiesReady).toBe(true)
+})
+
+it("pages back through the whole log with a bounded reading window and leaves live replay at the tail", async () => {
+  const head = 2600
+  const events = (from: number, to: number): WireEvent[] => Array.from({ length: to - from }, (_, offset) => ({ type: "user/message", seq: from + offset, text: `Message ${from + offset}` }))
+  const request = fixture(input => {
+    if (input.kind === "desktop/session/open") return Promise.resolve({ history: { events: events(2500, head), startSeq: 2500, nextSeq: head, headSeq: head } })
+    if (input.kind === "session/history") {
+      const before = input.beforeSeq
+      if (before !== undefined) {
+        const startSeq = Math.max(0, before - input.limit)
+        return Promise.resolve({ events: events(startSeq, before), startSeq, nextSeq: before, headSeq: head })
+      }
+      const end = Math.min(head, input.afterSeq + input.limit)
+      return Promise.resolve({ events: events(input.afterSeq, end), nextSeq: end, headSeq: head })
+    }
+    return undefined
+  })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props?.conversation?.history?.earlier).toBeTypeOf("function"))
+  for (let start = 2500; start > 0; start = Math.max(0, start - 200)) {
+    await act(async () => captured.props!.conversation!.history!.earlier!())
+    await waitFor(() => expect(captured.props?.conversation?.history?.viewport?.startSeq).toBe(Math.max(0, start - 200)))
+    expect(captured.props!.conversation!.history!.viewport!.events.length).toBeLessThanOrEqual(2000)
+  }
+  expect(request).toHaveBeenCalledWith({ kind: "session/history", workspaceId: "w1", sessionId: "a", afterSeq: 0, beforeSeq: 2500, limit: 200 })
+  expect(captured.props!.conversation!.history!.earlier).toBeUndefined()
+  expect(captured.props!.conversation!.history!.viewport!.events[0]).toMatchObject({ seq: 0 })
+  await act(async () => captured.props!.conversation!.history!.later!())
+  expect(captured.props!.conversation!.history!.viewport!.endSeq).toBe(2200)
+  expect(captured.props!.conversation!.rows.at(-1)).toMatchObject({ text: "Message 2599" })
+  act(() => captured.props!.conversation!.history!.latest!())
+  expect(captured.props!.conversation!.history!.viewport).toBeUndefined()
+})
 
 it("retains a successful initial dashboard when a newer background read fails", async () => {
   const initial = defer()

@@ -18,6 +18,7 @@ import { SettingsDialog } from "../settings/SettingsDialog.tsx"
 import { GenerationSpeed, MessageActions } from "./MessageActions.tsx"
 import { useToolText } from "./tool-text.ts"
 import type { AssistantPreview } from "./event-window.ts"
+import type { HistoryScroll } from "./use-history-scroll.ts"
 import { reasoningPreview } from "./reasoning-progress.ts"
 import "./timeline-polish.css"
 
@@ -123,11 +124,12 @@ function RowView({ row, open, toggle, activeReasoningId, page, setPage, navigati
 }
 
 /** Only the visible rows are mounted, so a long session stays bounded. */
-export interface TimelineProps { resultReader?: RecordedResultReader; rows: TimelineRow[]; assistantPreview?: AssistantPreview; navigation?: FileNavigation; running?: boolean; targetSeq?: number; historical?: boolean; onTargetVisible?(seq: number): void }
+export interface TimelineProps { resultReader?: RecordedResultReader; rows: TimelineRow[]; assistantPreview?: AssistantPreview; navigation?: FileNavigation; running?: boolean; targetSeq?: number; historical?: boolean; history?: HistoryScroll; onTargetVisible?(seq: number): void }
+const HISTORY_EDGE_PX = 96
 function timelineKey(row: WorkItem): string {
   return row.kind === "message" && row.stepStartSeq !== undefined ? `assistant:${row.stepStartSeq}` : row.id
 }
-export function Timeline({ rows, assistantPreview, navigation, running = false, targetSeq, historical = false, onTargetVisible, resultReader }: TimelineProps) {
+export function Timeline({ rows, assistantPreview, navigation, running = false, targetSeq, historical = false, history, onTargetVisible, resultReader }: TimelineProps) {
   const t = useText()
   const tt = useToolText()
   const latestTurn = rows.at(-1)?.turn
@@ -174,6 +176,9 @@ export function Timeline({ rows, assistantPreview, navigation, running = false, 
   const touchY = useRef<number | undefined>(undefined)
   const located = useRef<number | undefined>(undefined)
   const [showLatest, setShowLatest] = useState(false)
+  const [historyEdges, setHistoryEdges] = useState({ before: false, after: false })
+  const historyPaging = history !== undefined
+  const wasHistorical = useRef(historical)
   const writeScroll = useCallback<typeof elementScroll>((offset, options, instance) => {
     const element = instance.scrollElement
     const before = element?.scrollTop
@@ -190,6 +195,9 @@ export function Timeline({ rows, assistantPreview, navigation, running = false, 
     getScrollElement: () => parentRef.current,
     estimateSize: () => 56,
     overscan: 8,
+    // Resolve the existing row key before the virtualizer renders the new
+    // range. Its measurements then keep the same reading offset on prepend.
+    anchorTo: history?.viewport ? "end" : "start",
     // Seed the first measurement so rows mount before any observer fires.
     initialRect: { width: 1024, height: 768 },
     scrollToFn: writeScroll,
@@ -214,6 +222,30 @@ export function Timeline({ rows, assistantPreview, navigation, running = false, 
     following.current = false
     setShowLatest(true)
   }
+  const updateHistoryEdges = useCallback((element: HTMLDivElement) => {
+    if (!historyPaging) return
+    const before = element.scrollTop <= HISTORY_EDGE_PX
+    const after = element.scrollHeight - element.clientHeight - element.scrollTop <= HISTORY_EDGE_PX
+    setHistoryEdges(previous => previous.before === before && previous.after === after ? previous : { before, after })
+  }, [historyPaging])
+  const requestHistory = (direction: "before" | "after", automatic = true) => {
+    if (!history || history.loading || (automatic && history.error)) return
+    const load = direction === "before" ? history.earlier : history.later
+    const element = parentRef.current
+    if (!load || !element) return
+    const distance = direction === "before" ? element.scrollTop : element.scrollHeight - element.clientHeight - element.scrollTop
+    if (automatic && distance > HISTORY_EDGE_PX) return
+    pauseFollowing()
+    load()
+  }
+  useLayoutEffect(() => {
+    if (wasHistorical.current && !historical) {
+      following.current = true
+      setShowLatest(false)
+    }
+    wasHistorical.current = historical
+    if (parentRef.current) updateHistoryEdges(parentRef.current)
+  }, [historical, items, updateHistoryEdges])
   const target = rows.find(row => targetSeq !== undefined && row.seqs?.includes(targetSeq))
   const targetGroup = target ? grouped.find(row => row.kind === "activity-group" && row.rows.some(tool => tool.id === target.id)) : undefined
   useEffect(() => {
@@ -242,7 +274,10 @@ export function Timeline({ rows, assistantPreview, navigation, running = false, 
   }, [items, itemCount, totalSize, followLatest])
   useEffect(() => {
     const element = parentRef.current
-    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(followLatest)
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(() => {
+      if (element) updateHistoryEdges(element)
+      followLatest()
+    })
     if (element) {
       observer?.observe(element)
       if (element.firstElementChild) observer?.observe(element.firstElementChild)
@@ -269,14 +304,16 @@ export function Timeline({ rows, assistantPreview, navigation, running = false, 
       if (followFrame.current !== undefined) cancelAnimationFrame(followFrame.current)
       followFrame.current = undefined
     }
-  }, [followLatest, historical, targetSeq])
-  const canReturnLatest = !historical && showLatest && itemCount > 0
+  }, [followLatest, historical, targetSeq, updateHistoryEdges])
+  const canReturnLatest = history?.viewport !== undefined || (!historical && showLatest && itemCount > 0)
+  const showEarlier = !!history?.earlier && (historyEdges.before || !!history.error)
+  const showLater = !!history?.later && (historyEdges.after || !!history.error)
   return (
     <div className="timeline-region">
     <div ref={parentRef} className="timeline" data-testid="timeline" tabIndex={0} aria-label={t("會話內容")}
       onWheel={event => {
-        if (event.deltaY < 0) pauseFollowing()
-        else if (event.deltaY > 0) readingDirection.current = "down"
+        if (event.deltaY < 0) { pauseFollowing(); requestHistory("before") }
+        else if (event.deltaY > 0) { readingDirection.current = "down"; requestHistory("after") }
       }}
       onTouchStart={event => { touchY.current = event.touches[0]?.clientY }}
       onTouchMove={event => {
@@ -288,14 +325,15 @@ export function Timeline({ rows, assistantPreview, navigation, running = false, 
       onPointerDown={event => { if (event.target === event.currentTarget) { pointerReading.current = true; pauseFollowing() } }}
       onKeyDown={event => {
         if (event.target !== event.currentTarget) return
-        if (["ArrowUp", "PageUp", "Home"].includes(event.key) || event.shiftKey && event.key === " ") pauseFollowing()
-        else if (["ArrowDown", "PageDown", "End"].includes(event.key) || !event.shiftKey && event.key === " ") readingDirection.current = "down"
+        if (["ArrowUp", "PageUp", "Home"].includes(event.key) || event.shiftKey && event.key === " ") { pauseFollowing(); requestHistory("before") }
+        else if (["ArrowDown", "PageDown", "End"].includes(event.key) || !event.shiftKey && event.key === " ") { readingDirection.current = "down"; requestHistory("after") }
       }}
       onScroll={() => {
         const element = parentRef.current
         if (!element) return
         const readerDelta = element.scrollTop - observedScrollTop.current
         observedScrollTop.current = element.scrollTop
+        updateHistoryEdges(element)
         // Chromium captures native thumb movement without DOM pointermove.
         // Programmatic virtualizer compensation was removed by writeScroll.
         if (pointerReading.current && Math.abs(readerDelta) > 1) {
@@ -305,6 +343,8 @@ export function Timeline({ rows, assistantPreview, navigation, running = false, 
         const atBottom = element.scrollHeight - element.clientHeight - element.scrollTop <= 1
         // A growing row/viewport resize can fire scroll without reader intent.
         // Only explicit reading gestures pause; scrolling down to the end resumes.
+        if (!following.current && readerDelta < -1) requestHistory("before")
+        if (historical && readerDelta > 1) requestHistory("after")
         if (following.current) {
           if (!atBottom) followLatest()
         } else if (atBottom && readingDirection.current === "down" && !historical && targetSeq === undefined) {
@@ -340,8 +380,15 @@ export function Timeline({ rows, assistantPreview, navigation, running = false, 
         })}
       </div>
     </div>
+    {showEarlier || showLater || history?.loading || history?.error ? <div className="timeline-history-controls">
+      {showEarlier ? <button type="button" className="primary-button" disabled={history?.loading} onClick={() => requestHistory("before", false)}>{t("載入較早內容")}</button> : null}
+      {showLater ? <button type="button" className="primary-button" disabled={history?.loading} onClick={() => requestHistory("after", false)}>{t("載入較後內容")}</button> : null}
+      {history?.loading ? <span role="status">{t("正在載入歷史…")}</span> : null}
+      {history?.error ? <span role="alert">{displayError(history.error).summary}</span> : null}
+    </div> : null}
     {canReturnLatest || liveGeneration ? <div className="timeline-controls">
       {canReturnLatest ? <button type="button" className="timeline-latest" onClick={() => {
+        history?.latest?.()
         following.current = true; setShowLatest(false); followLatest()
       }}><ArrowDown size={14} aria-hidden="true" />{t("回到最新內容")}</button> : null}
       {liveGeneration ? <div className="timeline-activity-speed"><span>{tt("本輪已量測", "This turn so far")}</span><GenerationSpeed generation={liveGeneration} /></div> : null}

@@ -57,6 +57,18 @@ function fixture() {
 }
 
 describe("Desktop scoped IPC", () => {
+  it("reports whether a known workspace already has a ready runtime without starting one", async () => {
+    const f = fixture()
+    const peek = vi.fn<NonNullable<DesktopIpcDependencies["runtimes"]["peek"]>>().mockReturnValueOnce(undefined)
+    f.dependencies.runtimes.peek = peek
+    const status = { kind: "desktop/runtime/status", workspaceId: ENTRY.id } as const
+    await expect(dispatchDesktopRequest(status, f.dependencies)).resolves.toEqual({ ready: false })
+    peek.mockReturnValue({} as NonNullable<ReturnType<typeof peek>>)
+    await expect(dispatchDesktopRequest(status, f.dependencies)).resolves.toEqual({ ready: true })
+    await expect(dispatchDesktopRequest({ ...status, workspaceId: "unknown" }, f.dependencies)).rejects.toThrow("unknown workspace")
+    expect(f.get).not.toHaveBeenCalled()
+    expect(peek).toHaveBeenCalledTimes(2)
+  })
   it('routes explicit V2 preparation and persisted retry with their own capability and checked reply', async () => {
     const f = fixture()
     const request = { version: 2, sourceSessionId: 'a', results: 'selected-results-v1', selection: { kind: 'completed', atSeq: 3 } } as const

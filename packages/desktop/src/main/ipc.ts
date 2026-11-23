@@ -82,6 +82,11 @@ export async function dispatchDesktopRequest(
   if(!kind||!('value' in kind))throw Error('Invalid Desktop request kind')
   if(typeof value.kind==='string'&&value.kind.startsWith('desktop/surface/')) {if(!dependencies.surfaceObservation)throw Error('Native surface window unavailable');return dependencies.surfaceObservation.request(value)}
   if (typeof value.kind !== "string" || value.kind === "") throw new Error("unknown Desktop request")
+  if (value.kind === "desktop/runtime/status") {
+    const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+    if (!dependencies.catalog.get(workspaceId)) throw new Error(`unknown workspace id: ${workspaceId}`)
+    return { ready: dependencies.runtimes.peek?.(workspaceId) !== undefined }
+  }
   if (value.kind === 'desktop/runtime/recover') {
     if (Object.keys(value).some(key => !['kind', 'workspaceId'].includes(key))) throw Error('Invalid runtime recovery request')
     const workspaceId = requireNonEmpty(value.workspaceId, 'workspaceId')

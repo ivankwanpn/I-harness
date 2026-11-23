@@ -1,13 +1,18 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
-const virtual = vi.hoisted(() => ({ showItems: false, itemCount: 0, scrollToIndex: vi.fn(), scrollToOffset: vi.fn(), getTotalSize: () => 2000, getVirtualItems: () => virtual.showItems ? Array.from({ length: virtual.itemCount }, (_, index) => ({ index, start: index * 56 })) : [], measureElement: vi.fn(), scrollToFn: undefined as undefined | ((offset: number, options: { adjustments?: number }, instance: { scrollElement: HTMLElement }) => void) }))
+const virtual = vi.hoisted(() => {
+  const item = (index: number) => ({ index, start: index * 56, end: (index + 1) * 56 })
+  return { showItems: false, itemCount: 0, anchorTo: undefined as string | undefined, scrollToIndex: vi.fn(), scrollToOffset: vi.fn(), getTotalSize: () => 2000,
+    getVirtualItems: () => virtual.showItems ? Array.from({ length: virtual.itemCount }, (_, index) => item(index)) : [],
+    measureElement: vi.fn(), scrollToFn: undefined as undefined | ((offset: number, options: { adjustments?: number }, instance: { scrollElement: HTMLElement }) => void) }
+})
 vi.mock("@tanstack/react-virtual", () => ({
   elementScroll: (offset: number, options: { adjustments?: number }, instance: { scrollElement: HTMLElement }) => {
     const element = instance.scrollElement
     element.scrollTop = Math.max(0, Math.min(offset + (options.adjustments ?? 0), element.scrollHeight - element.clientHeight))
   },
-  useVirtualizer: (options: { count: number; scrollToFn?: typeof virtual.scrollToFn }) => { virtual.itemCount = options.count; virtual.scrollToFn = options.scrollToFn; return virtual },
+  useVirtualizer: (options: { count: number; anchorTo?: string; scrollToFn?: typeof virtual.scrollToFn }) => { virtual.itemCount = options.count; virtual.anchorTo = options.anchorTo; virtual.scrollToFn = options.scrollToFn; return virtual },
 }))
 import { Timeline } from "../src/renderer/session/Timeline.tsx"
 beforeEach(() => {
@@ -21,6 +26,31 @@ beforeEach(() => {
   })
 })
 afterEach(() => { cleanup(); vi.useRealTimers(); virtual.showItems = false; virtual.scrollToIndex.mockClear(); virtual.scrollToOffset.mockClear(); vi.unstubAllGlobals() })
+it("loads earlier history at the top, enables virtual anchoring during browsing, and returns to the live tail", () => {
+  vi.useFakeTimers()
+  virtual.showItems = true
+  const row = { id: "current", kind: "message" as const, role: "assistant" as const, text: "Current reading position" }
+  const earlier = vi.fn(), latest = vi.fn()
+  const view = render(<Timeline rows={[row]} history={{ loading: false, earlier }} />)
+  const scroller = screen.getByTestId("timeline")
+  Object.defineProperties(scroller, { scrollHeight: { configurable: true, value: 2000 }, clientHeight: { configurable: true, value: 400 } })
+  act(() => vi.runOnlyPendingTimers())
+  fireEvent.wheel(scroller, { deltaY: -240 })
+  scroller.scrollTop = 45
+  fireEvent.scroll(scroller)
+  expect(earlier).toHaveBeenCalledOnce()
+  const viewport = { events: [], startSeq: 0, endSeq: 3, hasBefore: false, hasAfter: false }
+  view.rerender(<Timeline rows={[{ ...row, id: "older-a" }, { ...row, id: "older-b" }, row]} historical history={{ loading: false, viewport, latest }} />)
+  expect(virtual.anchorTo).toBe("end")
+  fireEvent.scroll(scroller)
+  expect(earlier).toHaveBeenCalledOnce()
+  fireEvent.click(screen.getByRole("button", { name: "回到最新內容" }))
+  expect(latest).toHaveBeenCalledOnce()
+  view.rerender(<Timeline rows={[row]} />)
+  act(() => vi.runOnlyPendingTimers())
+  expect(scroller.scrollTop).toBe(1600)
+  expect(virtual.anchorTo).toBe("start")
+})
 it("follows new content only while the reader stays at the bottom", () => {
   vi.useFakeTimers()
   const rows = [{ id: "a", kind: "message" as const, role: "assistant" as const, text: "First" }]

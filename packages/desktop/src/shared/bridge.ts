@@ -133,6 +133,7 @@ export type DesktopRequest =
   | { kind: "workspace/list" }
   | { kind: "workspace/sandbox/state"; workspaceId: string }
   | { kind: "desktop/capabilities"; workspaceId: string }
+  | { kind: "desktop/runtime/status"; workspaceId: string }
   | { kind: "desktop/runtime/recover"; workspaceId: string }
   | { kind: "session/list"; workspaceId: string }
   | { kind: "session/dashboard"; workspaceId: string }

@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from "react"
 import type { HistoryRange } from "@i-harness/sdk"
 import type { HistorySelection } from "./SessionSearch.tsx"
 import { HISTORY_PAGE_SIZE, historyViewport, pageHistoryViewport, type HistoryViewport } from "./event-window.ts"
+import type { HistoryPageRequest } from "./history.ts"
 import { projectHistoryTimeline } from "./project.ts"
 import type { RecordedResultReader } from "./result-pages.ts"
 import { Timeline } from "./Timeline.tsx"
 import type { FileNavigation } from "./file-navigation.ts"
 import { useLocale } from "../design/i18n.ts"
-export interface HistoryRequest { kind: "session/history"; workspaceId: string; sessionId: string; afterSeq: number; limit: number }
+export interface HistoryRequest extends HistoryPageRequest { kind: "session/history"; workspaceId: string; sessionId: string }
 export interface SessionHistoryViewProps {
   resultReader?: RecordedResultReader
   selection: HistorySelection

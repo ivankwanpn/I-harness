@@ -33,6 +33,7 @@ import {
   type WireEvent,
 } from "./session/event-window.ts"
 import { loadHistory, loadRecentHistory, type HistoryPageRequest } from "./session/history.ts"
+import { useHistoryScroll } from "./session/use-history-scroll.ts"
 import type { InteractionReply } from "./interaction/PendingPanel.tsx"
 import type { ReviewChanges, ReviewText } from "./review/ReviewPane.tsx"
 import { pendingForSession, type PendingInteraction } from "./interaction/pending.ts"
@@ -51,6 +52,31 @@ import { createForkOperationController, createForkCallbackAdapters } from './ses
 const HISTORY_LIMIT = 500
 const HISTORY_MAX_PAGES = 40
 const historyOnly = (window: EventWindow): EventWindow => ({ ...window, live: [], assistantPreview: undefined })
+const LAST_WORKSPACE = "ih:last-workspace"
+
+function projectWorkspace(project: ProjectEntry, workspaces: readonly WorkspaceEntry[]): string | undefined {
+  return [project.primaryWorkspaceId, ...project.workspaceIds].find(id => id !== undefined && project.workspaceIds.includes(id) && workspaces.some(workspace => workspace.id === id))
+}
+
+function startupWorkspace(workspaces: WorkspaceEntry[], projects: ProjectEntry[]): { workspaceId?: string; projectId?: string } {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LAST_WORKSPACE) ?? "null") as { workspaceId?: unknown; projectId?: unknown } | null
+    const workspace = workspaces.find(row => row.id === saved?.workspaceId)
+    if (workspace) {
+      const project = projects.find(row => row.id === saved?.projectId && row.workspaceIds.includes(workspace.id))
+      return { workspaceId: workspace.id, projectId: project?.id }
+    }
+  } catch { /* A damaged or disabled preference still permits normal startup. */ }
+  for (const project of projects) {
+    const workspaceId = projectWorkspace(project, workspaces)
+    if (workspaceId) {
+      // A shared folder does not identify a project unless the user chose one.
+      const shared = projects.some(row => row.id !== project.id && row.workspaceIds.includes(workspaceId))
+      return { workspaceId, projectId: shared ? undefined : project.id }
+    }
+  }
+  return { workspaceId: workspaces[0]?.id }
+}
 
 /** The renderer data layer: it owns the bridge, selection and refresh rules;
  * the workbench below renders exactly what it is told. */
@@ -104,7 +130,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const operations = useSessionOperation(bridge, durableInputSupported.current)
   const operation = selectedWorkspaceId && selectedSessionId ? operations.states[operationKey(selectedWorkspaceId, selectedSessionId)] : undefined
   const sending = operation?.busy === true && operation.kind !== "model"
-  const [connection, setConnection] = useState<"online" | "offline" | "connecting" | "reconnecting">("online")
+  const [connection, setConnection] = useState<"online" | "offline" | "connecting" | "reconnecting">("connecting")
   const interactions = usePendingInteractions(bridge, selectedWorkspaceId)
   const pending = interactions.pending
   const [reviewChanges, setReviewChanges] = useState<ReviewChanges>()
@@ -140,6 +166,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const workStateRequest = useRef(0)
   const workspaceSelection = useRef({ workspaceId: selectedWorkspaceId })
   if (workspaceSelection.current.workspaceId !== selectedWorkspaceId) workspaceSelection.current = { workspaceId: selectedWorkspaceId }
+  const disconnected = useRef<typeof workspaceSelection.current | undefined>(undefined)
+  const disconnectRevision = useRef(0)
 
   useEffect(() => {
     cursorRef.current = eventWindow.cursor
@@ -161,7 +189,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     } catch (error) { setProjectError(error instanceof Error ? error.message : String(error)); throw error }
   }, [bridge])
 
-  useEffect(() => { void refreshProjects().catch(() => undefined) }, [refreshProjects])
   useEffect(() => {
     let active = true
     void bridge.request({ kind: "desktop/local/state" }).then((value) => {
@@ -176,6 +203,15 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     : projects?.find(project => project.id === selectedProjectId)?.id
   const projectScopeSupported = capabilities["desktop-project-scope"]?.includes("1") === true
   const projectReady = !projectScopeSupported || !!(projectBinding && projectBinding.workspaceId === selectedWorkspaceId && projectBinding.sessionId === selectedSessionId && !projectBinding.error)
+  useEffect(() => {
+    if (!projects || !selectedWorkspaceId || !workspaces.some(workspace => workspace.id === selectedWorkspaceId)) return
+    if (selectedSessionId && (!capabilitiesReady || projectScopeSupported && !selectedBinding)) return
+    const project = projects.find(row => row.id === activeProjectId)
+    const workspaceId = project && !project.workspaceIds.includes(selectedWorkspaceId) ? projectWorkspace(project, workspaces) : selectedWorkspaceId
+    if (!workspaceId) return
+    try { localStorage.setItem(LAST_WORKSPACE, JSON.stringify({ workspaceId, projectId: project?.id })) }
+    catch { /* The current selection still works in memory. */ }
+  }, [activeProjectId, capabilitiesReady, projects, projectScopeSupported, selectedBinding, selectedSessionId, selectedWorkspaceId, workspaces])
   useEffect(() => {
     if (!projectScopeSupported || !selectedWorkspaceId || !selectedSessionId) return
     let active = true
@@ -310,24 +346,36 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
 
   useEffect(() => {
     let active = true
-    void refreshWorkspaces()
-      .then((list) => {
+    const navigation = navigationVersion.current
+    void Promise.allSettled([refreshWorkspaces(), refreshProjects()])
+      .then(([folders, catalog]) => {
         if (!active) return
-        setSelectedWorkspaceId((current) => current ?? list[0]?.id)
-      })
-      .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error ? reason.message : String(reason))
+        if (folders.status === "rejected") {
+          setError(folders.reason instanceof Error ? folders.reason.message : String(folders.reason))
+          return
+        }
+        if (navigationVersion.current !== navigation || useUiStore.getState().selectedWorkspaceId !== undefined) return
+        const selected = startupWorkspace(folders.value, catalog.status === "fulfilled" ? catalog.value : [])
+        setSelectedProjectId(selected.projectId)
+        setSelectedWorkspaceId(selected.workspaceId)
       })
     return () => { active = false }
-  }, [refreshWorkspaces, retryNonce])
+  }, [refreshWorkspaces, refreshProjects, retryNonce, setSelectedWorkspaceId])
 
   useEffect(() => {
     if (selectedWorkspaceId === undefined) return
     let active = true
     const capabilityScope = workspaceSelection.current
+    const lastDisconnect = disconnectRevision.current
+    const current = () => active && workspaceSelection.current === capabilityScope && disconnectRevision.current === lastDisconnect
     setCapabilitySnapshot(undefined)
     setSandbox(undefined)
-    setConnection((current) => current === "reconnecting" ? "reconnecting" : "connecting")
+    // Checking an existing runtime doesn't start another one or delay the bootstrap reads.
+    void bridge.request({ kind: "desktop/runtime/status", workspaceId: selectedWorkspaceId }).then(value => {
+      if (current() && (value as { ready?: boolean } | undefined)?.ready === true) {
+        setConnection(status => status === "connecting" ? "online" : status)
+      }
+    }).catch(() => undefined)
     // Keep the first selection across failed bootstrap attempts and StrictMode
     // effect replay. A retry may reconcile that restored selection, never a
     // newer selection made by the user after the original attempt started.
@@ -341,7 +389,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           bridge.request({ kind: "desktop/capabilities", workspaceId: selectedWorkspaceId }),
           bridge.request({ kind: "workspace/sandbox/state", workspaceId: selectedWorkspaceId }),
         ])
-        if (!active || workspaceSelection.current !== capabilityScope) return
+        if (!current()) return
         if (dashboardVersion >= dashboardApplied.current) {
           dashboardApplied.current = dashboardVersion
           const initialDashboard = dashboardResult as SessionDashboardResult
@@ -359,10 +407,10 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         setConnection("online")
         setError(undefined)
         if ((capabilitiesResult as Record<string, string[]> | undefined)?.["desktop-interaction"]?.includes("1")) {
-          void interactions.refresh().catch((reason: unknown) => { if (active) setError(String(reason)) })
+          void interactions.refresh().catch((reason: unknown) => { if (current()) setError(String(reason)) })
         }
       } catch (reason) {
-        if (active) { setConnection("offline"); setError(reason instanceof Error ? reason.message : String(reason)) }
+        if (current()) { setConnection("offline"); setError(reason instanceof Error ? reason.message : String(reason)) }
       }
     })()
     return () => { active = false }
@@ -394,15 +442,20 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity") return
       if (workspaceSelection.current !== workspace || event.workspaceId !== selectedWorkspaceId) return
       if (event.kind === "sdk/ready") {
-        setRetryNonce(value => value + 1)
-        executionRevision.current = undefined
         setConnection("online")
         setError(undefined)
-        refresh.schedule()
-        if (selectedSessionId) void pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
+        if (disconnected.current === workspace) {
+          disconnected.current = undefined
+          setRetryNonce(value => value + 1)
+          executionRevision.current = undefined
+          refresh.schedule()
+          if (selectedSessionId) void pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
+        }
         return
       }
       if (event.kind === "sdk/disconnected") {
+        disconnected.current = workspace
+        disconnectRevision.current++
         clearChunks()
         assistantPreviews.current.clear()
         executionRevision.current = undefined
@@ -645,6 +698,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const gate = sendGate({ model, sandbox, connection }, t)
   const currentScope = JSON.stringify([selectedWorkspaceId, selectedSessionId])
   const { events, live } = eventWindow
+  const scrollHistory = useHistoryScroll(selection.current, windowKey === currentScope ? events : [], eventWindow.cursor, historyRequest)
   const conversationRows = useMemo(() => {
     const rows = windowKey === currentScope ? projectTimeline(timelineEvents({ events, live })) : []
     if (optimistic?.scope === currentScope) rows.push({ id: optimistic.id, kind: "message", role: "user", text: optimistic.text })
@@ -664,6 +718,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     ? undefined
     : {
         rows: conversationRows,
+        history: scrollHistory.earlier || scrollHistory.viewport || scrollHistory.loading || scrollHistory.error ? scrollHistory : undefined,
         assistantPreview: windowKey === currentScope ? eventWindow.assistantPreview : undefined,
         loading: historyLoading,
         canSend: gate.canSend && projectReady && !(operation?.busy && operation.kind !== "prompt"),
@@ -701,6 +756,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         },
         onSteer: async (text: string, context?: string, images?: import("@i-harness/sdk").ImageInput[], onAdmitted?: () => void) => {
           if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }).catch(() => { throw new ComposerPreparationError(t("無法確認會話專案；草稿仍保留。")) })
+          scrollHistory.latest?.()
           await operations.run(selectedWorkspaceId, selectedSessionId, "prompt", text, context, images, onAdmitted, "steer")
           void refreshTasks(selectedWorkspaceId, selectedSessionId)
         },
@@ -734,6 +790,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           const pending = { scope: currentScope, id: `optimistic:${crypto.randomUUID()}`, text }
           setOptimistic(pending)
           if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }).catch(() => { setOptimistic(current => current?.id === pending.id ? undefined : current); throw new ComposerPreparationError(t("無法確認會話專案；草稿仍保留。")) })
+          scrollHistory.latest?.()
           // Queue state can change before the admission promise resolves; a
           // short refresh makes a queued second prompt visible while the first
           // turn is still starting.
@@ -827,7 +884,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         navigationVersion.current++
         setSelectedProjectId(id)
         const project = projects?.find((row) => row.id === id)
-        const workspaceId = project?.primaryWorkspaceId ?? project?.workspaceIds[0]
+        const workspaceId = project && projectWorkspace(project, workspaces)
         if (workspaceId !== selection.current.workspaceId) { setDashboard(undefined); setConnection("connecting") }
         setSelectedWorkspaceId(workspaceId); setSelectedSessionId(undefined)
         useUiStore.getState().setSurface(workspaceId ? "conversation" : "projects")
@@ -892,7 +949,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         }
         return result
       }}
-      historicalView={historyTarget && historyTarget.workspaceId === selectedWorkspaceId && historyTarget.sessionId === selectedSessionId ? { selection: historyTarget, request: historyRequest, onLatest: () => setHistoryTarget(undefined) } : undefined}
+      historicalView={historyTarget && historyTarget.workspaceId === selectedWorkspaceId && historyTarget.sessionId === selectedSessionId ? { selection: historyTarget, request: historyRequest, onLatest: () => { scrollHistory.latest?.(); setHistoryTarget(undefined) } } : undefined}
       review={{
         projectFiles: selectedWorkspaceId && capabilities["desktop-project-files"]?.includes("1") ? { selection: { workspaceId: selectedWorkspaceId, ...(selectedSessionId ? { sessionId: selectedSessionId } : {}), ...(selectedBinding?.projectId ? { projectId: selectedBinding.projectId } : activeProjectId ? { projectId: activeProjectId } : {}) }, request: projectFileRequest, openFile: projectOpenFile, externalOpenFile } : undefined,
         onSaveFile: async (path, text, expectedRevision) => {

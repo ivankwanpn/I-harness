@@ -26,7 +26,8 @@ import { SettingsDialog } from "../settings/SettingsDialog.tsx"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { Composer, NewTaskComposer, readDraft, writeDraft, boundedDraft, useComposerSending } from "../session/Composer.tsx"
 import { ComposerProjectContext, type ComposerProjectState } from "../session/ComposerProjectContext.tsx"
-import type { TimelineRow } from "../session/project.ts"
+import { projectHistoryTimeline, type TimelineRow } from "../session/project.ts"
+import type { HistoryScroll } from "../session/use-history-scroll.ts"
 import { ExecutionPane } from "../session/ExecutionPane.tsx"
 import { InstructionsPane } from '../session/InstructionsPane.tsx'
 import { AgentProcessesPane } from "../session/AgentProcessesPane.tsx"
@@ -65,6 +66,7 @@ function isPrimaryPane(id: WorkPaneId): id is PrimaryPaneId {
 
 export interface ConversationView {
   rows: TimelineRow[]
+  history?: HistoryScroll
   assistantPreview?: import("../session/event-window.ts").AssistantPreview
   loading?: boolean
   canSend: boolean
@@ -394,6 +396,8 @@ export function Workbench({
   if (reviewOpen && !pageOpen && selectedWorkspaceId && selectedSessionId && (workPaneTab === "workflow" || workPaneTab === "reminders" || workPaneTab === "changes")) visitedWork.current.tabs.add(workPaneTab)
   if (reviewOpen && !pageOpen && selectedWorkspaceId && (workPaneTab === "browser" || workPaneTab === "terminal" || workPaneTab === "files")) visitedWorkspacePanes.current.tabs.add(workPaneTab)
   const workVisible = reviewOpen && !pageOpen
+  const historyViewport = conversation?.history?.viewport
+  const olderRows = useMemo(() => historyViewport ? projectHistoryTimeline(historyViewport.events) : undefined, [historyViewport])
   const toggleSidebar = drawer.toggle
   const navigate = (next: "settings" | "projects" | "plugins" | "search") => { drawer.closeTemporary(); setSurface(next) }
   const contextState: ComposerProjectState = projectContext ?? (conversation?.projectReady === false ? { status: "loading" }
@@ -449,7 +453,7 @@ export function Workbench({
             <PanelRight size={18} />
           </button>
           {displayProject && capabilities["desktop-review"]?.includes("1") ? <button type="button" className="header-action project-git-trigger" aria-label={t("專案 Git")} title={displayProject.name + " · Git"} onClick={() => setGitOpen(true)}><GitBranch size={16} aria-hidden="true" /><span>Git</span></button> : null}
-          {connection ? <span className={`connection-state connection-${connection}`} role="status">{t(connection === "online" ? "已連線" : connection === "offline" ? "連線已中斷" : connection === "reconnecting" ? "重新連線中…" : "連線中…")}</span> : null}
+          {connection ? <span className={`connection-state connection-${connection}`} role="status">{t(connection === "online" ? "已連線" : connection === "offline" ? "連線已中斷" : connection === "reconnecting" ? "重新連線中…" : "正在開啟工作區…")}</span> : null}
           {selectedWorkspaceId ? <WorkbenchTools key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} groups={[
             { label: english ? "Project" : "專案", items: [
               ...paneTools(["files", "browser", "terminal"]),
@@ -484,12 +488,11 @@ export function Workbench({
               <>
                 {conversation.historyError ? <p role="alert" className="notice error-text" title={conversation.historyError}>{displayError(conversation.historyError, { english }).summary}<button type="button" className="link-button" onClick={onRetry}>{t("重試")}</button></p> : null}
                 {capabilities["desktop-work-state"]?.includes("1") && conversation.workStateError ? <p role="alert" className="notice error-text">{t("工作狀態讀取失敗")}：{displayError(conversation.workStateError).summary}{conversation.onRetryWorkState ? <button type="button" className="link-button" onClick={conversation.onRetryWorkState}>{t("重試")}</button> : null}{conversation.onReloadSession ? <button type="button" className="link-button" onClick={() => { void conversation.onReloadSession?.() }}>{t("重新載入會話")}</button> : null}</p> : null}
-                {conversation.historyNotice ? <p className="notice history-notice">{conversation.historyNotice}</p> : null}
                 {capabilities["desktop-work-state"]?.includes("1") && !conversation.workStateError && conversation.workState?.goal ? <div className="conversation-goal" title={conversation.workState.goal.objective}>
                   <span className="conversation-goal-label">{t("目前目標")}</span><span className="conversation-goal-objective">{conversation.workState.goal.objective}</span>
                   <span className="conversation-goal-phase">{t(conversation.workState.goal.phase === "paused" ? "已暫停" : conversation.workState.goal.phase === "complete" ? "已完成" : "進行中")}</span>
                 </div> : null}
-                {conversation.rows.length === 0 && !conversation.assistantPreview
+                {conversation.rows.length === 0 && !conversation.assistantPreview && !conversation.history
                   ? conversation.loading
                     ? <div className="conversation-skeleton" role="status" aria-label={t("正在載入會話…")}>
                         <div className="skeleton-line skeleton-line-user" />
@@ -498,7 +501,9 @@ export function Workbench({
                         <div className="skeleton-line skeleton-line-assistant" />
                       </div>
                     : <div className="empty-conversation"><div className="empty-introduction"><h1>{t("今天想完成甚麼？")}</h1><p>{t(displayProject ? "描述你的目標，從這個專案開始。" : "延續左側的會話，或開始一項新任務。")}</p></div></div>
-                  : <Timeline resultReader={resultReader} key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={conversation.rows} assistantPreview={conversation.assistantPreview} running={conversation.running} navigation={fileNavigation} />}
+                  : <Timeline resultReader={resultReader} key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={olderRows ?? conversation.rows}
+                      assistantPreview={olderRows ? undefined : conversation.assistantPreview} running={conversation.running} historical={olderRows !== undefined}
+                      history={conversation.history} navigation={fileNavigation} />}
                 <div className="conversation-dock">
                 <div className="conversation-dock-notices">
                   {supports("desktop-work-state") ? <TodoProgress todos={conversation.workState?.todos} error={conversation.workStateError} onOpenTasks={openTodoEditor} /> : null}
