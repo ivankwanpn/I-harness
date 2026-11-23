@@ -1,5 +1,4 @@
 /* Original IH dashboard; hierarchy informed by CC Switch, ZCode and DSH. */
-.settings-content.settings-content-usage { max-width: 1280px; }
 .usage-statistics { --usage-blue: #8baddd; --usage-green: #80b5a1; --usage-amber: #c6b17c; --usage-purple: #af9bc7; display: grid; gap: 20px; min-width: 0; font-variant-numeric: tabular-nums; }
 :root[data-theme="light"] .usage-statistics { --usage-blue: #5276a8; --usage-green: #38816a; --usage-amber: #927230; --usage-purple: #8463a2; }
 .usage-toolbar, .usage-actions, .usage-panel-header, .usage-pagination, .usage-chart-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
@@ -62,7 +61,7 @@
 .usage-spinning { animation: usage-spin 1.3s linear infinite; }@keyframes usage-spin { to { transform: rotate(360deg); } }
 @container (max-width: 760px) { .usage-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }.usage-secondary-grid { grid-template-columns: 1fr; }.usage-filters { grid-template-columns: repeat(2,minmax(0,1fr)); }.usage-zone { text-align: left; }.usage-breakdown { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @container (max-width: 430px) { .usage-summary { gap: 8px; }.usage-summary article { padding: 15px 12px; }.usage-summary article > strong { font-size: 23px; }.usage-card-label { font-size: 11px; }.usage-presets button { padding: 6px 10px; }.usage-actions { justify-content: flex-start; flex: 1 1 100%; }.usage-panel-header { padding: 15px; }.usage-filters { gap: 10px; }.usage-zone { font-size: 10px; }.usage-chart-footer { align-items: flex-start; gap: 12px; }.usage-records .usage-panel-header { padding: 8px; }.usage-tabs button { padding: 7px 9px; }.usage-table-scroll td, .usage-table-scroll th { padding: 11px 12px; } }
-@media (max-width: 600px) { .settings-content.settings-content-usage { padding: 24px 16px; }.usage-price-grid { grid-template-columns: 1fr; } }
+@media (max-width: 600px) { .usage-price-grid { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .usage-spinning { animation: none; } }
 
 .usage-color-4 { background: var(--ih-muted); }.usage-fill-4 { fill: var(--ih-muted); }

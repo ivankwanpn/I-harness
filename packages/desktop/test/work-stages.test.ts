@@ -18,13 +18,12 @@ it("collapses a recorded turn's work without hiding the user, final answer or ou
   expect(collapsed.map((row) => row.id)).toEqual(["message:1", "work:turn:0", "message:5", "step:6"])
 })
 
-it("shows an unfinished turn inline until an actual turn end, independent of a transient running flag", () => {
+it("shows an unfinished turn inline until an actual turn end", () => {
   const rows = groupActivities(projectTimeline([
     { type: "turn/start", seq: 0 }, { type: "user/message", text: "task", seq: 1 },
     { type: "tool/call", callId: "c1", name: "read", args: {}, seq: 2 },
   ]))
   expect(workStages(rows, new Map()).map((row) => row.kind)).toEqual(["message", "tool"])
-  expect(workStages(rows, new Map(), true).map((row) => row.kind)).toEqual(["message", "tool"])
 })
 
 it("keeps mid-turn human steering, commentary and thinking ordered while work continues", () => {
@@ -36,7 +35,7 @@ it("keeps mid-turn human steering, commentary and thinking ordered while work co
     {type: "tool/call" as const, name: "read", callId: "read", args: {path: "dialog.tsx"}, seq: 5},
     {type: "tool/result" as const, name: "read", callId: "read", output: "actual source", seq: 6},
   ]
-  const live = workStages(groupActivities(projectTimeline(events)), new Map(), true)
+  const live = workStages(groupActivities(projectTimeline(events)), new Map())
   expect(live.map(row => row.kind)).toEqual(["message", "message", "other", "message", "tool"])
   expect(live.some(row => row.kind === "work-stage")).toBe(false)
   const ended = workStages(groupActivities(projectTimeline([...events,

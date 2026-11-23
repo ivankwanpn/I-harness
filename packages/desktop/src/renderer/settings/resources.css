@@ -1,10 +1,5 @@
 /* Resource-page presentation. Native resource identities and requests remain
  * in ResourceSettings; this scope does not style other retained settings pages. */
-.settings-content:has(> div:not([hidden]) > .settings-resource-tabs) {
-  width: 100%;
-  max-width: 1120px;
-}
-
 .settings-resource-tabs {
   min-width: 0;
 }

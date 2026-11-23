@@ -463,20 +463,22 @@ export function Workbench({
                     : <div className="empty-conversation"><div className="empty-introduction"><h1>{t("今天想完成甚麼？")}</h1><p>{t(displayProject ? "描述你的目標，從這個專案開始。" : "延續左側的會話，或開始一項新任務。")}</p></div></div>
                   : <Timeline resultReader={resultReader} key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={conversation.rows} assistantPreview={conversation.assistantPreview} running={conversation.running} navigation={fileNavigation} />}
                 <div className="conversation-dock">
-                {conversation.taskError && !(reviewOpen && workPaneTab === "tasks") ? <p role="alert" className="notice error-text" title={conversation.taskError}>{displayError(conversation.taskError).summary}</p> : null}
+                <div className="conversation-dock-notices">
+                  {conversation.taskError && !(reviewOpen && workPaneTab === "tasks") ? <p role="alert" className="notice error-text" title={conversation.taskError}>{displayError(conversation.taskError).summary}</p> : null}
+                  {(() => {
+                    const queued = (conversation.queue ?? []).filter(row => row.state === "queued")
+                    if (queued.length === 0) return null
+                    return <div className="composer-queue" aria-label={t("待送出訊息")}>
+                      <span className="composer-queue-label">{t("佇列")} {queued.length}</span>
+                      {queued.slice(0, 3).map(row => <span className="composer-queue-item" key={row.id} title={row.text}>
+                        <span className="composer-queue-text">{row.text}</span>
+                        <button type="button" aria-label={`${t("取消佇列訊息")} ${row.text}`} onClick={() => conversation.onCancelQueue(row.id)}>×</button>
+                      </span>)}
+                      {queued.length > 3 ? <span className="composer-queue-more">+{queued.length - 3}</span> : null}
+                    </div>
+                  })()}
+                </div>
                 <PendingPanel key={`${selectedWorkspaceId}:${selectedSessionId}`} draftOwner={bridge} workspaceId={selectedWorkspaceId} pending={conversation.pending} onReply={conversation.onReply} onStop={conversation.running ? conversation.onCancel : undefined} />
-                {(() => {
-                  const queued = (conversation.queue ?? []).filter(row => row.state === "queued")
-                  if (queued.length === 0) return null
-                  return <div className="composer-queue" aria-label={t("待送出訊息")}>
-                    <span className="composer-queue-label">{t("佇列")} {queued.length}</span>
-                    {queued.slice(0, 3).map(row => <span className="composer-queue-item" key={row.id} title={row.text}>
-                      <span className="composer-queue-text">{row.text}</span>
-                      <button type="button" aria-label={`${t("取消佇列訊息")} ${row.text}`} onClick={() => conversation.onCancelQueue(row.id)}>×</button>
-                    </span>)}
-                    {queued.length > 3 ? <span className="composer-queue-more">+{queued.length - 3}</span> : null}
-                  </div>
-                })()}
                 <div hidden={conversation.pending.length > 0}>
                 {composerProject}
                 <Composer
@@ -512,21 +514,56 @@ export function Workbench({
                 </div>
               </>
             )
-            : <div className="empty-conversation new-task-conversation">
-                {selectedWorkspaceId === undefined ? <>
+            : <>
+                <div className="empty-conversation">
                   <div className="empty-introduction">
-                  <span className="welcome-mark">I</span>
-                  <h1>{t("讓想法成為成果")}</h1>
-                  <p>{t("建立專案，集中管理資料夾與會話。")}</p>
-                  <button type="button" className="welcome-action" onClick={() => navigate("projects")} disabled={!onProjectsChanged}><FolderOpen size={17} />{t("專案")}</button>
+                    {selectedWorkspaceId === undefined ? <>
+                      <span className="welcome-mark">I</span>
+                      <h1>{t("讓想法成為成果")}</h1>
+                      <p>{t("建立專案，集中管理資料夾與會話。")}</p>
+                      <button type="button" className="welcome-action" onClick={() => navigate("projects")} disabled={!onProjectsChanged}><FolderOpen size={17} />{t("專案")}</button>
+                    </> : <>
+                      <h1>{t("今天想完成甚麼？")}</h1>
+                      <p>{t(displayProject ? "描述你的目標，從這個專案開始。" : "延續左側的會話，或開始一項新任務。")}</p>
+                    </>}
                   </div>
-                  <div className="empty-composer">{composerProject}<div className="project-required-composer">{t("先選擇專案以開始會話。")}</div></div>
-                </> : <>
-                  <div className="empty-introduction"><h1>{t("今天想完成甚麼？")}</h1>
-                  <p>{t(displayProject ? "描述你的目標，從這個專案開始。" : "延續左側的會話，或開始一項新任務。")}</p></div>
-                  <div className="empty-composer">{composerProject}{selectedProject && !selectedProject.workspaceIds.includes(selectedWorkspaceId) ? <><p className="notice">{english ? "Choose a project folder to create a conversation. This folder retains moved conversation storage." : "選擇專案資料夾以建立會話；此資料夾保留已移動會話的儲存資料。"}</p><button type="button" className="primary-button" onClick={() => { const member = selectedProject.primaryWorkspaceId ?? selectedProject.workspaceIds[0]; if (member) onSelectWorkspace(member, selectedProject.id) }}>{t("選擇資料夾")}</button></> : <NewTaskComposer onOpenHistory={onSelectHistory} onOpenProjectFile={fileNavigation?.onOpenProjectFile} key={`${selectedWorkspaceId}:${selectedProjectId ?? ""}`} bridge={bridge} draftRequest={capabilities["desktop-drafts"]?.includes("1") ? draftRequest : undefined} workspaceId={selectedWorkspaceId} projectId={selectedProjectId} capabilities={capabilities} onPermissionsChanged={onSandboxChange} onSubmitted={(id) => { if (workspaceScope.current.id === selectedWorkspaceId && workspaceScope.current.sessionId === undefined && workspaceScope.current.projectId === selectedProjectId) { onSelectSession(id); onSessionsChanged?.() } }} onDraftCreated={() => onSessionsChanged?.()} onWorkflow={openWorkflow} />}</div>
-                </>}
-              </div>}
+                </div>
+                <div className="conversation-dock">
+                  {composerProject}
+                  {selectedWorkspaceId === undefined ? (
+                    <div className="project-required-composer">{t("先選擇專案以開始會話。")}</div>
+                  ) : selectedProject && !selectedProject.workspaceIds.includes(selectedWorkspaceId) ? (
+                    <>
+                      <p className="notice">{english ? "Choose a project folder to create a conversation. This folder retains moved conversation storage." : "選擇專案資料夾以建立會話；此資料夾保留已移動會話的儲存資料。"}</p>
+                      <button type="button" className="primary-button" onClick={() => {
+                        const member = selectedProject.primaryWorkspaceId ?? selectedProject.workspaceIds[0]
+                        if (member) onSelectWorkspace(member, selectedProject.id)
+                      }}>{t("選擇資料夾")}</button>
+                    </>
+                  ) : (
+                    <NewTaskComposer
+                      key={`${selectedWorkspaceId}:${selectedProjectId ?? ""}`}
+                      bridge={bridge}
+                      draftRequest={capabilities["desktop-drafts"]?.includes("1") ? draftRequest : undefined}
+                      workspaceId={selectedWorkspaceId}
+                      projectId={selectedProjectId}
+                      capabilities={capabilities}
+                      onOpenHistory={onSelectHistory}
+                      onOpenProjectFile={fileNavigation?.onOpenProjectFile}
+                      onPermissionsChanged={onSandboxChange}
+                      onSubmitted={(id) => {
+                        const scope = workspaceScope.current
+                        if (scope.id === selectedWorkspaceId && scope.sessionId === undefined && scope.projectId === selectedProjectId) {
+                          onSelectSession(id)
+                          onSessionsChanged?.()
+                        }
+                      }}
+                      onDraftCreated={() => onSessionsChanged?.()}
+                      onWorkflow={openWorkflow}
+                    />
+                  )}
+                </div>
+              </>}
         </section>}
       </main>
       </>}

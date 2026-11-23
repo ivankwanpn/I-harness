@@ -1,11 +1,11 @@
 import type { TimelineItem } from "./activity-groups.ts"
 import type { GenerationReading } from "./project.ts"
-export interface WorkStage { kind: "work-stage"; id: string; count: number; active: boolean; hasErrors: boolean; generation?: GenerationReading }
+export interface WorkStage { kind: "work-stage"; id: string; count: number; expanded: boolean; hasErrors: boolean; generation?: GenerationReading }
 export type WorkItem = TimelineItem | WorkStage
 
 /** A stage hides intermediate work only. Headers/children stay flat so the
  * existing virtualizer, rather than a giant nested DOM, still bounds rendering. */
-export function workStages(items: readonly TimelineItem[], open: ReadonlyMap<string, boolean>, running = false): WorkItem[] {
+export function workStages(items: readonly TimelineItem[], open: ReadonlyMap<string, boolean>): WorkItem[] {
   const result: WorkItem[] = []
   for (let start = 0; start < items.length;) {
     const turn = items[start]!.turn
@@ -23,13 +23,8 @@ export function workStages(items: readonly TimelineItem[], open: ReadonlyMap<str
     }
     // Only an ended turn's last substantive assistant message is treated as
     // final. A prior commentary followed by a tool is still intermediate work.
-    let finalId: string | undefined
-    if (turn.complete) {
-      // Passive bookkeeping and background notices do not change which model
-      // response ended the work. A later tool or thought still blocks finality.
-      const last = segment.filter((row) => row.kind === "message" || row.kind === "tool" || row.kind === "activity-group" || (row.kind === "other" && row.label === "reasoning")).at(-1)
-      if (last?.kind === "message" && last.role === "assistant" && !last.transient) finalId = last.id
-    }
+    const last = segment.findLast((row) => row.kind === "message" || row.kind === "tool" || row.kind === "activity-group" || (row.kind === "other" && row.label === "reasoning"))
+    const finalId = last?.kind === "message" && last.role === "assistant" && !last.transient ? last.id : undefined
     // Thinking, commentary, tools and background inputs share the same ordered
     // work disclosure. The first thought remains a collapsed hint inside it.
     const work = (row: TimelineItem) => row.id !== finalId && row.kind !== "outcome" && row.kind !== "failure"
@@ -47,7 +42,7 @@ export function workStages(items: readonly TimelineItem[], open: ReadonlyMap<str
     }
     const hasErrors = segment.some(failed)
     const id = `work:${turn.id}`
-    const active = running && !turn.complete && end === items.length
+    const expanded = open.get(id) === true
     let header = false
     for (const row of segment) {
       if (row.id === finalId && row.kind === "message" && !row.interrupted && turn.generation) {
@@ -55,8 +50,8 @@ export function workStages(items: readonly TimelineItem[], open: ReadonlyMap<str
         continue
       }
       if (!work(row)) { result.push(row); continue }
-      if (!header && count) { result.push({ kind: "work-stage", id, count, active, hasErrors, generation: finalId === undefined ? turn.generation : undefined }); header = true }
-      if (open.get(id) ?? active) result.push(row)
+      if (!header && count) { result.push({ kind: "work-stage", id, count, expanded, hasErrors, generation: finalId === undefined ? turn.generation : undefined }); header = true }
+      if (expanded) result.push(row)
     }
     start = end
   }

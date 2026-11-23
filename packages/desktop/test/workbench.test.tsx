@@ -179,6 +179,20 @@ describe("Desktop workbench shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "顯示側欄" }))
     expect(screen.getByRole("navigation", { name: "專案" })).toBeTruthy()
   })
+  it("keeps draft and saved-session inputs in the same bottom dock layout", () => {
+    const props = { bridge: fakeBridge(), workspaces: [ENTRY], selectedWorkspaceId: ENTRY.id, capabilities: {}, onSelectWorkspace: vi.fn(), onSelectSession: vi.fn() }
+    const view = render(<Workbench {...props} />)
+    const session = screen.getByRole("region", { name: "會話" })
+    const dock = () => screen.getByRole("textbox", { name: "提示" }).closest(".conversation-dock")
+    expect(dock()).toBe(session.lastElementChild)
+
+    const conversation = { rows: [], canSend: false, running: false, loading: true, pending: [], onPrompt: async () => {}, onCancel() {}, onCancelTask() {}, onCancelQueue() {}, onReply: async () => {} }
+    view.rerender(<Workbench {...props} selectedSessionId="saved" conversation={conversation} />)
+    expect(dock()).toBe(session.lastElementChild)
+    view.rerender(<Workbench {...props} selectedSessionId="saved" conversation={{ ...conversation, loading: false, rows: [{ id: "reply", kind: "message", role: "assistant", text: "Saved reply" }] }} />)
+    expect(screen.getByTestId("timeline").closest(".timeline-region")?.nextElementSibling).toBe(dock())
+  })
+
   it("preserves a draft while a pending request takes over the bottom dock", () => {
     const conversation = { rows: [], canSend: true, running: true, pending: [], onPrompt: async () => {}, onCancel: vi.fn(), onCancelTask: vi.fn(), onCancelQueue: vi.fn(), onReply: async () => {} }
     const props = { bridge: fakeBridge(), workspaces: [ENTRY], selectedWorkspaceId: ENTRY.id, selectedSessionId: "dock-test", capabilities: {}, onSelectWorkspace: vi.fn(), onSelectSession: vi.fn() }

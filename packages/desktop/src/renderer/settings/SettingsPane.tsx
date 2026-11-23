@@ -163,7 +163,7 @@ export function SettingsPane({ workspace, sessionId, onClose, bridge, onSandboxC
     </nav>
     <main className="settings-main">
       {bridge ? <TitleBar bridge={bridge} title={t("設定")} /> : null}
-      <div className="settings-scroll" ref={scrollRef}><div className={`settings-content${tab === "usage" ? " settings-content-usage" : ""}`}>
+      <div className="settings-scroll" ref={scrollRef}><div className="settings-content">
         <header className="settings-page-heading">
           <div><h1>{t(current.label)}</h1><p className="settings-description">{t(current.description)}</p></div>
           {current.scope === "workspace" && workspace ? <span className="settings-page-context" title={workspace.path}><FolderOpen size={14} aria-hidden="true" /><span>{workspace.label}</span></span> : null}

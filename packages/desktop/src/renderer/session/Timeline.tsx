@@ -77,10 +77,9 @@ function RowView({ row, open, toggle, activeReasoningId, page, setPage, navigati
   const toolText = useToolText()
   const english = useLocale(state => state.locale) === "en"
   if (row.kind === "work-stage") {
-    const expanded = open.get(row.id) ?? row.active
     const count = `${row.count} ${toolText("項活動",row.count===1?"activity":"activities")}`
     const note = row.hasErrors ? toolText("部分活動未完成","Some activities were not completed") : undefined
-    return <button type="button" className="work-stage-heading" aria-label={t("工作過程")} aria-description={`${count}${note?` · ${note}`:""}`} aria-expanded={expanded} onClick={() => toggle(row.id)}>{t("工作過程")}<span className="work-stage-meta">{count}{note?<span className="work-stage-incomplete">{note}</span>:null}{row.generation ? <GenerationSpeed generation={row.generation} /> : null}</span><ChevronRight size={14} className={expanded ? "rotate-90" : ""} /></button>
+    return <button type="button" className="work-stage-heading" aria-label={t("工作過程")} aria-description={`${count}${note?` · ${note}`:""}`} aria-expanded={row.expanded} onClick={() => toggle(row.id)}>{t("工作過程")}<span className="work-stage-meta">{count}{note?<span className="work-stage-incomplete">{note}</span>:null}{row.generation ? <GenerationSpeed generation={row.generation} /> : null}</span><ChevronRight size={14} className={row.expanded ? "rotate-90" : ""} /></button>
   }
   if (row.kind === "activity-group") return <ActivityGroup resultReader={resultReader} row={row} page={page} setPage={setPage} expanded={open.get(row.id) ?? row.rows.some((tool) => open.get(tool.id) === true)} isOpen={(id) => open.get(id) === true} toggle={toggle} navigation={navigation} onPreview={onPreview} />
   if (row.kind === "message") {
@@ -139,7 +138,7 @@ export function Timeline({ rows, assistantPreview, navigation, running = false, 
   const [preview, setPreview] = useState<{ src: string; name: string }>()
   const grouped = useMemo(() => groupActivities(rows), [rows])
   const [open, setOpen] = useState(new Map<string, boolean>())
-  const items = useMemo(() => workStages(grouped, open, running), [grouped, open, running])
+  const items = useMemo(() => workStages(grouped, open), [grouped, open])
   // Streamed body text is a single tail item. A text update leaves the
   // recorded projection, activity groups, and their measurements in place.
   const previewItem: TimelineRow | undefined = assistantPreview && {
@@ -159,10 +158,8 @@ export function Timeline({ rows, assistantPreview, navigation, running = false, 
     if (!keepFollowing) pauseFollowing()
     setOpen((previous) => {
       const next = new Map(previous)
-      const current = previous.get(id) ?? (group?.kind === "work-stage" ? group.active : (group?.kind === "activity-group" && group.rows.some((tool) => previous.get(tool.id) === true)))
-      const willOpen = expanded ?? !current
-      next.set(id, willOpen)
-      if (willOpen && reasoning && group.turn) next.set(`work:${group.turn.id}`, true)
+      const current = previous.get(id) ?? (group?.kind === "activity-group" && group.rows.some((tool) => previous.get(tool.id) === true))
+      next.set(id, expanded ?? !current)
       while (next.size > 2000) next.delete(next.keys().next().value!)
       return next
     })

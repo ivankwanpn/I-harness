@@ -91,6 +91,9 @@ it("creates the completed work disclosure only after the turn ends while keeping
   expect(screen.getByText("Checking files")).toBeTruthy()
   expect(screen.getByText("Also check the dialogs")).toBeTruthy()
   expect(screen.getByRole("button",{name:"工具詳情 read"})).toBeTruthy()
+  view.rerender(<Timeline rows={projectTimeline(events)} />)
+  expect(screen.queryByRole("button",{name:"工作過程"})).toBeNull()
+  expect(screen.getByRole("button",{name:"工具詳情 read"})).toBeTruthy()
   view.rerender(<Timeline rows={projectTimeline([...events,{type:"assistant/message",text:"Final reply",seq:5},{type:"turn/end",seq:6}])} />)
   expect(screen.getByRole("button",{name:"工作過程"}).getAttribute("aria-expanded")).toBe("false")
   expect(screen.queryByText("Checking files")).toBeNull()
@@ -122,7 +125,7 @@ it("shows persisted model reasoning inside expandable work details", async () =>
   expect((await screen.findByText("Inspect")).tagName).toBe("STRONG")
 })
 
-it("keeps live reasoning compact and preserves an opened segment through the final answer", async () => {
+it("collapses finished work after live reasoning was opened and remembers the reasoning disclosure on reopen", async () => {
   const prefix = [{ type: "turn/start" as const, seq: 0 }, { type: "user/message" as const, text: "Check the files", seq: 1 }]
   const chunk = { type: "reasoning/chunk" as const, streamId: "a", text: "Inspect the directory\n\nRead", offset: 0, atSeq: 2 }
   const view = render(<Timeline rows={projectTimeline([...prefix, chunk])} running />)
@@ -138,16 +141,23 @@ it("keeps live reasoning compact and preserves an opened segment through the fin
   const reasoning = screen.getByRole("region", { name: "思考過程" })
   expect(reasoning.closest(".timeline")).toBe(screen.getByTestId("timeline"))
   expect(reasoning.hasAttribute("tabindex")).toBe(false)
-  view.rerender(<Timeline rows={projectTimeline([...prefix,
-    { type: "reasoning", streamId: "a", text: "Inspect the directory\n\nRead the files", seq: 2 },
-    { type: "tool/call", callId: "read", name: "read", args: {}, seq: 3 },
-    { type: "assistant/message", text: "Done", seq: 4 }, { type: "turn/end", seq: 5 },
-  ])} />)
-  expect(screen.getByRole("button", { name: "思考過程" })).toBe(disclosure)
-  expect(disclosure.getAttribute("aria-expanded")).toBe("true")
-  expect(screen.getByRole("button", { name: "工作過程" }).getAttribute("aria-expanded")).toBe("true")
-  expect(screen.getByText("Read the files")).toBeTruthy()
+  const finished = [...prefix,
+    { type: "reasoning" as const, streamId: "a", text: "Inspect the directory\n\nRead the files", seq: 2 },
+    { type: "tool/call" as const, callId: "read", name: "read", args: {}, seq: 3 },
+    { type: "assistant/message" as const, text: "Done", seq: 4 }, { type: "turn/end" as const, seq: 5 },
+  ]
+  view.rerender(<Timeline rows={projectTimeline(finished)} running />)
+  const stage = screen.getByRole("button", { name: "工作過程" })
+  expect(stage.getAttribute("aria-expanded")).toBe("false")
+  expect(screen.queryByRole("button", { name: "思考過程" })).toBeNull()
   expect(screen.getByText("Done")).toBeTruthy()
+  fireEvent.click(stage)
+  expect(screen.getByRole("button", { name: "思考過程" }).getAttribute("aria-expanded")).toBe("true")
+  expect(await screen.findByText("Read the files")).toBeTruthy()
+  view.rerender(<Timeline rows={projectTimeline([...finished,
+    { type: "turn/start", seq: 6 }, { type: "user/message", text: "Next task", seq: 7 },
+  ])} running />)
+  expect(stage.getAttribute("aria-expanded")).toBe("true")
 })
 
 it("shows measured generation with the final answer and omits a speed on an older turn", () => {

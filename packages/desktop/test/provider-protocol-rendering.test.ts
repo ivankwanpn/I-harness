@@ -241,7 +241,7 @@ it.each(protocols)("%s preserves live reasoning, canonical replay, Work Process 
     const stageId = `work:${live[0]!.turn!.id}`
     const collapsed = workStages(groupActivities(live), new Map())
     expect(collapsed.map((row) => row.kind)).toEqual(["message", "work-stage", "message"])
-    expect(collapsed[1]).toMatchObject({ id: stageId, count: 6, active: false })
+    expect(collapsed[1]).toMatchObject({ id: stageId, count: 6, expanded: false })
     expect(content(collapsed[2]!)).toBe(`assistant:${FINAL}`)
     // Core currently persists accumulated commentary after the streamed tool
     // call. Preserve that actual durable order rather than inventing UI order.
