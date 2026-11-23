@@ -49,15 +49,19 @@ it("renders the actual grouped route with preview, honest partial retention and 
 it.each([["canceled","已取消"],["unknown","結果未知"]] as const)("preserves trusted %s despite payload-shaped errors", (outcome,label) => {
   const envelope={...inline,execution:{outcome,dispatch:"not-dispatched" as const}}
   const rows=projectTimeline([{type:"turn/start"},event(envelope),{type:"turn/end"}])
-  expect(workStages(groupActivities(rows),new Map())[0]).toMatchObject({kind:"work-stage",hasErrors:false})
+  expect(workStages(groupActivities(rows),new Map())[0]).toMatchObject({kind:"work-stage",failedCount:0})
   render(<Timeline rows={projectTimeline([event(envelope)])} />)
   expect(screen.getByText(label)).toBeTruthy()
   expect(screen.queryByText("執行失敗")).toBeNull()
 })
-it("only failed trusted execution marks a work stage, including a grouped quota result",()=>{
-  for (const [envelope,hasErrors] of [[inline,false],[quota,false],[artifact,true]] as const) {
+it("only counts recorded execution failures, even when results are grouped",()=>{
+  for (const [envelope,failedCount] of [[inline,0],[quota,0],[artifact,2]] as const) {
     const rows=projectTimeline([{type:"turn/start"},event(envelope),event(envelope,false,"two"),{type:"turn/end"}])
-    expect(workStages(groupActivities(rows),new Map())[0]).toMatchObject({kind:"work-stage",hasErrors})
+    expect(workStages(groupActivities(rows),new Map())[0]).toMatchObject({kind:"work-stage",count:2,failedCount})
+    render(<Timeline rows={rows} />)
+    if (failedCount) expect(screen.getByText("2 項活動失敗")).toBeTruthy()
+    else expect(screen.queryByText(/項活動失敗/)).toBeNull()
+    cleanup()
   }
 })
 it("uses English storage labels and calls the validated media preview once",()=>{

@@ -68,7 +68,7 @@
 .timeline-assistant:hover .message-actions > button, .timeline-assistant:focus-within .message-actions > button { opacity: 1; }
 .message-copy-error { font-size: .85em; color: var(--ih-danger); overflow-wrap: anywhere; }
 .work-stage-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-inline-start: 8px; font-size: .86em; color: var(--ih-muted); }
-.work-stage-incomplete { color: var(--ih-warning); }
+.work-stage-failures { color: var(--ih-warning); }
 .timeline-image-dialog { width: min(1200px, 100%); }
 .timeline-image-dialog .settings-dialog-content { display: flex; align-items: center; justify-content: center; }
 .timeline-image-dialog img { display: block; max-width: 100%; max-height: 72vh; object-fit: contain; }

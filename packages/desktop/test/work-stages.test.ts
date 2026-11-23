@@ -45,11 +45,14 @@ it("keeps mid-turn human steering, commentary and thinking ordered while work co
   expect(ended.filter(row => row.kind === "message").map(row => row.text)).toEqual(["Start", "Also check the dialogs", "Final answer"])
 })
 
-it("retains a visible incomplete cue in a collapsed finished stage with a recorded failed result", () => {
+it("counts failed activities inside a collapsed completed turn and keeps its final reply", () => {
   const items=groupActivities(projectTimeline([{type:"turn/start",seq:0},{type:"user/message",text:"Read",seq:1},
-    {type:"tool/call",callId:"r",name:"read",args:{path:"missing"},seq:2},
-    {type:"tool/result",callId:"r",name:"read",output:{error:"File missing"},isError:true,seq:3},
-    {type:"turn/end",seq:4}]))
-  const stage=workStages(items,new Map()).find(row=>row.kind==="work-stage")
-  expect(stage).toMatchObject({hasErrors:true,count:1})
+    {type:"tool/call",callId:"first",name:"bash",args:{},seq:2},
+    {type:"tool/result",callId:"first",name:"bash",output:{exitCode:1},seq:3},
+    {type:"tool/call",callId:"second",name:"bash",args:{},seq:4},
+    {type:"tool/result",callId:"second",name:"bash",output:{exitCode:0},seq:5},
+    {type:"assistant/message",text:"Final answer",seq:6},{type:"turn/end",seq:7}]))
+  const stages=workStages(items,new Map())
+  expect(stages.find(row=>row.kind==="work-stage")).toMatchObject({count:2,failedCount:1,expanded:false})
+  expect(stages.at(-1)).toMatchObject({kind:"message",text:"Final answer"})
 })

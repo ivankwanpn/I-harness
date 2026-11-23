@@ -79,8 +79,10 @@ function RowView({ row, open, toggle, activeReasoningId, page, setPage, navigati
   const english = useLocale(state => state.locale) === "en"
   if (row.kind === "work-stage") {
     const count = `${row.count} ${toolText("項活動",row.count===1?"activity":"activities")}`
-    const note = row.hasErrors ? toolText("部分活動未完成","Some activities were not completed") : undefined
-    return <button type="button" className="work-stage-heading" aria-label={t("工作過程")} aria-description={`${count}${note?` · ${note}`:""}`} aria-expanded={row.expanded} onClick={() => toggle(row.id)}>{t("工作過程")}<span className="work-stage-meta">{count}{note?<span className="work-stage-incomplete">{note}</span>:null}{row.generation ? <GenerationSpeed generation={row.generation} /> : null}</span><ChevronRight size={14} className={row.expanded ? "rotate-90" : ""} /></button>
+    const failures = row.failedCount
+      ? toolText(`${row.failedCount} 項活動失敗`, `${row.failedCount} ${row.failedCount === 1 ? "activity" : "activities"} failed`)
+      : undefined
+    return <button type="button" className="work-stage-heading" aria-label={t("工作過程")} aria-description={failures ? `${count} · ${failures}` : count} aria-expanded={row.expanded} onClick={() => toggle(row.id)}>{t("工作過程")}<span className="work-stage-meta">{count}{failures ? <span className="work-stage-failures">{failures}</span> : null}{row.generation ? <GenerationSpeed generation={row.generation} /> : null}</span><ChevronRight size={14} className={row.expanded ? "rotate-90" : ""} /></button>
   }
   if (row.kind === "activity-group") return <ActivityGroup resultReader={resultReader} row={row} page={page} setPage={setPage} expanded={open.get(row.id) ?? row.rows.some((tool) => open.get(tool.id) === true)} isOpen={(id) => open.get(id) === true} toggle={toggle} navigation={navigation} onPreview={onPreview} />
   if (row.kind === "message") {
