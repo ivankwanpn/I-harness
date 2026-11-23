@@ -15,7 +15,6 @@ interface ProjectSessionsProps {
   revision?: number
   workspaces: WorkspaceEntry[]
   projectId?: string
-  primaryWorkspaceId?: string
   memberWorkspaceIds: ReadonlySet<string>
   assignedWorkspaceIds: ReadonlySet<string>
   knownProjectIds: ReadonlySet<string>
@@ -27,7 +26,7 @@ interface ProjectSessionsProps {
   onManageSession: ProjectSidebarProps["onManageSession"]
   onManageArchived: ProjectSidebarProps["onManageArchived"]
   onManageSessions?: ProjectSidebarProps["onManageSessions"]
-  onNewSession?(projectId?: string): void
+  onNewSession?(): void
   newSessionActive?: boolean
   filter?: string
   onOwners?(workspaceId: string, owners: (string | undefined)[]): void
@@ -167,7 +166,7 @@ export function ProjectSessions(props: ProjectSessionsProps) {
       onCopyId={async id => { await navigator.clipboard.writeText(id) }}
       onOpenFolder={async source => { if (source) await bridge.request({ kind: "workspace/reveal", workspaceId: source.workspaceId }) }}
       onManageSessions={props.onManageSessions ? (id, source) => { if (source) props.onManageSessions!(source.workspaceId, id) } : undefined}
-      onNewSession={props.onNewSession ? () => props.onNewSession!(props.projectId) : undefined}
+      onNewSession={props.onNewSession}
       newSessionActive={props.newSessionActive}
       filter={props.filter}
       /> : null}

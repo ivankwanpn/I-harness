@@ -280,7 +280,7 @@ export function NewTaskComposer({ bridge, draftRequest, onOpenHistory, onOpenPro
     canSend={capabilities["session-create"]?.includes("1") === true && !!selected && capabilities["desktop-input"]?.includes("1") === true && capabilities["desktop-draft-create"]?.includes("1") === true}
     sendReason={!selected ? t("選擇模型") : t("耐久輸入不可用")} running={false} onCancel={() => {}}
     fileReferencesEnabled={capabilities["prompt-context"]?.includes("1") === true} imageAttachmentsEnabled={capabilities["prompt-images"]?.includes("1") === true && model?.status === "ready" && model.imageInput === true}
-    permissionsEnabled={capabilities["desktop-agent-settings"]?.includes("1")} onWorkflow={onWorkflow} workflowEnabled={capabilities["desktop-workflow"]?.includes("1")} onPermissionsChanged={onPermissionsChanged}
+    permissionsEnabled={capabilities["desktop-agent-settings"]?.includes("1")} onWorkflow={onWorkflow} onPermissionsChanged={onPermissionsChanged}
     modelControl={<SessionModelPicker bridge={bridge} workspaceId={workspaceId} current={model} disabled={false} onSelect={async (selection) => save({ ...readMetadata(), selection })} />}
     captureSubmission={(text, images) => {
       if (isDraftRetired(workspaceId, sessionId)) throw new ComposerPreparationError(t("無法準備新會話；草稿仍保留。"))

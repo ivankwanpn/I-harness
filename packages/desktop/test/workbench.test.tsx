@@ -23,9 +23,37 @@ it("opens delegated work in its own pane while retaining the selected parent con
     conversation={{ rows: [], canSend: false, running: false, pending: [], onPrompt: async () => {}, onCancel() {}, onCancelTask() {}, onCancelQueue() {}, onReply: async () => {} }} />)
   fireEvent.click(screen.getByRole("button", { name: "工作台工具" }))
   fireEvent.click(screen.getByRole("button", { name: "子代理" }))
-  await waitFor(() => expect(screen.getByRole("tab", { name: "子代理" }).getAttribute("aria-selected")).toBe("true"))
+  expect(screen.getByRole("button", { name: "返回成果檢查" })).toBeTruthy()
+  expect(screen.queryByRole("tab", { name: "子代理" })).toBeNull()
   await waitFor(() => expect(screen.getByText("尚無子代理")).toBeTruthy())
   expect(request).toHaveBeenCalledWith({ kind: "desktop/session/subagents/list", workspaceId: ENTRY.id, sessionId: "parent" })
+})
+
+it("keeps primary review tabs visible together and returns to the previous tab after inspecting a tool", async () => {
+  useUiStore.setState({ reviewOpen: true })
+  const request = vi.fn(async (input: { kind: string }) => {
+    if (input.kind === "desktop/capabilities") return {}
+    if (input.kind === "desktop/session/execution/read") return { sessionId: "review", live: true, cells: [], total: 0, offset: 0, hasMore: false }
+    return undefined
+  })
+  render(<Workbench bridge={{ request, onEvent: () => () => {} }} workspaces={[ENTRY]} selectedWorkspaceId={ENTRY.id} selectedSessionId="review"
+    capabilities={{ "desktop-execution": ["1"], "desktop-terminal": ["1"], "desktop-workflow": ["1"], "desktop-instructions": ["1"], "desktop-work-state": ["1"] }}
+    onSelectWorkspace={() => {}} onSelectSession={() => {}}
+    conversation={{ rows: [], canSend: false, running: false, pending: [], workState: { goal: null, todosRevision: 1, todos: [{ content: "Inspect the result", status: "pending" }] },
+      onPrompt: async () => {}, onCancel() {}, onCancelTask() {}, onCancelQueue() {}, onReply: async () => {} }} />)
+  const panel = within(screen.getByRole("complementary", { name: "成果檢查" }))
+  expect(panel.getAllByRole("tab").map(tab => tab.textContent)).toEqual(["檔案", "變更", "工作"])
+  fireEvent.click(panel.getByRole("tab", { name: "變更" }))
+  expect(request).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "desktop/session/execution/read" }))
+  fireEvent.click(screen.getByRole("button", { name: "工作台工具" }))
+  fireEvent.click(screen.getByRole("button", { name: "Code Mode" }))
+  expect(await panel.findByText("尚無 Code Mode cell")).toBeTruthy()
+  expect(panel.queryByRole("tab", { name: "Code Mode" })).toBeNull()
+  fireEvent.click(panel.getByRole("button", { name: "返回成果檢查" }))
+  const changes = panel.getByRole("tab", { name: "變更" })
+  expect(changes.getAttribute("aria-selected")).toBe("true")
+  await waitFor(() => expect(document.activeElement).toBe(changes))
+  expect(panel.queryByText("尚無 Code Mode cell")).toBeNull()
 })
 
 function fakeBridge(): DesktopBridge {
@@ -120,14 +148,15 @@ describe("Desktop workbench shell", () => {
     bridge.request = vi.fn(async (request) => request.kind === "desktop/schedule/list" ? { schedules: [] } : undefined)
     const base = { bridge, workspaces: [ENTRY], selectedWorkspaceId: ENTRY.id, selectedSessionId: "s-1", onSelectWorkspace: () => {}, onSelectSession: () => {}, conversation: { rows: [], canSend: false, running: false, modelState: { status: "ready" as const, providerId: "deepseek", modelId: "deepseek-flash", label: "DeepSeek Flash" }, pending: [], onPrompt: async () => {}, onCancel() {}, onCancelTask() {}, onCancelQueue() {}, onReply: async () => {} } }
     const rendered = render(<Workbench {...base} capabilities={{ "desktop-schedule": ["1"] }} />)
-    fireEvent.click(screen.getByRole("tab", { name: "提醒" }))
+    fireEvent.click(screen.getByRole("button", { name: "工作台工具" }))
+    fireEvent.click(screen.getByRole("button", { name: "提醒" }))
     await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/schedule/list", workspaceId: ENTRY.id, sessionId: "s-1" }))
     expect(screen.getByText("此會話尚無提醒")).toBeTruthy()
     rendered.rerender(<Workbench {...base} conversation={{ ...base.conversation, queue: [{ id: "q-1", text: "queued", delivery: "queue", intent: "user", state: "queued", order: 1 }] }} capabilities={{ "desktop-schedule": ["1"] }} />)
     expect((screen.getByRole("button", { name: "建立提醒" }) as HTMLButtonElement).disabled).toBe(true)
     rendered.rerender(<Workbench {...base} capabilities={{}} />)
-    expect(screen.queryByRole("tab", { name: "提醒" })).toBeNull()
-    await waitFor(() => expect(screen.getByRole("tab", { name: "變更" }).getAttribute("aria-selected")).toBe("true"))
+    expect(screen.queryByText("此會話尚無提醒")).toBeNull()
+    await waitFor(() => expect(screen.getByRole("tab", { name: "檔案" }).getAttribute("aria-selected")).toBe("true"))
   })
   it("opens a new task draft and preserves typing without creating a session", async () => {
     const bridge = fakeBridge()
@@ -140,6 +169,26 @@ describe("Desktop workbench shell", () => {
     fireEvent.change(editor, { target: { value: "Review the playground" } })
     expect(editor.value).toBe("Review the playground")
     expect(vi.mocked(bridge.request).mock.calls.filter(([request]) => request.kind === "session/create")).toHaveLength(0)
+  })
+  it("uses the clicked project's primary folder when creating from an inactive project", async () => {
+    const firstMember = { id: "other-folder", path: "D:/other", label: "Other" }
+    const primary = { id: "other-primary", path: "D:/primary", label: "Primary" }
+    const timestamp = "2026-10-01T00:00:00Z"
+    const projects = [
+      { id: "current", name: "Current", primaryWorkspaceId: ENTRY.id, workspaceIds: [ENTRY.id], createdAt: timestamp, updatedAt: timestamp },
+      { id: "other", name: "Other project", primaryWorkspaceId: primary.id, workspaceIds: [firstMember.id, primary.id], createdAt: timestamp, updatedAt: timestamp },
+    ]
+    const onSelectWorkspace = vi.fn()
+    const bridge = fakeBridge()
+    bridge.request = vi.fn(async request => request.kind === "session/dashboard" ? { sessions: [] } : {})
+    render(<Workbench bridge={bridge} projects={projects} workspaces={[ENTRY, firstMember, primary]} selectedProjectId="current" selectedWorkspaceId={ENTRY.id}
+      selectedSessionId="saved" capabilities={{ "session-create": ["1"] }} onSelectWorkspace={onSelectWorkspace} onSelectSession={() => {}} />)
+    fireEvent.click(screen.getByRole("button", { name: "展開專案 Other project" }))
+    const group = screen.getByRole("button", { name: "Other project" }).closest("li")!
+    fireEvent.click(await within(group).findByRole("button", { name: /新會話/ }))
+    expect(onSelectWorkspace).toHaveBeenLastCalledWith(primary.id, "other")
+    fireEvent.click(screen.getByRole("button", { name: "新增會話" }))
+    expect(onSelectWorkspace).toHaveBeenLastCalledWith(ENTRY.id, "current")
   })
   it("inserts a settings command into the existing draft without sending", async () => {
     const bridge = fakeBridge()

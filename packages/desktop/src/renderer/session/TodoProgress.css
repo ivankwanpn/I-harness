@@ -1,26 +1,20 @@
-.todo-progress-host { position: relative; container-name: conversation-todos; container-type: inline-size; }
-.todo-progress-dock { --todo-success: #65b77a; position: absolute; top: 12px; right: 64px; z-index: 2; display: flex; flex-direction: column; width: min(300px, calc(100% - 76px)); max-height: calc(100% - 24px); margin: 0; border: 1px solid var(--ih-divider); border-radius: 14px; background: var(--ih-panel); box-shadow: 0 3px 12px rgb(0 0 0 / 8%); overflow: hidden; }
-.todo-progress-header { display: flex; flex-shrink: 0; align-items: center; gap: 15px; min-height: 38px; padding: 8px 12px 5px 15px; }
-.todo-progress-header h3 { margin: 0; color: var(--ih-muted); font-size: 12px; font-weight: 500; }
-.todo-progress-count { color: var(--ih-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.todo-progress-dock[data-complete="true"] .todo-progress-count { color: var(--todo-success); }
-.todo-progress-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
-.todo-progress-actions button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--ih-muted); cursor: pointer; }
-.todo-progress-actions button:hover { background: color-mix(in srgb, var(--ih-text) 7%, transparent); color: var(--ih-text); }
-.todo-progress-actions button:focus-visible, .todo-progress-pager button:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: -1px; }
-.todo-progress-body { display: flex; flex-direction: column; min-height: 0; padding: 1px 15px 12px; }
-.todo-progress-list { list-style: none; padding: 0; margin: 0; min-height: 0; max-height: 250px; overflow-y: auto; scrollbar-gutter: stable; }
-.todo-progress-list li { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; color: var(--ih-muted); font-size: 12px; line-height: 1.5; }
-.todo-progress-list svg { flex: 0 0 auto; margin-top: 2px; color: var(--ih-muted); stroke-width: 1.7; }
-.todo-progress-list li[data-status="completed"] svg { color: var(--todo-success); }
-.todo-progress-list li[data-status="completed"] s { color: color-mix(in srgb, var(--ih-muted) 72%, var(--ih-panel)); text-decoration-color: color-mix(in srgb, var(--ih-muted) 65%, transparent); }
-.todo-progress-list li[data-status="in_progress"], .todo-progress-list li[data-status="in_progress"] svg { color: var(--ih-text); }
-.todo-progress-list span, .todo-progress-list s { min-width: 0; overflow-wrap: anywhere; }
-.todo-progress-pager { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 8px; padding-top: 7px; color: var(--ih-muted); font-size: 10px; }
-.todo-progress-pager button { border: 0; border-radius: 4px; background: transparent; color: var(--ih-muted); padding: 3px 4px; cursor: pointer; font: inherit; }
-.todo-progress-pager button:disabled { opacity: .4; cursor: default; }
-:root[data-theme="light"] .todo-progress-dock { --todo-success: #31834a; }
-@container conversation-todos (max-width: 600px) {
-  .todo-progress-dock { right: 52px; width: min(300px, calc(100% - 64px)); }
-  .todo-progress-list { max-height: 140px; }
+.todo-progress-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  margin-block-end: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--ih-divider);
+  border-radius: var(--ih-radius-control);
+  background: var(--ih-panel);
+  color: var(--ih-muted);
+  font: inherit;
+  font-size: .86rem;
+  cursor: pointer;
 }
+.todo-progress-summary:hover { background: var(--ih-hover); color: var(--ih-text); }
+.todo-progress-summary:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: -2px; }
+.todo-progress-summary svg, .todo-progress-count { flex: none; }
+.todo-progress-count { font-variant-numeric: tabular-nums; }
+.todo-progress-current { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

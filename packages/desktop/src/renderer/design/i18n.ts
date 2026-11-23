@@ -165,7 +165,7 @@ const english = {
   "此子代理目前未在這裡執行，仍可查閱已保存的記錄。": "This subagent is not active here. Its saved history is still available.",
   "請先退出計畫模式，再派發後續任務或傳送訊息給子代理。": "Leave Plan Mode before sending a follow-up or message to a subagent.",
   "主會話已封存。": "The parent conversation is archived.",
-  "待辦進度": "Todo progress", "收合待辦清單": "Collapse Todo list", "展開待辦清單": "Expand Todo list", "開啟待辦編輯": "Open Todo editor",
+  "待辦進度": "Todo progress", "工作": "Work", "返回成果檢查": "Back to review",
   "正在套用專案資料夾…": "Applying project folder scope…", "檔案附件合計不能超過 8 個。": "File attachments cannot exceed 8 in total.",
   "完成一輪後才能建立分支": "Complete one turn before forking this conversation.",
   "每個會話可存取專案內全部資料夾；主要資料夾作為新會話的預設起點。": "Each conversation can access all project folders; the primary folder is the default starting point for new conversations.",

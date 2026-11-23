@@ -29,7 +29,8 @@ it("collapses the explorer without losing the mounted search field and its resul
   await screen.findByRole("button", { name: "src" })
   const input = screen.getByRole("textbox", { name: "搜尋專案檔名" }) as HTMLInputElement
   fireEvent.change(input, { target: { value: "index" } })
-  await screen.findByRole("button", { name: "src/index.ts" })
+  fireEvent.click(await screen.findByRole("button", { name: "src/index.ts" }))
+  await screen.findByRole("textbox", { name: "來源檔案內容" })
   fireEvent.click(screen.getByRole("button", { name: "收合檔案瀏覽器" }))
   expect(screen.queryByRole("navigation", { name: "專案檔案樹" })).toBeNull()
   expect(input.isConnected).toBe(true)

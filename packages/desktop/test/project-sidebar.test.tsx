@@ -26,7 +26,7 @@ function fixture(handle?: (request: DesktopRequest) => unknown) {
   }
   const props: ProjectSidebarProps = {
     bridge, projects, workspaces, selectedProjectId: "p1", selectedWorkspaceId: "w1", selectedSessionId: "s1", dashboard: dashboard("Current chat"),
-    canCreate: true, onCreate: vi.fn(), onCreateSession: vi.fn(),  onProjects: vi.fn(), onSettings: vi.fn(),
+    canCreate: true, onCreateSession: vi.fn(), onProjects: vi.fn(), onSettings: vi.fn(),
     onSelectProject: vi.fn(), onSelectWorkspace: vi.fn(), onSelectSession: vi.fn(), onManageSession: vi.fn(async () => {}), onManageArchived: vi.fn(),
   }
   return { props, bridge, listeners, emit(event: DesktopEvent) { for (const listener of listeners) listener(event) } }
@@ -48,7 +48,7 @@ describe("project conversation sidebar", () => {
     const create = await screen.findByRole("button", { name: /新會話/ }) as HTMLButtonElement
     expect(create.disabled).toBe(false)
     fireEvent.click(create)
-    expect(props.onCreateSession).toHaveBeenCalledWith("p1")
+    expect(props.onCreateSession).toHaveBeenCalledWith("w1", "p1")
   })
 
   it("orders pinned projects first and collects all member conversations directly under an expanded project", async () => {
@@ -195,7 +195,10 @@ describe("project conversation sidebar", () => {
     expect(props.onSelectWorkspace).not.toHaveBeenCalled()
     view.rerender(<ProjectSidebar {...props} canCreate={true} />)
     fireEvent.click(within(screen.getByRole("button", { name: "Product" }).closest("li")!).getByRole("button", { name: /新會話/ }))
-    expect(props.onCreateSession).toHaveBeenCalledWith("p1")
+    expect(props.onCreateSession).toHaveBeenCalledWith("w1", "p1")
+    const unassigned = screen.getByRole("button", { name: "未分類會話" }).closest("li")!
+    fireEvent.click(within(unassigned).getByRole("button", { name: /新會話/ }))
+    expect(props.onCreateSession).toHaveBeenLastCalledWith("wu", undefined)
   })
 
   it("routes folder reveal and copied conversation ID through the selected row scope", async () => {

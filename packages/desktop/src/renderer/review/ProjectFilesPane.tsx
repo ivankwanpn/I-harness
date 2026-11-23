@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react"
-import { ChevronRight, FileText, FolderOpen, PanelLeftClose, PanelLeftOpen, RefreshCw } from "lucide-react"
+import { FolderOpen, PanelLeftClose, PanelLeftOpen, RefreshCw } from "lucide-react"
 import type { ProjectFileRef, ProjectFileRoot, ProjectFileSelection, ProjectFilesRequester } from "../../../../desktop-gateway/src/project-files.ts"
 import { ProjectExplorer } from "./ProjectExplorer.tsx"
 import { EditorTabs } from "./EditorTabs.tsx"
@@ -42,6 +42,9 @@ export function ProjectFilesPane({ selection, request, openFile, externalOpenFil
   const roots = rootState?.scopeKey === rootScopeKey ? rootState.roots : []
   const unknownRootLabel = pf(rootState?.scopeKey === rootScopeKey && !rootState.error ? "已移出的資料夾" : "資料夾")
   const active = state.active, activeKey = active ? editorDraftKey(active) : ""
+  const externalFile = external?.selectionKey === selectionKey ? external.target : undefined
+  const editorOpen = state.tabs.length > 0 || externalFile !== undefined
+  const hideExplorer = editorOpen && explorerCollapsed
   const navigation = target?.selectionKey === selectionKey && target && editorDraftKey(target.ref) === activeKey ? target.navigation : undefined
   const loadIdentity = `${rootScopeKey}:${activeKey}:${refresh}:${openVersion.current}:${navigation?.nonce ?? ""}`
   const member = !!active && roots.some((root) => root.workspaceId === active.workspaceId)
@@ -121,20 +124,32 @@ export function ProjectFilesPane({ selection, request, openFile, externalOpenFil
     } catch (error) { store.feedback(ref, errorText(error)); return false }
   }
   return <section className="project-files-pane" aria-label={pf("專案檔案與編輯")}>
-    <header className="project-files-toolbar"><div><button type="button" className="project-files-icon-button" aria-label={pf(explorerCollapsed ? "展開檔案瀏覽器" : "收合檔案瀏覽器")} aria-expanded={!explorerCollapsed} onClick={() => setExplorerCollapsed(value => !value)} title={pf(explorerCollapsed ? "展開檔案瀏覽器" : "收合檔案瀏覽器")}>{explorerCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}</button><h3>{pf("專案檔案")}</h3></div><button type="button" className="project-files-icon-button" aria-label={pf("重新整理專案檔案")} title={pf("重新整理專案檔案")} onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={14} /></button></header>
+    <header className="project-files-toolbar">
+      <div>
+        {editorOpen ? <button type="button" className="project-files-icon-button" aria-label={pf(hideExplorer ? "展開檔案瀏覽器" : "收合檔案瀏覽器")} aria-expanded={!hideExplorer}
+          onClick={() => setExplorerCollapsed(value => !value)} title={pf(hideExplorer ? "展開檔案瀏覽器" : "收合檔案瀏覽器")}>
+          {hideExplorer ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+        </button> : null}
+        <h3>{pf("專案檔案")}</h3>
+      </div>
+      <button type="button" className="project-files-icon-button" aria-label={pf("重新整理專案檔案")} title={pf("重新整理專案檔案")} onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={14} /></button>
+    </header>
     {error ? <p role="alert" className="notice error-text">{error}</p> : null}
-    <div className="project-files-layout" data-explorer-collapsed={explorerCollapsed}>
-      <div className="project-files-explorer-region" hidden={explorerCollapsed} inert={explorerCollapsed}><ProjectExplorer key={`explorer:${selectionKey}`} roots={roots} selection={selection} request={request} onOpen={open} refresh={refresh} active={external?.selectionKey === selectionKey ? undefined : active} contentSearchAvailable={contentSearchAvailable} /></div>
-      <div className="project-files-editor-region">
-    <EditorTabs key={`tabs:${selectionKey}`} roots={roots} rootLabels={rootLabels.current} unknownRootLabel={unknownRootLabel} externalTab={external?.selectionKey === selectionKey ? { path: external.target.reference.path, onClose: () => setExternal(current => current === external ? undefined : current) } : undefined} store={store} onSave={saveTab} onOpen={open} />
-    {active && external?.selectionKey !== selectionKey ? <div className="project-file-breadcrumb" aria-label={`${rootLabels.current[active.workspaceId] ?? unknownRootLabel}/${active.path}`}><FolderOpen size={13} aria-hidden="true" /><span className="project-file-root-label">{rootLabels.current[active.workspaceId] ?? unknownRootLabel}</span><span className="project-file-separator">/</span><span className="project-file-relative-path">{active.path}</span></div> : null}
-    <div className="project-file-editor-content">
-    {external?.selectionKey === selectionKey ? <ExternalFileViewer target={external.target} selection={selection} request={request} onClose={() => setExternal(undefined)} /> : active ? <>
-      <SourceFileEditor workspaceId={active.workspaceId} path={active.path} store={store} available={member} value={loaded?.identity === loadIdentity ? loaded.value : undefined}
-        accessPending={rootState?.scopeKey !== rootScopeKey} accessError={rootState?.scopeKey === rootScopeKey ? rootState.error : undefined}
-        navigation={navigation} preview={member && preview?.identity === loadIdentity ? preview.value : undefined}
-        onSave={(_path, text, revision) => save(active, text, revision)} onReload={() => setRefresh((value) => value + 1)} /></> : <div className="project-files-empty"><FileText size={30} strokeWidth={1.2} /><h4>{pf("開啟檔案開始編輯")}</h4><p>{pf("從檔案樹或搜尋開啟檔案。")}</p>{explorerCollapsed ? <button type="button" onClick={() => setExplorerCollapsed(false)}>{pf("展開檔案瀏覽器")}<ChevronRight size={13} /></button> : null}</div>}
-    </div></div></div>
+    <div className="project-files-layout" data-editor-open={editorOpen} data-explorer-collapsed={hideExplorer}>
+      <div className="project-files-explorer-region" hidden={hideExplorer} inert={hideExplorer}><ProjectExplorer key={`explorer:${selectionKey}`} roots={roots} selection={selection} request={request} onOpen={open} refresh={refresh} active={externalFile ? undefined : active} contentSearchAvailable={contentSearchAvailable} /></div>
+      {editorOpen ? <div className="project-files-editor-region">
+        <EditorTabs key={`tabs:${selectionKey}`} roots={roots} rootLabels={rootLabels.current} unknownRootLabel={unknownRootLabel} externalTab={externalFile ? { path: externalFile.reference.path, onClose: () => setExternal(current => current === external ? undefined : current) } : undefined} store={store} onSave={saveTab} onOpen={open} />
+        {active && !externalFile ? <div className="project-file-breadcrumb" aria-label={`${rootLabels.current[active.workspaceId] ?? unknownRootLabel}/${active.path}`}><FolderOpen size={13} aria-hidden="true" /><span className="project-file-root-label">{rootLabels.current[active.workspaceId] ?? unknownRootLabel}</span><span className="project-file-separator">/</span><span className="project-file-relative-path">{active.path}</span></div> : null}
+        <div className="project-file-editor-content">
+          {externalFile ? <ExternalFileViewer target={externalFile} selection={selection} request={request} onClose={() => setExternal(undefined)} /> : active ? (
+            <SourceFileEditor workspaceId={active.workspaceId} path={active.path} store={store} available={member} value={loaded?.identity === loadIdentity ? loaded.value : undefined}
+              accessPending={rootState?.scopeKey !== rootScopeKey} accessError={rootState?.scopeKey === rootScopeKey ? rootState.error : undefined}
+              navigation={navigation} preview={member && preview?.identity === loadIdentity ? preview.value : undefined}
+              onSave={(_path, text, revision) => save(active, text, revision)} onReload={() => setRefresh((value) => value + 1)} />
+          ) : null}
+        </div>
+      </div> : null}
+    </div>
     {state.persistenceError ? <p role="alert">{state.persistenceError}</p> : null}
   </section>
 }

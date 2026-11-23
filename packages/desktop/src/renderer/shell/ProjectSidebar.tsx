@@ -24,8 +24,7 @@ export interface ProjectSidebarProps {
   dashboard?: SessionDashboardResult
   attentionBySession?: Record<string, number>
   canCreate: boolean
-  onCreate(): void
-  onCreateSession?(projectId?: string): void
+  onCreateSession?(workspaceId: string, projectId?: string): void
   onProjects(): void
   onSettings?(): void
   onPlugins?(): void
@@ -95,12 +94,17 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
   function renderSessions(folders: WorkspaceEntry[], project?: ProjectEntry) {
     if (folders.length === 0) return <p className="notice project-sidebar-empty">{t("尚未加入資料夾")}</p>
     const selected = project?.id === effectiveProjectId
-    return <ProjectSessions bridge={bridge} revision={props.revision} workspaces={folders} projectId={project?.id} primaryWorkspaceId={project?.primaryWorkspaceId} onOwners={onOwners}
+    // The list can include moved storage roots. Creation uses a live project member.
+    const creationFolder = project
+      ? folders.find(folder => folder.id === project.primaryWorkspaceId && project.workspaceIds.includes(folder.id))
+        ?? project.workspaceIds.map(id => folders.find(folder => folder.id === id)).find(Boolean)
+      : folders.find(folder => folder.id === selectedWorkspaceId) ?? folders[0]
+    return <ProjectSessions bridge={bridge} revision={props.revision} workspaces={folders} projectId={project?.id} onOwners={onOwners}
       memberWorkspaceIds={new Set(project?.workspaceIds ?? [])} assignedWorkspaceIds={assigned} knownProjectIds={knownProjectIds}
       selectedWorkspaceId={selected ? selectedWorkspaceId : undefined} selectedSessionId={selected ? selectedSessionId : undefined}
       dashboard={selected ? props.dashboard : undefined} attentionBySession={selected ? props.attentionBySession : undefined}
       onSelectSession={props.onSelectSession} onManageSession={props.onManageSession} onManageArchived={props.onManageArchived} onManageSessions={props.onManageSessions} filter={search}
-      onNewSession={props.canCreate && props.onCreateSession ? (projectId) => props.onCreateSession!(projectId ?? project?.id) : undefined}
+      onNewSession={props.canCreate && props.onCreateSession && creationFolder ? () => props.onCreateSession!(creationFolder.id, project?.id) : undefined}
       newSessionActive={selected && selectedSessionId === undefined} />
   }
 
