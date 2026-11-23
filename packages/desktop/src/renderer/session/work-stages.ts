@@ -1,7 +1,6 @@
 import type { TimelineItem } from "./activity-groups.ts"
 import type { GenerationReading } from "./project.ts"
-import { toolState } from "./tool-presentation.ts"
-export interface WorkStage { kind: "work-stage"; id: string; count: number; expanded: boolean; failedCount: number; generation?: GenerationReading }
+export interface WorkStage { kind: "work-stage"; id: string; count: number; expanded: boolean; generation?: GenerationReading }
 export type WorkItem = TimelineItem | WorkStage
 
 /** A stage hides intermediate work only. Headers/children stay flat so the
@@ -30,13 +29,7 @@ export function workStages(items: readonly TimelineItem[], open: ReadonlyMap<str
     // work disclosure. The first thought remains a collapsed hint inside it.
     const work = (row: TimelineItem) => row.id !== finalId && row.kind !== "outcome" && row.kind !== "failure"
       && !(row.kind === "message" && row.role === "user")
-    const activities = segment.filter(work).flatMap(row => row.kind === "activity-group" ? row.rows : [row])
-    const failedCount = activities.filter(row => {
-      if (row.kind === "other") return row.label === "step/failed" || row.codeActivity?.type === "code/cell" && row.codeActivity.state === "failed"
-      if (row.kind !== "tool") return false
-      return toolState(row.name, row.output, row.resultReceived, row.isError, row.dispatched, row.envelope) === "failed"
-    }).length
-    const count = activities.length
+    const count = segment.filter(work).length
     const id = `work:${turn.id}`
     const expanded = open.get(id) === true
     let header = false
@@ -46,7 +39,7 @@ export function workStages(items: readonly TimelineItem[], open: ReadonlyMap<str
         continue
       }
       if (!work(row)) { result.push(row); continue }
-      if (!header && count) { result.push({ kind: "work-stage", id, count, expanded, failedCount, generation: finalId === undefined ? turn.generation : undefined }); header = true }
+      if (!header && count) { result.push({ kind: "work-stage", id, count, expanded, generation: finalId === undefined ? turn.generation : undefined }); header = true }
       if (expanded) result.push(row)
     }
     start = end

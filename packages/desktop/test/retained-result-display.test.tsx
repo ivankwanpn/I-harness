@@ -49,20 +49,23 @@ it("renders the actual grouped route with preview, honest partial retention and 
 it.each([["canceled","已取消"],["unknown","結果未知"]] as const)("preserves trusted %s despite payload-shaped errors", (outcome,label) => {
   const envelope={...inline,execution:{outcome,dispatch:"not-dispatched" as const}}
   const rows=projectTimeline([{type:"turn/start"},event(envelope),{type:"turn/end"}])
-  expect(workStages(groupActivities(rows),new Map())[0]).toMatchObject({kind:"work-stage",failedCount:0})
+  expect(workStages(groupActivities(rows),new Map())[0]).toMatchObject({kind:"work-stage",count:1})
   render(<Timeline rows={projectTimeline([event(envelope)])} />)
   expect(screen.getByText(label)).toBeTruthy()
   expect(screen.queryByText("執行失敗")).toBeNull()
 })
-it("only counts recorded execution failures, even when results are grouped",()=>{
-  for (const [envelope,failedCount] of [[inline,0],[quota,0],[artifact,2]] as const) {
-    const rows=projectTimeline([{type:"turn/start"},event(envelope),event(envelope,false,"two"),{type:"turn/end"}])
-    expect(workStages(groupActivities(rows),new Map())[0]).toMatchObject({kind:"work-stage",count:2,failedCount})
-    render(<Timeline rows={rows} />)
-    if (failedCount) expect(screen.getByText("2 項活動失敗")).toBeTruthy()
-    else expect(screen.queryByText(/項活動失敗/)).toBeNull()
-    cleanup()
-  }
+it("shows recorded execution outcomes inside the expanded work group",()=>{
+  const rows=projectTimeline([{type:"turn/start"},event(artifact),event(quota,false,"two"),
+    {type:"assistant/message",text:"Final reply"},{type:"turn/end"}])
+  render(<Timeline rows={rows} />)
+  const heading=screen.getByRole("button",{name:"工作過程"})
+  expect(heading.getAttribute("aria-description")).toBe("1 項活動")
+  expect(screen.getByText("Final reply")).toBeTruthy()
+  expect(screen.queryByText("執行失敗")).toBeNull()
+  fireEvent.click(heading)
+  fireEvent.click(screen.getByRole("button",{name:"終端操作 2"}))
+  expect(screen.getByText("執行失敗")).toBeTruthy()
+  expect(screen.getByText("已收到結果")).toBeTruthy()
 })
 it("uses English storage labels and calls the validated media preview once",()=>{
   useUiStore.setState({locale:"en"})

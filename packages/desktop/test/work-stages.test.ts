@@ -45,7 +45,7 @@ it("keeps mid-turn human steering, commentary and thinking ordered while work co
   expect(ended.filter(row => row.kind === "message").map(row => row.text)).toEqual(["Start", "Also check the dialogs", "Final answer"])
 })
 
-it("counts failed activities inside a collapsed completed turn and keeps its final reply", () => {
+it("keeps the final reply visible and retains a failed tool inside its expandable work group", () => {
   const items=groupActivities(projectTimeline([{type:"turn/start",seq:0},{type:"user/message",text:"Read",seq:1},
     {type:"tool/call",callId:"first",name:"bash",args:{},seq:2},
     {type:"tool/result",callId:"first",name:"bash",output:{exitCode:1},seq:3},
@@ -53,6 +53,8 @@ it("counts failed activities inside a collapsed completed turn and keeps its fin
     {type:"tool/result",callId:"second",name:"bash",output:{exitCode:0},seq:5},
     {type:"assistant/message",text:"Final answer",seq:6},{type:"turn/end",seq:7}]))
   const stages=workStages(items,new Map())
-  expect(stages.find(row=>row.kind==="work-stage")).toMatchObject({count:2,failedCount:1,expanded:false})
+  expect(stages.find(row=>row.kind==="work-stage")).toMatchObject({count:1,expanded:false})
   expect(stages.at(-1)).toMatchObject({kind:"message",text:"Final answer"})
+  const group=workStages(items,new Map([["work:turn:0",true]])).find(row=>row.kind==="activity-group")
+  expect(group).toMatchObject({rows:[{output:{exitCode:1}},{output:{exitCode:0}}]})
 })
