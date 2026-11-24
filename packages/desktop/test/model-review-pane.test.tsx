@@ -22,6 +22,7 @@ it("captures a selected Git scope, reopens the saved model result, and locates t
     ...prepared, status: "completed",
     result: { summary: "Review summary", findings: [{ file: 0, line: 2, title: "Incorrect output", detail: "Fix the returned value." }] },
   }
+  let polls = 0
   const request = vi.fn(async (input: DesktopRequest) => {
     switch (input.kind) {
       case "projects/list": return [project]
@@ -30,7 +31,9 @@ it("captures a selected Git scope, reopens the saved model result, and locates t
       case "desktop/model-review/list": return []
       case "desktop/model-review/prepare": return prepared
       case "desktop/model-review/start": return { ...prepared, status: "running" }
-      case "desktop/model-review/read": return completed
+      case "desktop/model-review/read":
+        if (++polls === 1) throw new Error("Temporary workspace read failure")
+        return completed
       case "desktop/model-review/compare": return { current: false }
       default: throw new Error("Unexpected request")
     }
@@ -41,7 +44,9 @@ it("captures a selected Git scope, reopens the saved model result, and locates t
   fireEvent.click(screen.getByRole("button", { name: "擷取變更" }))
   expect(request).toHaveBeenCalledWith({ kind: "desktop/model-review/prepare", workspaceId: workspace.id, projectId: project.id, target: { kind: "base", branch: "main" } })
   fireEvent.click(await screen.findByRole("button", { name: "開始審查" }))
-  await screen.findByText("Review summary", {}, { timeout: 3000 })
+  await screen.findByText("暫時無法更新審查進度，正在重試。")
+  await screen.findByText("Review summary", {}, { timeout: 6000 })
+  expect(screen.queryByText("暫時無法更新審查進度，正在重試。")).toBeNull()
   expect(await screen.findByText("目前變更與這次審查的快照不同。")).toBeTruthy()
   fireEvent.click(screen.getByRole("button", { name: /Incorrect output/ }))
   expect(screen.getByText("+incorrect output").closest("li")?.classList.contains("highlighted")).toBe(true)

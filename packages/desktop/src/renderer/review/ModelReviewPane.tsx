@@ -17,6 +17,7 @@ export function ModelReviewPane({ bridge, workspaceId, projectId, sessionId }: {
   const [records, setRecords] = useState<ModelReviewRecord[]>([])
   const [job, setJob] = useState<ModelReviewJob>()
   const [error, setError] = useState<string>()
+  const [pollError, setPollError] = useState<string>()
   const [busy, setBusy] = useState(false)
   const [match, setMatch] = useState<boolean>()
   const [location, setLocation] = useState<{ file: number; line?: number }>()
@@ -43,20 +44,22 @@ export function ModelReviewPane({ bridge, workspaceId, projectId, sessionId }: {
     const { id } = job
     let active = true
     let timer: ReturnType<typeof setTimeout>
-    const refresh = () => {
+    const refresh = (interval = 800) => {
       timer = setTimeout(() => {
         void read(id).then(
           current => {
             if (!active) return
-            setJob(previous => previous?.id === id ? current : previous)
+            setPollError(undefined)
+            setJob(previous => previous?.id === id && previous.status === "running" ? current : previous)
             if (current.status === "running") refresh()
           },
           reason => {
             if (!active) return
-            report(reason)
+            setPollError(reason instanceof Error ? reason.message : String(reason))
+            refresh(Math.min(5000, interval * 2))
           },
         )
-      }, 800)
+      }, interval)
     }
     refresh()
     return () => { active = false; clearTimeout(timer) }
@@ -81,6 +84,7 @@ export function ModelReviewPane({ bridge, workspaceId, projectId, sessionId }: {
 
   function select(current: ModelReviewJob | undefined) {
     setJob(current)
+    setPollError(undefined)
     setMatch(undefined)
     setLocation(undefined)
   }
@@ -123,6 +127,9 @@ export function ModelReviewPane({ bridge, workspaceId, projectId, sessionId }: {
   const hasReadableChanges = job?.snapshot.files.some(row => row.text)
 
   return <section className="model-review" aria-label={t("模型審查", "Model review")}>
+    {job?.status === "running" && pollError ? <p className="muted" role="status" title={pollError}>
+      {t("暫時無法更新審查進度，正在重試。", "Unable to refresh review progress. Retrying…")}
+    </p> : null}
     <div className="model-review-controls">
       <label>{t("審查目標", "Review target")}
         <select value={kind} disabled={busy} onChange={event => { setKind(event.target.value as ModelReviewTarget["kind"]); setValue("") }}>

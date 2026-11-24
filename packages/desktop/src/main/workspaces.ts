@@ -17,6 +17,7 @@ export interface WorkspaceWorktree {
   gitDir: string
   kind: "managed" | "imported"
   operationId?: string
+  importReceipts?: Readonly<Record<string, string>>
   offered?: boolean
 }
 
@@ -47,12 +48,17 @@ function isWorktree(value: unknown): value is WorkspaceWorktree {
     && typeof row.gitCommonDir === "string" && !!row.gitCommonDir
     && typeof row.gitDir === "string" && !!row.gitDir
     && (row.offered === undefined || typeof row.offered === "boolean")
+    && (row.importReceipts === undefined || row.importReceipts !== null && typeof row.importReceipts === "object"
+      && !Array.isArray(row.importReceipts) && Object.entries(row.importReceipts).every(([key, digest]) =>
+        /^[0-9a-f]{64}$/.test(key) && typeof digest === "string" && /^[0-9a-f]{64}$/.test(digest)))
     && (row.kind === "managed" && typeof row.operationId === "string" && /^[0-9a-f]{64}$/.test(row.operationId)
       || row.kind === "imported" && row.operationId === undefined)
 }
 
 const copy = (row: WorkspaceEntry): WorkspaceEntry => ({
-  id: row.id, path: row.path, label: row.label, ...(row.worktree ? { worktree: { ...row.worktree } } : {}),
+  id: row.id, path: row.path, label: row.label, ...(row.worktree ? {
+    worktree: { ...row.worktree, ...(row.worktree.importReceipts ? { importReceipts: { ...row.worktree.importReceipts } } : {}) },
+  } : {}),
 })
 
 const pathKey = (path: string) => process.platform === "win32" ? path.toLowerCase() : path
@@ -112,6 +118,19 @@ export function createWorkspaceCatalog(filePath: string): WorkspaceCatalog {
           || pathKey(existing.worktree.gitCommonDir) !== pathKey(worktree.gitCommonDir)
           || pathKey(existing.worktree.gitDir) !== pathKey(worktree.gitDir))) {
           throw new Error("Worktree is already registered in a different workspace")
+        }
+        if (existing.worktree && worktree?.importReceipts) {
+          for (const [token, digest] of Object.entries(worktree.importReceipts)) {
+            if (existing.worktree.importReceipts?.[token] && existing.worktree.importReceipts[token] !== digest) {
+              throw new Error("Worktree import differs from the original request")
+            }
+          }
+          const registered = { ...existing, worktree: { ...existing.worktree,
+            importReceipts: { ...existing.worktree.importReceipts, ...worktree.importReceipts } } }
+          const next = rows.map(row => row === existing ? registered : row)
+          await writeRows(next)
+          rows = next
+          return copy(registered)
         }
         return copy(existing)
       }

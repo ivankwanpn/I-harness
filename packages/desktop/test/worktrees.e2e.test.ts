@@ -133,10 +133,12 @@ it("routes two real linked worktree conversations to their own files and Git ind
 
     const imported = join(profile, "Imported")
     await git(root, "worktree", "add", "-b", "external", "--", imported, "HEAD")
-    const external = await app.request({ ...selection, clientToken: "import-draft-token", worktree: { mode: "existing", path: imported } }) as { workspaceId: string; sessionId: string }
+    const importRequest = { ...selection, clientToken: "import-draft-token", worktree: { mode: "existing", path: imported } } as const
+    const external = await app.request(importRequest) as { workspaceId: string; sessionId: string }
     expect(app.catalog.get(external.workspaceId)?.path).toBe(await realpath(imported))
     expect(app.catalog.get(external.workspaceId)?.worktree?.kind).toBe("imported")
     await app.request({ kind: "desktop/worktrees/offer", workspaceId: external.workspaceId, projectId: project.id, offered: false })
+    expect(await app.request(importRequest)).toEqual(external)
     await expect(app.request({ ...selection, clientToken: "no-new-conversation", worktree: { mode: "existing", path: imported } })).rejects.toThrow(/Enable the linked worktree/)
     expect(await readFile(join(imported, "same.txt"), "utf8")).toBe("original")
     await app.runtimes.invalidate!(external.workspaceId)
@@ -146,6 +148,8 @@ it("routes two real linked worktree conversations to their own files and Git ind
     expect(await app.request({ kind: "desktop/worktrees/relink", workspaceId: external.workspaceId })).toMatchObject({
       id: external.workspaceId, path: await realpath(moved), worktree: { kind: "imported", offered: false },
     })
+    expect(await app.request(importRequest)).toEqual(external)
+    await expect(app.request({ ...importRequest, worktree: { mode: "existing", path: moved } })).rejects.toThrow(/original request/)
     await app.worktrees.close()
     await app.runtimes.close()
     app = openProfile()
@@ -154,6 +158,7 @@ it("routes two real linked worktree conversations to their own files and Git ind
       expect(await app.request({ kind: "desktop/project-files/roots", ...target, projectId: project.id })).toMatchObject({ roots: [{ workspaceId: target.workspaceId }] })
     }
     expect(await app.request({ kind: "desktop/session/project/state", ...external })).toMatchObject({ projectId: project.id, sessionId: external.sessionId })
+    expect(await app.request(importRequest)).toEqual(external)
     expect(await app.request({ ...selection, clientToken: "first-draft-token" })).toEqual(a)
     expect(await readdir(dir)).toHaveLength(2)
   } finally {

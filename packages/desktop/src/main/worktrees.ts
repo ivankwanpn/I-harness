@@ -207,6 +207,25 @@ export function createDesktopWorktrees(directory: string, catalog: WorkspaceCata
         const receipt = { sourceWorkspaceId: workspaceId, projectId, gitCommonDir: repo.common }
         const rows = await worktreeList(repo.root)
         if (!rows.some(row => samePath(row.path, repo.root))) throw new Error("The source checkout has no commit")
+        const operationId = createHash("sha256").update(JSON.stringify([workspaceId, projectId, clientToken])).digest("hex")
+        const registered = await catalog.list()
+        const imported = registered.find(row => row.worktree?.importReceipts?.[operationId])
+        const managed = registered.find(row => row.worktree?.operationId === operationId)
+        const importDigest = selection.mode === "existing"
+          ? createHash("sha256").update(JSON.stringify([selection.mode, key(selection.path)])).digest("hex")
+          : undefined
+        const remembered = imported ?? managed
+        if (remembered) {
+          if (imported ? imported.worktree?.importReceipts?.[operationId] !== importDigest : selection.mode !== "create") {
+            throw new Error("Worktree choice differs from the original request")
+          }
+          if (remembered.worktree?.projectId !== projectId || !samePath(remembered.worktree.gitCommonDir, repo.common)
+            || !rows.some(row => !row.missing && samePath(row.path, remembered.path))) {
+            throw new Error("The original worktree is no longer linked to this repository")
+          }
+          await assertWorktree(remembered)
+          return remembered
+        }
         if (selection.mode === "existing") {
           if (!isAbsolute(selection.path)) throw new Error("Choose an existing linked worktree")
           const selected = await identity(await realpath(selection.path))
@@ -214,18 +233,15 @@ export function createDesktopWorktrees(directory: string, catalog: WorkspaceCata
             || samePath(selected.gitDir, selected.common) || !rows.some(row => !row.missing && !row.locked && samePath(row.path, selected.root))) {
             throw new Error("Choose a linked worktree from this repository")
           }
-          if ((await catalog.list()).some(row => samePath(row.path, selected.root) && row.worktree?.offered === false)) {
+          if (registered.some(row => samePath(row.path, selected.root) && row.worktree?.offered === false)) {
             throw new Error("Enable the linked worktree before using it for a new conversation")
           }
           await source(workspaceId, projectId)
-          return catalog.registerWorktree(selected.root, { ...receipt, gitDir: selected.gitDir, kind: "imported" })
-        }
-
-        const operationId = createHash("sha256").update(JSON.stringify([workspaceId, projectId, clientToken])).digest("hex")
-        const remembered = (await catalog.list()).find(row => row.worktree?.operationId === operationId)
-        if (remembered) {
-          await assertWorktree(remembered)
-          return remembered
+          // Commit the destination and draft intent together. A replay uses
+          // the same workspace ID even after its Git checkout has moved.
+          return catalog.registerWorktree(selected.root, {
+            ...receipt, gitDir: selected.gitDir, kind: "imported", importReceipts: { [operationId]: importDigest! },
+          })
         }
         await mkdir(directory, { recursive: true })
         const root = await realpath(directory)
