@@ -323,6 +323,15 @@ it("does not clear a newer selection while the initial list was still loading", 
   await act(async () => { dashboard.resolve({ sessions: [] }); await dashboard.promise })
   expect(captured.props?.selectedSessionId).toBe("a")
 })
+it("preserves a restored selection when a partial listing omits its session", async () => {
+  useUiStore.setState({ selectedWorkspaceId: "w1", selectedSessionId: "omitted" })
+  const request = fixture(input => input.kind === "session/dashboard"
+    ? Promise.resolve({ sessions: [{ id: "healthy", live: false }], listingPartial: true }) : undefined)
+  await waitFor(() => expect(captured.props?.dashboard?.listingPartial).toBe(true))
+  expect(captured.props?.selectedSessionId).toBe("omitted")
+  expect(request).toHaveBeenCalledWith({ kind: "session/dashboard", workspaceId: "w1" })
+})
+
 it("does not reconcile a later user selection when retrying an unavailable initial listing", async () => {
   let reads = 0
   useUiStore.setState({ selectedWorkspaceId: "w1", selectedSessionId: "old-reviewer" })
@@ -473,6 +482,61 @@ function fixture(override: (request: DesktopRequest) => Promise<unknown> | undef
   render(strict ? <StrictMode><App bridge={bridge} /></StrictMode> : <App bridge={bridge} />)
   return request
 }
+
+it("retries an unacknowledged input with its original token and rotates it after acceptance", async () => {
+  const accepted = new Set<string>(), attempts: string[] = []
+  fixture(r => {
+    if (r.kind === "desktop/capabilities") return Promise.resolve({ "desktop-input": ["1"] })
+    if (r.kind === "desktop/session/input/submit") {
+      accepted.add(r.clientToken!)
+      attempts.push(r.clientToken!)
+      if (attempts.length === 1) return Promise.reject(Error("reply lost after admission"))
+      return Promise.resolve({ accepted: true, inputId: r.clientToken })
+    }
+    return undefined
+  })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("retry-input"))
+  await waitFor(() => expect(captured.props!.conversation).toBeDefined())
+  await act(async () => { await expect(captured.props!.conversation!.onPrompt("continue")).rejects.toThrow("reply lost") })
+  act(() => captured.props!.onSelectSession("other"))
+  act(() => captured.props!.onSelectSession("retry-input"))
+  await act(async () => { await captured.props!.conversation!.onPrompt("continue") })
+  expect(accepted.size).toBe(1)
+  await act(async () => { await captured.props!.conversation!.onPrompt("continue") })
+  expect(accepted.size).toBe(2)
+  expect(attempts[0]).toBe(attempts[1])
+  expect(attempts[2]).not.toBe(attempts[0])
+})
+
+it.each(["message", "cancellation"])("keeps repeated-text echoes until their own %s", async outcome => {
+  const admission = defer()
+  let token: string | undefined
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  fixture(r => {
+    if (r.kind === "desktop/capabilities") return Promise.resolve({ "desktop-input": ["1"] })
+    if (r.kind === "desktop/session/open") return Promise.resolve({ history: { events: [{ type: "user/message", seq: 0, text: "again" }], nextSeq: 1 } })
+    if (r.kind === "desktop/session/input/state") return Promise.resolve({ items: [{ id: "someone-else", text: "again", state: "queued", delivery: "queue", intent: "user", order: 1 }] })
+    if (r.kind === "desktop/session/input/submit") { token = r.clientToken; return admission.promise }
+    return undefined
+  }, listener => { emit = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("echo"))
+  await waitFor(() => expect(captured.props!.conversation!.rows.at(0)).toMatchObject({ text: "again" }))
+  let sending!: Promise<void>
+  act(() => { sending = captured.props!.conversation!.onPrompt("again") })
+  const echo = () => captured.props!.conversation!.rows.filter(row => row.id === `optimistic:${token}`)
+  await waitFor(() => expect(echo()).toHaveLength(1))
+  await act(async () => { admission.resolve({ accepted: true, inputId: "mine" }); await sending })
+  await act(async () => { captured.props!.conversation!.onCancelQueue("someone-else") })
+  expect(echo()).toHaveLength(1)
+  const notify = (event: WireEvent) => emit({ kind: "sdk/notification", workspaceId: "w1", method: "session/event", params: { sessionId: "echo", event } })
+  act(() => notify({ type: "user/message", seq: 1, text: "again", input: { inputId: "other", intent: "user" } }))
+  expect(echo()).toHaveLength(1)
+  if (outcome === "message") act(() => notify({ type: "user/message", seq: 2, text: "expanded prompt", input: { inputId: "mine", intent: "user" } }))
+  else await act(async () => { captured.props!.conversation!.onCancelQueue("mine") })
+  await waitFor(() => expect(echo()).toHaveLength(0))
+})
 
 it("starts in the remembered project without opening the first folder's runtime", async () => {
   localStorage.setItem("ih:last-workspace", JSON.stringify({ workspaceId: "w2", projectId: "p2" }))
@@ -625,6 +689,67 @@ it("ignores history from a session left while loading", async () => {
   await act(async () => { old.resolve({ events: [{ type: "user/message", seq: 0, text: "old session content" }], nextSeq: 1 }); await old.promise })
   expect(captured.props!.selectedSessionId).toBe("b")
   expect(captured.props!.conversation!.rows).toEqual([])
+})
+
+it("keeps a newer execution notification and queue when the opening history settles late", async () => {
+  const history = defer()
+  let running = false
+  let notify!: Parameters<DesktopBridge["onEvent"]>[0]
+  fixture(input => {
+    if (input.kind === "desktop/session/open") return history.promise
+    if (input.kind === "session/queue") return Promise.resolve(running ? [{ id: "active", state: "running" }] : [])
+    return undefined
+  }, listener => { notify = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props?.conversation?.queue).toEqual([]))
+  running = true
+  act(() => notify({ kind: "sdk/notification", workspaceId: "w1", method: "session/execution-state",
+    params: { sessionId: "a", running: true, queued: 0, revision: 5 } }))
+  await waitFor(() => expect(captured.props!.conversation?.queue).toEqual([{ id: "active", state: "running" }]))
+  await act(async () => history.resolve({ history: { events: [], nextSeq: 0 }, queue: [], running: false }))
+  expect(captured.props?.conversation).toMatchObject({ running: true, queue: [{ id: "active", state: "running" }] })
+})
+
+it("receives every prefix while the visible workspace changes, even for matching session ids", async () => {
+  let notify!: Parameters<DesktopBridge["onEvent"]>[0]
+  fixture(input => {
+    if (input.kind === "workspace/list") return Promise.resolve(["w1", "w2"].map(id => ({ id, path: "D:/" + id, label: id })))
+    if (input.kind === "session/dashboard") return Promise.resolve({ sessions: [{ id: "same", live: true }] })
+    return undefined
+  }, listener => { notify = listener; return () => {} })
+  const chunk = (workspaceId: string, offset: number, text: string) => act(() => notify({
+    kind: "sdk/notification", workspaceId, method: "session/event",
+    params: { sessionId: "same", event: { type: "assistant/chunk", stepStartSeq: 5, offset, text } },
+  }))
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("same"))
+  chunk("w1", 0, "first ")
+  act(() => captured.props!.onSelectWorkspace("w2"))
+  act(() => captured.props!.onSelectSession("same"))
+  chunk("w2", 0, "another workspace")
+  chunk("w1", 6, "middle ")
+  expect(captured.props!.conversation!.assistantPreview?.text).toBe("another workspace")
+  act(() => captured.props!.onSelectWorkspace("w1"))
+  act(() => captured.props!.onSelectSession("same"))
+  chunk("w1", 13, "tail")
+  expect(captured.props!.conversation!.assistantPreview?.text).toBe("first middle tail")
+})
+
+it("joins a live suffix to its native opening snapshot on a newly attached renderer", async () => {
+  const opening = defer()
+  let notify!: Parameters<DesktopBridge["onEvent"]>[0]
+  fixture(input => input.kind === "desktop/session/open" ? opening.promise : undefined,
+    listener => { notify = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  act(() => notify({ kind: "sdk/notification", workspaceId: "w1", method: "session/event",
+    params: { sessionId: "a", event: { type: "assistant/chunk", stepStartSeq: 1, offset: 6, text: "suffix" } } }))
+  expect(captured.props!.conversation!.assistantPreview).toBeUndefined()
+  await act(async () => opening.resolve({ history: { events: [], nextSeq: 0 }, assistantPreview: {
+    type: "assistant/chunk", stepStartSeq: 1, offset: 0, text: "first ",
+  } }))
+  expect(captured.props!.conversation!.assistantPreview?.text).toBe("first suffix")
 })
 
 it("streams two active sessions independently and preserves the preview on selection changes", async () => {

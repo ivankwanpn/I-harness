@@ -100,9 +100,13 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
       // Always confirm the owner after reading the list.
       let navigation: WorkspaceSessionSnapshot["navigation"]
       try {
-        const result = await bridge.request({ kind: "desktop/session/navigation/state", workspaceId })
-        if (!isSessionNavigationState(result)) throw new Error(en ? "Conversation ownership is unavailable" : "會話分組狀態無法確認")
-        navigation = result
+        const result = await bridge.request({ kind: "desktop/session/navigation/state", workspaceId, includeCoverage: true })
+        const report = result as { entries?: unknown; partial?: unknown } | undefined
+        // Older gateways return the confirmed map directly.
+        const entries = typeof report?.partial === "boolean" ? report.entries : result
+        if (report?.partial === true || dashboard?.listingPartial) error ??= en ? "Some conversations could not be listed" : "部分會話資料暫時無法讀取"
+        if (!isSessionNavigationState(entries)) throw new Error(en ? "Conversation ownership is unavailable" : "會話分組狀態無法確認")
+        navigation = entries
       } catch (reason) { error ??= reason instanceof Error ? reason.message : String(reason) }
       if (!current()) return
       paired.current = dashboard
@@ -111,7 +115,8 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
       setSnapshots(previous => ({ ...previous, [workspaceId]: {
         // Keep the group's retry control reachable after a failed read. Its
         // conversation rows always require a currently confirmed navigation.
-        dashboard, navigation: mode === "owners" ? undefined : navigation, owners: owners ?? previous[workspaceId]?.owners, error,
+        dashboard: mode === "owners" ? undefined : dashboard ?? previous[workspaceId]?.dashboard,
+        navigation: mode === "owners" ? undefined : navigation, owners: owners ?? previous[workspaceId]?.owners, error,
       } }))
       if (dashboard && foreground.current !== supplied && membershipChanged(dashboard, foreground.current)) refresh.schedule()
     })

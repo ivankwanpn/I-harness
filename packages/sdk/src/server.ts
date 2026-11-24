@@ -86,6 +86,7 @@ import { dispatchResultPage, type ResultPageHost } from './result-page.ts'
 export { parseResultPageQuery } from './results.ts'
 export { transportSessionEvents } from "./image-transport.ts"
 import type { SessionService } from "@i-harness/session-executor"
+import { historyTurns } from "./history-turns.ts"
 import { createManagedEventBridge } from "./managed-event-bridge.ts"
 import { onOriginalHostAssembly } from "../../session-executor/src/host-assembly-observer.ts"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -762,7 +763,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         // M41a v1: event-log walk over the in-process assembly. A cold durable
         // session is verified/adopted through the coordinator and assembled
         // on demand; an unknown id is NEVER auto-created by this read.
-        const p = params as { sessionId?: unknown; afterSeq?: unknown; beforeSeq?: unknown; limit?: unknown } | undefined
+        const p = params as { sessionId?: unknown; afterSeq?: unknown; beforeSeq?: unknown; limit?: unknown; includeTurns?: unknown } | undefined
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
           return makeFailure(id, INVALID_PARAMS, "session/history requires a non-empty sessionId")
         }
@@ -795,7 +796,8 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         const end = beforeSeq === undefined ? Math.min(afterSeq + limit, session.events.length) : Math.min(beforeSeq, session.events.length)
         const start = beforeSeq === undefined ? Math.min(afterSeq, session.events.length) : Math.max(0, end - limit)
         try {
-          return makeSuccess(id, { events: transportSessionEvents(session, session.events.slice(start, end)), nextSeq: end, ...(beforeSeq === undefined ? {} : { startSeq: start, headSeq: session.events.length }) })
+          return makeSuccess(id, { events: transportSessionEvents(session, session.events.slice(start, end)), nextSeq: end,
+            ...(p.includeTurns === true ? { turns: historyTurns(session.events, start, end) } : {}), ...(beforeSeq === undefined ? {} : { startSeq: start, headSeq: session.events.length }) })
         } catch (error) {
           return makeFailure(id, INTERNAL_ERROR, `session/history: ${error instanceof Error ? error.message : String(error)}`)
         }
@@ -863,7 +865,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             }
             sessions.push(out)
           }
-          return makeSuccess(id, { sessions, active: active || ownedRequestActivity() })
+          return makeSuccess(id, { sessions, ...(listed.listingPartial ? { listingPartial: true } : {}), ...(listed.listingUnavailable ? { listingUnavailable: true } : {}), active: active || ownedRequestActivity() })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           return makeFailure(id, INTERNAL_ERROR, message)

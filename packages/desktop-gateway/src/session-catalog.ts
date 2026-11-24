@@ -1,3 +1,4 @@
+import { readCatalogRows, readListedSessions } from "./catalog-rows.ts"
 import { createReadOnlySessionCoordinator, type ReadOnlySessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createJsonlCommitCoordinator } from '@i-harness/session-persistence-jsonl/internal/commit-coordinator'
@@ -39,38 +40,40 @@ export function createCommittedSessionCatalog() {
     void job.finally(() => reads.delete(job)).catch(() => undefined)
     return job
   }
+  async function navigationSnapshot(root: string) {
+    return read(root, { entries: {} as Record<string, SessionNavigation>, partial: false }, async coordinator => {
+      const { rows, partial } = await readCatalogRows(coordinator, () => async id => {
+        const { meta } = await coordinator.profile(id)
+        if (!isConversationMetadata(meta)) return undefined
+        const navigation = parseSessionNavigation(await coordinator.getDocument(navigationDocumentKey(id)))
+        const binding = parseSessionProjectBinding(await coordinator.getDocument(projectBindingDocumentKey(id)))
+        return [id, { ...navigation, ...(binding.projectId ? { projectId: binding.projectId } : {}) }] as const
+      }, true)
+      return { entries: Object.fromEntries(rows), partial }
+    })
+  }
   return {
-    navigation(root: string): Promise<Record<string, SessionNavigation>> {
-      return read(root, {}, async coordinator => {
-        const entries: [string, SessionNavigation][] = []
-        for (const id of await coordinator.list()) {
-          const { meta } = await coordinator.profile(id)
-          if (!isConversationMetadata(meta)) continue
-          const navigation = parseSessionNavigation(await coordinator.getDocument(navigationDocumentKey(id)))
-          const binding = parseSessionProjectBinding(await coordinator.getDocument(projectBindingDocumentKey(id)))
-          entries.push([id, { ...navigation, ...(binding.projectId ? { projectId: binding.projectId } : {}) }])
-        }
-        return Object.fromEntries(entries)
-      })
+    navigationSnapshot,
+    async navigation(root: string): Promise<Record<string, SessionNavigation>> {
+      return (await navigationSnapshot(root)).entries
     },
     dashboard(root: string): Promise<SessionDashboardResult> {
       return read<SessionDashboardResult>(root, { sessions: [] }, async (coordinator, store) => {
-        const sessions: SessionDashboardResult['sessions'] = []
-        for (const id of await coordinator.list()) {
-          const profile = await coordinator.profile(id)
-          if (profile.meta.archived || !isConversationMetadata(profile.meta)) continue
-          const load = async () => (await coordinator.snapshot(id)).session
-          const { title, turnCount } = store === 'jsonl' ? await savedSummary(root, id, profile.meta.title, load)
-            : describeSession(await load(), profile.meta.title)
-          sessions.push({ id, live: false, ...(title === undefined ? {} : { title }), updatedAt: profile.updatedAt, turnCount })
-        }
-        return { sessions }
+        const listed = await readListedSessions(coordinator, ids => {
+          const saved = savedSummary.forListing(root, ids)
+          return async (id, title) => {
+            const load = async () => (await coordinator.snapshot(id)).session
+            return store === 'jsonl' ? saved(id, title, load) : describeSession(await load(), title)
+          }
+        }, true)
+        return { ...listed, sessions: listed.sessions.map(row => ({ ...row, live: false })) }
       })
     },
     close() {
       closing = true
       return closeFlight ??= Promise.resolve().then(async () => {
         await Promise.allSettled([...reads])
+        savedSummary.clear()
         const results = await Promise.allSettled([...owners].map(async owner => { await owner.close(); owners.delete(owner) }))
         const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
         if (errors.length) throw new AggregateError(errors, 'Session catalog read cleanup incomplete')

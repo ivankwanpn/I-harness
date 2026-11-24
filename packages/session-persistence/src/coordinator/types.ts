@@ -60,7 +60,9 @@ export interface PersistenceBackend {
   create(sessionId: string, meta: SessionMeta): Promise<void>
   append(sessionId: string, events: SessionEvent[]): Promise<void>
   read(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }>
-  list(): Promise<string[]>
+  /** Pass a callback for partial display listings. Individual unreadable entries
+   * are omitted and reported; a failed directory enumeration always rejects. */
+  list(onUnreadable?: () => void): Promise<string[]>
   repair(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }>
   /** Atomically replace the event body while preserving session metadata.
    * Optional because read-only/custom backends may not support writable crash
@@ -164,7 +166,9 @@ export interface SessionCoordinator {
   /** Acquire long-term ownership before reading, durably canonicalize crash
    * recovery, and return a writable snapshot whose length equals its next seq. */
   loadOwned(sessionId: string): Promise<{ session: Session }>
-  list(): Promise<string[]>
+  /** Pass a callback for partial display listings. Individual unreadable entries
+   * are omitted and reported; a failed directory enumeration always rejects. */
+  list(onUnreadable?: () => void): Promise<string[]>
   /** C5: cheap per-session meta profile (header read only; no event decode).
    * Read-only — never acquires the ownership lease. */
   profile(sessionId: string): Promise<{ meta: SessionMeta; blank: boolean; updatedAt?: number }>

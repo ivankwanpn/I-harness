@@ -422,8 +422,11 @@ export function createJsonlBackend(root: string, options?: {
       },false,sessionId,true)
     },
 
-    async list(): Promise<string[]> {
-      const names = await readdir(rootPath).catch(() => [] as string[])
+    async list(onUnreadable?: () => void): Promise<string[]> {
+      const names = await readdir(rootPath).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return []
+        throw error
+      })
       // S-08: a zero-byte file is a create/fork that died before its first
       // durable write; a session file that is still marked publishing has a
       // durable header but no committed bootstrap birth yet. Neither is a
@@ -436,10 +439,15 @@ export function createJsonlBackend(root: string, options?: {
         try {
           await assertNotDeleted("session", id)
           if (markers.has(id)) return undefined
-          const info = await stat(filePath(id)).catch(() => undefined)
-          if (info !== undefined && info.size === 0) return undefined
+          const info = await stat(filePath(id))
+          if (info.size === 0) return undefined
           return id
-        } catch (error) { if ((error as Error).message.includes("permanently deleted")) return undefined; throw error }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as Error).message.includes("permanently deleted")) return undefined
+          if (!onUnreadable) throw error
+          onUnreadable()
+          return undefined
+        }
       }))).filter((id): id is string => id !== undefined)
     },
 

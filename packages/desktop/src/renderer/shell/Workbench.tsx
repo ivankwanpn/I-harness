@@ -24,7 +24,7 @@ import { ProjectSidebar } from "./ProjectSidebar.tsx"
 import { ProjectManager } from "../projects/ProjectManager.tsx"
 import { SettingsDialog } from "../settings/SettingsDialog.tsx"
 import type { DesktopBridge } from "../../shared/bridge.ts"
-import { Composer, NewTaskComposer, readDraft, writeDraft, boundedDraft, useComposerSending } from "../session/Composer.tsx"
+import { Composer, NewTaskComposer, captureSessionSubmission, readDraft, writeDraft, boundedDraft, useComposerSending, type ComposerProps } from "../session/Composer.tsx"
 import { ComposerProjectContext, type ComposerProjectState } from "../session/ComposerProjectContext.tsx"
 import { projectHistoryTimeline, type TimelineRow } from "../session/project.ts"
 import type { HistoryScroll } from "../session/use-history-scroll.ts"
@@ -52,7 +52,6 @@ import { ReviewResizeHandle } from "../review/ReviewResizeHandle.tsx"
 import { PaneResizeHandle } from "./PaneResizeHandle.tsx"
 import { PaneTabs } from "../vendor/zcode/PaneTabs.tsx"
 import { SessionModelPicker } from "../session/SessionModelPicker.tsx"
-import type { ImageInput } from "@i-harness/sdk"
 import { SessionManager, type ManageSession } from "../session/SessionManager.tsx"
 import type { SessionModelSelection, SessionModelState } from "@i-harness/sdk"
 import type { DesktopWorkStateView } from "@i-harness/desktop-gateway/src/work-state.ts"
@@ -83,7 +82,7 @@ export interface ConversationView {
   queue?: SessionQueueItem[]
   queueResumable?: boolean
   onResumeQueue?(): Promise<void>
-  onSteer?(text: string, context?: string, images?: ImageInput[], onAdmitted?: () => void): Promise<void>
+  onSteer?: ComposerProps["onSteer"]
   tasks?: AgentTaskView[]
   workState?: DesktopWorkStateView
   workStateError?: string
@@ -94,7 +93,7 @@ export interface ConversationView {
   historyError?: string
   historyNotice?: string
   pending: PendingInteraction[]
-  onPrompt(text: string, context?: string, images?: ImageInput[], onAdmitted?: () => void): Promise<void>
+  onPrompt: ComposerProps["onPrompt"]
   onCancel(): void | Promise<void>
   onCancelTask(taskId: string): void
   onCancelQueue(queueId: string): void
@@ -546,6 +545,7 @@ export function Workbench({
                   running={conversation.running}
                   modelLabel={conversation.modelLabel}
                   modelControl={bridge && conversation.onSetModel ? <SessionModelPicker key={`${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} current={conversation.modelState} disabled={conversation.running || conversation.operation?.busy === true} onSelect={async selection => { await conversation.onSetModel!(selection); if (contextModelOwner.current === currentContextModelOwner) setContextModelRevision(value => value + 1) }} /> : undefined}
+                  captureSubmission={(text, _images, delivery) => captureSessionSubmission(selectedWorkspaceId, selectedSessionId, text, delivery)}
                   onPrompt={conversation.onPrompt}
                   steeringEnabled={capabilities["desktop-input"]?.includes("1")}
                   onSteer={conversation.onSteer}

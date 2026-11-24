@@ -1,3 +1,4 @@
+import { readCatalogRows } from "./catalog-rows.ts"
 import { ForkAdmissionError, type SessionCoordinator, type SessionMeta } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 import { navigationDocumentKey, parseSessionNavigation, type SessionNavigation } from './session-navigation.ts'
@@ -118,6 +119,31 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
     const latestQueue = service.queueState(id)
     if (latestQueue.running || (!allowPending && latestQueue.queued)) throw new Error("Session is busy")
   }
+  async function navigationSnapshot() {
+    const { rows, partial } = await readCatalogRows(coordinator, () => async id => {
+      const profile = await coordinator.profile(id)
+      if (!await visible(id, profile.meta)) return undefined
+      await writes.get(id)
+      const projectId = await options.projectFor?.(id)
+      return [id, { ...await navigationFor(id), ...(projectId ? { projectId } : {}) }] as const
+    })
+    return { entries: Object.fromEntries(rows), partial }
+  }
+  async function archivedSnapshot() {
+    const { rows, partial } = await readCatalogRows(coordinator, (_ids, markPartial) => async id => {
+      const profile = await coordinator.profile(id)
+      if (!profile.meta.archived || !await visible(id, profile.meta)) return undefined
+      const projectId = await options.projectFor?.(id)
+      let title = profile.meta.title
+      try {
+        const session = (await (coordinator.snapshot?.(id) ?? coordinator.load(id))).session
+        const committed = deriveSessionTitle(session)
+        if (committed?.source === 'user' || title === undefined) title = committed?.title
+      } catch { markPartial() }
+      return { id, title, updatedAt: profile.updatedAt, ...(projectId ? { projectId } : {}) }
+    })
+    return { sessions: rows, ...(partial ? { listingPartial: true } : {}) }
+  }
   const manager = {
     fence,
     assertIdle: (id: string) => assertIdle(id),
@@ -136,27 +162,16 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
         return use()
       }, idle))
     },
+    navigationSnapshot,
     async navigation(): Promise<Record<string, SessionNavigation>> {
-      const entries = await Promise.all((await coordinator.list()).map(async (id) => {
-        const profile = await coordinator.profile(id)
-        if (!await visible(id, profile.meta)) return undefined
-        await writes.get(id)
-        const projectId = await options.projectFor?.(id)
-        return [id, { ...await navigationFor(id), ...(projectId ? { projectId } : {}) }] as const
-      }))
-      return Object.fromEntries(entries.filter((entry) => entry !== undefined))
+      return (await navigationSnapshot()).entries
     },
+    archivedSnapshot,
     async archived() {
-      const rows = await Promise.all((await coordinator.list()).map(async (id) => {
-        const profile = await coordinator.profile(id)
-        if (!profile.meta.archived || !await visible(id, profile.meta)) return undefined
-        const projectId = await options.projectFor?.(id)
-        const session = (await (coordinator.snapshot?.(id) ?? coordinator.load(id))).session
-        const committed = deriveSessionTitle(session)
-        const title = committed?.source === 'user' ? committed.title : profile.meta.title ?? committed?.title
-        return { id, title, updatedAt: profile.updatedAt, ...(projectId ? { projectId } : {}) }
-      }))
-      return rows.filter((row) => row !== undefined)
+      const result = await archivedSnapshot()
+      // Legacy callers use absence to decide whether a session can be opened.
+      if (result.listingPartial) throw Error("Incomplete archived session list")
+      return result.sessions
     },
     mutate(sessionId: string, action: SessionManagementAction, title?: string) {
       return serial(sessionId, async () => {

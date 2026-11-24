@@ -940,6 +940,14 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
       expect(range.nextSeq).toBe(range.events.length)
       expect(range.events[0]!.seq).toBe(0)
 
+      const middle = types.indexOf("user/message")
+      const middleReply = await server.handleLine(encodeFrame(makeRequest(110, "session/history", {
+        sessionId: "h1", beforeSeq: middle + 1, limit: 1, includeTurns: true,
+      })))
+      expect(decodeFrame(middleReply!)).toMatchObject({ result: {
+        events: [range.events[middle]], turns: [{ startSeq: types.indexOf("turn/start"), endSeq: types.indexOf("turn/end") }],
+      } })
+
       // afterSeq is EXCLUSIVE: only later events, same tail.
       const cut = 2
       const laterReply = await server.handleLine(

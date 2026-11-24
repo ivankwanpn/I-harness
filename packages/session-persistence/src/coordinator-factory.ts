@@ -164,7 +164,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     async snapshot(sessionId) { archiveReads?.assertPublicReadAdmission(); const session = await managed.snapshot(sessionId); const candidate = session ? { session } : await loads.snapshot(sessionId); archiveReads?.assertPublicReadAdmission(); return candidate },
     async load(sessionId) { archiveReads?.assertPublicReadAdmission(); assertDurableTransition(); observations.assertOutsideObservedSession(sessionId); const session = await managed.snapshot(sessionId); const candidate = session ? { session } : await loads.load(sessionId); archiveReads?.assertPublicReadAdmission(); return candidate },
     async loadOwned(sessionId) { assertDurableTransition(); observations.assertOutsideObservedSession(sessionId); observations.assertManagedSessionAdmission(sessionId); const session = await managed.snapshot(sessionId); return session ? { session } : loads.loadOwned(sessionId) },
-    async list() { return backend.list() },
+    async list(onUnreadable) { return backend.list(onUnreadable) },
     async profile(sessionId) { observations.assertOutsideObservedSession(sessionId); return backend.profile(sessionId) },
     updateMeta: async (id,patch) => {
       assertDurableTransition()

@@ -56,6 +56,20 @@ it("uses one shared-host probe per decision, requires complete results, and reta
   } finally { await manager.close() }
 })
 
+it.each(["idle sweep", "dismissed window"])("retries an idle owner's failed release via %s", async trigger => {
+  const f = activityFixture(), manager = createWorkspaceRuntimeManager({ sessionsRoot: f.sessionsRoot, resourcesPath: f.root })
+  try {
+    const runtime = await manager.get(f.workspace("retiring"))
+    await runtime.client.request("mode", { value: "fail-close-once" })
+    await new Promise(resolve => setTimeout(resolve, 5))
+    await expect(manager.evictIdle!(1)).rejects.toThrow("retry cleanup")
+    expect(manager.peek!("retiring")).toBeUndefined()
+    if (trigger === "idle sweep") expect(await manager.evictIdle!(1)).toBe(1)
+    await vi.waitFor(async () => expect(await manager.hasActiveWork()).toBe(false))
+    expect(await (await manager.get(f.workspace("retiring"))).client.request("ping")).toEqual({ ok: true })
+  } finally { await manager.close() }
+})
+
 it("uses SDK activity when an older shared host does not advertise process reports", async () => {
   const f = activityFixture(), manager = createWorkspaceRuntimeManager({ sessionsRoot: f.sessionsRoot, resourcesPath: f.root })
   try {
@@ -286,6 +300,26 @@ describe("Desktop SDK runtime manager", () => {
 
     off()
     await manager.close()
+  })
+
+  it("snapshots only the live reply belonging to the opened workspace and session", async () => {
+    const hosts = [fakeClient(), fakeClient()]
+    let next = 0
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => hosts[next++]! })
+    const emit = (index: number, event: object) => {
+      for (const listener of hosts[index]!.listeners) listener({ jsonrpc: "2.0", method: "session/event", params: { sessionId: "same", event } })
+    }
+    const chunk = (offset: number, text: string) => ({ type: "assistant/chunk", stepStartSeq: 3, text, offset })
+    try {
+      const a = await manager.get(workspace("a"))
+      const b = await manager.get(workspace("b"))
+      emit(0, chunk(0, "one")); emit(1, chunk(0, "other")); emit(0, chunk(3, " two"))
+      expect(a.assistantPreview!("same")?.text).toBe("one two")
+      expect(b.assistantPreview!("same")?.text).toBe("other")
+      emit(0, { type: "assistant/message", text: "one two", seq: 4 })
+      expect(a.assistantPreview!("same")).toBeUndefined()
+      expect(b.assistantPreview!("same")?.text).toBe("other")
+    } finally { await manager.close() }
   })
 
   it("fences context diagnostic delivery by the actual runtime generation", async () => {

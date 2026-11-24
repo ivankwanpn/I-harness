@@ -550,12 +550,12 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
         return
       }
       if (message.method === "desktop/session/navigation/state" && handlers.sessions) {
-        try { send(makeSuccess(message.id, await handlers.sessions.navigation())) }
+        try { send(makeSuccess(message.id, asRecord(message.params)?.includeCoverage === true ? await handlers.sessions.navigationSnapshot() : await handlers.sessions.navigation())) }
         catch (error) { send(makeFailure(message.id, INTERNAL_ERROR, error instanceof Error ? error.message : String(error))) }
         return
       }
       if (message.method === "desktop/session/archived" && handlers.sessions) {
-        try { send(makeSuccess(message.id, await handlers.sessions.archived())) }
+        try { send(makeSuccess(message.id, asRecord(message.params)?.includeCoverage === true ? await handlers.sessions.archivedSnapshot() : await handlers.sessions.archived())) }
         catch { send(makeFailure(message.id, INTERNAL_ERROR, "Archived sessions unavailable")) }
         return
       }

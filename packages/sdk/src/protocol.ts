@@ -345,8 +345,13 @@ export interface RpcFailure {
 
 export type RpcMessage = RpcRequest | RpcNotification | RpcSuccess | RpcFailure
 
-/** M41a v1: one page of a session's event log walk (session/history). */
+/** Inclusive sequence bounds of a recorded turn. Open turns have no endSeq. */
+export interface HistoryTurn { startSeq: number; endSeq?: number }
+
+/** One page of the session/history event log. */
 export interface HistoryRange {
+  /** Turn boundaries intersecting this page, when requested. endSeq identifies its durable turn/end. */
+  turns?: HistoryTurn[]
   /** Events strictly after `afterSeq`, in seq order, at most `limit` of them. */
   events: SessionEvent[]
   /** Seq of the next unreturned event (== the log length when returned in full). */
@@ -376,6 +381,8 @@ export interface SessionListResult {
   /** True when no listing source was wired — proud "unknown" instead of a
    * fabricated empty list being read as "no sessions exist". */
   listingUnavailable?: boolean
+  /** Rows are verified; omission cannot prove absence when a row failed to read. */
+  listingPartial?: boolean
 }
 
 /** Session creation result; semantic forks return the closed ForkSuccess superset. */
@@ -507,6 +514,8 @@ export interface SessionDashboardResult {
   /** True when no listing source was wired (honest "unknown" — never read as
    * "no sessions exist"). */
   listingUnavailable?: boolean
+  /** Rows are verified; omission cannot prove absence when a row failed to read. */
+  listingPartial?: boolean
 }
 
 /** M41b v1.1: rewind mode union (mirrors packages/rewind RewindMode). */

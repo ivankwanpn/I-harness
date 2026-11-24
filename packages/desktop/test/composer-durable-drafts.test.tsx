@@ -1,12 +1,59 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
-import { Composer, retireSessionDraft, writeDraft, readDraft, draftKey } from "../src/renderer/session/Composer.tsx"
+import { Composer, captureSessionSubmission, consumeSessionSubmission, retireSessionDraft, writeDraft, readDraft, draftKey, type ComposerProps } from "../src/renderer/session/Composer.tsx"
 import { writeFileReferences, readFileReferences } from "../src/renderer/session/file-reference-drafts.ts"
 import { writeImageDrafts, readImageDrafts } from "../src/renderer/session/image-drafts.ts"
 import { writeTextAttachmentDrafts, readTextAttachmentDrafts } from "../src/renderer/session/text-attachment-drafts.ts"
 import type { DraftRequest, DurableDraft } from "../src/shared/attachment-drafts.ts"
 afterEach(() => { cleanup(); localStorage.clear() })
+it("assigns an attachment edit a new token and ignores the previous receipt", () => {
+  const workspace = "attachment-edit", session = "submission"
+  const first = captureSessionSubmission(workspace, session, "continue", "queue")
+  writeFileReferences(workspace, session, ["changed.ts"])
+  const edited = captureSessionSubmission(workspace, session, "continue", "queue")
+  expect(edited.token).not.toBe(first.token)
+  consumeSessionSubmission(workspace, session, first.token)
+  expect(captureSessionSubmission(workspace, session, "continue", "queue").token).toBe(edited.token)
+})
+it("restores the established input's token before retry, then starts a new identical draft", async () => {
+  const workspace = "input-restart", session = "restored"
+  const original = { token: "original-retry-token", text: "continue", delivery: "queue" }
+  let record: DurableDraft = { revision: "1", draft: { prompt: "continue", references: ["file.txt"], images: [], texts: [], contextRefs: [], metadata: JSON.stringify(original) } }
+  let revision = 1
+  const draftRequest = async (r: DraftRequest): Promise<DurableDraft> => {
+    if (r.kind === "desktop/draft/load") return structuredClone(record)
+    expect(r.expectedRevision).toBe(record.revision)
+    return record = { revision: String(++revision), draft: r.kind === "desktop/draft/save" ? structuredClone(r.draft) : null }
+  }
+  const tokens: string[] = []
+  const onPrompt: ComposerProps["onPrompt"] = async (text, context, _images, admit, captured) => {
+    expect(text).toBe("continue")
+    const token = captured!.token
+    tokens.push(token)
+    expect(JSON.parse(record.draft!.metadata!).token).toBe(token)
+    if (tokens.length === 1) {
+      expect(context).toContain("file.txt")
+      throw Error("lost receipt")
+    }
+    if (tokens.length === 2) expect(context).toContain("file.txt")
+    await admit!(() => consumeSessionSubmission(workspace, session, token))
+  }
+  render(<Composer workspaceId={workspace} sessionId={session} draftRequest={draftRequest} canSend running={false}
+    captureSubmission={(text, _images, delivery) => captureSessionSubmission(workspace, session, text, delivery)} onPrompt={onPrompt} onCancel={() => {}} />)
+  const editor = screen.getByRole("textbox", { name: "提示" }) as HTMLTextAreaElement
+  const send = () => fireEvent.keyDown(editor, { key: "Enter" })
+  await waitFor(() => expect(editor.value).toBe("continue"))
+  send()
+  await waitFor(() => { expect(tokens.length).toBe(1); expect(editor.value).toBe("continue") })
+  send()
+  await waitFor(() => { expect(tokens.length).toBe(2); expect(record.draft?.metadata).toBeUndefined() })
+  expect(tokens).toEqual([original.token, original.token])
+  fireEvent.change(editor, { target: { value: "continue" } })
+  send()
+  await waitFor(() => expect(tokens.length).toBe(3))
+  expect(tokens[2]).not.toBe(original.token)
+})
 it("removes exactly a retired session's renderer draft copies and leaves siblings/new-task/editor data", () => {
   const w = "delete-w", s = "delete-s"
   writeDraft(w, s, "secret"); writeDraft(w, "sibling", "keep"); writeDraft(w, "new-task:unassigned", "new task")

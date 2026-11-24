@@ -1,6 +1,7 @@
 import { expect, it } from "vitest"
 import { projectTimeline } from "../src/renderer/session/project.ts"
 import { groupActivities } from "../src/renderer/session/activity-groups.ts"
+import { historyEvents } from "../src/renderer/session/history-events.ts"
 import { workStages } from "../src/renderer/session/work-stages.ts"
 it("collapses a recorded turn's work without hiding the user, final answer or outcome", () => {
   const rows = projectTimeline([
@@ -57,4 +58,20 @@ it("keeps the final reply visible and retains a failed tool inside its expandabl
   expect(stages.at(-1)).toMatchObject({kind:"message",text:"Final answer"})
   const group=workStages(items,new Map([["work:turn:0",true]])).find(row=>row.kind==="activity-group")
   expect(group).toMatchObject({rows:[{output:{exitCode:1}},{output:{exitCode:0}}]})
+})
+
+it("uses the durable turn identity across tail, middle and search-result pages", () => {
+  const turns = [{ startSeq: 0, endSeq: 515 }]
+  const middle = historyEvents({ turns, nextSeq: 221, events: [
+    { type: "assistant/message", seq: 220, text: "Intermediate update" },
+  ] })
+  const tail = historyEvents({ turns, nextSeq: 516, events: [
+    { type: "reasoning", seq: 513, text: "Working" },
+    { type: "assistant/message", seq: 514, text: "Done" },
+    { type: "turn/end", seq: 515 },
+  ] })
+  const group = (rows: ReturnType<typeof historyEvents>) => workStages(groupActivities(projectTimeline(rows)), new Map()).map(row => row.id)
+  expect(group(middle)).toEqual(["work:turn:0"])
+  expect(group(tail)).toEqual(["work:turn:0", "message:514"])
+  expect(group([...middle, ...tail])).toEqual(["work:turn:0", "message:514"])
 })

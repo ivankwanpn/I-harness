@@ -1,3 +1,5 @@
+import { createAssistantPreviews } from "../shared/assistant-preview.ts"
+import type { HistoryRange } from "@i-harness/sdk"
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
 import type { HarnessClient, ServerInfo } from "@i-harness/sdk"
@@ -17,6 +19,7 @@ export interface SandboxState {
 }
 
 export interface WorkspaceRuntime {
+  assistantPreview?: ReturnType<typeof createAssistantPreviews>["get"]
   hostPid?: number
   client: HarnessClient
   info: ServerInfo
@@ -100,11 +103,11 @@ async function runtimeIsIdle(runtime: WorkspaceRuntime): Promise<boolean> {
     }
     if (!capabilities["session-dashboard"]?.includes("1") || !capabilities["desktop-interaction"]?.includes("1")) return false
     const [dashboard, interactions] = await Promise.all([
-      client.request("session/dashboard", {}, 2_500) as Promise<{ sessions?: unknown; active?: unknown; listingUnavailable?: unknown } | null>,
+      client.request("session/dashboard", {}, 2_500) as Promise<{ sessions?: unknown; active?: unknown; listingUnavailable?: unknown; listingPartial?: unknown } | null>,
       client.request("desktop/interaction/pending", {}, 2_500),
     ])
     if (!Array.isArray(interactions) || interactions.length || !Array.isArray(dashboard?.sessions)) return false
-    if (dashboard.listingUnavailable !== undefined && dashboard.listingUnavailable !== false) return false
+    if (dashboard.listingPartial || dashboard.listingUnavailable !== undefined && dashboard.listingUnavailable !== false) return false
     if (dashboard.active !== undefined && dashboard.active !== false) return false
     return dashboard.sessions.every(row => {
       if (!row || typeof row !== "object" || typeof row.id !== "string" || !row.id || typeof row.live !== "boolean") return false
@@ -168,6 +171,13 @@ export function createWorkspaceRuntimeManager(options: {
     await launched.exited
   }
 
+  // Fencing a channel removes its routing entry immediately. Its original
+  // owner remains responsible for cleanup until the host confirms exit.
+  function retiringOwners() {
+    return [...workspaceOwners].filter(([id, owner]) =>
+      !pending.has(id) && !runtimes.has(id) && retiredClients.has(owner.client))
+  }
+
   function assertCurrent(id: string, generation: number): void {
     if (closed) throw new Error("runtime manager is closed")
     if ((generations.get(id) ?? 0) !== generation) throw new Error("runtime startup was invalidated")
@@ -214,6 +224,7 @@ export function createWorkspaceRuntimeManager(options: {
       if (needsProjectScope(workspace.id)) {
         if (!info.capabilities["desktop-project-scope"]?.includes("1")) throw new Error("Gateway does not support project execution scopes")
       }
+      const previews = createAssistantPreviews()
       launched.client.onNotification((frame) => {
         if (closed || (generations.get(workspace.id) ?? 0) !== generation || children.get(workspace.id) !== launched) return
         if (frame.method === "desktop/gateway/fatal") {
@@ -225,11 +236,19 @@ export function createWorkspaceRuntimeManager(options: {
         // compile time that every DesktopNotificationMethod is listed there, so
         // a new notification cannot be silently dropped by a stale chain.
         if (!isForwardedNotification(frame.method)) return
+        if (frame.method === "session/event") {
+          const params = frame.params as { sessionId?: string; event?: HistoryRange["events"][number] } | undefined
+          if (typeof params?.sessionId === "string" && params.event) previews.observe(params.sessionId, params.event)
+        }
+        if (frame.method === "session/execution-state") {
+          const state = frame.params as { sessionId?: string; running?: boolean } | undefined
+          if (state?.running === false && typeof state.sessionId === "string") previews.finish(state.sessionId)
+        }
         const params = frame.method === "desktop/context/diagnostic" && frame.params && typeof frame.params === "object" && !Array.isArray(frame.params)
           ? { ...frame.params, runtimeGeneration: generation } : frame.params
         emit({ kind: "sdk/notification", workspaceId: workspace.id, method: frame.method, params })
       },()=>{void manager.invalidate!(workspace.id).catch(()=>{})})
-      return { client: launched.client, info, sandbox, hostPid: launched.hostPid, whenClosed: () => {
+      return { client: launched.client, info, sandbox, assistantPreview: previews.get, hostPid: launched.hostPid, whenClosed: () => {
         const closing=closingClients.get(launched.client)
         return closing ? closing.then(()=>launched.exited,()=>launched.exited) : children.get(workspace.id)!==launched ? launched.exited : undefined
       } }
@@ -425,6 +444,15 @@ export function createWorkspaceRuntimeManager(options: {
     },
     async hasActiveWork() {
       if (pending.size > 0) return true
+      const retiring = retiringOwners()
+      if (retiring.length) {
+        // A dismissed window can be the only remaining caller. Join or retry
+        // those exact channels and retain the host until a later idle check.
+        for (const [, owner] of retiring) {
+          if (!closingClients.has(owner.client)) void stopWorkspace(owner).catch(() => {})
+        }
+        return true
+      }
       const activity = activityVersion
       for (let attempt = 0; attempt < 2; attempt++) {
         const lookups = lookupVersion
@@ -446,6 +474,7 @@ export function createWorkspaceRuntimeManager(options: {
       if (closed || ttlMs <= 0) return 0
       const now = Date.now()
       const epoch = scopeEpoch
+      const retiring = retiringOwners().filter(([, owner]) => !closingClients.has(owner.client))
       const candidates = [...runtimes].flatMap(([id, runtime]) => {
         const observed = lastUsed.get(id)
         if (!observed || now - observed.at < ttlMs || idleChecks.has(runtime) || retiredClients.has(runtime.client)) return []
@@ -455,7 +484,10 @@ export function createWorkspaceRuntimeManager(options: {
       const batch = shared?.supportsActivity && candidates.length > 0
         ? shared.inspectActivity(candidates.map(candidate => candidate.id)).catch(() => undefined)
         : undefined
-      const retired = await Promise.all(candidates.map(async ({ id, runtime, observed }) => {
+      const retired = await Promise.all([...retiring.map(async ([, owner]) => {
+        await stopWorkspace(owner)
+        return true
+      }), ...candidates.map(async ({ id, runtime, observed }) => {
         try {
           const idle = batch ? (await batch)?.idle.has(id) : await runtimeIsIdle(runtime)
           if (!idle) return false
@@ -470,7 +502,7 @@ export function createWorkspaceRuntimeManager(options: {
           if (child) await stopWorkspace(child)
           return true
         } finally { idleChecks.delete(runtime) }
-      }))
+      })])
       await shared?.retireIfEmpty()
       return retired.filter(Boolean).length
     },

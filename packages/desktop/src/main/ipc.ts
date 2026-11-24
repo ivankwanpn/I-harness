@@ -340,10 +340,12 @@ export async function dispatchDesktopRequest(
       const workspace = dependencies.catalog.get(workspaceId)
       if (!workspace) throw Error('Unknown workspace')
       const ready = dependencies.runtimes.peek?.(workspaceId)
-      if (!ready && dependencies.sessionCatalog) return dependencies.sessionCatalog.navigation(workspace)
+      const includeCoverage = value.includeCoverage === true
+      if (!ready && dependencies.sessionCatalog) return includeCoverage
+        ? dependencies.sessionCatalog.navigationSnapshot(workspace) : dependencies.sessionCatalog.navigation(workspace)
       const runtime = ready ?? await runtimeForKnownWorkspace(workspaceId, dependencies)
       if (!runtime.info.capabilities["desktop-sessions"]?.includes("1")) throw new Error("Session management unavailable")
-      return await runtime.client.request(value.kind, {})
+      return await runtime.client.request(value.kind, includeCoverage ? { includeCoverage: true } : {})
     }
     case "desktop/session/project/bind":
     case "desktop/session/project/state": {
@@ -420,7 +422,7 @@ export async function dispatchDesktopRequest(
     case "session/list":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.listSessions()
     case "desktop/session/archived":
-      return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.request(value.kind, {})
+      return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.request(value.kind, value.includeCoverage === true ? { includeCoverage: true } : {})
     case "desktop/rewind/points":
     case "desktop/rewind/plan":
     case "desktop/rewind/execute": {
@@ -550,24 +552,8 @@ export async function dispatchDesktopRequest(
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const sessionId = requireNonEmpty(value.sessionId, "sessionId")
       const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
-      const queueRead = runtime.info.capabilities["desktop-input"]?.includes("1")
-        ? runtime.client.request("desktop/session/input/state", { sessionId })
-        : runtime.client.request("session/queue", { sessionId })
-      const [tail, queue] = await Promise.allSettled([
-        runtime.client.history(sessionId, { afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: 500 }),
-        queueRead,
-      ])
-      const queueRows = queue.status === "fulfilled"
-        ? (Array.isArray(queue.value) ? queue.value as Array<{ state?: string }> : (queue.value as { items?: Array<{ state?: string }> } | undefined)?.items ?? [])
-        : []
-      return {
-        ...(tail.status === "fulfilled" ? { history: tail.value } : {}),
-        ...(tail.status === "rejected" ? { historyError: tail.reason instanceof Error ? tail.reason.message : String(tail.reason) } : {}),
-        queue: queueRows,
-        running: queueRows.some(row => row.state === "running"),
-        queueResumable: queue.status === "fulfilled" && !Array.isArray(queue.value) && (queue.value as { resumable?: boolean }).resumable === true,
-        ...(queue.status === "rejected" ? { queueError: queue.reason instanceof Error ? queue.reason.message : String(queue.reason) } : {}),
-      }
+      const history = await runtime.client.history(sessionId, { afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: 500, includeTurns: true })
+      return { history, assistantPreview: runtime.assistantPreview?.(sessionId) }
     }
     case "session/history": {
       // Validate every field BEFORE any runtime side effect.
@@ -576,7 +562,7 @@ export async function dispatchDesktopRequest(
       const afterSeq = requireNonNegativeInteger(value.afterSeq, "afterSeq")
       const beforeSeq = value.beforeSeq === undefined ? undefined : requireNonNegativeInteger(value.beforeSeq, "beforeSeq")
       const limit = requireHistoryLimit(value.limit)
-      return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.history(sessionId, { afterSeq, ...(beforeSeq === undefined ? {} : { beforeSeq }), limit })
+      return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.history(sessionId, { afterSeq, ...(beforeSeq === undefined ? {} : { beforeSeq }), limit, includeTurns: true })
     }
     case "session/context": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")

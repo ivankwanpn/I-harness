@@ -46,11 +46,16 @@ type SubmissionMetadata = {
 type CapturedSubmission = Readonly<SubmissionMetadata & {
   selection: Readonly<SessionModelSelection>; creationToken: string; token: string; fingerprint: string
 }>
+type SessionSubmission = Readonly<{ token: string; text: string; delivery: FollowupDelivery }>
+type Submission = CapturedSubmission | SessionSubmission
 const documentLabels: Record<string, string> = { "video/mp4": "MP4", "video/quicktime": "MOV", "video/webm": "WebM", "application/pdf": "PDF", "application/zip": "ZIP", "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "DOCX", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "XLSX", "application/vnd.openxmlformats-officedocument.presentationml.presentation": "PPTX" }
 subscribeDraftChanges((workspace, session, source) => {
   const key = draftKey(workspace, session)
   if (applyingDrafts.has(key) || retiredRawKeys.has(key) || isDraftRetired(workspace, session)) return
-  if (source === 'edit' && session.startsWith('new-task:')) {
+  if (source === 'edit' && !session.startsWith('new-task:')) {
+    const metadataKey = `${key}:submission`
+    if (rawRead(metadataKey) !== undefined) rawRemove(metadataKey)
+  } else if (source === 'edit') {
     const metadataKey = `${key}:submission`, metadata = readSubmissionMetadata(metadataKey)
     if (metadata.token !== undefined || metadata.payload !== undefined) {
       delete metadata.token
@@ -108,6 +113,25 @@ function rawRead(key: string): string | undefined {
 
 function readSubmissionMetadata(key: string): SubmissionMetadata {
   try { return JSON.parse(rawRead(key) ?? '{}') } catch { return {} }
+}
+
+/** The draft owns the admission token until this exact submission is accepted
+ * or edited. Navigation, transport errors and repeated clicks do not rotate it. */
+export function captureSessionSubmission(workspace: string, session: string, text: string, delivery: FollowupDelivery): SessionSubmission {
+  const key = `${draftKey(workspace, session)}:submission`
+  const current = readSubmissionMetadata(key) as Partial<SessionSubmission>
+  if (current?.text === text && typeof current.token === "string" && (current.delivery === "queue" || current.delivery === "steer")) return current as SessionSubmission
+  const owner = { token: crypto.randomUUID(), text, delivery }
+  rawWrite(key, JSON.stringify(owner))
+  publishDraftChange(workspace, session, 'submission')
+  return owner
+}
+
+export function consumeSessionSubmission(workspace: string, session: string, token: string) {
+  const key = `${draftKey(workspace, session)}:submission`
+  if (readSubmissionMetadata(key)?.token !== token) return
+  rawRemove(key)
+  publishDraftChange(workspace, session, 'submission')
 }
 
 function rawWrite(key: string, value: string): void {
@@ -221,10 +245,10 @@ export interface ComposerProps {
   contextRefreshKey?: string
   canCompact?: boolean
   onCompact?(instructions?: string): Promise<void>
-  captureSubmission?(text: string, images?: ImageInput[]): CapturedSubmission
-  onPrompt(text: string, context?: string, images?: ImageInput[], onAdmitted?: (consumeSubmission?: () => void) => void | Promise<void>, submission?: CapturedSubmission): Promise<void>
+  captureSubmission?(text: string, images: ImageInput[] | undefined, delivery: FollowupDelivery): Submission
+  onPrompt(text: string, context?: string, images?: ImageInput[], onAdmitted?: (consumeSubmission?: () => void) => void | Promise<void>, submission?: Submission): Promise<void>
   steeringEnabled?: boolean
-  onSteer?(text: string, context?: string, images?: ImageInput[], onAdmitted?: (consumeSubmission?: () => void) => void | Promise<void>, submission?: CapturedSubmission): Promise<void>
+  onSteer?: ComposerProps["onPrompt"]
   onCancel(): void | Promise<void>
 }
 
@@ -299,7 +323,7 @@ export function NewTaskComposer({ bridge, draftRequest, onOpenHistory, onOpenPro
       })
     }}
     onPrompt={async (text, context, images, onAdmitted, captured) => {
-      if (!captured) throw new ComposerPreparationError(t("無法準備新會話；草稿仍保留。"))
+      if (!captured || !("creationToken" in captured)) throw new ComposerPreparationError(t("無法準備新會話；草稿仍保留。"))
       let state = captured
       if (!state.payload) {
         const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(state.fingerprint))
@@ -557,11 +581,9 @@ function SessionComposer({
     try {
       const prompt = text.trim() ? text : references.length || contextRefs.length ? t("請查看引用的工作區檔案。") : texts.length ? t("請查看附加的檔案。") : t("請查看附加的圖片。")
       const wireImages = images.length ? images.map(({ id: _id, ...image }) => image) : undefined
-      const submission = captureSubmission?.(prompt, wireImages)
-      // A failed disk save is shown, while the in-memory input remains sendable.
-      if (client) await client.flush().catch(() => {})
       const compact = /^\/compact(?:\s+([\s\S]*))?$/.exec(text.trim())
       if (compact) {
+        if (client) await client.flush().catch(() => {})
         if (!onCompact || !canCompact) throw new Error(t("目前無法壓縮上下文"))
         const instructions = compact[1]?.trim()
         if (instructions && new TextEncoder().encode(instructions).length > 4096) throw new Error(t("內容超過 4096 bytes，請縮短。"))
@@ -572,6 +594,13 @@ function SessionComposer({
         publishSend(key, idleSend)
         return
       }
+      const submission = captureSubmission?.(prompt, wireImages, selectedDelivery)
+      const established = submission && "delivery" in submission ? submission : undefined
+      // Persist the token with the original draft before invoking the host.
+      // Reference contents are resolved under the current project authority on
+      // every attempt; the host rejects reuse for a differently prepared input.
+      if (client && established) await client.flush()
+      else if (client) await client.flush().catch(() => {})
       const contextParts = [references.length ? `${t("引用的工作區檔案（請按需讀取）：")}\n${JSON.stringify(references.map((path) => ({ workspaceId, path })), null, 2)}` : "", textAttachmentContext(texts)].filter(Boolean)
       for (const item of contextRefs) {
         if (!bridge) throw new Error("Context bridge unavailable")
@@ -622,7 +651,7 @@ function SessionComposer({
         settleDraft()
         return cleanupAccepted
       }
-      const dispatch = selectedDelivery === "steer" && onSteer ? onSteer : onPrompt
+      const dispatch = (established?.delivery ?? selectedDelivery) === "steer" && onSteer ? onSteer : onPrompt
       // Clear the editor as soon as the request is being dispatched. Admission
       // durability can take a round trip; the draft stays on disk until the
       // gateway accepts it, and a failure restores the text.

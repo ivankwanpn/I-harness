@@ -53,6 +53,7 @@ export function SessionManager({ bridge, workspaceId, onManage, onRewindComplete
   const blocked = busy || rewindBusy
   const selectedRows = (rows ?? []).filter(row => selected.has(row.id))
   const batchBlocked = blocked || !selectedRows.length || selectedRows.length > 100
+  const unknownOwner = selectedRows.some(row => !currentOwners || !Object.hasOwn(currentOwners, row.id))
   const busyListener = useRef(onBusyChange)
   busyListener.current = onBusyChange
   useEffect(() => { busyListener.current?.(busy || rewindBusy) }, [busy, rewindBusy])
@@ -65,8 +66,15 @@ export function SessionManager({ bridge, workspaceId, onManage, onRewindComplete
   useEffect(() => {
     let active = true
     setRows(undefined); setError(undefined); setEditing(undefined); setConfirm(undefined)
-    void bridge.request({ kind: archived ? "desktop/session/archived" : "session/list", workspaceId }).then((value) => {
-      if (active) setRows(archived ? value as Row[] : (value as { sessions: Row[] }).sessions)
+    void bridge.request(archived ? { kind: "desktop/session/archived", includeCoverage: true, workspaceId } : { kind: "session/list", workspaceId }).then((value) => {
+      if (!active) return
+      const report = Array.isArray(value) ? { sessions: value as Row[] } : value as { sessions: Row[]; listingUnavailable?: boolean; listingPartial?: boolean }
+      if (report.listingUnavailable) {
+        setError(c("無法取得會話列表", "Conversation list unavailable"))
+      } else {
+        setRows(report.sessions)
+        if (report.listingPartial) setError(c("部分會話資料暫時無法讀取", "Some conversations could not be listed"))
+      }
     }).catch((reason: unknown) => { if (active) setError(String(reason)) })
     return () => { active = false }
   }, [bridge, workspaceId, archived, refresh])
@@ -79,7 +87,7 @@ export function SessionManager({ bridge, workspaceId, onManage, onRewindComplete
     finally { lock.current = false; setBusy(false) }
   }
   function confirmBatch(action: ManageSessionBatchCommand["action"]) {
-    if (batchBlocked) return
+    if (batchBlocked || action === "move" && unknownOwner) return
     const sessionIds = selectedRows.map(row => row.id)
     setBatchConfirmation({ action, sessionIds, ...(action === "move" ? { ...(destination ? { projectId: destination } : {}), expectedOwners: Object.fromEntries(sessionIds.map(id => [id, currentOwners?.[id] ?? null])) } : {}) })
   }
@@ -147,7 +155,7 @@ export function SessionManager({ bridge, workspaceId, onManage, onRewindComplete
         {projects && currentOwners && executionWorkspace ? <div className="session-manager-move">
           <span>{c("目的專案", "Destination project")}</span>
           <Button size="small" className="session-manager-destination" aria-label={c("目的專案", "Destination project")} aria-haspopup="menu" aria-expanded={activeMenu?.kind === "destination"} aria-controls={activeMenu?.kind === "destination" ? menuId : undefined} disabled={blocked} icon={<Folder size={14} />} onClick={event => showMenu("destination", event.currentTarget)}><span>{destination ? projects.find(project => project.id === destination)?.name ?? t("專案已移除") : c("未分組", "Ungrouped")}</span><ChevronDown size={13} aria-hidden /></Button>
-          <Button size="small" disabled={batchBlocked} aria-label={c("移動所選會話", "Move selected conversations")} icon={<FolderInput size={14} />} onClick={() => confirmBatch("move")}>{c("移動", "Move")}</Button>
+          <Button size="small" disabled={batchBlocked || unknownOwner} aria-label={c("移動所選會話", "Move selected conversations")} icon={<FolderInput size={14} />} onClick={() => confirmBatch("move")}>{c("移動", "Move")}</Button>
         </div> : null}
       </div> : null}
     </div>
@@ -158,7 +166,7 @@ export function SessionManager({ bridge, workspaceId, onManage, onRewindComplete
       </details></section> : null}
       {error && !editing && !confirm && !batchConfirmation ? <div className="session-manager-error" role="alert"><span>{error}</span><Button size="small" disabled={blocked} onClick={() => setRefresh(refresh + 1)}>{t("重試")}</Button></div> : null}
       {rows === undefined && !error ? <p className="session-manager-state" role="status">{t("正在讀取…")}</p> : null}
-      {rows?.length === 0 ? <p className="session-manager-state ih-empty-state">{t("尚無會話")}</p> : null}
+      {rows?.length === 0 && !error ? <p className="session-manager-state ih-empty-state">{t("尚無會話")}</p> : null}
       {visibleRows?.length ? <ul className="session-manager-list" aria-label={c("會話列表", "Conversation list")}>{visibleRows.map(row => {
         const name = row.title || t("未命名會話")
         const project = projectName(row)

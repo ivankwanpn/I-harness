@@ -8,10 +8,10 @@ it("releases durable sends at admission and permits a second queued input from t
   const request = vi.fn().mockResolvedValue({ accepted: true, inputId: "durable-one" })
   const admitted = vi.fn()
   const view = renderHook(() => useSessionOperation({ request, onEvent: () => () => {} }, true))
-  await act(async () => { await view.result.current.run("w", "a", "prompt", "first", undefined, undefined, admitted) })
+  await act(async () => { await view.result.current.run("w", "a", { kind: "prompt", text: "first", token: crypto.randomUUID(), delivery: "queue", onAdmitted: admitted }) })
   expect(admitted).toHaveBeenCalledOnce()
   expect(view.result.current.states[operationKey("w", "a")]?.busy).toBe(false)
-  await act(async () => { await view.result.current.run("w", "a", "prompt", "second", undefined, undefined, undefined, "steer") })
+  await act(async () => { await view.result.current.run("w", "a", { kind: "prompt", text: "second", token: crypto.randomUUID(), delivery: "steer" }) })
   expect(request.mock.calls[0]?.[0]).toMatchObject({ kind: "desktop/session/input/submit", text: "first", delivery: "queue" })
   expect(request.mock.calls[1]?.[0]).toMatchObject({ kind: "desktop/session/input/submit", text: "second", delivery: "steer" })
 })
@@ -24,7 +24,7 @@ it("keeps an unaccepted draft when durable persistence fails after an in-memory 
   const bridge = { request, onEvent: (listener: (event: unknown) => void) => { listeners.push(listener); return () => {} } }
   const view = renderHook(() => useSessionOperation(bridge as never, true))
   let pending!: Promise<unknown>
-  act(() => { pending = view.result.current.run("w", "s", "prompt", "retain me", undefined, undefined, admitted) })
+  act(() => { pending = view.result.current.run("w", "s", { kind: "prompt", text: "retain me", token: crypto.randomUUID(), delivery: "queue", onAdmitted: admitted }) })
   const token = (request.mock.calls[0]![0] as { clientToken: string }).clientToken
   act(() => listeners.forEach((emit) => emit({ kind: "sdk/notification", workspaceId: "w", method: "session/event", params: { sessionId: "s", event: { type: "agent/input/admitted", intent: "user", delivery: "queue", clientToken: token } } })))
   expect(admitted).not.toHaveBeenCalled()
@@ -37,10 +37,10 @@ it("owns pending operations by session and rejects a second operation in that se
   const request = vi.fn(() => new Promise((done) => { resolve = done }))
   const view = renderHook(() => useSessionOperation({ request, onEvent: () => () => {} }))
   let pending!: Promise<unknown>
-  act(() => { pending = view.result.current.run("w", "a", "compact", "保留結論") })
+  act(() => { pending = view.result.current.run("w", "a", { kind: "compact", instructions: "保留結論" }) })
   expect(view.result.current.states[operationKey("w", "a")]?.busy).toBe(true)
   expect(view.result.current.states[operationKey("w", "b")]).toBeUndefined()
-  await expect(view.result.current.run("w", "a", "prompt", "duplicate")).rejects.toThrow("Session is busy")
+  await expect(view.result.current.run("w", "a", { kind: "prompt", text: "duplicate", token: crypto.randomUUID(), delivery: "queue" })).rejects.toThrow("Session is busy")
   expect(request).toHaveBeenCalledTimes(1)
   await act(async () => { resolve({ compacted: true, summary: "摘要", shadowedSeqs: [1] }); await pending })
   expect(view.result.current.states[operationKey("w", "a")]).toMatchObject({ busy: false, result: { compacted: true, summary: "摘要" } })
@@ -50,10 +50,10 @@ it("owns pending operations by session and rejects a second operation in that se
 it("releases the session for retry without storing raw remote failure text", async () => {
   const request = vi.fn().mockRejectedValueOnce(new Error("cancelled")).mockResolvedValueOnce({ compacted: false, shadowedSeqs: [] })
   const view = renderHook(() => useSessionOperation({ request, onEvent: () => () => {} }))
-  await act(async () => { await expect(view.result.current.run("w", "a", "compact")).rejects.toThrow("cancelled") })
+  await act(async () => { await expect(view.result.current.run("w", "a", { kind: "compact" })).rejects.toThrow("cancelled") })
   expect(view.result.current.states[operationKey("w", "a")]).toMatchObject({ busy: false })
   expect(view.result.current.states[operationKey("w", "a")]?.error).toBeUndefined()
-  await act(async () => { await view.result.current.run("w", "a", "compact", "  ") })
+  await act(async () => { await view.result.current.run("w", "a", { kind: "compact", instructions: "  " }) })
   expect(request).toHaveBeenLastCalledWith({ kind: "desktop/session/compact", workspaceId: "w", sessionId: "a" })
 })
 
@@ -65,7 +65,7 @@ it("reports prompt admission before a later model error without accepting anothe
   const bridge = { request, onEvent: (listener: (event: unknown) => void) => { emit = listener; return () => {} } }
   const view = renderHook(() => useSessionOperation(bridge as never))
   let pending!: Promise<unknown>
-  act(() => { pending = view.result.current.run("w", "a", "prompt", "read file", undefined, undefined, onAdmitted) })
+  act(() => { pending = view.result.current.run("w", "a", { kind: "prompt", text: "read file", token: crypto.randomUUID(), delivery: "queue", onAdmitted: onAdmitted }) })
   const token = (request.mock.calls[0]![0] as { clientToken?: string }).clientToken
   expect(typeof token).toBe("string")
   act(() => emit({ kind: "sdk/notification", workspaceId: "w", method: "session/event", params: { sessionId: "b", event: { type: "agent/input/admitted", text: "read file", intent: "user", delivery: "queue" } } }))
@@ -90,7 +90,7 @@ it("acknowledges a prompt whose file context was appended before admission", asy
   }
   const view = renderHook(() => useSessionOperation(bridge as never))
   let pending!: Promise<unknown>
-  act(() => { pending = view.result.current.run("w", "a", "prompt", "read file", 'Workspace refs: ["a.md"]', undefined, onAdmitted) })
+  act(() => { pending = view.result.current.run("w", "a", { kind: "prompt", token: crypto.randomUUID(), text: "read file", delivery: "queue", context: 'Workspace refs: ["a.md"]', onAdmitted }) })
   const token = (request.mock.calls[0]![0] as { clientToken?: string }).clientToken
   act(() => emit({ kind: "sdk/notification", workspaceId: "w", method: "session/event", params: { sessionId: "a", event: { type: "agent/input/admitted", text: 'read file\n\nWorkspace refs: ["a.md"]', intent: "user", delivery: "queue", clientToken: token } } }))
   expect(onAdmitted).toHaveBeenCalledOnce()

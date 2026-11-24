@@ -19,6 +19,7 @@ export class DurableDraftClient {
     if (this.retired) return Promise.resolve()
     if (this.loading) return this.loading
     const version = this.persistenceVersion
+    const initialEdit = this.editVersion
     const initial = this.read()
     this.loading = this.request({ kind: "desktop/draft/load", scope: this.scope }).then((record) => {
       if (this.retired) return
@@ -32,6 +33,9 @@ export class DurableDraftClient {
           for (const field of ["prompt", "references", "images", "texts", "contextRefs", "metadata"] as const) {
             if (JSON.stringify(current[field]) !== JSON.stringify(initial[field])) Object.assign(merged, { [field]: current[field] })
           }
+          // An edit belongs to a new input even if it recreated the saved
+          // text. Do not attach the previous input's retry token to it.
+          if (this.editVersion !== initialEdit && !this.scope.identity.startsWith("new-task:")) merged.metadata = current.metadata
           this.apply(merged); this.dirty = true
         }
       } else this.dirty = true

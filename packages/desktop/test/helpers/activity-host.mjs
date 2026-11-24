@@ -12,7 +12,13 @@ input.on("line", line => {
     case "open":
       ids.add(id)
       return send({ type: "opened", workspaceId: id, activityReports: id === "legacy" ? undefined : frame.activityReports })
-    case "close": ids.delete(id); return send({ type: "closed", workspaceId: id })
+    case "close":
+      if (id === "retiring" && mode === "fail-close-once") {
+        mode = "idle"
+        return send({ type: "error", operation: "close", workspaceId: id, message: "retry cleanup" })
+      }
+      ids.delete(id)
+      return send({ type: "closed", workspaceId: id })
     case "shutdown": input.close(); process.stdin.destroy(); return
     case "activity": {
       probes++

@@ -33,13 +33,35 @@ function fixture(handle?: (request: DesktopRequest) => unknown) {
 }
 
 describe("project conversation sidebar", () => {
+  it("shows confirmed rows beside a partial-list retry and recovers the missing row", async () => {
+    let unreadable = true
+    const { props } = fixture(request => {
+      if (request.kind === "session/dashboard") return Promise.resolve({
+        sessions: [{ id: "s1", title: "Healthy", live: false }, ...(!unreadable ? [{ id: "s2", title: "Recovered", live: false }] : [])],
+        listingPartial: unreadable,
+      })
+      if (request.kind === "desktop/session/navigation/state") return Promise.resolve({
+        entries: { s1: { pinned: false, unread: false, projectId: "p1" }, ...(!unreadable ? { s2: { pinned: false, unread: false, projectId: "p1" } } : {}) },
+        partial: unreadable,
+      })
+      return undefined
+    })
+    render(<ProjectSidebar {...props} projects={[projects[0]!]} workspaces={[workspaces[0]!]} selectedProjectId="p1" selectedWorkspaceId="w1" dashboard={undefined} />)
+    expect(await screen.findByText("Healthy")).toBeTruthy()
+    const retry = await screen.findByRole("button", { name: "重試" })
+    expect(screen.queryByText("Recovered")).toBeNull()
+    unreadable = false
+    fireEvent.click(retry)
+    expect(await screen.findByText("Recovered")).toBeTruthy()
+    expect(screen.queryByRole("alert")).toBeNull()
+  })
   it("reads one paired snapshot per workspace when search expands three overlapping projects", async () => {
     const { props, bridge, emit } = fixture()
     const sharedProjects = ["p1", "p2", "p3"].map(id => ({ ...projects[0]!, id, name: id, workspaceIds: ["w1"] }))
     render(<ProjectSidebar {...props} projects={sharedProjects} workspaces={[workspaces[0]!]}
       selectedWorkspaceId={undefined} selectedProjectId={undefined} selectedSessionId={undefined} dashboard={undefined} />)
     const request = vi.mocked(bridge.request)
-    await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/session/navigation/state", workspaceId: "w1" }))
+    await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/session/navigation/state", workspaceId: "w1", includeCoverage: true }))
     const counts = () => ["session/dashboard", "desktop/session/navigation/state"].map(kind => request.mock.calls.filter(([input]) => input.kind === kind).length)
     request.mockClear()
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "Chat" } })
@@ -57,7 +79,7 @@ describe("project conversation sidebar", () => {
     const { props, bridge } = fixture(request => request.kind === 'desktop/session/navigation/state'
       ? { s1: { pinned: true, unread: false } } : undefined)
     render(<ProjectSidebar {...props} selectedProjectId={undefined} selectedWorkspaceId={undefined} />)
-    await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: 'desktop/session/navigation/state', workspaceId: 'w2' }))
+    await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: 'desktop/session/navigation/state', workspaceId: 'w2', includeCoverage: true }))
     expect(screen.getByText('未分類會話')).toBeTruthy()
     expect(bridge.request).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'session/dashboard' }))
   })
@@ -80,7 +102,7 @@ describe("project conversation sidebar", () => {
     expect(await screen.findByText("Chat w2")).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Frontend" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Backend" })).toBeNull()
-    await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/session/navigation/state", workspaceId: "w1" }))
+    await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/session/navigation/state", workspaceId: "w1", includeCoverage: true }))
     expect(bridge.request).not.toHaveBeenCalledWith({ kind: "session/dashboard", workspaceId: "w1" })
     expect(bridge.request).toHaveBeenCalledWith({ kind: "session/dashboard", workspaceId: "w2" })
     expect(bridge.request).not.toHaveBeenCalledWith({ kind: "session/dashboard", workspaceId: "wu" })
@@ -130,7 +152,7 @@ describe("project conversation sidebar", () => {
     expect(bridge.request).not.toHaveBeenCalled()
     removed = true
     view.rerender(<ProjectSidebar {...only} dashboard={{ sessions: [] }} />)
-    await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/session/navigation/state", workspaceId: "w1" }))
+    await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/session/navigation/state", workspaceId: "w1", includeCoverage: true }))
     expect(screen.queryByText("Latest status")).toBeNull()
   })
 

@@ -1,3 +1,4 @@
+import { historyEvents } from "./history-events.ts"
 import type { HistoryRange } from "@i-harness/sdk"
 
 export interface HistoryPageRequest {
@@ -34,7 +35,7 @@ export async function loadRecentHistory(
 ): Promise<HistoryLoad> {
   const tail = await request({ afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: options.limit })
   if (Number.isSafeInteger(tail.nextSeq) && Number.isSafeInteger(tail.headSeq) && Number.isSafeInteger(tail.startSeq)) {
-    return { events: tail.events, cursor: tail.nextSeq, exhausted: tail.nextSeq >= tail.headSeq!, startSeq: tail.startSeq }
+    return { events: historyEvents(tail), cursor: tail.nextSeq, exhausted: tail.nextSeq >= tail.headSeq!, startSeq: tail.startSeq }
   }
   // Older gateway: no tail metadata. Fall back to the head probe so mixed
   // desktop/gateway versions still show the newest bounded window.
@@ -59,7 +60,7 @@ export async function loadHistory(
   let cursor = options.afterSeq
   for (let page = 0; page < maxPages; page += 1) {
     const result = await request({ afterSeq: cursor, limit: options.limit })
-    events.push(...result.events)
+    events.push(...historyEvents(result))
     const previous = cursor
     cursor = Math.max(cursor, result.nextSeq)
     // A short page means the log is exhausted; a non-advancing cursor means a

@@ -135,6 +135,7 @@ export interface HistoryOptions {
   afterSeq?: number
   /** Tail read: return the window ending just before this seq. */
   beforeSeq?: number
+  includeTurns?: boolean
   limit?: number
 }
 
@@ -481,10 +482,11 @@ export class HarnessClient {
    * paging up to `limit` events. Rejects with RpcError(-32602, "session not
    * found") for an unknown session. */
   async history(sessionId: string, opts: HistoryOptions = {}): Promise<HistoryRange> {
-    const params: { sessionId: string; afterSeq?: number; beforeSeq?: number; limit?: number } = { sessionId }
+    const params: { sessionId: string; afterSeq?: number; beforeSeq?: number; limit?: number; includeTurns?: boolean } = { sessionId }
     if (opts.afterSeq !== undefined) params.afterSeq = opts.afterSeq
     if (opts.beforeSeq !== undefined) params.beforeSeq = opts.beforeSeq
     if (opts.limit !== undefined) params.limit = opts.limit
+    if (opts.includeTurns) params.includeTurns = true
     const result = await this.request("session/history", params)
     return result as HistoryRange
   }

@@ -45,7 +45,7 @@ export type DesktopRequest =
   | { kind: "projects/save"; input: { id?: string; name: string; workspaceIds: string[]; primaryWorkspaceId?: string; pinned?: boolean; expectedUpdatedAt?: string } }
   | { kind: "projects/remove"; id: string }
   | { kind: "workspace/reveal"; workspaceId: string }
-  | { kind: "desktop/session/navigation/state"; workspaceId: string }
+  | { kind: "desktop/session/navigation/state"; workspaceId: string; includeCoverage?: true }
   | { kind: "desktop/session/project/bind"; workspaceId: string; sessionId: string; projectId?: string }
   | { kind: "desktop/session/project/state"; workspaceId: string; sessionId: string }
   | { kind: "desktop/session/input/submit"; workspaceId: string; sessionId: string; text: string; delivery: "queue" | "steer"; context?: string; images?: ImageInput[]; clientToken?: string }
@@ -104,7 +104,7 @@ export type DesktopRequest =
   | { kind: "desktop/rewind/points"; workspaceId: string; sessionId: string }
   | { kind: "desktop/rewind/plan"; workspaceId: string; sessionId: string; target: number; mode: "all" | "files" | "conversation" }
   | { kind: "desktop/rewind/execute"; workspaceId: string; sessionId: string; target: number; mode: "all" | "files" | "conversation"; fingerprint: string }
-  | { kind: "desktop/session/archived"; workspaceId: string }
+  | { kind: "desktop/session/archived"; workspaceId: string; includeCoverage?: true }
   | { kind: 'desktop/session/fork/prepare'; workspaceId: string; request: ForkPrepareRequest }
   | { kind: 'desktop/session/fork/begin' | 'desktop/session/fork/retry'; workspaceId: string; operation: ForkOperation }
   | { kind: 'desktop/session/fork/capabilities'; workspaceId: string }

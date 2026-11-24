@@ -1,8 +1,10 @@
 import type { HistoryRange } from "@i-harness/sdk"
-import { mergeReasoningChunks, mergeTextFragments } from "./reasoning-progress.ts"
+import { assistantBoundary, isAssistantPreview, updateAssistantPreview, type AssistantPreview } from "../../shared/assistant-preview.ts"
+import { historyEvents, type WireEvent } from "./history-events.ts"
+import { mergeReasoningChunks } from "./reasoning-progress.ts"
 
-export type WireEvent = HistoryRange["events"][number]
-export type AssistantPreview = Extract<WireEvent, { type: "assistant/chunk" }> & { stepStartSeq: number; offset: number }
+export { isAssistantPreview, updateAssistantPreview, type AssistantPreview } from "../../shared/assistant-preview.ts"
+export type { WireEvent } from "./history-events.ts"
 
 export interface EventWindow {
   /** Next unread seq — the replay checkpoint, never the last displayed seq. */
@@ -92,34 +94,6 @@ function retainEvent(event: WireEvent): WireEvent {
   return rest
 }
 
-export function isAssistantPreview(event: WireEvent): event is AssistantPreview {
-  return event.type === "assistant/chunk" && event.seq === undefined &&
-    event.stepStartSeq !== undefined && Number.isSafeInteger(event.stepStartSeq) && event.stepStartSeq >= 0 &&
-    event.offset !== undefined && Number.isSafeInteger(event.offset) && event.offset >= 0 &&
-    typeof event.text === "string" && event.text.length > 0
-}
-
-function assistantBoundary(event: WireEvent): number {
-  switch (event.type) {
-    case "assistant/message":
-    case "step/start":
-    case "step/end":
-    case "step/failed":
-    case "turn/start":
-    case "turn/end":
-      return event.seq ?? -1
-    default:
-      return -1
-  }
-}
-
-export function updateAssistantPreview(current: AssistantPreview | undefined, event: WireEvent): AssistantPreview | undefined {
-  if (!isAssistantPreview(event)) return current && assistantBoundary(event) > current.stepStartSeq ? undefined : current
-  if (!current || event.stepStartSeq > current.stepStartSeq) return event
-  if (event.stepStartSeq < current.stepStartSeq) return current
-  return mergeTextFragments(current, event) ?? current
-}
-
 function settleLive(state: EventWindow, incoming: readonly WireEvent[]): Pick<EventWindow, "live" | "assistantPreview" | "assistantBoundary"> {
   const completed = new Set(incoming.flatMap((event) => event.type === "reasoning" && event.streamId ? [event.streamId] : []))
   const boundary = incoming.reduce((latest, event) => Math.max(latest, assistantBoundary(event)), state.assistantBoundary ?? -1)
@@ -146,7 +120,7 @@ export function applyHistory(state: EventWindow, page: HistoryRange): EventWindo
     : state.events
   return {
     cursor: Math.max(state.cursor, page.nextSeq),
-    events: capEvents(mergeBySeq(previous, page.events.filter(event => (event as { type: string }).type !== "model/activity").map(retainEvent))),
+    events: capEvents(mergeBySeq(previous, historyEvents(page).filter(event => (event as { type: string }).type !== "model/activity").map(retainEvent))),
     ...settleLive(state, page.events),
     connection: "online",
   }
@@ -183,7 +157,9 @@ export function applyNotification(state: EventWindow, event: WireEvent): EventWi
   // Streaming appends are the hot path: a strictly newer seq needs neither a
   // rebuild nor a sort, only the new array React needs to re-render.
   if (last?.seq === undefined || event.seq > last.seq) {
-    return { ...state, ...live, events: capEvents([...state.events, event]) }
+    const owner = event.type === "turn/start" ? { startSeq: event.seq } : last?.type !== "turn/end" ? last?.historyTurn : undefined
+    const row = owner && (owner.endSeq === undefined || event.seq <= owner.endSeq) ? { ...event, historyTurn: owner } : event
+    return { ...state, ...live, events: capEvents([...state.events, row]) }
   }
   return { ...state, ...live, events: capEvents(mergeBySeq(state.events, [event])) }
 }
@@ -197,10 +173,10 @@ export interface HistoryViewport { events: WireEvent[]; startSeq: number; endSeq
 export const HISTORY_PAGE_SIZE = 200
 export const MAX_HISTORY_VIEW_EVENTS = 2000
 export function historyViewport(page: HistoryRange, startSeq: number): HistoryViewport {
-  return { events: page.events.filter(event => (event as { type: string }).type !== "model/activity").map(retainEvent), startSeq, endSeq: page.nextSeq, hasBefore: startSeq > 0, hasAfter: page.events.length === HISTORY_PAGE_SIZE }
+  return { events: historyEvents(page).filter(event => (event as { type: string }).type !== "model/activity").map(retainEvent), startSeq, endSeq: page.nextSeq, hasBefore: startSeq > 0, hasAfter: page.events.length === HISTORY_PAGE_SIZE }
 }
 export function pageHistoryViewport(state: HistoryViewport, page: HistoryRange, startSeq: number, direction: "before" | "after"): HistoryViewport {
-  const merged = mergeBySeq(orderedBySeq(state.events), page.events.filter(event => (event as { type: string }).type !== "model/activity").map(retainEvent))
+  const merged = mergeBySeq(orderedBySeq(state.events), historyEvents(page).filter(event => (event as { type: string }).type !== "model/activity").map(retainEvent))
   const events = direction === "before" ? merged.slice(0, MAX_HISTORY_VIEW_EVENTS) : merged.slice(-MAX_HISTORY_VIEW_EVENTS)
   const first = events[0]?.seq ?? startSeq
   const last = events.at(-1)?.seq

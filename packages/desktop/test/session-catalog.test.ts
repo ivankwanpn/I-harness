@@ -78,7 +78,8 @@ it.each(['jsonl', 'commit-log'] as const)('reads cold %s navigation and titles a
     await expect(dispatchDesktopRequest({ kind: 'session/dashboard', workspaceId: 'foreign' }, dependencies)).rejects.toThrow('Unknown workspace')
     live = false
     await writers[0]!.putDocument(navigationDocumentKey('conversation'), { version: 1, pinned: 'invalid', unread: false })
-    await expect(sessionCatalog.navigation(workspaces[0]!)).rejects.toThrow('navigation metadata is invalid')
+    await expect(sessionCatalog.navigationSnapshot(workspaces[0]!)).resolves.toMatchObject({ partial: true })
+    expect(await sessionCatalog.navigation(workspaces[0]!)).not.toHaveProperty('conversation')
   } finally { await sessionCatalog.close(); await Promise.all(writers.map(writer => writer.close())) }
   await expect(sessionCatalog.navigation(workspaces[0]!)).rejects.toThrow('closed')
   expect(JSON.parse(await readFile(join(root, 'settings.json'), 'utf8'))).toEqual({ sessionStore: kind })
@@ -94,7 +95,7 @@ it('shares a JSONL listing summary for an unchanged file, then reads its newer c
     { type: 'session/title', source: 'user', title: name, messageSeqs: [] },
     { type: 'turn/end' },
   ] } as const))
-  const summary = () => cache(root, 'session', 'Header title', load)
+  const summary = () => cache.forListing(root, ['session'])('session', 'Header title', load)
   await expect(Promise.all([summary(), summary()])).resolves.toEqual([
     { title: name, turnCount: 1 }, { title: name, turnCount: 1 },
   ])
@@ -105,6 +106,24 @@ it('shares a JSONL listing summary for an unchanged file, then reads its newer c
   await expect(summary()).resolves.toEqual({ title: name, turnCount: 1 })
   expect(load).toHaveBeenCalledTimes(2)
 })
+
+it('keeps complete per-session summaries across a 513-session scan and forgets removed sessions', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-desktop-catalog-')); roots.push(root)
+  const ids = Array.from({ length: 513 }, (_, index) => String(index))
+  await Promise.all(ids.map(id => writeFile(join(root, id + '.jsonl'), 'revision')))
+  const cache = createJsonlDashboardSummaryCache()
+  const load = vi.fn(async () => ({ formatVersion: 1, events: [{ type: 'turn/end' }] } as const))
+  async function scan() {
+    const read = cache.forListing(root, ids)
+    for (const id of ids) await read(id, undefined, load)
+  }
+  await scan()
+  await scan()
+  expect(load).toHaveBeenCalledTimes(513)
+  cache.forListing(root, ids.slice(1))
+  await cache.forListing(root, ids)(ids[0]!, undefined, load)
+  expect(load).toHaveBeenCalledTimes(514)
+}, 30000)
 
 it('joins an already starting workspace dashboard and falls back to committed data if it fails', async () => {
   const workspace = { id: 'one', path: 'D:/one', label: 'One' }

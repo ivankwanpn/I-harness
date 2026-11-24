@@ -24,7 +24,7 @@ export function workStages(items: readonly TimelineItem[], open: ReadonlyMap<str
     // Only an ended turn's last substantive assistant message is treated as
     // final. A prior commentary followed by a tool is still intermediate work.
     const last = segment.findLast((row) => row.kind === "message" || row.kind === "tool" || row.kind === "activity-group" || (row.kind === "other" && row.label === "reasoning"))
-    const finalId = last?.kind === "message" && last.role === "assistant" && !last.transient ? last.id : undefined
+    const finalId = !turn.endsBeyondPage && last?.kind === "message" && last.role === "assistant" && !last.transient ? last.id : undefined
     // Thinking, commentary, tools and background inputs share the same ordered
     // work disclosure. The first thought remains a collapsed hint inside it.
     const work = (row: TimelineItem) => row.id !== finalId && row.kind !== "outcome" && row.kind !== "failure"

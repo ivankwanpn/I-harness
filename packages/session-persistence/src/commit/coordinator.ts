@@ -80,7 +80,7 @@ export type CommitCoordinator = {
   withProcessReadObservation<T, U>(id: string, options: import('../coordinator/process-read-owner.ts').ProcessReadOptions, work: (observation: import('../coordinator/process-read-owner.ts').ProcessReadObservation) => Promise<T>, publish: (candidate: T, observation: import('../coordinator/process-read-owner.ts').ProcessReadObservation, last: import('../coordinator/process-read-owner.ts').ProcessReadUpdate) => Promise<U>): Promise<U>
   closeManagedDocument(sessionId: string): Promise<void>
   revokeManagedDocumentNewWork(sessionId: string): void
-  list(): Promise<string[]>
+  list(onUnreadable?: () => void): Promise<string[]>
   profile(sessionId: string): Promise<{ meta: SessionMeta; blank: boolean; updatedAt?: number }>
   updateMeta(sessionId: string, patch: Partial<SessionMeta>): Promise<SessionMeta>
   publishForkTarget(target: { targetSessionId: string; sourceSessionId: string; operationId: string; requestDigest: string; createdAt: string }): Promise<'published' | 'already-published' | 'mismatch'>
@@ -644,24 +644,38 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       await unpinSession(sessionId)
     },
     revokeManagedDocumentNewWork(sessionId) { managed.get(sessionId)?.revokeNewWork() },
-    async list() {
+    async list(onUnreadable) {
       const ids = new Set<string>()
-      for (const entry of await readdir(root, { withFileTypes: true })) {
+      const entries = await readdir(root, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return []
+        throw error
+      })
+      for (const entry of entries) {
         if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== DOCUMENT_SESSION) {
-          const exists = await stat(join(root, entry.name, `session.v${COMMIT_LOG_GENERATION}.jsonl`)).then(() => true, () => false)
+          const exists = await stat(join(root, entry.name, `session.v${COMMIT_LOG_GENERATION}.jsonl`)).then(() => true, (error: NodeJS.ErrnoException) => {
+            if (error.code === 'ENOENT') return false
+            if (!onUnreadable) throw error
+            onUnreadable()
+            return false
+          })
           if (exists) ids.add(entry.name)
         } else if (entry.isFile() && entry.name.endsWith('.jsonl') && !entry.name.includes('.doc.')) {
           ids.add(entry.name.slice(0, -'.jsonl'.length))
         }
       }
       // A broken legacy store must not silently look like an empty store.
-      if (options.legacy) for (const id of await options.legacy.list()) ids.add(id)
+      if (options.legacy) for (const id of await options.legacy.list(onUnreadable)) ids.add(id)
       const visible: string[] = []
       for (const id of ids) {
         try { const log = await open(id, 'read'); try { if (!log.view().deleted) visible.push(id) } finally { await log.close() } }
         catch (error) {
-          if (!(error instanceof CommitLogNotFoundError)) throw error
-          if (!await getDocumentOf('deletion:' + id)) visible.push(id)
+          if (error instanceof CommitLogNotFoundError) {
+            try { if (!await getDocumentOf('deletion:' + id)) visible.push(id) }
+            catch (cause) { if (!onUnreadable) throw cause; onUnreadable() }
+          } else {
+            if (!onUnreadable) throw error
+            onUnreadable()
+          }
         }
       }
       return visible.sort()

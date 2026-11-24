@@ -13,11 +13,12 @@ describe("durable draft client admission races", () => {
     expect(current.prompt).toBe(""); expect(writes).toBe(0)
   })
   it("retains edits made while a restart load is pending and saves them using the loaded revision", async () => {
-    let finish!: (record: DurableDraft) => void, current = draft(""), record: DurableDraft = { revision: "old", draft: { ...draft("disk"), texts: [{ id: 9, name: "restored.txt", text: "saved attachment" }] } }
+    let finish!: (record: DurableDraft) => void, current = draft(""), record: DurableDraft = { revision: "old", draft: { ...draft("disk"), metadata: '{"token":"prior-submission"}', texts: [{ id: 9, name: "restored.txt", text: "saved attachment" }] } }
     const request = async (value: DraftRequest): Promise<DurableDraft> => { if (value.kind === "desktop/draft/load") return new Promise((resolve) => { finish = resolve }); if (value.kind === "desktop/draft/save") { expect(value.expectedRevision).toBe("old"); record = { revision: "new", draft: value.draft }; return record }; throw new Error("unexpected clear") }
     const client = new DurableDraftClient(scope, request, () => current, (value) => { current = value }, () => {})
     const loading = client.restore(); current = draft("new edit"); client.changed(); finish(record); await loading; await client.flush()
     expect(current.prompt).toBe("new edit"); expect(record.draft?.prompt).toBe("new edit"); expect(current.texts[0]?.text).toBe("saved attachment")
+    expect(record.draft?.metadata).toBeUndefined()
   })
   it("does not let an old admission erase a newer edit", async () => {
     let current = draft("sent"), record: DurableDraft = { revision: null, draft: null }, clearCalls = 0

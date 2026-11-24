@@ -1,6 +1,6 @@
 import { safeCompactionBlockedReason } from "@i-harness/desktop-gateway/src/context-diagnostics.ts"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ComposerPreparationError, retireSessionDraft } from "./session/Composer.tsx"
+import { captureSessionSubmission, consumeSessionSubmission, ComposerPreparationError, retireSessionDraft, type ComposerProps } from "./session/Composer.tsx"
 import type { HistorySelection } from "./session/SessionSearch.tsx"
 import type { HistoryRequest } from "./session/SessionHistoryView.tsx"
 import type { ProjectFilesRequest } from "@i-harness/desktop-gateway/src/project-files.ts"
@@ -80,6 +80,26 @@ function startupWorkspace(workspaces: WorkspaceEntry[], projects: ProjectEntry[]
 
 /** The renderer data layer: it owns the bridge, selection and refresh rules;
  * the workbench below renders exactly what it is told. */
+interface PendingEcho { scope: string; token: string; text: string; inputId?: string }
+
+function pendingEchoes(rows: PendingEcho[], scope: string, events: WireEvent[]): PendingEcho[] {
+  if (!rows.length) return rows
+  const admissions = new Map<string, string>()
+  const settled = new Set<string>()
+  for (const event of events) {
+    if (event.type === "agent/input/admitted" && event.clientToken) admissions.set(event.clientToken, event.inputId)
+    if (event.type === "agent/input/cancelled") settled.add(event.inputId)
+    if (event.type === "user/message" && event.input?.inputId) settled.add(event.input.inputId)
+  }
+  const remaining: PendingEcho[] = []
+  for (const row of rows) {
+    const inputId = row.inputId ?? admissions.get(row.token)
+    if (row.scope !== scope || (inputId && settled.has(inputId))) continue
+    remaining.push(inputId && !row.inputId ? { ...row, inputId } : row)
+  }
+  return remaining.length === rows.length && remaining.every((row, i) => row === rows[i]) ? rows : remaining
+}
+
 export function App({ bridge }: { bridge: DesktopBridge }) {
   const t = useText()
   const locale = useLocale((state) => state.locale)
@@ -114,7 +134,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [historyLoading, setHistoryLoading] = useState(false)
   const eventWindowCache = useMemo(createHistoryPreviewCache, [bridge])
   const assistantPreviews = useRef(new Map<string, AssistantPreview>())
-  const [optimistic, setOptimistic] = useState<{ scope: string; id: string; text: string }>()
+  const [optimistic, setOptimistic] = useState<PendingEcho[]>([])
   const [model, setModel] = useState<SessionModelState>()
   const [queue, setQueue] = useState<SessionQueueItem[]>()
   const [tasks, setTasks] = useState<AgentTaskView[]>()
@@ -268,7 +288,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       const items = Array.isArray(queueRows) ? queueRows as SessionQueueItem[] : (queueRows as { items: SessionQueueItem[] }).items
       setQueue(items)
       // A status notification received during this read is newer than its snapshot.
-      if (statusRevision === runningRevision.current) setRunning(items.some(row => row.state === "running"))
+      if (executionRevision.current === undefined && statusRevision === runningRevision.current) setRunning(items.some(row => row.state === "running"))
       setQueueResumable(!Array.isArray(queueRows) && (queueRows as { resumable: boolean }).resumable)
       setTasks(taskRows as AgentTaskView[])
       setTaskError(undefined)
@@ -392,11 +412,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       setDashboard(initialDashboard)
       if (!reconciledWorkspaces.current.has(selectedWorkspaceId)
         && selection.current === restoredSelection && restoredSelection.sessionId
-        && !initialDashboard.listingUnavailable
+        && !initialDashboard.listingUnavailable && !initialDashboard.listingPartial
         && !initialDashboard.sessions.some((row) => row.id === restoredSelection.sessionId)) {
         setSelectedSessionId(undefined)
       }
-      if (!initialDashboard.listingUnavailable) reconciledWorkspaces.current.add(selectedWorkspaceId)
+      if (!initialDashboard.listingUnavailable && !initialDashboard.listingPartial) reconciledWorkspaces.current.add(selectedWorkspaceId)
     }).catch(reportFailure)
     return () => { active = false }
   }, [bridge, interactions.refresh, retryNonce, selectedWorkspaceId])
@@ -404,7 +424,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   useEffect(() => {
     const previews = assistantPreviews.current
     return () => previews.clear()
-  }, [bridge, selectedWorkspaceId])
+  }, [bridge])
 
   // Subscribe BEFORE the first history read (spec §6): a live event that lands
   // during the read must not be lost.
@@ -424,6 +444,29 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     const refresh = () => { refreshList.schedule(); refreshTurn?.schedule() }
     const unsubscribe = bridge.onEvent((event) => {
       if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity") return
+      // Notifications for all workspaces arrive on this bridge. Keep unfinished
+      // prefixes between selections, and retire only the disconnected owner.
+      let preview: AssistantPreview | undefined
+      if (event.kind === "sdk/disconnected") {
+        const prefix = JSON.stringify([event.workspaceId]).slice(0, -1) + ","
+        for (const key of assistantPreviews.current.keys()) if (key.startsWith(prefix)) assistantPreviews.current.delete(key)
+      } else if (event.kind === "sdk/notification" && event.method === "session/execution-state") {
+        const state = event.params as { sessionId?: string; running?: boolean }
+        if (state?.running === false && typeof state.sessionId === "string") {
+          assistantPreviews.current.delete(JSON.stringify([event.workspaceId, state.sessionId]))
+        }
+      } else if (event.kind === "sdk/notification" && event.method === "session/event") {
+        const params = event.params as { sessionId?: string; event?: WireEvent }
+        if (params?.event && typeof params.sessionId === "string") {
+          const key = JSON.stringify([event.workspaceId, params.sessionId])
+          const previous = assistantPreviews.current.get(key)
+          preview = updateAssistantPreview(previous, params.event)
+          if (preview !== previous) {
+            if (preview) assistantPreviews.current.set(key, preview)
+            else assistantPreviews.current.delete(key)
+          }
+        }
+      }
       if (workspaceSelection.current !== workspace || event.workspaceId !== selectedWorkspaceId) return
       if (event.kind === "sdk/ready") {
         setConnection("online")
@@ -442,7 +485,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         disconnected.current = workspace
         disconnectRevision.current++
         clearChunks()
-        assistantPreviews.current.clear()
         executionRevision.current = undefined
         setCapabilitySnapshot(undefined)
         setSandbox(undefined)
@@ -484,16 +526,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       if (info.kind === "ignore") return
       const record = event.method === "session/event" ? (event.params as { event?: WireEvent }).event : undefined
       if (record) {
-        const key = JSON.stringify([selectedWorkspaceId, info.sessionId])
-        const previous = assistantPreviews.current.get(key)
-        const preview = updateAssistantPreview(previous, record)
-        if (preview !== previous) {
-          if (preview) assistantPreviews.current.set(key, preview)
-          else assistantPreviews.current.delete(key)
-        }
         if (isAssistantPreview(record)) {
-          if (preview && preview !== previous && info.sessionId === selectedSessionId && selection.current === scope) {
-            // The producer already paces text; show the first piece without an additional frame buffer.
+          if (preview && info.sessionId === selectedSessionId && selection.current === scope) {
             setEventWindow(current => selection.current === scope ? applyNotification(current, preview) : current)
           }
           return
@@ -591,7 +625,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     setTaskError(undefined)
     setHistoryError(undefined)
     setHistoryCount(undefined)
-    setRunning(false)
+    if (executionRevision.current === undefined) setRunning(false)
     runningRevision.current++
     setQueueResumable(false)
     // Start every selection read together. Waiting for history before the
@@ -600,10 +634,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     type OpenResult = {
       history?: HistoryRange
       historyError?: string
-      queue?: SessionQueueItem[]
-      running?: boolean
-      queueResumable?: boolean
-      queueError?: string
+      assistantPreview?: AssistantPreview
     }
     void (async () => {
       const raw = await bridge.request({ kind: "desktop/session/open", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
@@ -616,8 +647,10 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           if (!stillOpen()) return current
           const next = applyHistory(current, history)
           eventWindowCache.set(selectionKey, next)
+          const baseline = opened?.assistantPreview
+          const seeded = baseline && isAssistantPreview(baseline) ? applyNotification(next, baseline) : next
           const live = assistantPreviews.current.get(selectionKey)
-          return live ? applyNotification(next, live) : next
+          return live ? applyNotification(seeded, live) : seeded
         })
         setHistoryLoading(false)
         if (opened?.historyError) setHistoryError(opened.historyError)
@@ -626,11 +659,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         await pageHistory(selectedWorkspaceId, selectedSessionId, 0)
       }
       if (!stillOpen()) return
-      if (opened && !opened.queueError && Array.isArray(opened.queue)) {
-        setQueue(opened.queue)
-        setRunning(opened.running === true)
-        setQueueResumable(opened.queueResumable === true)
-      }
       // Warm the session assembly while the user is reading the restored tail;
       // the first prompt then does not pay the lazy assembly cost.
       if (opened) void bridge.request({ kind: "desktop/session/warm", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
@@ -641,9 +669,14 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     void bridge.request({ kind: "session/model/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
       .then(value => { if (active && version === modelRequest.current) setModel(value as SessionModelState) }).catch(fail)
     void interactions.refresh(selectedSessionId).catch(fail)
-    void refreshTasks(selectedWorkspaceId, selectedSessionId).catch(fail)
     return () => { active = false }
-  }, [bridge, eventWindowCache, interactions.refresh, pageHistory, refreshTasks, retryNonce, selectedSessionId, selectedWorkspaceId])
+  }, [bridge, eventWindowCache, interactions.refresh, pageHistory, retryNonce, selectedSessionId, selectedWorkspaceId])
+
+  // Select the authoritative queue surface only after this workspace has
+  // negotiated its capabilities. History loading does not own execution state.
+  useEffect(() => {
+    if (capabilitiesReady && selectedWorkspaceId && selectedSessionId) void refreshTasks(selectedWorkspaceId, selectedSessionId)
+  }, [capabilitiesReady, capabilities, refreshTasks, selectedSessionId, selectedWorkspaceId])
 
   useEffect(() => {
     if (!selectedWorkspaceId || !selectedSessionId || operation?.kind !== "model" || operation.busy) return
@@ -671,27 +704,52 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const currentScope = JSON.stringify([selectedWorkspaceId, selectedSessionId])
   const { events, live } = eventWindow
   const scrollHistory = useHistoryScroll(selection.current, windowKey === currentScope ? events : [], eventWindow.cursor, historyRequest)
+  const visibleEchoes = useMemo(() => pendingEchoes(optimistic, currentScope, events), [optimistic, currentScope, events])
+  useEffect(() => {
+    if (visibleEchoes !== optimistic) setOptimistic(current => current === optimistic ? visibleEchoes : current)
+  }, [optimistic, visibleEchoes])
   const conversationRows = useMemo(() => {
     const rows = windowKey === currentScope ? projectTimeline(timelineEvents({ events, live })) : []
-    if (optimistic?.scope === currentScope) rows.push({ id: optimistic.id, kind: "message", role: "user", text: optimistic.text })
+    for (const echo of visibleEchoes) rows.push({ id: `optimistic:${echo.token}`, kind: "message", role: "user", text: echo.text })
     return rows
-  }, [currentScope, events, live, optimistic, windowKey])
-  useEffect(() => {
-    if (!optimistic) return
-    if (optimistic.scope !== currentScope) { setOptimistic(undefined); return }
-    if (windowKey === currentScope && events.some(event => event.type === "user/message" && event.text === optimistic.text)) { setOptimistic(undefined); return }
-    // A queued prompt has not become a durable user/message yet. Keep its local
-    // row until the queue admits it instead of making it vanish on a timer.
-    if (running || (queue ?? []).some(item => item.text === optimistic.text)) return
-    const timer = setTimeout(() => setOptimistic(current => current?.id === optimistic.id ? undefined : current), 15_000)
-    return () => clearTimeout(timer)
-  }, [optimistic, currentScope, events, running, queue, windowKey])
+  }, [currentScope, events, live, visibleEchoes, windowKey])
+  function sendInput(delivery: "queue" | "steer"): ComposerProps["onPrompt"] {
+    return async (text, context, images, onAdmitted, captured) => {
+      if (!selectedWorkspaceId || !selectedSessionId) throw new Error("No conversation selected")
+      const owner = selection.current
+      const submission = captured && "delivery" in captured ? captured : captureSessionSubmission(selectedWorkspaceId, selectedSessionId, text, delivery)
+      const { token } = submission
+      const showEcho = submission.delivery === "queue"
+      const ownsEcho = (row: PendingEcho) => row.scope === currentScope && row.token === token
+      const removeEcho = () => setOptimistic(current => current.filter(row => !ownsEcho(row)))
+      if (showEcho) setOptimistic(current => [...current.filter(row => !ownsEcho(row)), { scope: currentScope, token, text }])
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }).catch(() => { throw new ComposerPreparationError(t("無法確認會話專案；草稿仍保留。")) })
+        if (selection.current === owner) scrollHistory.latest?.()
+        timer = setTimeout(() => { if (selection.current === owner) void refreshTasks(selectedWorkspaceId, selectedSessionId) }, 500)
+        const accepted = (inputId?: string) => {
+          if (showEcho && inputId) setOptimistic(current => current.map(row => ownsEcho(row) ? { ...row, inputId } : row))
+          const consume = () => consumeSessionSubmission(selectedWorkspaceId, selectedSessionId, token)
+          if (onAdmitted) void onAdmitted(consume)
+          else consume()
+        }
+        await operations.run(selectedWorkspaceId, selectedSessionId, { kind: "prompt", token, text, context, images, delivery: submission.delivery, onAdmitted: accepted })
+        if (!capabilities["desktop-input"]?.includes("1")) removeEcho()
+      } catch (error) { removeEcho(); throw error }
+      finally { clearTimeout(timer) }
+      if (selection.current !== owner) return
+      if (connection === "online") void pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
+      void refreshTasks(selectedWorkspaceId, selectedSessionId)
+      void refreshDashboard(selectedWorkspaceId)
+    }
+  }
   const conversation = selectedWorkspaceId === undefined || selectedSessionId === undefined
     ? undefined
     : {
         rows: conversationRows,
         history: scrollHistory.earlier || scrollHistory.viewport || scrollHistory.loading || scrollHistory.error ? scrollHistory : undefined,
-        assistantPreview: windowKey === currentScope ? eventWindow.assistantPreview : undefined,
+        assistantPreview: windowKey === currentScope && eventWindow.assistantPreview?.offset === 0 ? eventWindow.assistantPreview : undefined,
         loading: historyLoading,
         canSend: gate.canSend && projectReady && !(operation?.busy && operation.kind !== "prompt"),
         projectReady,
@@ -709,7 +767,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         canCompact: gate.canSend && !running && !operation?.busy && !(queue?.length),
         onCompact: async (instructions?: string): Promise<void> => {
           const scope = selection.current
-          const result = await operations.run(selectedWorkspaceId, selectedSessionId, "compact", instructions)
+          const result = await operations.run(selectedWorkspaceId, selectedSessionId, { kind: "compact", instructions })
           if (selection.current === scope && (result?.outcome === 'blocked' || result?.outcome === 'reduced-over-target')) setTaskActionFailure({ scope, message: [result.outcome === 'reduced-over-target' ? t('壓縮後的完整請求仍超過目標。') : t('壓縮未完成。'), safeCompactionBlockedReason(result.blockedReason)].filter(Boolean).join(' ') })
           if (selection.current === scope) await pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
         },
@@ -726,12 +784,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
             throw reason
           }
         },
-        onSteer: async (text: string, context?: string, images?: import("@i-harness/sdk").ImageInput[], onAdmitted?: () => void) => {
-          if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }).catch(() => { throw new ComposerPreparationError(t("無法確認會話專案；草稿仍保留。")) })
-          scrollHistory.latest?.()
-          await operations.run(selectedWorkspaceId, selectedSessionId, "prompt", text, context, images, onAdmitted, "steer")
-          void refreshTasks(selectedWorkspaceId, selectedSessionId)
-        },
+        onSteer: sendInput("steer"),
         tasks,
         workState: workStateResult?.scope === selection.current ? workStateResult.view : undefined,
         workStateError: workStateFailure?.scope === selection.current ? workStateFailure.message : undefined,
@@ -757,26 +810,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         historyError,
         historyNotice: historyCount === undefined ? undefined : t("歷史視窗已載入 {count} 筆；可使用會話搜尋查找其他內容。", { count: historyCount }),
         pending: pendingForSession(pending, selectedSessionId),
-        onPrompt: async (text: string, context?: string, images?: import("@i-harness/sdk").ImageInput[], onAdmitted?: () => void): Promise<void> => {
-          const scope = selection.current
-          const pending = { scope: currentScope, id: `optimistic:${crypto.randomUUID()}`, text }
-          setOptimistic(pending)
-          if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }).catch(() => { setOptimistic(current => current?.id === pending.id ? undefined : current); throw new ComposerPreparationError(t("無法確認會話專案；草稿仍保留。")) })
-          scrollHistory.latest?.()
-          // Queue state can change before the admission promise resolves; a
-          // short refresh makes a queued second prompt visible while the first
-          // turn is still starting.
-          const queueRefresh = setTimeout(() => { if (selection.current === scope) void refreshTasks(selectedWorkspaceId, selectedSessionId) }, 500)
-          try { await operations.run(selectedWorkspaceId, selectedSessionId, "prompt", text, context, images, onAdmitted) }
-          catch (reason) { clearTimeout(queueRefresh); setOptimistic(current => current?.id === pending.id ? undefined : current); throw reason }
-          clearTimeout(queueRefresh)
-          if (selection.current !== scope) return
-          if (connection === "online") {
-            void pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
-          }
-          void refreshTasks(selectedWorkspaceId, selectedSessionId)
-          void refreshDashboard(selectedWorkspaceId)
-        },
+        onPrompt: sendInput("queue"),
         onCancel: async () => {
           const scope = selection.current
           try {
@@ -800,7 +834,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         },
         onCancelQueue: (queueId: string) => {
           const scope = selection.current
-          const queued = queue?.find(row => row.id === queueId)
           void (async () => {
             const primary = durableInputSupported.current
               ? await bridge.request({ kind: "desktop/session/input/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, inputId: queueId })
@@ -814,7 +847,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
               const fallback = await bridge.request({ kind: "session/queue/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, id: queueId }).catch(() => undefined) as { cancelled?: boolean } | undefined
               if (fallback?.cancelled === true) cancelled = true
             }
-            if (cancelled && queued && optimistic?.text === queued.text) setOptimistic(undefined)
+            if (cancelled) setOptimistic(current => current.filter(row => row.scope !== currentScope || row.inputId !== queueId))
             if (selection.current === scope) setTaskActionFailure(undefined)
             return refreshTasks(selectedWorkspaceId, selectedSessionId)
           })().catch((reason: unknown) => { if (selection.current === scope) setTaskActionFailure({ scope, message: reason instanceof Error ? reason.message : String(reason) }) })

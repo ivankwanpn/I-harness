@@ -1,8 +1,9 @@
-import type { HistoryRange, ImageInput } from "@i-harness/sdk"
+import type { ImageInput } from "@i-harness/sdk"
 import type { Message } from "../design/i18n.ts"
 import { mergeReasoningChunks, type ReasoningChunk } from "./reasoning-progress.ts"
 
-export type WireEvent = HistoryRange["events"][number]
+import type { WireEvent } from "./history-events.ts"
+export type { WireEvent } from "./history-events.ts"
 export type ToolResultReference = Extract<WireEvent, { type: "context/result-ref" }>["ref"]
 export type RecordedResultEnvelope = NonNullable<Extract<WireEvent, { type: "tool/result" }>["envelope"]>
 export type RecordedCodeEvent = Extract<WireEvent, { type: "code/cell" | "code/output" | "code/store" }>
@@ -14,11 +15,12 @@ export type TimelineRow = (
   | { id: string; kind: "outcome"; flags: { refused?: true; truncated?: true; empty?: true } }
   | { id: string; kind: "failure"; failure: NonNullable<Extract<WireEvent, { type: "step/failed" }>["failure"]> }
   | { id: string; kind: "other"; label: string; title?: string; detail?: string; codeActivity?: RecordedCodeEvent; transient?: true }
-) & { turn?: { id: string; complete: boolean; generation?: GenerationReading }; seqs?: number[] }
+) & { turn?: { id: string; complete: boolean; endsBeyondPage?: true; generation?: GenerationReading }; seqs?: number[] }
 
 /** Pure fold of durable records and live chunks, with stable rendered ids. */
 export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
   const rows: TimelineRow[] = []
+  const pageEnd = events.findLast(event => event.seq !== undefined)?.seq ?? -1
   const toolIndex = new Map<string, number>()
   const referenceCalls = new Map<string, Set<number>>()
   const resultReferences: Array<{ event: Extract<WireEvent, { type: "context/result-ref" }>; rowId: string }> = []
@@ -36,7 +38,19 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
   const appendRow = (row: TimelineRow) => rows.push(turn ? { ...row, turn } : row)
   for (const [index, event] of events.entries()) {
     if (event.type === "step/failed") stepStartSeq = undefined
-    if (event.type === "turn/start") { groupScope = `turn:${event.seq ?? index}`; turn = { id: groupScope, complete: false }; truncatedStep = false; stepMessageIndex = undefined }
+    const bounds = event.historyTurn
+    const owner = bounds ? "turn:" + bounds.startSeq : undefined
+    if (event.type === "turn/start" || (owner && owner !== turn?.id)) {
+      groupScope = owner ?? "turn:" + (event.seq ?? index)
+      turn = { id: groupScope, complete: bounds?.endSeq !== undefined,
+        ...(bounds?.endSeq !== undefined && bounds.endSeq > pageEnd ? { endsBeyondPage: true } : {}) }
+      truncatedStep = false
+      stepMessageIndex = undefined
+    }
+    if (bounds?.endSeq !== undefined && turn && !turn.complete) {
+      turn.complete = true
+      if (bounds.endSeq > pageEnd) turn.endsBeyondPage = true
+    }
     if (event.type === "turn/end") { if (turn) turn.complete = true; turn = undefined; groupScope = undefined; promotedInput = undefined; truncatedStep = false; stepMessageIndex = undefined }
     if (event.type === "user/message" && event.internal) continue
     if (event.type === "agent/input/admitted") { admittedInputs.set(event.inputId, event); continue }

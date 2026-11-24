@@ -57,15 +57,15 @@ function fixture() {
 }
 
 describe("Desktop scoped IPC", () => {
-  it("opens the selected history and queue without scanning the workspace dashboard", async () => {
+  it("opens turn-aware history and the current preview without fetching execution state twice", async () => {
     const f = fixture()
     const dashboard = vi.fn(async () => ({ sessions: [] }))
     f.setRuntime({ client: { history: f.history, request: f.request, dashboard }, info: { capabilities: { "desktop-input": ["1"] } } })
     f.request.mockResolvedValue({ items: [], resumable: true })
     await expect(dispatchDesktopRequest({ kind: "desktop/session/open", workspaceId: ENTRY.id, sessionId: "s" }, f.dependencies))
-      .resolves.toMatchObject({ history: { events: [], nextSeq: 0 }, queue: [], running: false, queueResumable: true })
-    expect(f.history).toHaveBeenCalledWith("s", { afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: 500 })
-    expect(f.request).toHaveBeenCalledWith("desktop/session/input/state", { sessionId: "s" })
+      .resolves.toMatchObject({ history: { events: [], nextSeq: 0 } })
+    expect(f.history).toHaveBeenCalledWith("s", { afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: 500, includeTurns: true })
+    expect(f.request).not.toHaveBeenCalled()
     expect(dashboard).not.toHaveBeenCalled()
   })
 
@@ -389,7 +389,7 @@ describe("Desktop scoped IPC", () => {
       kind: "session/history", workspaceId: "ws-1", sessionId: "s1", afterSeq: 7, limit: 50,
     }, f.dependencies)
 
-    expect(f.history).toHaveBeenCalledWith("s1", { afterSeq: 7, limit: 50 })
+    expect(f.history).toHaveBeenCalledWith("s1", { afterSeq: 7, limit: 50, includeTurns: true })
   })
 
   it("answers desktop/capabilities from the initialized host info", async () => {
