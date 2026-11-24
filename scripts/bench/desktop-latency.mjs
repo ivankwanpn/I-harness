@@ -294,6 +294,25 @@ async function submit(evaluate, tag, prompt = tag) {
     return sample.pressed
   })()`)
 }
+async function waitForParallelReply(evaluate, workspace, tag) {
+  let checkedAt = 0
+  return until(async () => {
+    const key = JSON.stringify(tag)
+    const sample = await evaluate(`window.ihLatencySamples[${key}]`)
+    if (sample?.finished) return sample
+    // When the OS throttles a background window it may not deliver a paint
+    // sample. Use a separate durable observation during soak and keep the
+    // missing paint visible in the report.
+    if (soakMinutes && sample && Date.now() - sample.pressed > 10_000 && Date.now() >= checkedAt + 5000) {
+      checkedAt = Date.now()
+      const completed = await evaluate(`window.ihDesktop.request({kind:"session/history",workspaceId:${JSON.stringify(workspace.id)},
+        sessionId:"long",afterSeq:0,beforeSeq:Number.MAX_SAFE_INTEGER,limit:40})
+        .then(history=>history.events.some(event=>event.type==="assistant/message"&&event.text.includes("Finished "+${key})))`)
+      if (completed) return { ...sample, finished: clock(), paintMissing: true }
+    }
+    return undefined
+  }, "parallel " + workspace.id + " finished")
+}
 function summarize(trials, traces) {
   const round = value => value === undefined ? undefined : Number(value.toFixed(1))
   return trials.map(trial => {
@@ -306,7 +325,7 @@ function summarize(trials, traces) {
       for (const name of phases)
       assert(marks.some(mark => mark.phase === name), `Missing ${name} for ${trial.tag}`)
     }
-    if (!live && trial.scenario !== "parallel-background") assert(trial.firstText, "Expected to observe the first content while selected")
+    if (!live && !soakMinutes && trial.scenario !== "parallel-background") assert(trial.firstText, "Expected to observe the first content while selected")
     const offset = at => at === undefined ? undefined : round(at - trial.pressed)
     const loopback = responseMarks.get(trial.tag)
     if (!live) assert.equal(loopback?.length, 2, "The fixture must exercise one tool, then a second provider request")
@@ -316,7 +335,8 @@ function summarize(trials, traces) {
       turnStartMs: offset(phase("turn-start")), requestProjectedMs: offset(phase("request-projected")), requestAssessedMs: offset(phase("request-assessed")),
       providerIssuedMs: offset(issued?.at), providerEventMs: offset(phase("provider-first-event", issued?.attempt)),
       providerTextMs: offset(phase("provider-first-text", issued?.attempt)), firstToolMs: offset(phase("tool-start")),
-      firstTextInFrameMs: offset(trial.firstText), finalTextInFrameMs: offset(trial.finished),
+      firstTextInFrameMs: offset(trial.firstText),
+      ...(trial.paintMissing ? { finalPaintMissing: true, durableReplyObservedMs: offset(trial.finished) } : { finalTextInFrameMs: offset(trial.finished) }),
       ...(loopback ? { fixtureReceivedMs: offset(loopback[0].received), fixtureFirstTextMs: offset(loopback[0].firstText),
         fixtureNextRequestMs: offset(loopback[1].received), inputBytes: loopback[0].inputBytes } : {}) }
   })
@@ -373,9 +393,9 @@ try {
     await until(() => responseMarks.get(a)?.length === 1, "first concurrent request")
     const startB = await select(evaluate, workspaces[1], "long")
     await submit(evaluate, b)
-    const sampleB = await until(() => evaluate(`window.ihLatencySamples[${JSON.stringify(b)}]?.finished && window.ihLatencySamples[${JSON.stringify(b)}]`), "visible parallel B")
+    const sampleB = await waitForParallelReply(evaluate, workspaces[1], b)
     await select(evaluate, workspaces[0], "long")
-    const sampleA = await until(() => evaluate(`window.ihLatencySamples[${JSON.stringify(a)}]?.finished && window.ihLatencySamples[${JSON.stringify(a)}]`), "restored parallel A history")
+    const sampleA = await waitForParallelReply(evaluate, workspaces[0], a)
     trials.push({ workspace: workspaces[0], session: "long", scenario: "parallel-background", tag: a, activation: startA, ...sampleA })
     trials.push({ workspace: workspaces[1], session: "long", scenario: "parallel-foreground", tag: b, activation: startB, ...sampleB })
     if (soakMinutes) {
