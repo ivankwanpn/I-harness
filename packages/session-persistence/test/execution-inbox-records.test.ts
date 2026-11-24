@@ -3,14 +3,112 @@ const probe=vi.hoisted(()=>({views:0,ordinals:[] as number[],gate:undefined as u
 vi.mock('@i-harness/core-session',async load=>{const original=await load<typeof import('@i-harness/core-session')>();return {...original,createManagedSessionState(){probe.views++;throw Error('Inbox lookup constructed a complete view')}}})
 vi.mock('../../session-persistence-jsonl/src/backend/archive-reader.ts',async load=>{const original=await load<typeof import('../../session-persistence-jsonl/src/backend/archive-reader.ts')>();return {...original,async readSessionArchive(...args:Parameters<typeof original.readSessionArchive>){const result=await original.readSessionArchive(...args);if(args[4]){probe.ordinals.push(...args[4].ordinals);const gate=probe.gate;if(gate){probe.gate=undefined;gate.entered();await gate.wait}}return result}}})
 import {mkdtemp} from 'node:fs/promises'
+import {appendFileSync} from 'node:fs'
 import {join} from 'node:path'
+import {committedFactSeqs} from '@i-harness/core-session'
 import {createJsonlBackend} from '@i-harness/session-persistence-jsonl'
 import {composeJsonlTaskTransitionCoordinator} from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
 import {taskDocumentStorageContract} from '../../subagent/src/task/storage-contract.ts'
 import {acquireManagedExecution} from '../src/execution-internal.ts'
+import {readRestoredConversation} from '@i-harness/core-session/internal/restoration'
 const coordinators:ReturnType<typeof composeJsonlTaskTransitionCoordinator>[]=[]
 afterEach(async()=>{probe.gate=undefined;for(const c of coordinators.splice(0))await c.close();probe.views=0;probe.ordinals=[]})
 async function fixture(){const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'inbox-records-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract);coordinators.push(coordinator);await coordinator.create({sessionId:'inbox'});return {root,backend,coordinator}}
+
+async function persistedExchanges() {
+ const {root,coordinator}=await fixture()
+ await coordinator.append('inbox', [
+  {type:'turn/start'},
+  {type:'user/message',text:'original request'},
+  {type:'agent/input/admitted',version:1,inputId:'saved',text:'original input body',delivery:'queue',intent:'user'},
+  {type:'agent/input/promoted',version:1,inputId:'saved'},
+ ])
+ const execution=await acquireManagedExecution(coordinator,'inbox'),action=execution.owner.beginAction()
+ try {
+  const provenance={kind:'human',authority:'request',scope:'turn',producer:'session.prompt'} as const
+  const [admissionSeq]=committedFactSeqs(await action.facts.inputs.admit({
+   type:'agent/input/admitted',version:1,inputId:'prepared',text:'/prepared',delivery:'queue',intent:'user',preparationPolicy:'human-host',provenance,
+  }))
+  const [actionSeq]=committedFactSeqs(await action.captureGeneration([{
+   type:'context/action',version:1,op:'open',ownerSessionId:'inbox',actionId:'prepared-action',purpose:'main',
+   origin:{kind:'input',seq:admissionSeq!},startedAt:100,expiresAt:3600100,trustedAt:100,
+  }],()=>true).admit())
+  const preparation={
+   type:'agent/input/preparation',version:1,preparationId:'preparation',actionId:'prepared-action',actionSeq:actionSeq!,admissionSeq:admissionSeq!,inputId:'prepared',
+  } as const
+  committedFactSeqs(await action.captureInputPreparation({...preparation,op:'started',startedAt:100},()=>true).admit())
+  const source=action.registerSettlementSource(async()=>{})
+  try {
+   const result={...preparation,op:'completed' as const,observations:[{producer:'host-preparation' as const,text:'expanded original request'}]}
+   const [resultSeq]=committedFactSeqs(await source.inputPreparation.capture(result).admit())
+   committedFactSeqs(await action.facts.inputs.start(
+    {type:'agent/input/promoted',version:1,inputId:'prepared'},
+    {type:'user/message',text:'/prepared',input:{inputId:'prepared',intent:'user'},provenance},
+    {...result,seq:resultSeq!},
+   ))
+  } finally {await source.close()}
+  committedFactSeqs(await action.facts.agent.lifecycle({type:'conversation/semantics',version:1,mode:'accepted-exchange-v1'}))
+  for(let index=0;index<8;index++){
+   const attemptId=`attempt-${index}`,actionId='saved-action'
+   const [stepSeq]=committedFactSeqs(await action.facts.agent.lifecycle({type:'step/start',actionId,attemptId}))
+   const exchange=action.captureModelExchange({type:'assistant/message',text:`original response ${index}`},{
+    type:'model/exchange-accepted',version:1,exchangeId:`exchange-${index}`,actionId,attemptId,
+    stepStartSeq:{kind:'prior',seq:stepSeq!,expectedType:'step/start'},
+    assistantSeq:{kind:'group',position:0,expectedType:'assistant/message'},
+    callSeqs:[],
+   })
+   committedFactSeqs(await exchange.admit())
+   committedFactSeqs(await action.facts.agent.lifecycle({type:'step/end'}))
+  }
+  committedFactSeqs(await action.facts.agent.lifecycle({type:'turn/end'}))
+ } finally {
+  action.finish()
+  await execution.close()
+  await coordinator.close()
+ }
+ probe.ordinals=[]
+ return root
+}
+
+it('reuses the verified archive for cold validation and opens the held reader for later dependencies',async()=>{
+ const root=await persistedExchanges()
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ coordinators.push(coordinator)
+ const execution=await acquireManagedExecution(coordinator,'inbox')
+ expect(probe.ordinals).toEqual([])
+ const observation=execution.observe(),admission=await observation.inbox.admitted('saved')
+ expect(admission).toMatchObject({text:'original input body'})
+ expect(probe.ordinals).toEqual([admission?.seq])
+ const lease=await execution.prepare()
+ try{
+  const {projection}=readRestoredConversation(lease,{ownerSessionId:'inbox'})
+  const rendered=JSON.stringify(projection)
+  expect(rendered).toContain('expanded original request')
+  expect(rendered).toContain('original response 7')
+ }finally{await lease.settle()}
+ expect(probe.views).toBe(0)
+},20000)
+
+it('rejects a changed archive before publishing the cold execution attachment',async()=>{
+ const root=await persistedExchanges();let changed=false
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{
+  lock:{enabled:true},
+  originalExecutionFoldFactory:()=>({
+   appendValidated(unit){
+    if(!changed&&unit.some(event=>event.type==='model/exchange-accepted')){
+     changed=true
+     appendFileSync(join(root,'inbox.jsonl'),'different history after validation began')
+    }
+   },
+   finishRestore(){},
+   snapshot(){return null},
+   validateSnapshot(value){return value===null},
+  }),
+ },taskDocumentStorageContract)
+ coordinators.push(coordinator)
+ await expect(acquireManagedExecution(coordinator,'inbox')).rejects.toThrow('TASK_TRANSITION_FAILED')
+ expect(changed).toBe(true)
+},20000)
 
 it('reads the original nonresident completed and cancelled records through the same native owner without a complete view',async()=>{
  const {backend,coordinator}=await fixture()

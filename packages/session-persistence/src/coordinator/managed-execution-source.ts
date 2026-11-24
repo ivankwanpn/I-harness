@@ -40,7 +40,20 @@ export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry
  const source:OriginalConversationRestorationSource={
   get formatVersion(){if(formatVersion===undefined)throw new FactRecoveryRequiredError();return formatVersion},get header(){return header},get prefix(){if(!prefix)throw new FactRecoveryRequiredError();return prefix},assertCurrent,
   async consume(accept){assertCurrent();if(!initial)throw new FactRecoveryRequiredError();for(const event of initial.events){await accept([event]);assertCurrent()}},
-  async readEvent(ordinal){assertCurrent();scope??=openExecutionDependencies(ports.backend,ports.id,held,prefix!);const event=await scope.readEvent(ordinal);assertCurrent();return event},
+  async readEvent(ordinal){
+   assertCurrent()
+   // Initialization walks the frozen events of the original held history proof.
+   // Its prefix is verified before the walk and settle rechecks the filesystem.
+   if(initial){
+    const event=Number.isSafeInteger(ordinal)&&ordinal>=0?initial.events[ordinal]:undefined
+    if(!event||event.seq!==ordinal)throw new FactRecoveryRequiredError()
+    return event
+   }
+   scope??=openExecutionDependencies(ports.backend,ports.id,held,prefix!)
+   const event=await scope.readEvent(ordinal)
+   assertCurrent()
+   return event
+  },
   async settle(){if(proof){await proof.assertCurrent();assertCurrent()}if(scope){await scope.close();scope=undefined}assertCurrent()},
   async close(){if(scope){await scope.close();scope=undefined}retired=true;initial=undefined;proof=undefined},
   appendCommitted(batch,receipt){assertCurrent();if(!prefix||batch.key.firstSeq!==prefix.eventCount||batch.key.previousPrefixDigest!==prefix.prefixDigest||receipt.key!==batch.key)throw new FactRecoveryRequiredError();prefix=Object.freeze({eventCount:prefix.eventCount+batch.key.count,bodyBytes:prefix.bodyBytes+batch.bytes.length,prefixDigest:receipt.prefixDigest})},
@@ -54,8 +67,11 @@ export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry
    const pending=(async()=>{
     let transient:Session|undefined=(await ports.loadOwned(ports.id)).session;assertCurrent()
     await ports.transitions.existing(ports.id,async before=>{await before(transient!.formatVersion,transient!.events,transient!.header?.seedLength??0);transient=undefined},undefined,async history=>{
-     initial=history.initial;proof=history;formatVersion=initial.formatVersion;header=initial.header;await history.assertCurrent();assertCurrent()
-     const read=readArchiveHistoryPrefix(ports.backend,history);if(read.kind!=='available')throw new FactRecoveryRequiredError();prefix=Object.freeze({...read.prefix})
+     const snapshot=history.initial
+     await history.assertCurrent();assertCurrent()
+     const read=readArchiveHistoryPrefix(ports.backend,history)
+     if(read.kind!=='available'||read.prefix.eventCount!==snapshot.events.length)throw new FactRecoveryRequiredError()
+     initial=snapshot;proof=history;formatVersion=snapshot.formatVersion;header=snapshot.header;prefix=Object.freeze({...read.prefix})
      state=await restoreManagedExecutionState(source,Object.freeze({token,assertHeld:held.assertHeld,openDependencies(expected:JournalPrefix){assertCurrent();return openExecutionDependencies(ports.backend,ports.id,held,expected)}}),ports.foldFactory)
      await history.assertCurrent();assertCurrent()
     })
