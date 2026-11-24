@@ -5,6 +5,28 @@ import { DatabaseSync } from 'node:sqlite'
 import { expect, it } from 'vitest'
 import { Store, hash } from '../src/store.ts'
 
+it('rolls back a blocked clear and can clear and rebuild using the same store', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'code-clear-lock-'))
+  const store = new Store(root, 'fixture')
+  let reader: DatabaseSync | undefined
+  const budget = 8 * 1024 * 1024
+  const populate = () => store.commit([{ sourceId: 'workspace', path: 'a', revision: '1', hash: 'h', chunks: [] }], undefined, [], '', new Map(), budget, () => {})
+  try {
+    await store.open(budget)
+    populate()
+    reader = new DatabaseSync(join(root, 'code-retrieval', hash('fixture'), 'index.sqlite'))
+    reader.exec('BEGIN')
+    expect(reader.prepare('SELECT count(*) AS n FROM files').get()?.n).toBe(1)
+    expect(() => store.clear()).toThrow(/locked|busy/i)
+    expect(store.status()).toMatchObject({files:1,generation:1})
+    reader.exec('ROLLBACK')
+    store.clear()
+    expect(store.status()).toMatchObject({files:0,generation:0})
+    populate()
+    expect(store.status()).toMatchObject({files:1,generation:1})
+  } finally { reader?.close(); store.close(); await rm(root, { recursive:true, force:true }) }
+})
+
 it('looks up cached file chunks and cascading term deletions without scanning the entire committed generation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'code-store-plan-'))
   const store = new Store(root, 'fixture')

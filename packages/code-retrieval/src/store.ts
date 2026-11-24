@@ -89,8 +89,8 @@ export class Store {
     const page=(db.prepare('PRAGMA page_size').get() as {page_size:number}).page_size
     const pages=Math.floor((maxDiskBytes-page)/2/page)
     if(pages<1 || before.storedBytes>pages*page) throw new Error('Code Context disk quota exceeded')
-    db.exec(`PRAGMA max_page_count=${pages}; BEGIN IMMEDIATE`)
-    try {
+    db.exec(`PRAGMA max_page_count=${pages}`)
+    this.write(db, () => {
       const insertChunk=db.prepare('INSERT INTO chunks(source,path,revision,text,startLine,endLine,startOffset,endOffset) VALUES(?,?,?,?,?,?,?,?)')
       const insertTerm=db.prepare('INSERT OR IGNORE INTO terms VALUES(?,?)')
       const staged=new Set(files.map(f=>JSON.stringify([f.sourceId,f.path])))
@@ -116,12 +116,37 @@ export class Store {
       for(const row of db.prepare('SELECT key FROM vectors').all() as {key:string}[]) if(!live.has(row.key)) db.prepare('DELETE FROM vectors WHERE key=?').run(row.key)
       db.prepare('UPDATE meta SET generation=?,reasons=?,model=? WHERE id=1').run(before.generation+1,JSON.stringify(reasons),model)
       check()
+    })
+  }
+  private write(db:DatabaseSync, operation:()=>void):void {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      operation()
       db.exec('COMMIT')
-    } catch(error) {if(db.isTransaction)db.exec('ROLLBACK');throw error}
+    } catch(error) {
+      if(db.isTransaction) {
+        try { db.exec('ROLLBACK') }
+        catch(rollbackError) {
+          this.close()
+          throw new AggregateError([error,rollbackError], 'Code Context transaction rollback failed')
+        }
+      }
+      throw error
+    }
   }
   clear():void {
-    if(!this.db)return
-    this.db.exec("BEGIN IMMEDIATE; DELETE FROM files; DELETE FROM vectors; UPDATE meta SET generation=0,reasons='[]',model='' WHERE id=1; COMMIT; VACUUM")
+    const db=this.db
+    if(!db)return
+    this.write(db, () => db.exec("DELETE FROM files; DELETE FROM vectors; UPDATE meta SET generation=0,reasons='[]',model='' WHERE id=1"))
+    // Clearing has committed. If a reader now prevents vacuum, SQLite can
+    // reuse the free pages on the next refresh.
+    try { db.exec('VACUUM') }
+    catch(error) {
+      const code=(error as {errcode?:number}).errcode
+      if(code === undefined || ![5,6].includes(code & 255)) {
+        throw new Error('Code Context index was cleared but disk compaction failed', {cause:error})
+      }
+    }
   }
   close():void {this.db?.close();this.db=undefined}
 }
