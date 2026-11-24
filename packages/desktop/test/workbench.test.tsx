@@ -239,7 +239,8 @@ describe("Desktop workbench shell", () => {
     view.rerender(<Workbench {...props} selectedSessionId="saved" conversation={conversation} />)
     expect(dock()).toBe(session.lastElementChild)
     view.rerender(<Workbench {...props} selectedSessionId="saved" conversation={{ ...conversation, loading: false, rows: [{ id: "reply", kind: "message", role: "assistant", text: "Saved reply" }] }} />)
-    expect(screen.getByTestId("timeline").closest(".timeline-region")?.nextElementSibling).toBe(dock())
+    expect(dock()).toBe(session.lastElementChild)
+    expect(dock()?.previousElementSibling?.contains(screen.getByTestId("timeline"))).toBe(true)
   })
 
   it("preserves a draft while a pending request takes over the bottom dock", () => {

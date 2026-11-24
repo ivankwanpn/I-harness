@@ -492,21 +492,23 @@ export function Workbench({
                   <span className="conversation-goal-label">{t("目前目標")}</span><span className="conversation-goal-objective">{conversation.workState.goal.objective}</span>
                   <span className="conversation-goal-phase">{t(conversation.workState.goal.phase === "paused" ? "已暫停" : conversation.workState.goal.phase === "complete" ? "已完成" : "進行中")}</span>
                 </div> : null}
-                {conversation.rows.length === 0 && !conversation.assistantPreview && !conversation.history
-                  ? conversation.loading
-                    ? <div className="conversation-skeleton" role="status" aria-label={t("正在載入會話…")}>
-                        <div className="skeleton-line skeleton-line-user" />
-                        <div className="skeleton-line skeleton-line-assistant" />
-                        <div className="skeleton-line skeleton-line-user skeleton-line-short" />
-                        <div className="skeleton-line skeleton-line-assistant" />
-                      </div>
-                    : <div className="empty-conversation"><div className="empty-introduction"><h1>{t("今天想完成甚麼？")}</h1><p>{t(displayProject ? "描述你的目標，從這個專案開始。" : "延續左側的會話，或開始一項新任務。")}</p></div></div>
-                  : <Timeline resultReader={resultReader} key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={olderRows ?? conversation.rows}
-                      assistantPreview={olderRows ? undefined : conversation.assistantPreview} running={conversation.running} historical={olderRows !== undefined}
-                      history={conversation.history} navigation={fileNavigation} />}
+                <div className="todo-progress-host">
+                  {supports("desktop-work-state") ? <TodoProgress key={JSON.stringify([selectedWorkspaceId, selectedSessionId])} todos={conversation.workState?.todos} error={conversation.workStateError} onOpenTasks={openTodoEditor} /> : null}
+                  {conversation.rows.length === 0 && !conversation.assistantPreview && !conversation.history
+                    ? conversation.loading
+                      ? <div className="conversation-skeleton" role="status" aria-label={t("正在載入會話…")}>
+                          <div className="skeleton-line skeleton-line-user" />
+                          <div className="skeleton-line skeleton-line-assistant" />
+                          <div className="skeleton-line skeleton-line-user skeleton-line-short" />
+                          <div className="skeleton-line skeleton-line-assistant" />
+                        </div>
+                      : <div className="empty-conversation"><div className="empty-introduction"><h1>{t("今天想完成甚麼？")}</h1><p>{t(displayProject ? "描述你的目標，從這個專案開始。" : "延續左側的會話，或開始一項新任務。")}</p></div></div>
+                    : <Timeline resultReader={resultReader} key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={olderRows ?? conversation.rows}
+                        assistantPreview={olderRows ? undefined : conversation.assistantPreview} running={conversation.running} historical={olderRows !== undefined}
+                        history={conversation.history} navigation={fileNavigation} />}
+                </div>
                 <div className="conversation-dock">
                 <div className="conversation-dock-notices">
-                  {supports("desktop-work-state") ? <TodoProgress todos={conversation.workState?.todos} error={conversation.workStateError} onOpenTasks={openTodoEditor} /> : null}
                   {conversation.taskError && !(reviewOpen && workPaneTab === "tasks") ? <p role="alert" className="notice error-text" title={conversation.taskError}>{displayError(conversation.taskError).summary}</p> : null}
                   {(() => {
                     const queued = (conversation.queue ?? []).filter(row => row.state === "queued")

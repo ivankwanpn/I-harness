@@ -1,5 +1,6 @@
 import type { DesktopWorkStateView } from "@i-harness/desktop-gateway/src/work-state.ts"
-import { ChevronRight, ListTodo } from "lucide-react"
+import { useEffect, useId, useState } from "react"
+import { ArrowRight, Circle, CircleCheck, ListTodo, Maximize2 } from "lucide-react"
 import { useText } from "../design/i18n.ts"
 import "./TodoProgress.css"
 
@@ -9,19 +10,43 @@ export interface TodoProgressProps {
   onOpenTasks(): void
 }
 
-/** The Work pane owns the full list, including completed items. */
+const PAGE_SIZE = 8
+
 export function TodoProgress({ todos, error, onOpenTasks }: TodoProgressProps) {
   const t = useText()
+  const listId = useId()
+  const [expanded, setExpanded] = useState(true)
+  const [pageOverride, setPageOverride] = useState<number | null>(null)
+  const activeIndex = todos?.findIndex(item => item.status === "in_progress") ?? -1
+  const firstPending = todos?.findIndex(item => item.status === "pending") ?? -1
+  const focusPage = Math.floor(Math.max(0, activeIndex >= 0 ? activeIndex : firstPending) / PAGE_SIZE)
+  const pages = Math.ceil((todos?.length ?? 0) / PAGE_SIZE)
+  useEffect(() => setPageOverride(null), [focusPage, pages])
   if (error !== undefined || !todos?.length) return null
-  const current = todos.find(item => item.status === "in_progress") ?? todos.find(item => item.status !== "completed")
-  if (!current) return null
+
   const completed = todos.filter(item => item.status === "completed").length
-  const name = t("待辦進度")
-  return <button type="button" className="todo-progress-summary" title={current.content} onClick={onOpenTasks}
-    aria-label={`${name} · ${t("已完成 {count}/{total}", { count: completed, total: todos.length })} · ${current.content}`}>
-    <ListTodo size={15} aria-hidden="true" />
-    <span className="todo-progress-count">{completed}/{todos.length}</span>
-    <span className="todo-progress-current">{current.content}</span>
-    <ChevronRight size={14} aria-hidden="true" />
-  </button>
+  const page = Math.min(pageOverride ?? focusPage, pages - 1)
+  const statusLabel = (status: (typeof todos)[number]["status"]) => t(status === "completed" ? "已完成" : status === "in_progress" ? "進行中" : "待開始")
+
+  return <section className="todo-progress-dock" aria-label={t("待辦進度")} data-complete={completed === todos.length}>
+    <header className="todo-progress-header">
+      <h3>{t("待辦進度")}</h3>
+      <span className="todo-progress-count" aria-live="polite" aria-atomic="true" aria-label={t("已完成 {count}/{total}", { count: completed, total: todos.length })}>{completed}/{todos.length}</span>
+      <div className="todo-progress-actions">
+        <button type="button" aria-label={t(expanded ? "收合待辦清單" : "展開待辦清單")} title={t(expanded ? "收合待辦清單" : "展開待辦清單")} aria-expanded={expanded} aria-controls={listId} onClick={() => setExpanded(!expanded)}><ListTodo size={14} aria-hidden="true" /></button>
+        <button type="button" aria-label={t("開啟待辦編輯")} title={t("開啟待辦編輯")} onClick={onOpenTasks}><Maximize2 size={13} aria-hidden="true" /></button>
+      </div>
+    </header>
+    {expanded ? <div id={listId} className="todo-progress-body">
+      <ul key={page} className="todo-progress-list">{todos.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map((item, offset) => <li key={`${page * PAGE_SIZE + offset}:${item.content}`} data-status={item.status} aria-current={item.status === "in_progress" ? "step" : undefined} aria-label={`${item.content} · ${statusLabel(item.status)}`}>
+        {item.status === "completed" ? <CircleCheck size={14} aria-hidden="true" /> : item.status === "in_progress" ? <ArrowRight size={14} aria-hidden="true" /> : <Circle size={14} aria-hidden="true" />}
+        {item.status === "completed" ? <s>{item.content}</s> : <span>{item.content}</span>}
+      </li>)}</ul>
+      {pages > 1 ? <div className="todo-progress-pager">
+        <button type="button" disabled={page === 0} onClick={() => setPageOverride(page - 1)}>{t("上一頁")}</button>
+        <span>{t("第 {page} / {total} 頁", { page: page + 1, total: pages })}</span>
+        <button type="button" disabled={page + 1 === pages} onClick={() => setPageOverride(page + 1)}>{t("下一頁")}</button>
+      </div> : null}
+    </div> : null}
+  </section>
 }
