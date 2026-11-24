@@ -13,7 +13,14 @@ export function attachNativeWindow(window: BrowserWindow, preferences: ReturnTyp
   window.on("close", () => {
     if (savedOnClose && (!window.isVisible() || window.isMinimized())) return
     try {
-      preferences.update({ bounds: window.getNormalBounds(), maximized: window.isMaximized() })
+      const bounds = window.getNormalBounds()
+      const maximized = window.isMaximized()
+      const saved = preferences.get()
+      if (saved.maximized !== maximized || !saved.bounds
+        || saved.bounds.x !== bounds.x || saved.bounds.y !== bounds.y
+        || saved.bounds.width !== bounds.width || saved.bounds.height !== bounds.height) {
+        preferences.update({ bounds, maximized })
+      }
       savedOnClose = true
     }
     catch (error) { console.warn("Unable to save window preferences", error instanceof Error ? error.message : String(error)) }

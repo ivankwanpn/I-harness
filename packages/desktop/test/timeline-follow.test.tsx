@@ -1,31 +1,23 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
-import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import { afterEach, expect, it, vi } from "vitest"
 const virtual = vi.hoisted(() => {
   const item = (index: number) => ({ index, start: index * 56, end: (index + 1) * 56 })
-  return { showItems: false, itemCount: 0, anchorTo: undefined as string | undefined, scrollToIndex: vi.fn(), scrollToOffset: vi.fn(), getTotalSize: () => 2000,
+  return { showItems: false, itemCount: 0, anchorTo: undefined as string | undefined, scrollToIndex: vi.fn(), write: vi.fn(), getTotalSize: () => 2000,
+    get scrollElement() { return document.querySelector<HTMLElement>('[data-testid="timeline"]') },
     getVirtualItems: () => virtual.showItems ? Array.from({ length: virtual.itemCount }, (_, index) => item(index)) : [],
     measureElement: vi.fn(), scrollToFn: undefined as undefined | ((offset: number, options: { adjustments?: number }, instance: { scrollElement: HTMLElement }) => void) }
 })
 vi.mock("@tanstack/react-virtual", () => ({
   elementScroll: (offset: number, options: { adjustments?: number }, instance: { scrollElement: HTMLElement }) => {
     const element = instance.scrollElement
+    virtual.write(offset)
     element.scrollTop = Math.max(0, Math.min(offset + (options.adjustments ?? 0), element.scrollHeight - element.clientHeight))
   },
   useVirtualizer: (options: { count: number; anchorTo?: string; scrollToFn?: typeof virtual.scrollToFn }) => { virtual.itemCount = options.count; virtual.anchorTo = options.anchorTo; virtual.scrollToFn = options.scrollToFn; return virtual },
 }))
 import { Timeline } from "../src/renderer/session/Timeline.tsx"
-beforeEach(() => {
-  virtual.scrollToOffset.mockImplementation((offset: number, options?: { align?: string }) => {
-    const element = document.querySelector<HTMLElement>('[data-testid="timeline"]')
-    if (element) {
-      const target = options?.align === "end" ? offset - element.clientHeight : offset
-      if (virtual.scrollToFn) virtual.scrollToFn(target, {}, { scrollElement: element })
-      else element.scrollTop = Math.max(0, Math.min(target, element.scrollHeight - element.clientHeight))
-    }
-  })
-})
-afterEach(() => { cleanup(); vi.useRealTimers(); virtual.showItems = false; virtual.scrollToIndex.mockClear(); virtual.scrollToOffset.mockClear(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.useRealTimers(); virtual.showItems = false; virtual.scrollToIndex.mockClear(); virtual.write.mockClear(); vi.unstubAllGlobals() })
 it("loads earlier history at the top, enables virtual anchoring during browsing, and returns to the live tail", () => {
   vi.useFakeTimers()
   virtual.showItems = true
@@ -56,16 +48,16 @@ it("follows new content only while the reader stays at the bottom", () => {
   const rows = [{ id: "a", kind: "message" as const, role: "assistant" as const, text: "First" }]
   const view = render(<Timeline rows={rows} />)
   act(() => vi.runOnlyPendingTimers())
-  expect(virtual.scrollToOffset).toHaveBeenLastCalledWith(0)
+  expect(virtual.write).toHaveBeenLastCalledWith(0)
   const scroller = screen.getByTestId("timeline")
   Object.defineProperties(scroller, { scrollHeight: { configurable: true, value: 2000 }, clientHeight: { configurable: true, value: 400 } })
   scroller.scrollTop = 200
   fireEvent.wheel(scroller, { deltaY: -300 })
   fireEvent.scroll(scroller)
-  virtual.scrollToOffset.mockClear()
+  virtual.write.mockClear()
   view.rerender(<Timeline rows={[...rows, { ...rows[0]!, id: "b", text: "Next" }]} />)
   act(() => vi.runOnlyPendingTimers())
-  expect(virtual.scrollToOffset).not.toHaveBeenCalled()
+  expect(virtual.write).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole("button", { name: "回到最新內容" }))
   act(() => vi.runOnlyPendingTimers())
   expect(scroller.scrollTop).toBe(1600)
@@ -350,10 +342,10 @@ it("does not follow a historical page or leave a frame running after unmount", (
   view.rerender(<Timeline rows={[{ ...rows[0]!, text: "Updated history page" }]} historical />)
   act(() => vi.runOnlyPendingTimers())
   expect(element.scrollTop).toBe(500)
-  expect(virtual.scrollToOffset).not.toHaveBeenCalled()
+  expect(virtual.write).not.toHaveBeenCalled()
   view.unmount()
   const pending = render(<Timeline rows={rows} />)
   pending.unmount()
   act(() => vi.runOnlyPendingTimers())
-  expect(virtual.scrollToOffset).not.toHaveBeenCalled()
+  expect(virtual.write).not.toHaveBeenCalled()
 })

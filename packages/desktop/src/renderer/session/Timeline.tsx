@@ -209,12 +209,13 @@ export function Timeline({ rows, assistantPreview, navigation, running = false, 
       followFrame.current = undefined
       const element = parentRef.current
       if (element && following.current && !historical && targetSeq === undefined) {
-        // DOM overflow can exceed the virtual row estimate (Markdown margins,
-        // wrapping and delayed media). Pin to the physical scroll extent.
-        virtualizer.scrollToOffset(Math.max(0, element.scrollHeight - element.clientHeight))
+        // This frame owns a single bottom write. A virtual scroll command also
+        // reconciles on later frames, which can undo a wheel gesture before
+        // Chromium delivers its scroll event. ResizeObserver handles later growth.
+        writeScroll(Math.max(0, element.scrollHeight - element.clientHeight), {}, virtualizer)
       }
     })
-  }, [virtualizer, historical, targetSeq])
+  }, [virtualizer, historical, targetSeq, writeScroll])
   const pauseFollowing = () => {
     readingDirection.current = "up"
     observedScrollTop.current = parentRef.current?.scrollTop ?? 0

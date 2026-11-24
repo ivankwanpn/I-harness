@@ -20,6 +20,7 @@ function fixture(initialMaximized = false) {
   let visible = true
   let minimized = false
   let destroyed = false
+  const bounds = { x: 10, y: 20, width: 800, height: 600 }
   const controls: string[] = []
   const deliveries: { channel: string; event: DesktopEvent }[] = []
   const preferences = { notifications: false, maximized: !initialMaximized, locale: "en" as const }
@@ -28,7 +29,7 @@ function fixture(initialMaximized = false) {
     on: events.on.bind(events), removeListener: events.removeListener.bind(events),
     isMaximized: () => maximized, isDestroyed: () => destroyed,
     isVisible: () => visible, isMinimized: () => minimized,
-    getNormalBounds: () => ({ x: 10, y: 20, width: 800, height: 600 }),
+    getNormalBounds: () => ({ ...bounds }),
     minimize: () => { controls.push("minimize") },
     maximize: () => { controls.push("maximize"); maximized = true; events.emit("maximize") },
     unmaximize: () => { controls.push("unmaximize"); maximized = false; events.emit("unmaximize") },
@@ -56,6 +57,7 @@ function fixture(initialMaximized = false) {
     externalState(value: boolean) { maximized = value; events.emit(value ? "maximize" : "unmaximize") },
     dismiss() { minimized = true; visible = false; maximized = false },
     reopen() { minimized = false; visible = true; events.emit("restore") },
+    move(x: number) { bounds.x = x },
     destroy() { destroyed = true },
   }
 }
@@ -72,6 +74,22 @@ it("keeps pre-dismissal bounds on the automatic follow-up close and saves a rest
     f.events.emit("close")
     expect(f.updates).toHaveLength(2)
     expect(f.updates[1]).toMatchObject({ maximized: false })
+  } finally { f.unregister() }
+})
+
+it("skips unchanged saved geometry, preserves the hidden snapshot, and saves movement after restore", () => {
+  const f = fixture(true)
+  Object.assign(f.preferences, { bounds: { x: 10, y: 20, width: 800, height: 600 }, maximized: true })
+  try {
+    f.events.emit("close")
+    f.dismiss()
+    f.events.emit("close")
+    expect(f.updates).toEqual([])
+    f.reopen()
+    f.externalState(true)
+    f.move(30)
+    f.events.emit("close")
+    expect(f.updates).toEqual([{ bounds: { x: 30, y: 20, width: 800, height: 600 }, maximized: true }])
   } finally { f.unregister() }
 })
 
