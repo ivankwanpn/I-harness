@@ -10,6 +10,7 @@ import type {GenerationActionState} from '../conversation/generation.ts'
 import type {PreparedConversationArchive} from '../conversation/restoration-types.ts'
 import type {DeliveryState} from '../conversation/delivery.ts'
 import type {DeliveryKey} from '../events/delivery.ts'
+import type { OwnedSessionHistoryPage, SessionHistoryPageOptions } from '../conversation/history/session-history.ts'
 
 export interface ExecutionDeliveryObservation {
  readonly revision:number
@@ -82,6 +83,8 @@ readonly schedules:Readonly<{kind:'unavailable';reason:'original-schedule-adapte
  /** Data only, hydrated at the original recorded ordinal; never an admission grant. */
  admitted(inputId:string):Promise<DeepReadonly<Extract<SessionEventView,{type:'agent/input/admitted'}>>|undefined>;
  lastCancellationSeq(inputId:string):number|undefined}>
+ /** The original coordinator orders this read against writes and joins its cleanup. */
+ readHistoryPage(options:SessionHistoryPageOptions):Promise<OwnedSessionHistoryPage|undefined>
  assertCurrent():void
  /** Checks already captured model input data across attempt bookkeeping. */
  assertRequestInputCurrent():void

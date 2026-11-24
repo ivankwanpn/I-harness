@@ -19,5 +19,36 @@ it('selects the original configured Desktop runtime and joins its owner',async()
  let host:Awaited<ReturnType<typeof createDesktopHost>>|undefined,number=0
  const call=async(method:string,params:Record<string,unknown>={})=>{const id=++number;await host!.handleLine(encodeFrame(makeRequest(id,method,params)));const reply=frames.find(frame=>'id'in frame&&frame.id===id);if(!isRpcSuccess(reply))throw Error(JSON.stringify(reply));return reply.result}
  observed.assemblies=0;observed.service=undefined
- try{host=await createDesktopHost({workspace,sessionDir:join(root,'sessions'),settingsPath,credentialsPath,buildProviderClient:createHostFixtureModel(origin),onWrite:frame=>frames.push(frame)});await call('initialize');const {sessionId}=await call('session/create') as {sessionId:string};await call('session/prompt',{sessionId,prompt:'hello original host'});const execution=originalManagedExecutionFor(observed.service!,sessionId);expect(execution).toBeDefined();expect(Object.hasOwn(execution!.owner,'view')).toBe(false);expect(observed.assemblies).toBe(0);const main=requests.find(request=>Array.isArray(request.tools));expect(main).toBeDefined();const names=main.tools.map((tool:any)=>tool.function.name);expect(names).toContain('spawn_agent');expect(names).toContain('schedule_create');expect(names).toContain('shell');const history=await call('session/history',{sessionId,afterSeq:0,limit:200}) as {events:{type:string;text?:string;title?:string}[]};expect(history.events.some(event=>event.type==='assistant/message'&&event.text==='owned response')).toBe(true);expect(history.events.some(event=>event.type==='session/title'&&event.title==='owned response')).toBe(true);await host.close();host=undefined;expect(()=>execution!.observe()).toThrow()}finally{await host?.close();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()))}
+ try {
+  host=await createDesktopHost({workspace,sessionDir:join(root,'sessions'),settingsPath,credentialsPath,buildProviderClient:createHostFixtureModel(origin),onWrite:frame=>frames.push(frame)})
+  await call('initialize')
+  const {sessionId}=await call('session/create') as {sessionId:string}
+  await call('session/prompt',{sessionId,prompt:'hello original host'})
+  const execution=originalManagedExecutionFor(observed.service!,sessionId)
+  expect(execution).toBeDefined()
+  expect(Object.hasOwn(execution!.owner,'view')).toBe(false)
+  expect(observed.assemblies).toBe(0)
+  const main=requests.find(request=>Array.isArray(request.tools))
+  expect(main).toBeDefined()
+  const names=main.tools.map((tool:any)=>tool.function.name)
+  expect(names).toContain('spawn_agent')
+  expect(names).toContain('schedule_create')
+  expect(names).toContain('shell')
+  const history=await call('session/history',{sessionId,beforeSeq:Number.MAX_SAFE_INTEGER,limit:200,includeTurns:true}) as {
+   events:{type:string;seq:number;text?:string;title?:string}[]; startSeq:number; nextSeq:number; headSeq:number; turns:{startSeq:number;endSeq?:number}[]
+  }
+  expect(history.events.some(event=>event.type==='assistant/message'&&event.text==='owned response')).toBe(true)
+  expect(history.events.some(event=>event.type==='session/title'&&event.title==='owned response')).toBe(true)
+  expect(history.startSeq).toBe(0)
+  expect(history.headSeq).toBe(history.nextSeq)
+  expect(history.turns).toEqual([{startSeq:history.events.find(event=>event.type==='turn/start')?.seq,endSeq:history.events.find(event=>event.type==='turn/end')?.seq}])
+  expect(Object.hasOwn(execution!.owner,'view')).toBe(false)
+  expect(observed.assemblies).toBe(0)
+  await host.close();host=undefined
+  expect(()=>execution!.observe()).toThrow()
+ } finally {
+  await host?.close()
+  server.closeAllConnections()
+  await new Promise<void>(resolve=>server.close(()=>resolve()))
+ }
 },60000)

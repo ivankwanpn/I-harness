@@ -1,4 +1,4 @@
-import type { SessionView as Session, SessionEvent, SessionHeader } from "@i-harness/core-session"
+import type { OwnedSessionHistoryPage, SessionHistoryPageOptions, SessionView as Session, SessionEvent, SessionHeader } from "@i-harness/core-session"
 import type { SettingsProviderProtocol } from "@i-harness/settings"
 
 export interface SessionMeta extends SessionHeader {
@@ -163,6 +163,8 @@ export interface SessionCoordinator {
   load(sessionId: string): Promise<{ session: Session }>
   /** Read the durable prefix without ownership, disk repair or runtime creation. */
   snapshot?(sessionId: string): Promise<{ session: Session }>
+  /** Read a bounded page from an existing private execution when supported. */
+  readHistoryPage?(sessionId: string, options: SessionHistoryPageOptions): Promise<OwnedSessionHistoryPage | undefined>
   /** Acquire long-term ownership before reading, durably canonicalize crash
    * recovery, and return a writable snapshot whose length equals its next seq. */
   loadOwned(sessionId: string): Promise<{ session: Session }>

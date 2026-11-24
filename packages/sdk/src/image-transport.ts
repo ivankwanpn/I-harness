@@ -39,33 +39,41 @@ function earlierImages(index: AdmissionIndex, inputId: string, before: number): 
   return images
 }
 
-/** Give SDK readers the displayed image without sending its recovery copy.
- * The durable admission still owns the bytes; this produces fresh wire events
- * and never mutates session.events. Pages may start after the admission. */
-export function transportSessionEvents(session: Session, events: readonly SessionEvent[]): import('@i-harness/core-session').SessionEvent[] {
-  const needed = new Map<number, string>()
-  for (const event of events) {
-    if (event.type !== "user/message" || event.imageInputId === undefined) continue
-    const position = event.seq ?? session.events.indexOf(event)
-    if (!Number.isSafeInteger(position) || position < 0 || session.events[position] !== event) {
-      throw new Error("image admission: user/message position is unavailable")
-    }
-    needed.set(position, event.imageInputId)
-  }
-  const hydrated = new Map<number, readonly DeepReadonly<ImageInput>[]>()
-  if (needed.size > 0) {
-    const index = indexFor(session)
-    for (const [position, inputId] of needed) hydrated.set(position, earlierImages(index, inputId, position))
-  }
-  return copyConversationData(events.map((event) => {
+/** Keep displayed images on user messages and strip their durable copies. */
+function copyWireEvents(events: readonly SessionEvent[], imagesFor: (event: Extract<SessionEvent, { type: "user/message" }>, inputId: string) => readonly DeepReadonly<ImageInput>[]): import('@i-harness/core-session').SessionEvent[] {
+  return copyConversationData(events.map(event => {
     if (event.type === "agent/input/admitted" && event.images !== undefined) {
       const { images: _images, ...rest } = event
       return rest
     }
     if (event.type === "user/message" && event.imageInputId !== undefined) {
-      const position = event.seq ?? session.events.indexOf(event)
-      return { ...event, images: hydrated.get(position)! }
+      return { ...event, images: imagesFor(event, event.imageInputId) }
     }
     return event
   }))
+}
+
+/** Read images from the existing in-process session, including earlier pages. */
+export function transportSessionEvents(session: Session, events: readonly SessionEvent[]): import('@i-harness/core-session').SessionEvent[] {
+  let index: AdmissionIndex | undefined
+  return copyWireEvents(events, (event, inputId) => {
+    const position = event.seq ?? session.events.indexOf(event)
+    if (!Number.isSafeInteger(position) || position < 0 || session.events[position] !== event) {
+      throw new Error("image admission: user/message position is unavailable")
+    }
+    index ??= indexFor(session)
+    return earlierImages(index, inputId, position)
+  })
+}
+
+/** The coordinator has already looked up each image's earlier admission. */
+export function transportHistoryPageEvents(events: readonly SessionEvent[], images: ReadonlyMap<number, readonly DeepReadonly<ImageInput>[]>): import('@i-harness/core-session').SessionEvent[] {
+  return copyWireEvents(events, (event, inputId) => {
+    if (event.seq === undefined || !Number.isSafeInteger(event.seq) || event.seq < 0) {
+      throw new Error("image admission: user/message position is unavailable")
+    }
+    const displayed = images.get(event.seq)
+    if (!displayed?.length) throw new Error(`image admission not found for user/message: ${inputId}`)
+    return displayed
+  })
 }

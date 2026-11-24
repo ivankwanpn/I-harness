@@ -913,6 +913,60 @@ describe("createSdkServer session ownership", () => {
 })
 
 describe("createSdkServer v1 (session/history + session/list)", () => {
+  it("uses an owned durable page with hydrated images, matching cursor and turn fields", async () => {
+    const image = { mediaType: "image/png" as const, dataBase64: "AQID" }
+    const user = { type: "user/message" as const, text: "show", imageInputId: "earlier", seq: 12 }
+    const admitted = { type: "agent/input/admitted" as const, version: 1 as const, inputId: "later", text: "later",
+      delivery: "queue" as const, intent: "user" as const, images: [image], seq: 13 }
+    const durablePage = { events: [user, admitted], images: new Map([[12, [image]]]), startSeq: 12, nextSeq: 14, headSeq: 20,
+      turns: [{ startSeq: 10, endSeq: 15 }] }
+    const readHistoryPage = vi.fn(async () => durablePage)
+    const snapshot = vi.fn(async () => { throw new Error("Unexpected full snapshot") })
+    const service = makeStubService()
+    const server = createSdkServer(service, { coordinator: { readHistoryPage, snapshot } as unknown as SessionCoordinator })
+    try {
+      await handshake(server)
+      const request = async (params: object) => decodeFrame((await server.handleLine(encodeFrame(makeRequest(1, "session/history", params))))!) as RpcSuccess
+      const result = (await request({ sessionId: "persisted", beforeSeq: 14, limit: 2, includeTurns: true })).result
+      const { images: _durableImages, ...admittedWire } = admitted
+      expect(result).toEqual({ events: [{ ...user, images: [image] }, admittedWire], startSeq: 12, nextSeq: 14, headSeq: 20,
+        turns: [{ startSeq: 10, endSeq: 15 }] })
+      expect(readHistoryPage).toHaveBeenCalledWith("persisted", { afterSeq: 0, beforeSeq: 14, limit: 2, includeTurns: true })
+      expect((await request({ sessionId: "persisted", afterSeq: 12, limit: 2 })).result).toEqual({
+        events: [{ ...user, images: [image] }, admittedWire], nextSeq: 14,
+      })
+      expect(snapshot).not.toHaveBeenCalled()
+      expect(service.assemblyFor).not.toHaveBeenCalled()
+      expect(admitted.images).toEqual([image])
+    } finally {
+      await server.close()
+    }
+  })
+
+  it("prefers live history and only falls back when the durable capability returns undefined", async () => {
+    const live = createSession()
+    append(live, { type: "user/message", text: "live" })
+    const service = makeStubService()
+    service.liveSession = id => id === "live" ? live : undefined
+    const readHistoryPage = vi.fn<NonNullable<SessionCoordinator["readHistoryPage"]>>().mockResolvedValue(undefined)
+    const snapshot = vi.fn(async () => ({ session: live }))
+    const server = createSdkServer(service, { coordinator: { readHistoryPage, snapshot } as unknown as SessionCoordinator })
+    try {
+      await handshake(server)
+      const request = async (sessionId: string) => decodeFrame((await server.handleLine(encodeFrame(makeRequest(1, "session/history", { sessionId }))))!)
+      expect(await request("live")).toMatchObject({ result: { events: live.events, nextSeq: 1 } })
+      expect(readHistoryPage).not.toHaveBeenCalled()
+      expect(snapshot).not.toHaveBeenCalled()
+      expect(await request("fallback")).toMatchObject({ result: { events: live.events, nextSeq: 1 } })
+      expect(snapshot).toHaveBeenCalledOnce()
+      readHistoryPage.mockRejectedValueOnce(new Error("Archive changed"))
+      expect(await request("faulty")).toMatchObject({ error: { code: INTERNAL_ERROR, message: "session/history: failed to prepare session: Archive changed" } })
+      expect(snapshot).toHaveBeenCalledOnce()
+    } finally {
+      await server.close()
+    }
+  })
+
   it("session/history walks the live log (afterSeq exclusive, limit, nextSeq)", async () => {
     const { service, cleanup } = await makeService()
     try {

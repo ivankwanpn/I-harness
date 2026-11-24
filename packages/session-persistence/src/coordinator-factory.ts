@@ -161,6 +161,12 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       if (managed.has(sessionId)) throw new Error('Managed document requires fact admission')
       mutations.enqueue(sessionId, events)
     },
+    async readHistoryPage(sessionId, options) {
+      archiveReads?.assertPublicReadAdmission()
+      const page = await managed.readHistoryPage(sessionId, options)
+      archiveReads?.assertPublicReadAdmission()
+      return page
+    },
     async snapshot(sessionId) { archiveReads?.assertPublicReadAdmission(); const session = await managed.snapshot(sessionId); const candidate = session ? { session } : await loads.snapshot(sessionId); archiveReads?.assertPublicReadAdmission(); return candidate },
     async load(sessionId) { archiveReads?.assertPublicReadAdmission(); assertDurableTransition(); observations.assertOutsideObservedSession(sessionId); const session = await managed.snapshot(sessionId); const candidate = session ? { session } : await loads.load(sessionId); archiveReads?.assertPublicReadAdmission(); return candidate },
     async loadOwned(sessionId) { assertDurableTransition(); observations.assertOutsideObservedSession(sessionId); observations.assertManagedSessionAdmission(sessionId); const session = await managed.snapshot(sessionId); return session ? { session } : loads.loadOwned(sessionId) },

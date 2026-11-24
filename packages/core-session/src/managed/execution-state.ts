@@ -1,5 +1,6 @@
 import {canonicalJsonData} from '../serialization/json-data.ts'
 import {legacyResultMetadata} from '../conversation/history/result-metadata.ts'
+import { SESSION_HISTORY_LIMIT, type SessionHistoryPageOptions } from '../conversation/history/session-history.ts'
 import {validManagedArtifactRef} from '../results/validate.ts'
 import { types } from 'node:util'
 import { AsyncLocalStorage } from 'node:async_hooks'
@@ -359,7 +360,9 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
         try{current()}catch(error){signalUnavailable(error,!sameHeldOwner());throw error};if(record)admittedReads.set(record,{identity,current:()=>current()});signalReady();return record
       }
     })
-    const readRecords=async(ordinals:readonly number[])=>{
+    function readRecords(ordinals:readonly number[]):Promise<SessionEventView[]>
+    function readRecords(ordinals:readonly number[],requireBatch:true):Promise<SessionEventView[]|undefined>
+    async function readRecords(ordinals:readonly number[],requireBatch=false){
       current();const scope=captureWriterDependencies(open(expected));debt.add(scope);activeDependencyScopes.add(scope);markBusy()
       let records:import('./types.ts').SessionEventView[]|undefined,failed=false,primary:unknown
       try{
@@ -368,13 +371,13 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
           const selected=await scope.readEvents(ordinals)
           current(scope);scope.assertCurrent()
           records=selected.map(record=>freezeJsonData(structuredClone(record)))
-        }else{
+        }else if(!requireBatch){
           records=[];for(const ordinal of ordinals){current(scope);scope.assertCurrent();const record=await scope.readEvent(ordinal);current(scope);scope.assertCurrent();if(record.seq!==ordinal)throw TypeError('Original indexed record required');records.push(freezeJsonData(structuredClone(record)))}
         }
       }
       catch(error){failed=true;primary=error}
       try{await scope.close();activeDependencyScopes.delete(scope);debt.delete(scope)}catch(cleanup){activeDependencyScopes.delete(scope);const cause=failed?new AggregateError([primary,cleanup],'Delivery read and exact dependency cleanup failed'):cleanup;dependencyFailure={cause};signalUnavailable(cause,!sameHeldOwner());throw cause}
-      if(failed){signalReady();throw primary};current();signalReady();return records!
+      if(failed){signalReady();throw primary};current();signalReady();return records
     }
     const deliveryView:ExecutionObservation['delivery']=Object.freeze({
       revision:fence,
@@ -398,6 +401,33 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     const ui=()=>{current();return uiScalars??=original.uiScalars()}
     const observation:ExecutionObservation=Object.freeze({identity,eventCount:expected.eventCount,formatVersion:member<number>('formatVersion'),...header?{header}:{},prefix:Object.freeze({...expected}),get hasConversationMessages(){return ui().hasConversationMessages},get turnCount(){return ui().turnCount},get todosRevision(){return ui().todosRevision},codeState(){if(this!==observation)throw TypeError('Original observation receiver required');current();const value=freezeJsonData(structuredClone(original.codeState()) as unknown) as ReturnType<ExecutionObservation['codeState']>;current();return value},projectionRevision:original.context.projectionRevision(),contextRevision:original.context.contextRevision(),scheduleRevision:original.context.scheduleRevision(),schedules,metadata,inbox,delivery:deliveryView,
       assertCurrent(){if(this!==observation)throw TypeError('Original observation receiver required');current()},
+      async readHistoryPage(options: SessionHistoryPageOptions) {
+        if (this !== observation) throw TypeError('Original observation receiver required')
+        current()
+        const { afterSeq, beforeSeq, limit, includeTurns } = options
+        if (!Number.isInteger(afterSeq) || afterSeq < 0 || !Number.isInteger(limit) || limit <= 0 ||
+            (beforeSeq !== undefined && (!Number.isSafeInteger(beforeSeq) || beforeSeq < 0)))
+          throw new RangeError('Invalid session history range')
+        const plan = original.historyPagePlan({ afterSeq, beforeSeq, limit: Math.min(limit, SESSION_HISTORY_LIMIT), includeTurns })
+        if (!plan) return undefined
+        const { range, ordinals, admissions, turns } = plan
+        const records = await readRecords(ordinals, true)
+        current()
+        if (!records) return undefined
+        const events = records.slice(0, range.nextSeq - range.startSeq)
+        const images = new Map<number, NonNullable<Extract<SessionEventView, { type: 'agent/input/admitted' }>['images']>>()
+        if (admissions.size) {
+          const byOrdinal = new Map(records.map((record, index) => [ordinals[index]!, record]))
+          for (const [ordinal, admission] of admissions) {
+            const event = events[ordinal - range.startSeq], proof = byOrdinal.get(admission)
+            if (event?.type !== 'user/message' || proof?.type !== 'agent/input/admitted' ||
+                event.imageInputId !== proof.inputId || !proof.images?.length)
+              throw new Error(`image admission not found for user/message: ${event?.type === 'user/message' ? event.imageInputId : ordinal}`)
+            images.set(ordinal, proof.images)
+          }
+        }
+        return { ...range, events, images, ...(turns === undefined ? {} : { turns }) }
+      },
       assertRequestInputCurrent() {
         if (this !== observation) throw TypeError('Original observation receiver required')
         runOriginalCurrentnessRead(assertHeld, () => {

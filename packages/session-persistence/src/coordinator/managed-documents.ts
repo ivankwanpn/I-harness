@@ -4,7 +4,7 @@ import {runOriginalCurrentnessRead} from '../../../core-session/src/managed/curr
 import { hasArchiveHistoryPrefixReader } from '../archive-read-internal.ts'
 import { createManagedRestoredRead } from './managed-restored-read.ts'
 import type { ManagedRestoredContextRead } from '../restored-context-internal.ts'
-import type { Session, JournalPrefix } from '@i-harness/core-session'
+import type { Session, JournalPrefix, OwnedSessionHistoryPage, SessionHistoryPageOptions } from '@i-harness/core-session'
 import { FactRecoveryRequiredError, aggregateErrors } from '@i-harness/core-session'
 import type { CoordinatorOptions, PersistenceBackend } from './types.ts'
 import type { Ownership } from './ownership.ts'
@@ -154,39 +154,51 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     } finally { finishJournalMutation(entry,token,outcome) }
   }
   const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations,processLatches,transitions,(id,entry)=>{if(documents.get(id)!==entry||!entry.ready||!entry.document)throw new FactRecoveryRequiredError();resolved.set(id,entry.document)},(id,entry)=>{if(documents.get(id)!==entry||entry.ready||!entry.document||entry.revoked)throw new FactRecoveryRequiredError();const document=entry.document;return ()=>{resolved.set(id,document)}})
-  function materializeExecution(id:string,existing:ManagedEntry):Promise<ReturnType<typeof createManagedDocument>>{
+  function readPrivateExecution<T>(
+    id: string,
+    existing: ManagedEntry,
+    readPrivate: (original: ReturnType<typeof originalManagedExecution>, assertCurrent: () => void) => Promise<T>,
+    readMaterialized: (document: ReturnType<typeof createManagedDocument>) => T,
+  ): Promise<T> {
     if (!existing.document || !Object.hasOwn(existing.document, 'view')) ownership.assertOutsideSessionOperation(id)
     const prior = existing.flight
     const operation = (async () => {
       await prior
       if (documents.get(id) !== existing || existing.revoked || !existing.document) throw new FactRecoveryRequiredError()
       const document = existing.document
-      if (Object.hasOwn(document, 'view')) return document
+      if (Object.hasOwn(document, 'view')) return readMaterialized(document)
       const original = originalManagedExecution(document, ownership)
-      const read = async () => {
+      const assertCurrent = () => {
         if (documents.get(id) !== existing || existing.revoked || existing.document !== document) throw new FactRecoveryRequiredError()
-        document.assertReady()
-        document.assertObservable()
-        const expected = original.core.prefix
-        const archive = await backend.read(id)
         original.assertCurrent()
         original.held.assertHeld()
-        const actual = await original.readOwnedPrefix()
-        original.assertCurrent()
         document.assertObservable()
-        if (documents.get(id) !== existing || existing.revoked || original.core.prefix !== expected
-          || archive.version !== original.core.formatVersion || archive.events.length !== expected.eventCount
-          || actual.eventCount !== expected.eventCount || actual.bodyBytes !== expected.bodyBytes
-          || actual.prefixDigest !== expected.prefixDigest) throw new FactRecoveryRequiredError()
-        return original.materialize(archive.events)
       }
-      return original.materializeDuringPreparation(read) ?? ownership.withSessionOperation(id, read)
+      const read = async () => {
+        assertCurrent()
+        document.assertReady()
+        return readPrivate(original, assertCurrent)
+      }
+      return original.readDuringPreparation(read) ?? ownership.withSessionOperation(id, read)
     })()
     const flight = operation.then(() => {})
     existing.flight = flight
     void flight.catch(() => {})
     void flight.finally(() => { if (existing.flight === flight) existing.flight = undefined }).catch(() => {})
     return operation
+  }
+  function materializeExecution(id: string, existing: ManagedEntry): Promise<ReturnType<typeof createManagedDocument>> {
+    return readPrivateExecution(id, existing, async (original, assertCurrent) => {
+      const expected = original.core.prefix
+      const archive = await backend.read(id)
+      assertCurrent()
+      const actual = await original.readOwnedPrefix()
+      assertCurrent()
+      if (original.core.prefix !== expected || archive.version !== original.core.formatVersion
+        || archive.events.length !== expected.eventCount || actual.eventCount !== expected.eventCount
+        || actual.bodyBytes !== expected.bodyBytes || actual.prefixDigest !== expected.prefixDigest) throw new FactRecoveryRequiredError()
+      return original.materialize(archive.events)
+    }, document => document)
   }
   async function acquireExecution(id:string):Promise<ManagedExecutionAttachment>{
     if(!transitions||!ownership.lockEnabled||!hasExecutionDependencies(backend))throw Object.assign(new Error('Original execution backend unavailable'),{code:'FACT_OWNER_UNSUPPORTED'})
@@ -308,6 +320,18 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     },
     revoke(id:string){assertTaskOutside(id);bootstrap.assertOutsideCapture(id);const entry=documents.get(id);if(entry)revokeManagedEntry(entry)},
     async assertObservable(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;entry?.document?.assertObservable()},
+    async readHistoryPage(id: string, options: SessionHistoryPageOptions): Promise<OwnedSessionHistoryPage | undefined> {
+      const entry = documents.get(id)
+      assertEntry(entry)
+      if (!entry || !executions.has(entry)) return undefined
+      return readPrivateExecution<OwnedSessionHistoryPage | undefined>(id, entry, async (original, assertCurrent) => {
+        const observation = original.core.observe()
+        const page = await observation.readHistoryPage(options)
+        observation.assertCurrent()
+        assertCurrent()
+        return page
+      }, () => undefined)
+    },
     async snapshot(id:string){
       const entry=documents.get(id);assertEntry(entry)
       if(entry&&executions.has(entry)&&(!entry.document||!Object.hasOwn(entry.document,'view')))ownership.assertOutsideSessionOperation(id)

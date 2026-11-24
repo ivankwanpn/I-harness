@@ -79,14 +79,13 @@ import { SELECTED_RESULTS_FORK_CAPABILITY, SelectedResultsForkOperationError, re
 //   session/status { sessionId, status, error? } — lifecycle transitions
 // Malformed lines are ignored; unknown methods get -32601; invalid params -32602;
 // a request sent before `initialize` gets -32600 (M68 batch B, v3).
-import { createNondurableFactOwner, isFactRecoveryRequired, isNondurableSession, subscribe, IMAGE_MEDIA_TYPES, validateImages, type ImageInput, type SessionView as Session, type SessionEventView as SessionEvent, type SessionEvent as MutableSessionEvent } from "@i-harness/core-session"
+import { createNondurableFactOwner, isFactRecoveryRequired, isNondurableSession, subscribe, IMAGE_MEDIA_TYPES, SESSION_HISTORY_LIMIT, sessionHistoryRange, sessionHistoryTurns, validateImages, type ImageInput, type OwnedSessionHistoryPage, type SessionView as Session, type SessionEventView as SessionEvent, type SessionEvent as MutableSessionEvent } from "@i-harness/core-session"
 import { createRewindIntentLog, withRewindFacts } from '@i-harness/session-executor'
-import { transportSessionEvents } from "./image-transport.ts"
+import { transportHistoryPageEvents, transportSessionEvents } from "./image-transport.ts"
 import { dispatchResultPage, type ResultPageHost } from './result-page.ts'
 export { parseResultPageQuery } from './results.ts'
 export { transportSessionEvents } from "./image-transport.ts"
 import type { SessionService } from "@i-harness/session-executor"
-import { historyTurns } from "./history-turns.ts"
 import { createManagedEventBridge } from "./managed-event-bridge.ts"
 import { onOriginalHostAssembly } from "../../session-executor/src/host-assembly-observer.ts"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -131,7 +130,6 @@ export const SDK_SERVER_PROTOCOL_VERSION = PROTOCOL_VERSION
 
 // M41a v1: session/history paging defaults (additive — v0 never had this).
 const HISTORY_DEFAULT_LIMIT = 500
-const HISTORY_LIMIT_CAP = 1000
 
 export interface SdkServerOptions {
   /** Visibility is supplied by the host; never falls back to SessionService. */
@@ -760,9 +758,8 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         }
       }
       case "session/history": {
-        // M41a v1: event-log walk over the in-process assembly. A cold durable
-        // session is verified/adopted through the coordinator and assembled
-        // on demand; an unknown id is NEVER auto-created by this read.
+        // Prefer the in-process log. A coordinator can read its durable pages
+        // without materializing an assembly. History never creates a session.
         const p = params as { sessionId?: unknown; afterSeq?: unknown; beforeSeq?: unknown; limit?: unknown; includeTurns?: unknown } | undefined
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
           return makeFailure(id, INVALID_PARAMS, "session/history requires a non-empty sessionId")
@@ -775,29 +772,35 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         if (typeof rawLimit !== "number" || !Number.isInteger(rawLimit) || rawLimit <= 0) {
           return makeFailure(id, INVALID_PARAMS, "session/history limit must be a positive integer")
         }
-        const limit = Math.min(rawLimit, HISTORY_LIMIT_CAP)
+        const limit = Math.min(rawLimit, SESSION_HISTORY_LIMIT)
         const beforeSeq = p.beforeSeq
         if (beforeSeq !== undefined && (typeof beforeSeq !== "number" || !Number.isSafeInteger(beforeSeq) || beforeSeq < 0)) {
           return makeFailure(id, INVALID_PARAMS, "session/history beforeSeq must be a non-negative integer")
         }
+        const includeTurns = p.includeTurns === true
+        const pageOptions = { afterSeq, beforeSeq, limit, includeTurns }
         let session: Session | undefined
+        let page: OwnedSessionHistoryPage | undefined
         try {
-          session = await sessionForHistory(p.sessionId)
+          session = service.liveSession(p.sessionId)
+          if (session === undefined) {
+            page = await opts.coordinator?.readHistoryPage?.(p.sessionId, pageOptions)
+            if (page === undefined) session = await sessionForHistory(p.sessionId)
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           return makeFailure(id, INTERNAL_ERROR, `session/history: failed to prepare session: ${message}`)
         }
-        if (session === undefined) {
-          return makeFailure(id, INVALID_PARAMS, `session/history: session not found: ${p.sessionId}`)
-        }
-        // The live log seqs are the 0-based positions in events (assigned at
-        // append). A tail read starts from `beforeSeq` so a cold conversation
-        // needs one round trip instead of a head probe plus repeated snapshots.
-        const end = beforeSeq === undefined ? Math.min(afterSeq + limit, session.events.length) : Math.min(beforeSeq, session.events.length)
-        const start = beforeSeq === undefined ? Math.min(afterSeq, session.events.length) : Math.max(0, end - limit)
         try {
-          return makeSuccess(id, { events: transportSessionEvents(session, session.events.slice(start, end)), nextSeq: end,
-            ...(p.includeTurns === true ? { turns: historyTurns(session.events, start, end) } : {}), ...(beforeSeq === undefined ? {} : { startSeq: start, headSeq: session.events.length }) })
+          if (page !== undefined) {
+            return makeSuccess(id, { events: transportHistoryPageEvents(page.events, page.images), nextSeq: page.nextSeq,
+              ...(includeTurns ? { turns: page.turns ?? [] } : {}), ...(beforeSeq === undefined ? {} : { startSeq: page.startSeq, headSeq: page.headSeq }) })
+          }
+          if (session === undefined) return makeFailure(id, INVALID_PARAMS, `session/history: session not found: ${p.sessionId}`)
+          // A backward page starts from a known bound or from the latest event.
+          const { startSeq, nextSeq, headSeq } = sessionHistoryRange(session.events.length, pageOptions)
+          return makeSuccess(id, { events: transportSessionEvents(session, session.events.slice(startSeq, nextSeq)), nextSeq,
+            ...(includeTurns ? { turns: sessionHistoryTurns(session.events, startSeq, nextSeq) } : {}), ...(beforeSeq === undefined ? {} : { startSeq, headSeq }) })
         } catch (error) {
           return makeFailure(id, INTERNAL_ERROR, `session/history: ${error instanceof Error ? error.message : String(error)}`)
         }
