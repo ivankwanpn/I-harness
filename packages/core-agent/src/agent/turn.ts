@@ -50,7 +50,7 @@ export function createTurnRunner(ctx: PluginContext, deps: ExecutionDependencies
     lifecycle.turnOpen = true
     // M25: host telemetry beside the session-log append (independent stream —
     // the session log itself is untouched; agent-invisible).
-    deps.telemetry?.emit({ type: "turn/start", ts: Date.now(), data: { message } })
+    deps.telemetry?.emit({ type: "turn/start", ts: Date.now(), data: { message, sessionId: deps.sessionId } })
 
     let needsContinuation = true
     let stopContinuations = 0

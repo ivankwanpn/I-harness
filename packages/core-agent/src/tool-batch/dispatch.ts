@@ -49,7 +49,7 @@ export function createStartCall(session: BatchSource, tools: ToolRegistry, batch
     if (parkReplan()) return
     if(isManagedBatchSource(session))for(;;){const wait=getManagedExecutionAdmissionWait(session.domain,session.action,cancellation.batchSignal);if(!wait)break;await wait}
     opts.assertFactOpen?.()
-    opts.telemetry?.emit({ type: "tool/start", ts: Date.now(), data: { tool: call.name, callId: call.callId } })
+    opts.telemetry?.emit({ type: "tool/start", ts: Date.now(), data: { tool: call.name, callId: call.callId, ...(opts.sessionId ? { sessionId: opts.sessionId } : {}) } })
     if(isManagedBatchSource(session))session.attach(index,prepared,opts.settlementSource! as import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').FactOutcome>)
     else attachModelMember(liveToken, index, prepared, tools)
     const promise = tools

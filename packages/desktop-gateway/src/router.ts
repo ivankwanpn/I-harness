@@ -13,6 +13,7 @@ import {
 import type { SdkServer } from "@i-harness/sdk/server"
 import type { DesktopHandlers, GatewayWrite } from "./types.ts"
 import { ReviewPathError } from "./review.ts"
+import { readModelReviewTarget } from "./model-review-snapshot.ts"
 import { randomUUID } from "node:crypto"
 import { createSurfaceSubscriptions } from './observation/subscriptions.ts'
 import { ScheduleInputError } from "@i-harness/schedule"
@@ -83,6 +84,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.sandboxState !== undefined) capabilities["desktop-sandbox"] = ["1"]
     if (handlers.interaction !== undefined) capabilities["desktop-interaction"] = ["1"]
     if (handlers.review !== undefined) capabilities["desktop-review"] = ["1"]
+    if (handlers.modelReview !== undefined) capabilities["desktop-model-review"] = ["1"]
     send({ ...frame, result: { ...frame.result, capabilities } })
   }
 }
@@ -712,6 +714,27 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
                 : { kind: "question", answer: decision.answer as string },
           })
           send(makeSuccess(message.id, reply))
+        } catch (error) {
+          send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error)))
+        }
+        return
+      }
+
+      if (message.method.startsWith("desktop/model-review/") && handlers.modelReview) {
+        const review = handlers.modelReview
+        const params = asRecord(message.params)
+        try {
+          const method = message.method
+          const id = typeof params?.id === "string" ? params.id : ""
+          const result = method === "desktop/model-review/prepare" ? await review.prepare(readModelReviewTarget(params?.target))
+            : method === "desktop/model-review/list" ? await review.list()
+            : method === "desktop/model-review/start" ? await review.start(id)
+            : method === "desktop/model-review/read" ? await review.read(id)
+            : method === "desktop/model-review/compare" ? await review.compare(id)
+            : method === "desktop/model-review/cancel" ? await review.cancel(id)
+            : undefined
+          if (result === undefined) throw new Error("Invalid model review request")
+          send(makeSuccess(message.id, result))
         } catch (error) {
           send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error)))
         }

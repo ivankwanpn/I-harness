@@ -143,3 +143,25 @@
   .session-composer .composer-model { max-width: 140px; }
   .composer-delivery-control { max-width: 140px; }
 }
+.composer-worktree {
+  position: relative;
+}
+
+.composer-worktree-choices {
+  background: var(--ih-panel);
+  border: 1px solid var(--ih-divider);
+  border-radius: 8px;
+  bottom: 100%;
+  display: grid;
+  gap: 0.5rem;
+  max-width: min(28rem, calc(100vw - 4rem));
+  padding: 0.75rem;
+  position: absolute;
+  z-index: 2;
+}
+
+.composer-worktree-choices small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

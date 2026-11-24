@@ -4,6 +4,7 @@ import type { WorkspaceEntry } from "../../main/workspaces.ts"
 import type { DesktopBridge, DesktopRequest } from "../../shared/bridge.ts"
 import { useLocale } from "../design/i18n.ts"
 import { ReviewPane, type ReviewChanges, type ReviewCommitResult, type ReviewGitResult, type ReviewText } from "./ReviewPane.tsx"
+import { ModelReviewPane } from "./ModelReviewPane.tsx"
 import "./project-git.css"
 
 export interface ProjectGitPaneProps {
@@ -11,6 +12,8 @@ export interface ProjectGitPaneProps {
   project: ProjectEntry
   workspaces: WorkspaceEntry[]
   onBusyChange?(busy: boolean): void
+  initialMode?: "review"
+  isolatedSession?: { workspaceId: string; sessionId: string }
 }
 
 interface NativeScope { project: ProjectEntry; members: WorkspaceEntry[]; revision: string }
@@ -46,7 +49,7 @@ const record = (value: unknown): value is Record<string, unknown> => typeof valu
 const nonempty = (value: unknown): value is string => typeof value === "string" && value.length > 0
 const errorText = (value: unknown) => value instanceof Error ? value.message : String(value)
 
-function checkedNativeScope(projects: unknown, workspaces: unknown, projectId: string, invalid: string, removed: string): NativeScope {
+function checkedNativeScope(projects: unknown, workspaces: unknown, projectId: string, invalid: string, removed: string, isolatedWorkspaceId?: string): NativeScope {
   if (!Array.isArray(projects) || !Array.isArray(workspaces)
     || !projects.every(row => record(row) && nonempty(row.id) && typeof row.name === "string"
       && Array.isArray(row.workspaceIds) && row.workspaceIds.every(nonempty) && new Set(row.workspaceIds).size === row.workspaceIds.length
@@ -54,8 +57,11 @@ function checkedNativeScope(projects: unknown, workspaces: unknown, projectId: s
       && nonempty(row.createdAt) && nonempty(row.updatedAt))
     || !workspaces.every(row => record(row) && nonempty(row.id) && nonempty(row.path) && typeof row.label === "string")
     || new Set(projects.map(row => row.id)).size !== projects.length || new Set(workspaces.map(row => row.id)).size !== workspaces.length) throw new Error(invalid)
-  const project = (projects as ProjectEntry[]).find(row => row.id === projectId)
-  if (!project) throw new Error(removed)
+  const saved = (projects as ProjectEntry[]).find(row => row.id === projectId)
+  if (!saved) throw new Error(removed)
+  const project = isolatedWorkspaceId
+    ? { ...saved, workspaceIds: [isolatedWorkspaceId], primaryWorkspaceId: isolatedWorkspaceId }
+    : saved
   const members = project.workspaceIds.map(id => (workspaces as WorkspaceEntry[]).find(row => row.id === id))
   if (members.some(row => !row)) throw new Error(invalid)
   const knownMembers = members as WorkspaceEntry[]
@@ -82,10 +88,11 @@ function checkedMutation(value: unknown, commit: boolean, invalid: string): Revi
   throw new Error(invalid)
 }
 
-export function ProjectGitPane({ bridge, project, workspaces, onBusyChange }: ProjectGitPaneProps) {
+export function ProjectGitPane({ bridge, project, workspaces, onBusyChange, initialMode, isolatedSession }: ProjectGitPaneProps) {
   const english = useLocale(state => state.locale) === "en"
   const copy = (zh: string, en: string) => english ? en : zh
-  const propsKey = JSON.stringify([project.id, project.updatedAt, project.workspaceIds, project.primaryWorkspaceId, workspaces.map(row => [row.id, row.path])])
+  const [modelReview, setModelReview] = useState(initialMode === "review")
+  const propsKey = JSON.stringify([project.id, project.updatedAt, project.workspaceIds, project.primaryWorkspaceId, workspaces.map(row => [row.id, row.path]), isolatedSession])
   const [native, setNative] = useState<{ bridge: DesktopBridge; key: string; scope?: NativeScope; error?: string }>()
   const [membershipRefresh, setMembershipRefresh] = useState(0)
   const [choice, setChoice] = useState<{ projectId: string; workspaceId: string }>()
@@ -134,7 +141,12 @@ export function ProjectGitPane({ bridge, project, workspaces, onBusyChange }: Pr
 
   async function readScope(capturedBridge: DesktopBridge, projectId: string): Promise<NativeScope> {
     const [projects, folders] = await Promise.all([capturedBridge.request({ kind: "projects/list" }), capturedBridge.request({ kind: "workspace/list" })])
-    return checkedNativeScope(projects, folders, projectId, copy("無法確認專案資料夾，請重新整理。", "Could not verify project folders. Refresh to retry."), copy("此專案已移除，Git 操作不可用。", "This project was removed. Git actions are unavailable."))
+    const invalid = copy("無法確認專案資料夾，請重新整理。", "Could not verify project folders. Refresh to retry.")
+    if (isolatedSession) {
+      const binding = await capturedBridge.request({ kind: "desktop/project-files/roots", ...isolatedSession, projectId }) as { projectId?: string; roots?: { workspaceId?: string }[] }
+      if (binding?.projectId !== projectId || binding.roots?.length !== 1 || binding.roots[0]?.workspaceId !== isolatedSession.workspaceId) throw new Error(invalid)
+    }
+    return checkedNativeScope(projects, folders, projectId, invalid, copy("此專案已移除，Git 操作不可用。", "This project was removed. Git actions are unavailable."), isolatedSession?.workspaceId)
   }
   async function refreshMembership() {
     const ticket = ++membershipVersion.current
@@ -273,7 +285,13 @@ export function ProjectGitPane({ bridge, project, workspaces, onBusyChange }: Pr
     {currentNative?.error ? <><p role="alert" className="notice error-text">{currentNative.error}</p><button type="button" disabled={busy} onClick={() => void refreshMembership()}>{copy("重新整理", "Refresh")}</button></> : null}
     {!scope && !currentNative?.error ? <p role="status" className="muted">{copy("正在確認專案資料夾…", "Verifying project folders…")}</p> : null}
     {scope && members.length === 0 ? <p className="notice">{copy("此專案沒有可用的資料夾。", "This project has no available folders.")}</p> : null}
-    {target ? <fieldset className="project-git-review" disabled={busy}>
+    {target ? <div className="model-review-controls">
+      <button type="button" disabled={busy} aria-pressed={!modelReview} onClick={() => setModelReview(false)}>{copy("檔案變更", "Changes")}</button>
+      <button type="button" disabled={busy} aria-pressed={modelReview} onClick={() => setModelReview(true)}>{copy("模型審查", "Model review")}</button>
+    </div> : null}
+    {target && modelReview ? <ModelReviewPane key={JSON.stringify([target.scopeKey, isolatedSession?.sessionId])} bridge={bridge}
+      projectId={project.id} workspaceId={target.workspaceId} sessionId={isolatedSession?.sessionId} /> : null}
+    {target && !modelReview ? <fieldset className="project-git-review" disabled={busy}>
       {visible?.error ? <p role="alert" className="notice error-text">{visible.error}</p> : null}
       <ReviewPane title="Git" draftOwner={bridge} workspaceId={target.workspaceId} draftKey={target.scopeKey} changes={visible?.value} error={visible?.error} selected={selected} diff={selected?.mode === "diff" ? selectedDetail : undefined} preview={selected?.mode === "preview" ? selectedDetail : undefined}
         onSelect={select} onRefresh={() => refresh(target)}

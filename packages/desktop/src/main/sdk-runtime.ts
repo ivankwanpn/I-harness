@@ -122,6 +122,7 @@ export function createWorkspaceRuntimeManager(options: {
   sessionsRoot: string
   resourcesPath?: string
   projectContexts?: () => Promise<DesktopProjectContext[]>
+  projectContextsForWorkspace?: (workspaceId: string, contexts: DesktopProjectContext[]) => Promise<DesktopProjectContext[]>
   launch?: (workspace: WorkspaceEntry, sessionDir: string) => LaunchedRuntime
 }): WorkspaceRuntimeManager {
   const shared = options.launch ? undefined : createSharedDesktopHost(options.sessionsRoot, options.resourcesPath)
@@ -331,7 +332,10 @@ export function createWorkspaceRuntimeManager(options: {
         if (closed) throw new Error("runtime manager is closed")
         const outcomes = await Promise.allSettled([...runtimes.entries()].map(async ([id, runtime]) => {
           if (!needsProjectScope(id)) return
-          try { await runtime.client.request("desktop/project/sync", { projects }) }
+          try {
+            const scoped = await options.projectContextsForWorkspace?.(id, projects) ?? projects
+            await runtime.client.request("desktop/project/sync", { projects: scoped })
+          }
           catch (error) {
             // A concurrent replacement owns its own lifecycle.
             if (runtimes.get(id) === runtime) await manager.invalidate!(id)
@@ -367,8 +371,9 @@ export function createWorkspaceRuntimeManager(options: {
               do {
                 syncedEpoch = scopeEpoch
                 const projects = await options.projectContexts()
+                const scoped = await options.projectContextsForWorkspace?.(workspace.id, projects) ?? projects
                 assertCurrent(workspace.id, generation)
-                await runtime.client.request("desktop/project/sync", { projects })
+                await runtime.client.request("desktop/project/sync", { projects: scoped })
                 assertCurrent(workspace.id, generation)
               } while (syncedEpoch !== scopeEpoch)
             }

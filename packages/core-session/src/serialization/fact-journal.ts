@@ -16,6 +16,9 @@ const hash = (domain: string, ...parts: Uint8Array[]) => {
   return result.digest('hex')
 }
 const utf8 = (value: unknown) => Buffer.from(stringifyJsonData(value) ?? fail(), 'utf8')
+const outerStart = Buffer.from('{"recordKind":"session/fact-batch","version":1,')
+const eventKey = Buffer.from(',"events":')
+const closeCore = Buffer.from('}')
 
 export function legacyPrefixDigest(eventCount: number, body: Uint8Array): string {
   if (!count(eventCount)) fail()
@@ -46,10 +49,14 @@ export function encodeFactBatch(batchId: string, previousPrefixDigest: string, e
   if (typeof batchId !== 'string' || !/^[\x21-\x7e]{1,256}$/.test(batchId) || !digest(previousPrefixDigest)
     || !count(firstSeq) || !eventCount || !count(firstSeq + eventCount)
     || events.some((event, position) => event.seq !== firstSeq + position)) fail()
-  const core = { batchId, firstSeq, count: eventCount, previousPrefixDigest, events }
-  const batchDigest = hash('ih.fact-batch.v1\0', utf8(core))
+  const coreHeader = utf8({ batchId, firstSeq, count: eventCount, previousPrefixDigest }).subarray(0, -1)
+  const encodedEvents = utf8(events)
+  // The digest covers the original v1 core object byte for byte. Reuse its
+  // event representation in the outer frame instead of walking it again.
+  const batchDigest = hash('ih.fact-batch.v1\0', coreHeader, eventKey, encodedEvents, closeCore)
   const prefixDigest = factPrefixDigest(previousPrefixDigest, batchDigest)
-  const bytes = Buffer.concat([utf8({ recordKind: 'session/fact-batch', version: 1, ...core, batchDigest, prefixDigest }), Buffer.from([0x0a])])
+  const trailer = utf8({ batchDigest, prefixDigest }).subarray(1)
+  const bytes = Buffer.concat([outerStart, coreHeader.subarray(1), eventKey, encodedEvents, Buffer.from(','), trailer, Buffer.from('\n')])
   return { key: Object.freeze({ batchId, firstSeq: firstSeq!, count: eventCount, previousPrefixDigest, batchDigest }), bytes }
 }
 
@@ -60,7 +67,7 @@ export function decodeFactBatch(bytes: Uint8Array): { key: BatchKey; events: Ses
   try { row = JSON.parse(buffer.subarray(0, -1).toString('utf8')) } catch { fail() }
   if (!row! || row!.recordKind !== 'session/fact-batch' || row!.version !== 1 || !Array.isArray(row!.events)) fail()
   const encoded = encodeFactBatch(row!.batchId as string, row!.previousPrefixDigest as string, row!.events as SessionEvent[])
-  if (row!.firstSeq !== encoded.key.firstSeq || row!.count !== encoded.key.count || !buffer.equals(Buffer.from(encoded.bytes))) fail()
+  if (row!.firstSeq !== encoded.key.firstSeq || row!.count !== encoded.key.count || !buffer.equals(encoded.bytes)) fail()
   return { key: encoded.key, events: row!.events as SessionEvent[], prefixDigest: row!.prefixDigest as string }
 }
 

@@ -525,6 +525,9 @@ Section "${APP_NAME}" Install
   ClearErrors
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   !insertmacro CheckBootstrapWrite
+!ifdef TEST_HOOKS
+  !insertmacro TestBeforePayload
+!endif
   ClearErrors
   !include "${PAYLOAD_INSTALL}"
   ${If} ${Errors}

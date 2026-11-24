@@ -49,7 +49,10 @@ function checkedInput(value: unknown, workspaces: WorkspaceCatalog): ProjectInpu
   if (value.id !== undefined && (typeof value.id !== "string" || value.id === "")) {
     throw new ProjectCatalogError("Project ID must identify an existing project", "invalid-project-input")
   }
-  if (!Array.isArray(value.workspaceIds) || value.workspaceIds.some((id) => typeof id !== "string" || !workspaces.get(id))) {
+  if (!Array.isArray(value.workspaceIds) || value.workspaceIds.some((id) => {
+    const workspace = typeof id === "string" ? workspaces.get(id) : undefined
+    return !workspace || !!workspace.worktree
+  })) {
     throw new ProjectCatalogError("Project workspace IDs must refer to known folder workspaces", "invalid-project-input")
   }
   const workspaceIds = value.workspaceIds as string[]
@@ -132,7 +135,7 @@ export function createProjectCatalog(filePath: string, workspaces: WorkspaceCata
       if ((cause as NodeJS.ErrnoException).code !== "ENOENT") {
         throw new ProjectCatalogError("Could not read the Desktop project catalog", "project-storage-error", cause)
       }
-      const known = await workspaces.list()
+      const known = (await workspaces.list()).filter(workspace => !workspace.worktree)
       const at = new Date().toISOString()
       const migrated = known.map((workspace): ProjectEntry => ({
         id: randomUUID(),

@@ -8,6 +8,7 @@ import { DESKTOP_CONFIGURATION_ID, type DesktopHostEvent } from "./host-protocol
 interface Scope {
   id: string
   workspace: string
+  isolatedWorktree: boolean
   ready: Promise<DesktopHost>
   host?: DesktopHost
   handshake?: Promise<void>
@@ -42,11 +43,12 @@ export function createWorkspaceHosts(
     void flight.catch(() => { scope.closeFlight = undefined })
     return flight
   }
-  async function open(id: string, workspace: string, activityReports: boolean) {
-    const opened: DesktopHostEvent = { type: "opened", workspaceId: id, ...(activityReports ? { activityReports: 1 as const } : {}) }
+  async function open(id: string, workspace: string, activityReports: boolean, isolatedWorktree: boolean) {
+    const opened: DesktopHostEvent = { type: "opened", workspaceId: id, ...(activityReports ? { activityReports: 1 as const } : {}),
+      ...(isolatedWorktree ? { isolatedWorktree: true } : {}) }
     const key = fileKey(id)
     const existing = scopes.get(key)
-    if (existing && (existing.id !== id || fileKey(existing.workspace) !== fileKey(workspace) || existing.closeFlight)) throw Error("Workspace channel already in use")
+    if (existing && (existing.id !== id || fileKey(existing.workspace) !== fileKey(workspace) || existing.isolatedWorktree !== isolatedWorktree || existing.closeFlight)) throw Error("Workspace channel already in use")
     if (existing && !existing.startupCleanup) {
       if (existing.retiring) throw Error("Workspace channel already in use")
       if (existing.host) send(opened)
@@ -63,14 +65,14 @@ export function createWorkspaceHosts(
       const canonical = await realpath(workspace)
       if (fileKey(canonical) !== fileKey(workspace) || !(await stat(canonical)).isDirectory()) throw Error("Workspace path changed")
       if (key === fileKey(DESKTOP_CONFIGURATION_ID)) {
-        if (id !== DESKTOP_CONFIGURATION_ID || fileKey(canonical) !== fileKey(await realpath(dirname(sessionsRoot)))) throw Error("Invalid desktop configuration scope")
+        if (isolatedWorktree || id !== DESKTOP_CONFIGURATION_ID || fileKey(canonical) !== fileKey(await realpath(dirname(sessionsRoot)))) throw Error("Invalid desktop configuration scope")
       } else {
         await mkdir(sessionDir, { recursive: true })
         if (process.platform === "win32" && !(await readdir(sessionsRoot)).includes(id)) throw Error("Workspace storage identity mismatch")
         if (fileKey(await realpath(sessionDir)) !== fileKey(join(await realpath(sessionsRoot), id))) throw Error("Workspace session directory changed")
       }
       return create({
-        workspace: canonical, sessionDir,
+        workspace: canonical, sessionDir, ...(isolatedWorktree ? { isolatedWorktree: true } : {}),
         onWrite: frame => {
           if (scope.host && !scope.retiring && scopes.get(key) === scope) send({ type: "data", workspaceId: id, line: JSON.stringify(frame) })
         },
@@ -79,7 +81,7 @@ export function createWorkspaceHosts(
       if (error instanceof DesktopHostStartupError) scope.startupCleanup = error.retryCleanup
       throw error
     })
-    const scope: Scope = { id, workspace, ready, active: new Set(), retiring: false }
+    const scope: Scope = { id, workspace, isolatedWorktree, ready, active: new Set(), retiring: false }
     scopes.set(key, scope)
     try {
       scope.host = await ready
@@ -141,7 +143,8 @@ export function createWorkspaceHosts(
         id = cmd.workspaceId
         if (cmd.type === "open") {
           if (typeof cmd.workspacePath !== "string" || !isAbsolute(cmd.workspacePath)) throw Error("Absolute workspace path required")
-          await open(id, resolve(cmd.workspacePath), cmd.activityReports === 1)
+          if (cmd.isolatedWorktree !== undefined && cmd.isolatedWorktree !== true) throw Error("Invalid worktree isolation mode")
+          await open(id, resolve(cmd.workspacePath), cmd.activityReports === 1, cmd.isolatedWorktree === true)
           return
         }
         const scope = scopes.get(fileKey(id))

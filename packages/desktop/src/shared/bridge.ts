@@ -1,5 +1,6 @@
 import type { ProviderCommand } from "@i-harness/desktop-gateway"
 import type { PluginCommand } from "@i-harness/desktop-gateway"
+import type { ModelReviewTarget } from "@i-harness/desktop-gateway/src/model-review-contract.ts"
 import type { ForkOperationV2, ForkPrepareRequestV2, ImageInput, SessionModelSelection } from "@i-harness/sdk"
 import type { AgentDefaults } from "@i-harness/desktop-gateway"
 import type { SubagentSettingsCommand } from "@i-harness/desktop-gateway"
@@ -137,7 +138,11 @@ export type DesktopRequest =
   | { kind: "desktop/runtime/recover"; workspaceId: string }
   | { kind: "session/list"; workspaceId: string }
   | { kind: "session/dashboard"; workspaceId: string }
-  | { kind: "session/create"; workspaceId: string; projectId?: string; clientToken?: string }
+  | { kind: "session/create"; workspaceId: string; projectId?: string; clientToken?: string; worktree?: import("./worktrees.ts").WorktreeSelection }
+  | { kind: "desktop/worktrees/list"; workspaceId: string; projectId: string }
+  | { kind: "desktop/worktrees/state"; workspaceId: string }
+  | { kind: "desktop/worktrees/offer"; workspaceId: string; projectId: string; offered: boolean }
+  | { kind: "desktop/worktrees/relink"; workspaceId: string }
   | { kind: "session/history"; workspaceId: string; sessionId: string; afterSeq: number; beforeSeq?: number; limit: number }
 | { kind: "desktop/session/open"; workspaceId: string; sessionId: string }
 | { kind: "desktop/session/warm"; workspaceId: string; sessionId: string }
@@ -158,6 +163,11 @@ export type DesktopRequest =
       decision: { kind: "approval"; approved: boolean; remember?: import("@i-harness/desktop-gateway/src/approval-rules.ts").RememberApprovalOptions } | { kind: "question"; answer: string } | { kind: "question"; deferred: true }
     }
   | { kind: "desktop/review/changes"; workspaceId: string }
+  | ({ workspaceId: string; projectId: string; sessionId?: string } & (
+      | { kind: "desktop/model-review/prepare"; target: ModelReviewTarget }
+      | { kind: "desktop/model-review/list" }
+      | { kind: "desktop/model-review/start" | "desktop/model-review/read" | "desktop/model-review/compare" | "desktop/model-review/cancel"; id: string }
+    ))
   | { kind: "desktop/review/diff"; workspaceId: string; path: string; maxBytes?: number }
   | { kind: "desktop/review/file"; workspaceId: string; path: string; maxBytes?: number }
   | { kind: "desktop/review/file/save"; workspaceId: string; path: string; text: string; expectedRevision: string }

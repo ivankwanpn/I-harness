@@ -5,6 +5,8 @@ import { tmpdir } from "node:os"
 import { isAbsolute, join, relative, resolve, win32 } from "node:path"
 import { openPinnedFileForReview, type PinnedReviewFile } from "./review-handle.ts"
 import { openPinnedFileForEdit, type PinnedEditableFile } from "./review-edit-handle.ts"
+import { reviewSnapshotReader } from "./model-review-snapshot.ts"
+import type { ModelReviewSnapshot, ModelReviewTarget } from "./model-review-contract.ts"
 
 export interface ChangeRow {
   path: string
@@ -46,6 +48,7 @@ export interface WorkspaceReview {
   stage(path: string): Promise<GitMutationResult>
   unstage(path: string): Promise<GitMutationResult>
   commit(message: string): Promise<GitCommitResult>
+  capture(target: ModelReviewTarget): Promise<ModelReviewSnapshot>
   close(): Promise<void>
 }
 
@@ -200,6 +203,40 @@ export function createWorkspaceReview(root: string, options: {
     timeoutMs: options.gitCommand?.timeoutMs ?? 10_000,
   }
   const git = (args: string[], maxBytes: number, extraEnv?: NodeJS.ProcessEnv) => runGit(workspace, args, maxBytes, { ...gitControl, extraEnv })
+  const captureReview = reviewSnapshotReader({
+    git,
+    async untracked(path, maxBytes) {
+      try {
+        const { parts } = checkedRelative(path)
+        const canonical = await realpath(workspace)
+        if (relative(workspace, canonical) !== "") return {}
+        const file = join(workspace, ...parts)
+        const before = await lstat(file)
+        if (!before.isFile() || before.isSymbolicLink()) return {}
+        const handle = await openPinnedFile(file)
+        try {
+          if (!inside(workspace, handle.finalPath) || relative(file, handle.finalPath) !== "") return {}
+          const { bytes, count } = await handle.read(maxBytes + 1)
+          const truncated = count > maxBytes
+          const text = bytes.includes(0) ? undefined : utf8Prefix(bytes.subarray(0, maxBytes), truncated)
+          return text === undefined ? { binary: true } : { text, truncated }
+        } finally { await handle.close() }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof ReviewPathError) return {}
+        throw error
+      }
+    },
+  })
+  async function capture(target: ModelReviewTarget) {
+    const initial = await realpath(workspace)
+    if (relative(workspace, initial) !== "") throw new ReviewPathError("Review root differs from its stored canonical path")
+    const identity = await lstat(initial, { bigint: true })
+    const result = await captureReview(target)
+    if (relative(initial, await realpath(workspace)) !== "") throw new ReviewPathError("Review root changed during capture")
+    const current = await lstat(workspace, { bigint: true })
+    if (current.ino !== identity.ino || current.dev !== identity.dev) throw new ReviewPathError("Review root changed during capture")
+    return result
+  }
 
   async function gitAvailable(): Promise<"ok" | "git-missing" | "not-git-repo" | "no-head"> {
     const repo = await git(["rev-parse", "--is-inside-work-tree"], 128)
@@ -374,6 +411,7 @@ export function createWorkspaceReview(root: string, options: {
     stage: (path) => changeIndex(path, "stage"),
     unstage: (path) => changeIndex(path, "unstage"),
     commit,
+    capture,
     async close() {
       aborter.abort()
       for (const child of active) child.kill()

@@ -839,6 +839,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             const out: DashboardSessionRow = {
               id: row.id,
               ...(typeof row.title === "string" ? { title: row.title } : {}),
+              ...(typeof row.forkParentId === "string" ? { forkParentId: row.forkParentId } : {}),
               ...(typeof row.updatedAt === "number" ? { updatedAt: row.updatedAt } : {}),
               ...(typeof row.turnCount === "number" ? { turnCount: row.turnCount } : {}),
               ...(typeof row.contextUsed === "number" ? { contextUsed: row.contextUsed } : {}),

@@ -2,12 +2,14 @@ import { useEffect, useMemo, useId, useRef, useState, useCallback, lazy, Suspens
 import { Activity, ArrowLeft, Bell, Brain, Code2, FileDiff, FileText, FolderOpen, GitBranch, Globe, ListTodo, PanelLeft, PanelRight, Search, ShieldCheck, Target, TerminalSquare, UsersRound, Wrench, type LucideIcon } from "lucide-react"
 import { BrowserPane } from "../browser/BrowserPane.tsx"
 import { WorkbenchTools, type WorkbenchTool } from "./WorkbenchTools.tsx"
+import { CommandPalette } from "./CommandPalette.tsx"
 import { useUiStore } from "./ui-store.ts"
 import { displayError } from "../design/error-display.ts"
 import { useText, useLocale } from "../design/i18n.ts"
 import { MemoryPane } from "../memory/MemoryPane.tsx"
 import { SessionSearch } from "../session/SessionSearch.tsx"
 import { SessionHistoryView, type SessionHistoryViewProps } from "../session/SessionHistoryView.tsx"
+import { ConversationBranches } from "../session/ConversationBranches.tsx"
 import type { HistorySelection } from "../session/SessionSearch.tsx"
 import { SettingsPane } from "../settings/SettingsPane.tsx"
 import { PluginMarketplace } from "../settings/PluginMarketplace.tsx"
@@ -25,6 +27,7 @@ import { ProjectManager } from "../projects/ProjectManager.tsx"
 import { SettingsDialog } from "../settings/SettingsDialog.tsx"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { Composer, NewTaskComposer, captureSessionSubmission, readDraft, writeDraft, boundedDraft, useComposerSending, type ComposerProps } from "../session/Composer.tsx"
+import { WorktreeIndicator } from "../session/WorktreePicker.tsx"
 import { ComposerProjectContext, type ComposerProjectState } from "../session/ComposerProjectContext.tsx"
 import { projectHistoryTimeline, type TimelineRow } from "../session/project.ts"
 import type { HistoryScroll } from "../session/use-history-scroll.ts"
@@ -142,7 +145,7 @@ export interface WorkbenchProps {
   onSelectSession(sessionId: string): void
   onManageSession?: ManageSession
   onRewindComplete?: (workspaceId: string, sessionId: string) => void
-  onSessionsChanged?(): void
+  onSessionsChanged?(createdWorkspaceId?: string): void
   onSandboxChange?(mode: SandboxState["mode"]): void
 }
 
@@ -255,7 +258,23 @@ export function Workbench({
     .filter(id => panes[id].available && (id !== "tasks" || hasWork || workPaneTab === "tasks"))
     .map(id => ({ id, label: panes[id].label }))
   const [gitOpen, setGitOpen] = useState(false)
+  const [gitMode, setGitMode] = useState<"review">()
+  const [branchesOpen, setBranchesOpen] = useState(false)
   const [gitBusy, setGitBusy] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  useEffect(() => { setBranchesOpen(false) }, [selectedWorkspaceId, selectedSessionId])
+  useEffect(() => {
+    function openPalette(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.repeat || event.isComposing || event.keyCode === 229
+        || !(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey || event.key.toLowerCase() !== "k") return
+      if (event.target instanceof Element && event.target.closest(".terminal-pane, .cm-editor, [role=dialog]")) return
+      if (document.querySelector(".settings-dialog-backdrop:not([hidden]):not([inert])")) return
+      event.preventDefault()
+      setPaletteOpen(true)
+    }
+    window.addEventListener("keydown", openPalette)
+    return () => window.removeEventListener("keydown", openPalette)
+  }, [])
   useEffect(() => { setGitOpen(false) }, [selectedProjectId])
   const [workflowSection, setWorkflowSection] = useState<"goal" | "jobs" | "reviews">("goal")
   useEffect(() => {
@@ -347,12 +366,15 @@ export function Workbench({
   const selectedProject = projects?.find((project) => project.id === selectedProjectId)
   const composerSending = useComposerSending(selectedWorkspaceId, selectedSessionId ?? `new-task:${selectedProjectId ?? "unassigned"}`)
   const displayProject = selectedProject
+  const selectedWorkspace = workspaces.find(folder => folder.id === selectedWorkspaceId)
+  const isolatedSession = selectedWorkspace?.worktree && selectedSessionId ? { workspaceId: selectedWorkspace.id, sessionId: selectedSessionId } : undefined
   const newSessionWorkspaceId = selectedProject
     ? [selectedProject.primaryWorkspaceId, ...selectedProject.workspaceIds].find(id => id !== undefined && selectedProject.workspaceIds.includes(id) && workspaces.some(folder => folder.id === id))
     : selectedProjectId === undefined ? selectedWorkspaceId : undefined
   const canCreate = capabilities["session-create"]?.includes("1") === true
   const fileProjectMembers = projects?.find(project => project.id === review?.projectFiles?.selection.projectId)?.workspaceIds
-  const fileProjectRoots = review?.projectFiles ? workspaces.filter(row => review.projectFiles?.selection.projectId ? fileProjectMembers?.includes(row.id) : row.id === selectedWorkspaceId).map(row => ({ workspaceId: row.id, path: row.path })) : undefined
+  const fileProjectRoots = review?.projectFiles ? workspaces.filter(row => isolatedSession || !review.projectFiles?.selection.projectId
+    ? row.id === selectedWorkspaceId : fileProjectMembers?.includes(row.id)).map(row => ({ workspaceId: row.id, path: row.path })) : undefined
   const fileMembershipRevision = fileProjectRoots ? JSON.stringify(fileProjectRoots.map(root => [root.workspaceId, root.path] as const).sort((left, right) => left[0].localeCompare(right[0]))) : undefined
   const fileNavigation: FileNavigation | undefined = review && selectedWorkspaceId && (capabilities["desktop-review"]?.includes("1") || review.projectFiles) ? {
     workspaceId: selectedWorkspaceId, workspacePath: workspaces.find(row => row.id === selectedWorkspaceId)?.path ?? "",
@@ -369,6 +391,19 @@ export function Workbench({
     setSurface("conversation")
     onSelectWorkspace(workspaceId, projectId)
   }
+  const toolGroups = [
+    { label: english ? "Project" : "專案", items: [
+      ...paneTools(["files", "browser", "terminal"]),
+      ...(supports("desktop-memory") ? [{ id: "memory", label: t(memoryOpen ? "返回會話" : "工作區記憶"), icon: <Brain size={16} />, selected: memoryOpen, open: () => setMemoryOpen(open => !open) }] : []),
+    ] },
+    { label: english ? "Conversation" : "會話", items: paneTools(["changes", "instructions", "reminders"]) },
+    { label: english ? "Work and collaboration" : "工作與協作", items: [
+      ...paneTools(["tasks", "subagents"]),
+      ...(panes.workflow.available ? ([["goal", "Goal / Plan", Target], ["jobs", t("背景工作"), ListTodo], ["reviews", t("代審"), ShieldCheck]] as const)
+        .map(([id, label, Icon]) => ({ id, label, icon: <Icon size={16} />, open: () => openWorkflow(id) })) : []),
+    ] },
+    { label: english ? "Diagnostics and execution" : "診斷與執行", items: paneTools(["diagnostics", "execution", "processes"]) },
+  ]
 
   const settingsVisited = useRef(surface === "settings")
   if (surface === "settings") settingsVisited.current = true
@@ -447,21 +482,15 @@ export function Workbench({
           }}>
             <PanelRight size={18} />
           </button>
-          {displayProject && capabilities["desktop-review"]?.includes("1") ? <button type="button" className="header-action project-git-trigger" aria-label={t("專案 Git")} title={displayProject.name + " · Git"} onClick={() => setGitOpen(true)}><GitBranch size={16} aria-hidden="true" /><span>Git</span></button> : null}
+          {displayProject && capabilities["desktop-review"]?.includes("1") ? <button type="button" className="header-action project-git-trigger" aria-label={t("專案 Git")} title={displayProject.name + " · Git"} onClick={() => { setGitMode(undefined); setGitOpen(true) }}><GitBranch size={16} aria-hidden="true" /><span>Git</span></button> : null}
+          {selectedSessionId && dashboard?.sessions.some(row => row.forkParentId === selectedSessionId || (row.id === selectedSessionId && row.forkParentId)) ?
+            <button type="button" className="icon-button header-action" onClick={() => setBranchesOpen(true)}
+              aria-label={english ? "Conversation branches" : "會話分支"} title={english ? "Conversation branches" : "會話分支"}><GitBranch size={16} /></button> : null}
           {connection ? <span className={`connection-state connection-${connection}`} role="status">{t(connection === "online" ? "已連線" : connection === "offline" ? "連線已中斷" : connection === "reconnecting" ? "重新連線中…" : "正在開啟工作區…")}</span> : null}
-          {selectedWorkspaceId ? <WorkbenchTools key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} groups={[
-            { label: english ? "Project" : "專案", items: [
-              ...paneTools(["files", "browser", "terminal"]),
-              ...(supports("desktop-memory") ? [{ id: "memory", label: t(memoryOpen ? "返回會話" : "工作區記憶"), icon: <Brain size={16} />, selected: memoryOpen, open: () => setMemoryOpen(open => !open) }] : []),
-            ] },
-            { label: english ? "Conversation" : "會話", items: paneTools(["changes", "instructions", "reminders"]) },
-            { label: english ? "Work and collaboration" : "工作與協作", items: [
-              ...paneTools(["tasks", "subagents"]),
-              ...(panes.workflow.available ? ([["goal", "Goal / Plan", Target], ["jobs", t("背景工作"), ListTodo], ["reviews", t("代審"), ShieldCheck]] as const)
-                .map(([id, label, Icon]) => ({ id, label, icon: <Icon size={16} />, open: () => openWorkflow(id) })) : []),
-            ] },
-            { label: english ? "Diagnostics and execution" : "診斷與執行", items: paneTools(["diagnostics", "execution", "processes"]) },
-          ]} /> : null}
+          {selectedWorkspaceId ? <WorkbenchTools key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} groups={toolGroups} /> : null}
+          <button type="button" className="icon-button header-action" aria-label={english ? "Command center" : "命令中心"}
+            title={english ? "Command center (Ctrl+K)" : "命令中心 (Ctrl+K)"} aria-keyshortcuts="Control+K"
+            onClick={() => setPaletteOpen(true)}><Search size={16} /></button>
           {selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <button type="button" className="primary-button header-action" aria-label={t(surface === "search" ? "返回會話" : "搜尋會話")} title={t(surface === "search" ? "返回會話" : "搜尋會話")} onClick={() => setSurface(surface === "search" ? "conversation" : "search")}><Search size={16} /><span className="header-action-label">{t(surface === "search" ? "返回會話" : "搜尋會話")}</span></button> : null}
         </TitleBar>
         <p data-testid="session-announcer" aria-live="polite" className="visually-hidden">
@@ -520,7 +549,9 @@ export function Workbench({
                 </div>
                 <PendingPanel key={`${selectedWorkspaceId}:${selectedSessionId}`} draftOwner={bridge} workspaceId={selectedWorkspaceId} pending={conversation.pending} onReply={conversation.onReply} onStop={conversation.running ? conversation.onCancel : undefined} />
                 <div hidden={conversation.pending.length > 0}>
-                {composerProject}
+                  {composerProject}
+                  {isolatedSession && selectedWorkspace ? <WorktreeIndicator key={selectedWorkspace.id} bridge={bridge} workspaceId={selectedWorkspace.id} path={selectedWorkspace.path}
+                    onRelink={() => onSessionsChanged?.(selectedWorkspace.id)} /> : null}
                 <Composer
                   onOpenHistory={onSelectHistory}
                   onOpenProjectFile={fileNavigation?.onOpenProjectFile}
@@ -591,14 +622,15 @@ export function Workbench({
                       onOpenHistory={onSelectHistory}
                       onOpenProjectFile={fileNavigation?.onOpenProjectFile}
                       onPermissionsChanged={onSandboxChange}
-                      onSubmitted={(id) => {
+                      onSubmitted={(id, targetWorkspaceId) => {
                         const scope = workspaceScope.current
                         if (scope.id === selectedWorkspaceId && scope.sessionId === undefined && scope.projectId === selectedProjectId) {
-                          onSelectSession(id)
-                          onSessionsChanged?.()
+                          if (targetWorkspaceId && targetWorkspaceId !== selectedWorkspaceId) onSelectSessionInWorkspace?.(targetWorkspaceId, id, selectedProjectId)
+                          else onSelectSession(id)
+                          onSessionsChanged?.(targetWorkspaceId)
                         }
                       }}
-                      onDraftCreated={() => onSessionsChanged?.()}
+                      onDraftCreated={(_id, targetWorkspaceId) => onSessionsChanged?.(targetWorkspaceId)}
                       onWorkflow={openWorkflow}
                     />
                   )}
@@ -658,8 +690,26 @@ export function Workbench({
         </div>
       </aside> : null}
       {manager && managerManage ? <SettingsDialog title={t("管理會話")} closeLabel={t("關閉")} busy={managerBusy} initialFocusSelector="button" onClose={() => setManager(undefined)}><p className="settings-description">{english ? "This manager lists all conversations stored in the source folder, including conversations from other projects." : "此處管理來源資料夾儲存的所有會話，可能包含其他專案的會話。"}<br /><span>{workspaces.find(row => row.id === manager.workspaceId)?.path}</span></p><SessionManager key={JSON.stringify(manager)} onBusyChange={busy => { if (managerOwner.current === manager) setManagerBusy(busy) }} bridge={bridge} workspaceId={manager.workspaceId} initialArchived={manager.archived} initialSelected={manager.sessionId ? [manager.sessionId] : []} onManage={async (id, action, title) => { await managerManage(id, action, title); setSidebarRevision(value => value + 1) }} onRewindComplete={capabilities["desktop-rewind"]?.includes("1") && onRewindComplete ? id => onRewindComplete(manager.workspaceId, id) : undefined} onBatch={onBatchSessions && capabilities["desktop-sessions"]?.includes("1") ? command => batchRequest(manager.workspaceId, command) : undefined} projects={projects} currentOwners={managerOwners} executionWorkspace={workspaces.find(row => row.id === manager.workspaceId)?.path} /></SettingsDialog> : null}
+      {paletteOpen ? <CommandPalette bridge={bridge}
+        workspace={selectedWorkspaceId ? { id: selectedWorkspaceId, label: workspaces.find(row => row.id === selectedWorkspaceId)?.label ?? workspaceTitle } : undefined}
+        sessions={dashboard?.sessions ?? []} sessionSearch={supports("desktop-session-search")} files={fileNavigation?.onOpenProjectFile ? review?.projectFiles : undefined}
+        commands={[
+          { id: "settings", label: t("設定"), run: () => setSurface("settings") },
+          ...(newSessionWorkspaceId && canCreate ? [{ id: "new", label: t("新會話"), run: () => createSession(newSessionWorkspaceId, selectedProjectId) }] : []),
+          ...(displayProject && supports("desktop-review") ? [{ id: "git", label: t("專案 Git"), run: () => { setGitMode(undefined); setGitOpen(true) } }] : []),
+          ...(displayProject && supports("desktop-model-review") ? [{ id: "model-review", label: english ? "Review code changes" : "審查程式碼變更", run: () => { setGitMode("review"); setGitOpen(true) } }] : []),
+          ...(selectedSessionId ? [{ id: "branches", label: english ? "Conversation branches" : "會話分支", run: () => setBranchesOpen(true) }] : []),
+          ...(selectedWorkspaceId ? toolGroups.flatMap(group => group.items.map(item => ({ id: item.id, label: item.label, run: item.open }))) : []),
+        ]}
+        onConversation={id => { setSurface("conversation"); onSelectSession(id) }}
+        onHistory={target => { if (onSelectHistory) onSelectHistory(target); else { setSurface("conversation"); onSelectSession(target.sessionId) } }}
+        onFile={ref => fileNavigation?.onOpenProjectFile?.(ref)} onClose={() => setPaletteOpen(false)} /> : null}
+      {branchesOpen && selectedWorkspaceId && selectedSessionId ? <ConversationBranches key={JSON.stringify([selectedWorkspaceId, selectedSessionId])}
+        bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} sessions={dashboard?.sessions ?? []}
+        onSelect={id => { setSurface("conversation"); onSelectSession(id) }} onHistory={onSelectHistory} onClose={() => setBranchesOpen(false)} /> : null}
       {gitOpen && displayProject ? <SettingsDialog title={displayProject.name + " · Git"} className="project-git-dialog" closeLabel={t("關閉")} busy={gitBusy} onClose={() => { if (!gitBusy) setGitOpen(false) }} initialFocusSelector=".project-git-pane select:not(:disabled), .project-git-pane button:not(:disabled)">
-        <ProjectGitPane key={displayProject.id} bridge={bridge} project={displayProject} workspaces={workspaces} onBusyChange={setGitBusy} />
+        <ProjectGitPane key={JSON.stringify([displayProject.id, gitMode])} bridge={bridge} project={displayProject}
+          workspaces={workspaces} onBusyChange={setGitBusy} initialMode={gitMode} isolatedSession={isolatedSession} />
       </SettingsDialog> : null}
     </div>
   )

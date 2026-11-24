@@ -22,7 +22,8 @@ export function createForkOperationController(options: {
   navigate(workspaceId: string, targetSessionId: string): void
   identity?(): { operationId: string; targetSessionId: string; createdAt: string }
 }) {
-  const attempts = new Map<string, Attempt>(), key = (workspaceId: string, sourceSessionId: string) => JSON.stringify([workspaceId, sourceSessionId])
+  const attempts = new Map<string, Attempt>()
+  const key = (workspaceId: string, sourceSessionId: string, atSeq?: number) => JSON.stringify([workspaceId, sourceSessionId, atSeq])
   const identity = options.identity ?? (() => ({ operationId: crypto.randomUUID(), targetSessionId: crypto.randomUUID(), createdAt: new Date().toISOString() }))
   const current = (ticket: NavigationTicket) => {
     if (ticket.selection !== options.selection() || ticket.version !== options.navigationVersion()) ticket.active = false
@@ -31,8 +32,8 @@ export function createForkOperationController(options: {
   const retireNavigation = (workspaceId?: string) => {
     for (const attempt of attempts.values()) if (workspaceId === undefined || attempt.workspaceId === workspaceId) { if (attempt.navigation) attempt.navigation.active = false }
   }
-  function run(workspaceId: string, sourceSessionId: string): Promise<ForkOutcome> {
-    const id = key(workspaceId, sourceSessionId)
+  function run(workspaceId: string, sourceSessionId: string, atSeq?: number): Promise<ForkOutcome> {
+    const id = key(workspaceId, sourceSessionId, atSeq)
     let attempt = attempts.get(id)
     if (attempt?.flight) return attempt.flight
     if (!attempt) { attempt = { workspaceId, dispatched: false }; attempts.set(id, attempt) }
@@ -43,13 +44,16 @@ export function createForkOperationController(options: {
       try {
         if (!owned.operation) {
           let reply: unknown
-          try { reply = await options.bridge.request({ kind: 'desktop/session/fork/prepare', workspaceId, request: { version: 1, sourceSessionId } }) }
+          try { reply = await options.bridge.request({
+            kind: 'desktop/session/fork/prepare', workspaceId,
+            request: { version: 1, sourceSessionId, ...(atSeq === undefined ? {} : { selection: { kind: 'completed', atSeq } }) },
+          }) }
           catch (cause) { throw new ForkPreparationError('transport', undefined, { cause }) }
           let prepared
           try { prepared = readForkPrepareResult(reply) }
           catch (cause) { throw new ForkPreparationError('protocol', undefined, { cause }) }
           if (prepared.kind !== 'prepared') throw new ForkPreparationError('unavailable', prepared)
-          if (prepared.prepared.core.sourceSessionId !== sourceSessionId || prepared.prepared.core.selection.atSeq !== undefined) throw new ForkPreparationError('protocol')
+          if (prepared.prepared.core.sourceSessionId !== sourceSessionId || prepared.prepared.core.selection.atSeq !== atSeq) throw new ForkPreparationError('protocol')
           current(ticket)
           owned.operation = createForkOperation(prepared.prepared, identity())
         }
@@ -93,13 +97,13 @@ export function createForkOperationController(options: {
     },
     refresh(workspaceId: string) { retireNavigation(workspaceId); return options.refresh(workspaceId) },
     retireNavigation,
-    fresh(workspaceId: string, sourceSessionId: string): Promise<ForkOutcome> {
-      const id = key(workspaceId, sourceSessionId), original = attempts.get(id)
+    fresh(workspaceId: string, sourceSessionId: string, atSeq?: number): Promise<ForkOutcome> {
+      const id = key(workspaceId, sourceSessionId, atSeq), original = attempts.get(id)
       if (original?.flight) return Promise.reject(new Error('Conversation fork is already in progress'))
       if (original?.cleanupPending) return Promise.reject(new Error('Recover the current branch before creating another branch'))
       if (original?.navigation) original.navigation.active = false
       attempts.delete(id)
-      return run(workspaceId, sourceSessionId)
+      return run(workspaceId, sourceSessionId, atSeq)
     },
   }
 }

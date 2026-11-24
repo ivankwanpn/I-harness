@@ -11,6 +11,7 @@ import { buildModelClient } from "@i-harness/provider"
 import { prepareModelRequest, withPreparedSignal, snapshotModelData, type LLMRequest, type ModelClient } from "@i-harness/llm-seam"
 import { createUsageStore } from "@i-harness/usage-stats"
 import { createUsageCapture } from "./usage-capture.ts"
+import { createDesktopTimingTrace } from "./timing-trace.ts"
 import {createUsageHandlers} from './usage-host.ts'
 import { createUsageObservationSink } from './usage-observation-sink.ts'
 import { safeCompactionDiagnostic } from "./context-diagnostics.ts"
@@ -54,7 +55,7 @@ import { pluginExtensions, expandPluginPrompt, mountedHookAuthority } from "./pl
 import { createDesktopTerminal } from "./terminal.ts"
 import { createDesktopSchedules } from "./schedules.ts"
 import { createDesktopWorkState } from "./work-state.ts"
-import { createAgentSettings } from "./agent-settings.ts"
+import { createAgentSettings, worktreePermissions } from "./agent-settings.ts"
 import { createWslSettings, type WslSettingsOptions } from "./wsl-settings.ts"
 import { validateDesktopSettingsDocument } from "./settings-file.ts"
 import { createSubagentSettings } from "./subagent-settings.ts"
@@ -118,10 +119,12 @@ import { DesktopHostStartupError } from "./host-startup-error.ts"
 export { DesktopHostStartupError } from "./host-startup-error.ts"
 import { openInteractionPersistence } from "./interaction-persistence.ts"
 import { createWorkspaceReview } from "./review.ts"
+import { createModelReview } from "./model-review.ts"
 import type { DesktopHandlers, SandboxState } from "./types.ts"
 
 export interface DesktopHostOptions {
   workspace: string
+  isolatedWorktree?: true
   sessionDir: string
   profile?: DesktopProfileServices
   settingsPath?: string
@@ -184,15 +187,19 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   const usageStore = options.profile?.usageStore ?? createUsageStore(join(dirname(settingsPath), "usage-stats"))
   const usageObservations=recordObservations?createUsageObservationSink({record:value=>usageStore.recordObservation(value)}):undefined
   defer(() => usageObservations?.close())
+  const timing = createDesktopTimingTrace(options.workspace)
+  defer(() => timing?.close())
   const usageCapture = createUsageCapture({ observationMode:!!usageObservations,passiveObserver:usageObservations?.observer,workspace: options.workspace, record: record => usageStore.record(record), projectFor: id => projects.projectFor(id),projectSnapshotFor:id=>projects.projectSnapshotFor(id),
+    timing,
     onRequestFacts: facts => options.onWrite(makeNotification("desktop/context/diagnostic", facts)),
     onWarning: warnings => options.onWrite(makeNotification("desktop/usage/recording-warning", { workspace: options.workspace, warnings })) })
   const usageStats:NonNullable<DesktopHandlers['usageStats']>=createUsageHandlers(usageStore,{recordingMode:usageObservations?'observations':'legacy',warnings:()=>[...usageCapture.warnings(),...(usageObservations?.warnings()??[])]})
-  let mode = settings.get().sandboxMode
+  const initialPolicy = worktreePermissions(settings.get(), options.isolatedWorktree)
+  let mode = initialPolicy.sandboxMode
   let windowsSandboxBackend = settings.get().windowsSandboxBackend
   let wslExecution = { ...settings.get().wslExecution }
   let webSearchMode = settings.get().webSearchMode
-  let approvalMode = settings.get().approvalMode
+  let approvalMode = initialPolicy.approvalMode
   const codexAccounts = options.profile?.accounts ?? createCodexManagement({ directory: join(dirname(credentialsPath), "coding-plans", "openai-codex") })
   const runtime = createFileProviderRuntime({ settingsPath, credentialsPath, codex: codexAccounts,
     passiveUsageWorkspace:usageObservations?options.workspace:undefined,
@@ -411,6 +418,12 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
     prepareTaskChild:nativeContext.prepareTaskChild,
     instructionEnvironment,
     telemetry: { close() {}, emit(event) {
+      if (timing && typeof event.data.sessionId === "string") {
+        if (event.type === "turn/start") timing.mark("turn-start", event.data.sessionId)
+        if (event.type === "provider/call") timing.mark("request-projected", event.data.sessionId)
+        if (event.type === "provider/context" && event.data.operation !== "summary") timing.mark("request-assessed", event.data.sessionId)
+        if (event.type === "tool/start") timing.mark("tool-start", event.data.sessionId)
+      }
       if (event.type !== "compaction/attempt" && !(event.type === "provider/context" && event.data.operation === "summary")) return
       const compaction = safeCompactionDiagnostic({ ...event.data, operation: event.type === "compaction/attempt" ? "attempt" : "summary" })
       if (compaction) { try { options.onWrite(makeNotification("desktop/context/diagnostic", { sessionId: event.data.sessionId, compaction })) } catch { /* Observer isolation. */ } }
@@ -525,7 +538,17 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
       ...(error ? { error } : {}), ...(modelFailure ? { modelFailure } : {}), ...(errorCode ? { errorCode } : {}),
     })),
   })
-  const input = { ...rawInput, admit: (id: string, raw: Parameters<typeof rawInput.admit>[1]) => fence.run(id, () => rawInput.admit(id, raw)),
+  const input = { ...rawInput, admit: (id: string, raw: Parameters<typeof rawInput.admit>[1]) => {
+    if (!timing || !raw.clientToken) return fence.run(id, () => rawInput.admit(id, raw))
+    timing.mark("gateway-received", id, raw.clientToken)
+    return fence.run(id, () => rawInput.admit(id, raw)).then(result => {
+      timing.mark("gateway-admitted", id, raw.clientToken)
+      return result
+    }, error => {
+      timing.mark("gateway-rejected", id, raw.clientToken)
+      throw error
+    })
+  },
     resume: (id: string) => fence.run(id, () => rawInput.resume(id)), cancel: (id: string, inputId: string) => fence.run(id, () => rawInput.cancel(id, inputId)) }
   const interaction = createInteractionBridge(options.onWrite, {
     approvalRules,
@@ -540,6 +563,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   })
   defer(() => interaction.close())
   const agentSettings = createAgentSettings(settingsPath, { sandboxMode: mode, windowsSandboxBackend, wslExecution, webSearchMode, autoCompaction: settings.get().compaction.auto, approvalMode }, {
+    isolatedWorktree: options.isolatedWorktree,
     onWindowsSandboxBackendChanged(next) { windowsSandboxBackend = next },
     onWslExecutionChanged(next) { wslExecution = { ...next } },
     onWebSearchModeChanged(next) { webSearchMode = next },
@@ -592,6 +616,13 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
     return JSON.stringify([parent, child])
   }, event => options.onWrite(makeNotification('desktop/instructions/changed', event)))
   const review = createWorkspaceReview(options.workspace)
+  const modelReview = createModelReview({
+    sessionDir: options.sessionDir,
+    capture: review.capture,
+    resolveModel: selection => runtime.resolveModel(selection),
+  })
+  defer(() => modelReview.close())
+  defer(() => review.close())
   const projectContentSearch = createProjectContentSearch(options.workspace)
   const managedWorkflowUis=new Map<string,{execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment;ui:ReturnType<typeof createManagedWorkflowUi>}>()
   const workflowUiFor=(id:string)=>{const runtime=originalManagedRuntimeFor(service,id);if(!runtime)return undefined;const existing=managedWorkflowUis.get(id);if(existing?.execution===runtime.execution){runtime.assertCurrent();return existing.ui}if(existing)throw Error('Original managed workflow owner changed');const retain=(close:()=>Promise<void>)=>retainManagedExecutionCleanup(service,id,runtime.execution,close);const ui=createManagedWorkflowUi({id,...runtime,retain,coordinator,service,async jobEvents(documentJobIds){runtime.assertCurrent();const observation=runtime.execution.observe(),events=await observation.jobStatusEvents(documentJobIds);observation.assertCurrent();runtime.assertCurrent();return events},async lastStepSince(ordinal){runtime.assertCurrent();const observation=runtime.execution.observe(),end=await observation.lastStepEndSince(ordinal);observation.assertCurrent();runtime.assertCurrent();return end}});retain(async()=>{if(managedWorkflowUis.get(id)?.ui===ui)managedWorkflowUis.delete(id)});managedWorkflowUis.set(id,{execution:runtime.execution,ui});return ui}
@@ -615,6 +646,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   const handlers: DesktopHandlers = {
     hasActiveWork: (): boolean => base.hasActiveWork() || interaction.hasPending() || input.hasActiveWork()
       || workflow.hasActiveWork() || terminal.hasActiveWork() || nativeContext.hasActiveWork()
+      || modelReview.hasActiveWork()
       || ownedIndexJobs.hasActiveWork() || (!options.profile && codexAccounts.hasActiveLogin()),
     hasActiveProfileWork: options.profile ? () => codexAccounts.hasActiveLogin() : undefined,
     workspace: options.workspace, autoTitle, modelRetry: createModelRetrySettings(settingsPath), modelWait: createModelWaitSettings(settingsPath), codeSettings, approvalRules, usageStats,
@@ -670,6 +702,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
     sandboxState: (): SandboxState => ({ mode, source: "settings", wired: true }),
     interaction,
     review,
+    modelReview,
   }
   const internalIds = new Set<string>()
   const forkController=createForkSessionController(coordinator,createGatewayForkHost({workspace:options.workspace,coordinator,projects,nativeContext,
@@ -859,6 +892,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
         const forksJoined=cleaned.has('router')&&cleaned.has('fork controller')&&cleaned.has('execution observation')
         if(forksJoined)await once("projects", () => projects.close())
         await once("review", () => review.close())
+        await once("model review", () => modelReview.close())
         if(forksJoined)await once("workflow", () => workflow.close())
         if(forksJoined)await once("session service", () => service.close())
         if(forksJoined&&cleaned.has('session service'))await once('usage observations',async()=>{await usageObservations?.close()})
@@ -874,6 +908,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
         if (cleaned.has('trust watcher') && cleaned.has('policy watcher') && cleaned.has('instructions') && cleaned.has('plugins') && cleaned.has('plugin observer')) await once('instruction watch', () => instructionWatch.close())
         await once("policy refresh", async () => { await policySync })
         await once("memory", () => memory.close())
+        if (cleaned.has("session service")) await once("developer timing trace", () => timing?.close())
         if (indexedSessionQuery) await once("session search", () => indexedSessionQuery.close())
         if (forksJoined&&cleaned.has("session service")&&cleaned.has('native context')) await once("coordinator", () => closeCoordinatorWithRetainedCleanupOperation(coordinator, cleanupOperation))
         if (failures.length) throw new AggregateError(failures.map(item => item.cause),

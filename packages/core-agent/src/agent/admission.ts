@@ -58,6 +58,7 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
       const needsReduction = finalAssessment.decision.disposition === 'reduce' || snapshot.recoveryRequired && recoveryAdmission !== 'authorized'
       if (finalAssessment.disposition && current()) context.ownedBudget.retire(finalAssessment.disposition)
       deps.telemetry?.emit({ type: "provider/context", ts: Date.now(), data: {
+        sessionId: deps.sessionId,
         systemBytes: prepared.measurement.input.components.system.textUtf8Bytes,
         schemaBytes: prepared.measurement.input.components.toolSchemas.structuredBytes,
         ...(finalAssessment.estimate.kind === 'estimated' ? { estimatedInputTokens: finalAssessment.estimate.value, estimateSource: finalAssessment.estimate.source } : { tokenEstimateUnavailable: finalAssessment.estimate.reason }), coverage: snapshot.coverage,

@@ -3,6 +3,7 @@ import { createRetryingClient, resolveRetryPolicy, mapModelRequest, observeModel
 import type { buildModelClient } from "@i-harness/provider"
 import { validateRequestMetrics, type UsageRecord } from "@i-harness/usage-stats"
 import { withOriginalPassiveClientAttribution } from '@i-harness/llm-seam/internal/passive-observation'
+import type { createDesktopTimingTrace } from "./timing-trace.ts"
 
 /** Captures provider attempts, below retries and above protocol adapters. The
  * only durable data is the explicit UsageRecord allowlist. */
@@ -16,6 +17,7 @@ export function createUsageCapture(options: {
   projectSnapshotFor?: (sessionId:string)=>string|undefined
   projectFor?: (sessionId: string) => Promise<string | undefined>
   onWarning?: (warnings: string[]) => void
+  timing?: ReturnType<typeof createDesktopTimingTrace>
   now?: () => number
 }) {
   const now = options.now ?? Date.now
@@ -47,7 +49,12 @@ export function createUsageCapture(options: {
             if(request.sessionId&&options.projectSnapshotFor)try{projectId=options.projectSnapshotFor(request.sessionId)}catch{failedAttributions++;notifyWarning()}
             return {projectId,start(measurement){
               const id=randomUUID(),startedAt=now();let firstTokenMs:number|undefined
-              return {event(event){if(firstTokenMs===undefined&&((event.type==='text/chunk'||event.type==='reasoning')&&event.text.length>0||event.type==='tool_call'))firstTokenMs=Math.max(0,now()-startedAt)},finish(status){
+              const timing = options.timing?.provider(request)
+              return {issue: timing?.issue, event(event){
+                timing?.event(event)
+                if(firstTokenMs===undefined&&((event.type==='text/chunk'||event.type==='reasoning')&&event.text.length>0||event.type==='tool_call'))firstTokenMs=Math.max(0,now()-startedAt)
+              },finish(status){
+                timing?.finish(status)
                 let requestMetrics:UsageRecord['requestMetrics']
                 try{const {input,packet,output}=measurement;requestMetrics=validateRequestMetrics({version:1,coverage:input.coverage,...packet,systemTokens:input.components.system.heuristicTokens,schemaTokens:input.components.toolSchemas.heuristicTokens,reasoningTokens:input.components.replayedReasoning.heuristicTokens,imageCount:input.components.images.imageCount,capSupport:output.capSupport,configuredOutputCap:output.configuredCap,effectiveOutputCap:output.effectiveCap,minimumOutputCap:output.minimumCap,reasoningBudget:output.reasoningBudget})}catch{/* Optional diagnostics. */}
                 try{options.onRequestFacts?.({id,projectId,sessionId:request.sessionId,providerId:profile.name,modelId:model??profile.defaultModel??'unknown',status,durationMs:Math.max(0,now()-startedAt),...(firstTokenMs===undefined?{}:{firstTokenMs}),...(requestMetrics===undefined?{}:{requestMetrics})})}catch{/* Observer isolation. */}

@@ -12,6 +12,7 @@ import { createHostCommandWriter } from "./host-command-writer.ts"
 
 interface Channel {
   input: PassThrough
+  isolatedWorktree: boolean
   opened: ReturnType<typeof Promise.withResolvers<void>>
   ready: boolean
   exited: ReturnType<typeof Promise.withResolvers<void>>
@@ -90,6 +91,11 @@ function connect(child: ChildProcessWithoutNullStreams) {
       if (!channel) throw new Error("Desktop host replied on an unknown workspace")
       switch (event.type) {
         case "opened":
+          if (channel.isolatedWorktree && event.isolatedWorktree !== true) {
+            channel.opened.reject(new Error("The Gateway did not confirm worktree isolation"))
+            void releaseChannel(event.workspaceId, channel).catch(() => {})
+            break
+          }
           supportsActivity = event.activityReports === 1
           channel.ready = true
           channel.opened.resolve()
@@ -192,7 +198,7 @@ function connect(child: ChildProcessWithoutNullStreams) {
       if (channels.has(id)) throw new Error("Previous workspace scope has not closed")
       const channel: Channel = {
         input: new PassThrough(), opened: Promise.withResolvers<void>(), exited: Promise.withResolvers<void>(),
-        disconnected: Promise.withResolvers<void>(), releasing: false, ready: false,
+        disconnected: Promise.withResolvers<void>(), releasing: false, ready: false, isolatedWorktree: !!workspace.worktree,
       }
       channels.set(id, channel)
       const sendData = (text: string) => {
@@ -214,7 +220,7 @@ function connect(child: ChildProcessWithoutNullStreams) {
       // A simultaneous application quit may retire this launch before the
       // manager reaches its startup await.
       void ready.catch(() => undefined)
-      try { send({ type: "open", workspaceId: id, workspacePath: workspace.path, activityReports: 1 }) }
+      try { send({ type: "open", workspaceId: id, workspacePath: workspace.path, activityReports: 1, ...(workspace.worktree ? { isolatedWorktree: true } : {}) }) }
       catch (error) { endChannel(id, channel, error as Error) }
       return { client, ready, hostPid: child.pid, disconnected: channel.disconnected.promise,
         exited: channel.exited.promise, stderrTail: () => channel.diagnostic ?? "", exitInfo: () => exitInfo }

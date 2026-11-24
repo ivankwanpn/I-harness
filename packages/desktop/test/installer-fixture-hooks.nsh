@@ -42,3 +42,10 @@
     CreateDirectory "$INSTDIR\Uninstall.exe"
   ${EndIf}
 !macroend
+
+!macro TestBeforePayload
+  ReadINIStr $8 "${TEST_ROOT}\test-controls.ini" "Controls" "FailPayloadCopy"
+  ${If} $8 == 1
+    CreateDirectory "$INSTDIR\resources\app\out\main\index.js"
+  ${EndIf}
+!macroend

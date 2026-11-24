@@ -6,6 +6,7 @@ import type { WorkspaceRuntime, WorkspaceRuntimeManager } from "./sdk-runtime.ts
 import { validateSandboxState } from "./sdk-runtime.ts"
 import type { WorkspaceCatalog } from "./workspaces.ts"
 import type { ProjectCatalog } from "./projects.ts"
+import type { createDesktopWorktrees } from "./worktrees.ts"
 import { readPickedAttachments } from "./file-attachments.ts"
 import { projectRuntimeContexts, syncLiveProjectContexts } from "./project-runtime.ts"
 import { contextRequestParams } from "./context-requests.ts"
@@ -35,6 +36,7 @@ export interface DesktopIpcDependencies {
   surfaceObservation?: ReturnType<typeof createNativeSurfaceObservation>
   catalog: WorkspaceCatalog
   projects?: ProjectCatalog
+  worktrees?: ReturnType<typeof createDesktopWorktrees>
   revealWorkspace?: (path: string) => Promise<void>
   runtimes: WorkspaceRuntimeManager
   /** Native folder picker; injected so the dispatcher stays testable. */
@@ -201,7 +203,7 @@ export async function dispatchDesktopRequest(
       const owners = requireRecord(command.expectedOwners)
       if (command.sessionIds.some(id => !Object.hasOwn(owners, String(id)) || owners[String(id)] !== null && (typeof owners[String(id)] !== "string" || !owners[String(id)]))) throw new Error("Invalid expected project owners")
       if (!dependencies.projects) throw new Error("Project catalog unavailable")
-      const scopes = await projectRuntimeContexts(dependencies.projects, dependencies.catalog)
+      const scopes = await projectRuntimeContexts(dependencies.projects, dependencies.catalog, workspaceId)
       if (command.projectId !== undefined && !scopes.some(scope => scope.id === command.projectId && scope.roots.length > 0)) throw new Error("Destination project unavailable")
       await runtime.client.request("desktop/project/sync", { projects: scopes })
     }
@@ -354,7 +356,7 @@ export async function dispatchDesktopRequest(
       if (!runtime.info.capabilities["desktop-project-scope"]?.includes("1")) throw new Error("Project execution scopes are unavailable")
       if (value.kind.endsWith("/state")) return await runtime.client.request(value.kind, { sessionId })
       if (!dependencies.projects) throw new Error("Project catalog unavailable")
-      const scopes = await projectRuntimeContexts(dependencies.projects, dependencies.catalog)
+      const scopes = await projectRuntimeContexts(dependencies.projects, dependencies.catalog, requireNonEmpty(value.workspaceId, "workspaceId"))
       const projectId = value.projectId === undefined ? undefined : requireNonEmpty(value.projectId, "projectId")
       if (projectId && !scopes.some((scope) => scope.id === projectId && scope.roots.length > 0)) throw new Error("Unknown or empty project")
       await runtime.client.request("desktop/project/sync", { projects: scopes })
@@ -404,6 +406,19 @@ export async function dispatchDesktopRequest(
       return dependencies.native.configure({ ...(typeof value.notifications === "boolean" ? { notifications: value.notifications } : {}), ...(value.locale === "en" || value.locale === "zh-TW" ? { locale: value.locale } : {}), ...(typeof value.terminalShell === "string" ? { terminalShell: value.terminalShell as TerminalShellChoice } : {}), ...(typeof value.terminalFontFamily === "string" ? { terminalFontFamily: value.terminalFontFamily.trim() } : {}), ...(value.followupDelivery === "queue" || value.followupDelivery === "steer" ? { followupDelivery: value.followupDelivery } : {}) })
     case "workspace/list":
       return await dependencies.catalog.list()
+    case "desktop/worktrees/list":
+      return await dependencies.worktrees?.list(requireNonEmpty(value.workspaceId, "workspaceId"), requireNonEmpty(value.projectId, "projectId"))
+    case "desktop/worktrees/state":
+      return await dependencies.worktrees?.describe(requireNonEmpty(value.workspaceId, "workspaceId"))
+    case "desktop/worktrees/offer":
+      if (!dependencies.worktrees || typeof value.offered !== "boolean") throw new Error("Invalid worktree offer")
+      return await dependencies.worktrees.setOffered(requireNonEmpty(value.workspaceId, "workspaceId"), requireNonEmpty(value.projectId, "projectId"), value.offered)
+    case "desktop/worktrees/relink": {
+      if (!dependencies.worktrees || !dependencies.runtimes.invalidate) throw new Error("Worktree recovery unavailable")
+      const workspace = await dependencies.worktrees.relocate(requireNonEmpty(value.workspaceId, "workspaceId"), id => dependencies.runtimes.invalidate!(id))
+      if (dependencies.runtimes.recover) await dependencies.runtimes.recover(workspace)
+      return workspace
+    }
     case "workspace/open":
       return await dependencies.catalog.open(requireNonEmptyPath(value.path))
     case "workspace/pick": {
@@ -418,7 +433,7 @@ export async function dispatchDesktopRequest(
           : runtime.sandbox
       }
     case "desktop/capabilities":
-      return { ...(await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).info.capabilities, ...(dependencies.drafts ? { "desktop-drafts": ["1"] } : {}) }
+      return { ...(await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).info.capabilities, ...(dependencies.drafts ? { "desktop-drafts": ["1"] } : {}), ...(dependencies.worktrees ? { "desktop-git-worktrees": ["1"] } : {}) }
     case "session/list":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.listSessions()
     case "desktop/session/archived":
@@ -526,21 +541,48 @@ export async function dispatchDesktopRequest(
       return await (ready ?? await runtimeForKnownWorkspace(workspaceId, dependencies)).client.dashboard()
     }
     case "session/create": {
-      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const sourceWorkspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       if (value.clientToken !== undefined && (typeof value.clientToken !== "string" || value.clientToken.length < 8 || value.clientToken.length > 128)) throw new Error("Invalid draft creation token")
-      const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
       let projectId: string | undefined
       if (value.projectId !== undefined) {
         projectId = requireNonEmpty(value.projectId, "projectId")
-        if (!dependencies.projects || !(await dependencies.projects.list()).some((project) => project.id === projectId && project.workspaceIds.includes(workspaceId))) throw new Error("Project does not contain the selected folder")
+        if (!dependencies.projects || !(await dependencies.projects.list()).some((project) => project.id === projectId
+          && (project.workspaceIds.includes(sourceWorkspaceId) || dependencies.catalog.get(sourceWorkspaceId)?.worktree?.projectId === project.id))) {
+          throw new Error("Project does not contain the selected folder")
+        }
       }
-      if (value.clientToken && !runtime.info.capabilities["desktop-draft-create"]?.includes("1")) throw new Error("Durable draft creation unavailable")
-      const created = value.clientToken ? await runtime.client.request("session/create", { clientToken: value.clientToken }) as { sessionId: string } : await runtime.client.createSession()
-      if (projectId) {
-        await runtime.client.request("desktop/project/sync", { projects: await projectRuntimeContexts(dependencies.projects!, dependencies.catalog) })
-        await runtime.client.request("desktop/session/project/bind", { sessionId: created.sessionId, projectId })
+      async function create(workspaceId: string, isolated: boolean) {
+        const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
+        if (value.clientToken && !runtime.info.capabilities["desktop-draft-create"]?.includes("1")) throw new Error("Durable draft creation unavailable")
+        const created = value.clientToken ? await runtime.client.request("session/create", { clientToken: value.clientToken }) as { sessionId: string } : await runtime.client.createSession()
+        if (projectId) {
+          // The isolated runtime is initialized with the current native
+          // project snapshot before admission. A replay of an already bound
+          // receipt needs no second binding mutation.
+          if (isolated) {
+            const current = await runtime.client.request("desktop/session/project/state", { sessionId: created.sessionId }) as { projectId?: string }
+            if (current.projectId === projectId) return created
+            if (current.projectId) throw new Error("The original conversation moved to another project")
+          } else {
+            await runtime.client.request("desktop/project/sync", { projects: await projectRuntimeContexts(dependencies.projects!, dependencies.catalog, workspaceId) })
+          }
+          await runtime.client.request("desktop/session/project/bind", { sessionId: created.sessionId, projectId })
+        }
+        return created
       }
-      return created
+      const worktree = value.worktree === undefined ? undefined : requireRecord(value.worktree)
+      if (worktree) {
+        if (!projectId || typeof value.clientToken !== "string" || !dependencies.worktrees) throw new Error("Durable project worktree creation unavailable")
+        const owner = projectId, token = value.clientToken, worktrees = dependencies.worktrees
+        const mode = worktree.mode
+        if (mode !== "create" && mode !== "existing") throw new Error("Invalid worktree choice")
+        const selection = mode === "create" ? { mode } as const : { mode, path: requireNonEmptyPath(worktree.path) } as const
+        return await worktrees.createSession(sourceWorkspaceId, owner, token, selection, async () => {
+          const workspaceId = (await worktrees.prepare(sourceWorkspaceId, owner, token, selection)).id
+          return { ...await create(workspaceId, true), workspaceId }
+        })
+      }
+      return await create(sourceWorkspaceId, false)
     }
     case "desktop/session/warm": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
@@ -807,6 +849,22 @@ export async function dispatchDesktopRequest(
             : { kind: "question", answer: record.answer as string },
       })
     }
+    case "desktop/model-review/prepare":
+    case "desktop/model-review/list":
+    case "desktop/model-review/start":
+    case "desktop/model-review/read":
+    case "desktop/model-review/compare":
+    case "desktop/model-review/cancel": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const projectId = requireNonEmpty(value.projectId, "projectId")
+      const sessionId = value.sessionId === undefined ? undefined : requireNonEmpty(value.sessionId, "sessionId")
+      const { runtime, projectId: confirmedProject } = await runtimeForProjectMember({ workspaceId, projectId, sessionId }, workspaceId, dependencies)
+      if (confirmedProject !== projectId) throw new Error("The review project changed")
+      if (!runtime.info.capabilities["desktop-model-review"]?.includes("1")) throw new Error("Model review is unavailable")
+      const params = value.kind === "desktop/model-review/prepare" ? { target: value.target }
+        : value.kind === "desktop/model-review/list" ? {} : { id: requireNonEmpty(value.id, "review ID") }
+      return await runtime.client.request(value.kind, params)
+    }
     case "desktop/review/file/save":
     case "desktop/review/stage":
     case "desktop/review/unstage":
@@ -909,7 +967,10 @@ async function runtimeForKnownWorkspace(
 ): Promise<WorkspaceRuntime> {
   const workspace = dependencies.catalog.get(workspaceId)
   if (workspace === undefined) throw new Error(`unknown workspace id: ${workspaceId}`)
-  try { return await dependencies.runtimes.get(workspace) }
+  try {
+    if (workspace.worktree) await dependencies.worktrees?.assertWorktree(workspace)
+    return await dependencies.runtimes.get(workspace)
+  }
   catch (error) {
     try { dependencies.diagnostics?.recordRequestFailure(workspaceId, undefined, error, "runtime/error") } catch { /* Diagnostics must preserve the runtime rejection. */ }
     throw error

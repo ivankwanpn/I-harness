@@ -1,0 +1,14 @@
+.settings-dialog.command-palette { width: min(590px, calc(100vw - 32px)); }
+.command-palette .settings-dialog-content { margin-top: 14px; }
+.command-palette input { padding: 9px 11px; border-radius: 8px; }
+.command-palette-hint { margin: 8px 0 12px; font-size: .82rem; }
+.command-palette-results { margin: 0; padding: 0; list-style: none; max-height: min(420px, 55vh); overflow: auto; }
+.command-palette-results h3 { color: var(--ih-muted); font-size: .8rem; margin: 10px 8px 4px; }
+.command-palette-results button {
+  border: 0; background: transparent; color: var(--ih-text); text-align: start;
+  width: 100%; display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  padding: 8px; border-radius: 6px; cursor: pointer;
+}
+.command-palette-results button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command-palette-results button small { color: var(--ih-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 48%; }
+.command-palette-results button[aria-selected="true"] { background: var(--ih-hover); outline: 1px solid var(--ih-divider); outline-offset: -1px; }

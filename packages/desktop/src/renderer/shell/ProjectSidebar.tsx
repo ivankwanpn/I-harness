@@ -93,8 +93,11 @@ function ProjectTree(props: ProjectSidebarProps) {
       document.removeEventListener("visibilitychange", refreshOnReturn)
     }
   }, [bridge])
-  const assigned = new Set(projects.flatMap((project) => project.workspaceIds))
   const knownProjectIds = new Set(projects.map(project => project.id))
+  const assigned = new Set([
+    ...projects.flatMap(project => project.workspaceIds),
+    ...workspaces.filter(row => row.worktree && knownProjectIds.has(row.worktree.projectId)).map(row => row.id),
+  ])
   const unassigned = workspaces.filter((workspace) => !assigned.has(workspace.id) || [...(snapshots[workspace.id]?.owners ?? [])].some(id => id === undefined || !knownProjectIds.has(id)))
   const managementWorkspace = workspaces.find(workspace => workspace.id === selectedWorkspaceId) ?? workspaces[0]
   const effectiveProjectId = selectedProjectId && knownProjectIds.has(selectedProjectId) ? selectedProjectId : undefined
@@ -109,7 +112,8 @@ function ProjectTree(props: ProjectSidebarProps) {
 
   const expanded = (id?: string) => expandedProjects.has(projectKey(id)) || search.trim() !== ""
   const members = new Map(projects.map(project => [
-    project.id, workspaces.filter(workspace => project.workspaceIds.includes(workspace.id) || snapshots[workspace.id]?.owners?.has(project.id)),
+    project.id, workspaces.filter(workspace => project.workspaceIds.includes(workspace.id)
+      || workspace.worktree?.projectId === project.id || snapshots[workspace.id]?.owners?.has(project.id)),
   ]))
   const readModes = new Map<string, SidebarReadMode>()
   function include(folders: WorkspaceEntry[], projectId?: string) {

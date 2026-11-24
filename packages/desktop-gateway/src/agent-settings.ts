@@ -7,18 +7,29 @@ export interface AgentSettingsState {
   saved: AgentDefaults
   effective: AgentDefaults
   restartRequired: boolean
+  isolatedWorktree?: true
   source: "settings"
   executions?: readonly { sessionId: string; status: unknown }[]
 }
 
+export function worktreePermissions(
+  saved: Pick<AgentDefaults, "sandboxMode" | "approvalMode">,
+  isolatedWorktree?: boolean,
+): Pick<AgentDefaults, "sandboxMode" | "approvalMode"> {
+  return {
+    sandboxMode: isolatedWorktree && saved.sandboxMode === "danger-full-access" ? "workspace-write" : saved.sandboxMode,
+    approvalMode: isolatedWorktree && saved.approvalMode === "full-access" ? "dangerous" : saved.approvalMode,
+  }
+}
+
 /** Persist settings first, then apply the host's live policy callbacks. A host
  * without a callback keeps reporting its startup policy until rebuilt. */
-export function createAgentSettings(path: string, startup: AgentDefaults, options: { executionStatus?(): Promise<readonly { sessionId: string; status: unknown }[]>; onWindowsSandboxBackendChanged?(backend: SettingsWindowsSandboxBackend): void; onWslExecutionChanged?(configuration: SettingsWslExecution): void | Promise<void>; onWebSearchModeChanged?(mode: SettingsWebSearchMode): void | Promise<void>; onApprovalModeChanged?: (mode: SettingsApprovalMode) => void; onSandboxModeChanged?: (mode: SettingsSandboxMode) => void | Promise<void>; onAutoCompactionChanged?: (enabled: boolean) => void } = {}) {
+export function createAgentSettings(path: string, startup: AgentDefaults, options: { isolatedWorktree?: boolean; executionStatus?(): Promise<readonly { sessionId: string; status: unknown }[]>; onWindowsSandboxBackendChanged?(backend: SettingsWindowsSandboxBackend): void; onWslExecutionChanged?(configuration: SettingsWslExecution): void | Promise<void>; onWebSearchModeChanged?(mode: SettingsWebSearchMode): void | Promise<void>; onApprovalModeChanged?: (mode: SettingsApprovalMode) => void; onSandboxModeChanged?: (mode: SettingsSandboxMode) => void | Promise<void>; onAutoCompactionChanged?: (enabled: boolean) => void } = {}) {
   const effective = { ...startup, wslExecution: normalizeWslExecution(startup.wslExecution), windowsSandboxBackend: startup.windowsSandboxBackend ?? "legacy" }
   const withStore = <T>(work: (store: SettingsStore) => Promise<T>) => withDesktopSettings(path, work)
   function snapshot(value: Settings): AgentSettingsState {
     const saved = defaults(value)
-    return { saved, effective: { ...effective, wslExecution: { ...effective.wslExecution } }, source: "settings", restartRequired: saved.windowsSandboxBackend !== effective.windowsSandboxBackend || JSON.stringify(saved.wslExecution) !== JSON.stringify(effective.wslExecution) || (effective.webSearchMode !== undefined && saved.webSearchMode !== effective.webSearchMode) || saved.sandboxMode !== effective.sandboxMode || saved.autoCompaction !== effective.autoCompaction || saved.approvalMode !== effective.approvalMode }
+    return { saved, effective: { ...effective, wslExecution: { ...effective.wslExecution } }, ...(options.isolatedWorktree ? { isolatedWorktree: true } : {}), source: "settings", restartRequired: saved.windowsSandboxBackend !== effective.windowsSandboxBackend || JSON.stringify(saved.wslExecution) !== JSON.stringify(effective.wslExecution) || (effective.webSearchMode !== undefined && saved.webSearchMode !== effective.webSearchMode) || saved.sandboxMode !== effective.sandboxMode || saved.autoCompaction !== effective.autoCompaction || saved.approvalMode !== effective.approvalMode }
   }
   async function diagnostics(state: AgentSettingsState): Promise<AgentSettingsState> {
     // Native backend probes can start processes and wait for settlement. They
@@ -26,7 +37,7 @@ export function createAgentSettings(path: string, startup: AgentDefaults, option
     return { ...state, executions: await options.executionStatus?.() }
   }
   function defaults(value: ReturnType<SettingsStore["get"]>): AgentDefaults {
-    return { windowsSandboxBackend: value.windowsSandboxBackend, wslExecution: { ...value.wslExecution }, webSearchMode: value.webSearchMode, sandboxMode: value.sandboxMode, autoCompaction: value.compaction.auto, approvalMode: value.approvalMode }
+    return { windowsSandboxBackend: value.windowsSandboxBackend, wslExecution: { ...value.wslExecution }, webSearchMode: value.webSearchMode, autoCompaction: value.compaction.auto, ...worktreePermissions(value, options.isolatedWorktree) }
   }
   async function applyEffective(saved: AgentDefaults): Promise<void> {
     if (saved.wslExecution && JSON.stringify(saved.wslExecution) !== JSON.stringify(effective.wslExecution) && options.onWslExecutionChanged) {
@@ -81,6 +92,9 @@ export function createAgentSettings(path: string, startup: AgentDefaults, option
     async configure(value: unknown) {
       if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid agent settings")
       const input = value as Record<string, unknown>
+      if (options.isolatedWorktree && (input.approvalMode === "full-access" || input.sandboxMode === "danger-full-access")) {
+        throw new Error("Full access is unavailable in an isolated worktree")
+      }
       if (Object.keys(input).some((key) => !["sandboxMode", "autoCompaction", "approvalMode", "windowsSandboxBackend", "wslExecution", "webSearchMode"].includes(key))) throw new Error("Unknown agent setting")
       validateExecutionSettings(input)
       if (input.sandboxMode !== undefined && (typeof input.sandboxMode !== "string" || !["read-only", "workspace-write", "danger-full-access"].includes(input.sandboxMode))) throw new Error("Invalid sandbox mode")
@@ -88,7 +102,7 @@ export function createAgentSettings(path: string, startup: AgentDefaults, option
       if (input.approvalMode !== undefined && (typeof input.approvalMode !== "string" || !["dangerous", "ask-all", "delegate", "full-access"].includes(input.approvalMode))) throw new Error("Invalid approval mode")
       if (input.approvalMode === "full-access" && input.sandboxMode !== undefined && input.sandboxMode !== "danger-full-access") throw new Error("Full access requires the full-access sandbox")
       const state = await withStore(async (store) => {
-        const nextMode = (input.approvalMode ?? store.get().approvalMode) as SettingsApprovalMode
+        const nextMode = (input.approvalMode ?? defaults(store.get()).approvalMode) as SettingsApprovalMode
         const nextSandbox = nextMode === "full-access" ? "danger-full-access" : input.sandboxMode
         if (nextMode === "full-access" && input.sandboxMode !== undefined && input.sandboxMode !== "danger-full-access") throw new Error("Full access requires the full-access sandbox")
         await store.set({

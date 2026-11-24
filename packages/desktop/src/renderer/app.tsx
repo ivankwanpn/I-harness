@@ -63,7 +63,8 @@ function startupWorkspace(workspaces: WorkspaceEntry[], projects: ProjectEntry[]
     const saved = JSON.parse(localStorage.getItem(LAST_WORKSPACE) ?? "null") as { workspaceId?: unknown; projectId?: unknown } | null
     const workspace = workspaces.find(row => row.id === saved?.workspaceId)
     if (workspace) {
-      const project = projects.find(row => row.id === saved?.projectId && row.workspaceIds.includes(workspace.id))
+      const project = projects.find(row => row.id === saved?.projectId
+        && (row.workspaceIds.includes(workspace.id) || workspace.worktree?.projectId === row.id))
       return { workspaceId: workspace.id, projectId: project?.id }
     }
   } catch { /* A damaged or disabled preference still permits normal startup. */ }
@@ -226,7 +227,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     if (!projects || !selectedWorkspaceId || !workspaces.some(workspace => workspace.id === selectedWorkspaceId)) return
     if (selectedSessionId && (!capabilitiesReady || projectScopeSupported && !selectedBinding)) return
     const project = projects.find(row => row.id === activeProjectId)
-    const workspaceId = project && !project.workspaceIds.includes(selectedWorkspaceId) ? projectWorkspace(project, workspaces) : selectedWorkspaceId
+    const workspace = workspaces.find(row => row.id === selectedWorkspaceId)
+    const workspaceId = project && !project.workspaceIds.includes(selectedWorkspaceId) && !workspace?.worktree
+      ? projectWorkspace(project, workspaces) : selectedWorkspaceId
     if (!workspaceId) return
     try { localStorage.setItem(LAST_WORKSPACE, JSON.stringify({ workspaceId, projectId: project?.id })) }
     catch { /* The current selection still works in memory. */ }
@@ -953,7 +956,14 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         }
         return result
       }}
-      historicalView={historyTarget && historyTarget.workspaceId === selectedWorkspaceId && historyTarget.sessionId === selectedSessionId ? { selection: historyTarget, request: historyRequest, onLatest: () => { scrollHistory.latest?.(); setHistoryTarget(undefined) } } : undefined}
+      historicalView={historyTarget && historyTarget.workspaceId === selectedWorkspaceId && historyTarget.sessionId === selectedSessionId ? {
+        selection: historyTarget, request: historyRequest, onLatest: () => { navigationVersion.current++; scrollHistory.latest?.(); setHistoryTarget(undefined) },
+        onForkAt: capabilities["session-fork-bootstrap"]?.includes("1") ? async target => {
+          const scope = selection.current
+          if (scope.workspaceId !== target.workspaceId || scope.sessionId !== target.sessionId) return
+          await forkOperations.current!.run(target.workspaceId, target.sessionId, target.seq)
+        } : undefined,
+      } : undefined}
       review={{
         projectFiles: selectedWorkspaceId && capabilities["desktop-project-files"]?.includes("1") ? { selection: { workspaceId: selectedWorkspaceId, ...(selectedSessionId ? { sessionId: selectedSessionId } : {}), ...(selectedBinding?.projectId ? { projectId: selectedBinding.projectId } : activeProjectId ? { projectId: activeProjectId } : {}) }, request: projectFileRequest, openFile: projectOpenFile, externalOpenFile } : undefined,
         onSaveFile: async (path, text, expectedRevision) => {
@@ -1026,7 +1036,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           reason => { if (workspaceSelection.current === recoveryScope) { setConnection('offline'); setError(reason instanceof Error ? reason.message : String(reason)) } },
         )
       }}
-      onSessionsChanged={() => {
+      onSessionsChanged={(createdWorkspaceId) => {
+        if (createdWorkspaceId) void refreshWorkspaces().catch(() => {})
         if (selectedWorkspaceId !== undefined) void forkOperations.current!.refresh(selectedWorkspaceId)
       }}
     />

@@ -2,8 +2,8 @@ import { readForkRequestCore, readForkPrepareResult, readForkOutcome, type ForkO
 import { createBootstrapRequestIntent } from '../../../session-persistence/src/index.ts'
 
 /** Valid controlled replies for renderer/IPC unit tests; no B2 authority. */
-export function preparedFork(sourceSessionId = 'a') {
-  const core = readForkRequestCore({ version: 1, kind: 'session-fork-core', sourceSessionId, selection: { kind: 'completed' }, sourceCapture: 'first-authorized-capture', metadata: {} })
+export function preparedFork(sourceSessionId = 'a', atSeq?: number) {
+  const core = readForkRequestCore({ version: 1, kind: 'session-fork-core', sourceSessionId, selection: { kind: 'completed', ...(atSeq === undefined ? {} : { atSeq }) }, sourceCapture: 'first-authorized-capture', metadata: {} })
   const { intent, requestDigest } = createBootstrapRequestIntent(core, { kind: 'unassigned' })
   const result = readForkPrepareResult({ kind: 'prepared', prepared: { version: 1, kind: 'session-fork-prepared', core, requestIntent: intent, requestDigest } })
   if (result.kind !== 'prepared') throw new Error('Invalid unit fixture')

@@ -871,6 +871,33 @@ it("refreshes the selected file content together with the change list", async ()
   await waitFor(() => expect(captured.props!.review!.diff).toMatchObject({ text: "version2" }))
 })
 
+it("branches at the selected history point using the durable fork controller", async () => {
+  const pending = defer()
+  const request = fixture(input => {
+    if (input.kind === "desktop/capabilities") return Promise.resolve({ "session-fork-bootstrap": ["1"] })
+    if (input.kind === "desktop/notifications/target") return Promise.resolve({ workspaceId: input.workspaceId, sessionId: input.sessionId })
+    if (input.kind === "desktop/session/fork/prepare") return Promise.resolve(preparedFork(input.request.sourceSessionId, input.request.selection?.atSeq))
+    if (input.kind === "desktop/session/fork/begin") {
+      pending.resolve(readyFork(input.operation))
+      return pending.promise
+    }
+    return undefined
+  })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  const target = { workspaceId: "w1", sessionId: "a", seq: 11 }
+  act(() => captured.props!.onSelectHistory!(target))
+  await waitFor(() => expect(captured.props!.historicalView?.onForkAt).toBeTypeOf("function"))
+  await act(async () => captured.props!.historicalView!.onForkAt!(target))
+  expect(request).toHaveBeenCalledWith({
+    kind: "desktop/session/fork/prepare", workspaceId: "w1",
+    request: { version: 1, sourceSessionId: "a", selection: { kind: "completed", atSeq: 11 } },
+  })
+  const outcome = await pending.promise as ReturnType<typeof readyFork>
+  if (outcome.kind !== "ready") throw new Error("Expected the fork to be ready")
+  expect(captured.props!.selectedSessionId).toBe(outcome.sessionId)
+  expect(captured.props!.historicalView).toBeUndefined()
+})
+
 it("validates historical targets and keeps historical page reads separate from the live rows", async () => {
   fixture(request => request.kind === "desktop/notifications/target" ? Promise.resolve({ workspaceId: request.workspaceId, sessionId: request.sessionId })
     : request.kind === "session/dashboard" ? Promise.resolve({ sessions: [{ id: "a", live: false }] })

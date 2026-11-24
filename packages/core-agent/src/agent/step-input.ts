@@ -92,6 +92,7 @@ export function createStepInput(deps: Pick<AgentDeps,'sessionId'|'telemetry'> & 
       type: "provider/call",
       ts: Date.now(),
       data: {
+        sessionId: deps.sessionId,
         step: getSteps(),
         messages: messages.length,
         tools: request.tools.length,

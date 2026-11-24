@@ -98,7 +98,7 @@ export function createManagedAdmission(host: ManagedAgentHost, context: ReturnTy
                     context.budget.retire(assessed.disposition);
                 if (snapshot.coverage === 'incomplete')
                     throw Error(snapshot.reason);
-                host.telemetry?.emit({ type: 'provider/context', ts: Date.now(), data: { systemBytes: prepared.measurement.input.components.system.textUtf8Bytes, schemaBytes: prepared.measurement.input.components.toolSchemas.structuredBytes, ...assessed.estimate.kind === 'estimated' ? { estimatedInputTokens: assessed.estimate.value, estimateSource: assessed.estimate.source } : { tokenEstimateUnavailable: assessed.estimate.reason }, coverage: snapshot.coverage, reasoningTokens: snapshot.reasoningTokens, outputReserve: snapshot.outputReserve, capSupport: snapshot.capSupport } });
+                host.telemetry?.emit({ type: 'provider/context', ts: Date.now(), data: { sessionId: host.domain.sessionId, systemBytes: prepared.measurement.input.components.system.textUtf8Bytes, schemaBytes: prepared.measurement.input.components.toolSchemas.structuredBytes, ...assessed.estimate.kind === 'estimated' ? { estimatedInputTokens: assessed.estimate.value, estimateSource: assessed.estimate.source } : { tokenEstimateUnavailable: assessed.estimate.reason }, coverage: snapshot.coverage, reasoningTokens: snapshot.reasoningTokens, outputReserve: snapshot.outputReserve, capSupport: snapshot.capSupport } });
                 await context.budget.checkpoint();
                 await host.flush?.();
                 signal.throwIfAborted();

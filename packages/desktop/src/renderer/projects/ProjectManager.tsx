@@ -47,6 +47,7 @@ export function ProjectManager({ bridge, projects, workspaces, onChanged, onOpen
     await action(async () => {
       const folder = await bridge.request({ kind: "workspace/pick" }) as WorkspaceEntry | undefined
       if (!folder) return
+      if (folder.worktree) throw new Error(folder.path + " already has a conversation worktree binding")
       if (version !== draftVersion.current) { await onChanged(); return }
       setAddedFolders((old) => [...old.filter((row) => row.id !== folder.id), folder])
       setDraft((old) => old ? { ...old, workspaceIds: [...new Set([...old.workspaceIds, folder.id])], primaryWorkspaceId: old.primaryWorkspaceId ?? folder.id } : old)
@@ -78,7 +79,7 @@ export function ProjectManager({ bridge, projects, workspaces, onChanged, onOpen
         <div className="project-folder-list">{draft.workspaceIds.map((id) => { const folder = folderMap.get(id); return <div key={id} className="project-folder-row"><Folder size={15} /><span title={folder?.path}>{folder?.label ?? id}<small>{folder?.path}</small></span><button type="button" className="project-badge" aria-label={t("設為主要資料夾 {name}", { name: folder?.label ?? id })} aria-pressed={draft.primaryWorkspaceId === id} disabled={busy} onClick={() => setDraft({ ...draft, primaryWorkspaceId: id })}>{t(draft.primaryWorkspaceId === id ? "主要" : "設為主要")}</button><button type="button" className="icon-button" disabled={busy} aria-label={t("移除資料夾 {name}", { name: folder?.label ?? id })} onClick={() => setDraft({ ...draft, workspaceIds: draft.workspaceIds.filter((candidate) => candidate !== id), primaryWorkspaceId: draft.primaryWorkspaceId === id ? draft.workspaceIds.find((candidate) => candidate !== id) : draft.primaryWorkspaceId })}>×</button></div> })}
           <button type="button" className="project-add-folder" disabled={busy} onClick={() => { void pickFolder() }}><FolderPlus size={16} />{t("新增資料夾")}</button>
         </div>
-        {workspaces.some((folder) => !draft.workspaceIds.includes(folder.id)) ? <label>{t("加入已開啟的資料夾")}<select disabled={busy} value="" onChange={(event) => { const id = event.target.value; if (id) setDraft({ ...draft, workspaceIds: [...draft.workspaceIds, id], primaryWorkspaceId: draft.primaryWorkspaceId ?? id }) }}><option value="">{t("選擇資料夾")}</option>{workspaces.filter((folder) => !draft.workspaceIds.includes(folder.id)).map((folder) => <option key={folder.id} value={folder.id}>{folder.label} · {folder.path}</option>)}</select></label> : null}
+        {workspaces.some((folder) => !folder.worktree && !draft.workspaceIds.includes(folder.id)) ? <label>{t("加入已開啟的資料夾")}<select disabled={busy} value="" onChange={(event) => { const id = event.target.value; if (id) setDraft({ ...draft, workspaceIds: [...draft.workspaceIds, id], primaryWorkspaceId: draft.primaryWorkspaceId ?? id }) }}><option value="">{t("選擇資料夾")}</option>{workspaces.filter((folder) => !folder.worktree && !draft.workspaceIds.includes(folder.id)).map((folder) => <option key={folder.id} value={folder.id}>{folder.label} · {folder.path}</option>)}</select></label> : null}
         {error ? <p role="alert" className="error-text">{error}</p> : null}
         {staleDraft ? <p role="alert" className="error-text">{t("專案已更新，請重新開啟編輯以保留最新資料夾設定。")}</p> : null}
         <footer className="settings-dialog-actions">

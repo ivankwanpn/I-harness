@@ -6,7 +6,8 @@ import { createWorkspaceRuntimeManager, type WorkspaceRuntimeManager } from "./s
 import { createDesktopWindow } from "./window.ts"
 import { createWorkspaceCatalog, type WorkspaceCatalog } from "./workspaces.ts"
 import { createProjectCatalog } from "./projects.ts"
-import { projectRuntimeContexts } from "./project-runtime.ts"
+import { projectRuntimeContexts, scopedProject } from "./project-runtime.ts"
+import { createDesktopWorktrees } from "./worktrees.ts"
 import { createLocalPreferences } from "./local-preferences.ts"
 import { attachNativeWindow } from "./native-window.ts"
 import { createBrowserSurface } from "./browser-surface.ts"
@@ -44,9 +45,15 @@ app.whenReady().then(() => {
   const localPreferences = createLocalPreferences(join(app.getPath("userData"), "desktop-preferences.json"))
   const workspaces = createWorkspaceCatalog(join(app.getPath("userData"), "workspaces.json"))
   const projects = createProjectCatalog(join(app.getPath("userData"), "projects.json"), workspaces)
+  const worktrees = createDesktopWorktrees(join(app.getPath("userData"), "git-worktrees"), workspaces, projects)
   const sessionCatalog = createDesktopSessionCatalog(join(app.getPath('userData'), 'sessions'))
   const manager = createWorkspaceRuntimeManager({
     projectContexts: () => projectRuntimeContexts(projects, workspaces),
+    async projectContextsForWorkspace(id, contexts) {
+      const workspace = workspaces.get(id)
+      if (workspace?.worktree) await worktrees.assertWorktree(workspace)
+      return contexts.map(context => scopedProject(context, workspace))
+    },
     sessionsRoot: join(app.getPath("userData"), "sessions"),
     ...(app.isPackaged ? { resourcesPath: process.resourcesPath } : {}),
   })
@@ -76,7 +83,7 @@ app.whenReady().then(() => {
   drainNativeSettings = async () => {
     let retrySurfaces=false
     try {await closeDesktopSurfaceWindows()} catch(error) {retrySurfaces=true;diagnostics.recordRequestFailure('desktop',undefined,error,'runtime/error')}
-    await closeDesktopProjectContentSearches(); await globalProviders.close(); await manager.close(); await sessionCatalog.close()
+    await closeDesktopProjectContentSearches(); await globalProviders.close(); await worktrees.close(); await manager.close(); await sessionCatalog.close()
     if(retrySurfaces){try{await closeDesktopSurfaceWindows()}catch(error){diagnostics.recordRequestFailure('desktop',undefined,error,'runtime/error');await diagnostics.flush();throw error}}
     stopDiagnostics(); await diagnostics.flush(); stopUsageWarnings(); await usageWarnings.flush(); await notifications.flush(); await drafts.flush()
   }
@@ -90,7 +97,7 @@ app.whenReady().then(() => {
     // Capture the user's window bounds before the close handler hides or minimizes it.
     const native = attachNativeWindow(window, localPreferences, { notifications })
     cancelPendingClose = attachCloseLifecycle(window, {
-      hasActiveWork: () => manager.hasActiveWork(),
+      hasActiveWork: async () => worktrees.hasActiveWork() || await manager.hasActiveWork(),
       trayAvailable: () => tray !== undefined,
       quitState: () => quitState,
     })
@@ -98,6 +105,7 @@ app.whenReady().then(() => {
     const unregister = registerDesktopIpc(window, {
       catalog: workspaces,
       projects,
+      worktrees,
       revealWorkspace: async (path) => { const failure = await shell.openPath(path); if (failure) throw new Error(failure) },
       runtimes: manager,
       sessionCatalog,

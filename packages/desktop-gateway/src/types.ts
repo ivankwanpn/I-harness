@@ -79,6 +79,7 @@ export interface DesktopHandlers {
   sandboxState?: () => SandboxState | Promise<SandboxState>
   interaction?: Pick<InteractionBridge, "pending" | "reply"> & Partial<Pick<InteractionBridge, "cancelSession" | "replyTrustedHuman" | "rememberPending">>
   review?: WorkspaceReview
+  modelReview?: ReturnType<typeof import("./model-review.ts").createModelReview>
 }
 
 export type GatewayWrite = (frame: RpcMessage) => void

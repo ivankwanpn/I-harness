@@ -43,7 +43,12 @@ export async function readListedSessions(
     return async id => {
       const { meta, updatedAt } = await source.profile(id)
       if (meta.archived || !isConversationMetadata(meta)) return undefined
-      const row = { id, ...(updatedAt !== undefined ? { updatedAt } : {}), ...(meta.title !== undefined ? { title: meta.title } : {}) }
+      const row = {
+        id,
+        ...(updatedAt !== undefined ? { updatedAt } : {}),
+        ...(meta.title !== undefined ? { title: meta.title } : {}),
+        ...(meta.origin === "fork" && meta.parentSession ? { forkParentId: meta.parentSession } : {}),
+      }
       try { return { ...row, ...await summary(id, meta.title) } }
       catch { markPartial(); return row }
     }

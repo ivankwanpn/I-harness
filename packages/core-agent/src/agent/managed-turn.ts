@@ -154,7 +154,7 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
             invocation.input(input);
             if (admission.provenance?.kind === 'human' && admission.provenance.authority === 'request' && admission.intent === 'user')
                 host.requestContext?.promotedHumanRequest();
-            host.telemetry?.emit({ type: 'turn/start', ts: Date.now(), data: { message } });
+            host.telemetry?.emit({ type: 'turn/start', ts: Date.now(), data: { message, sessionId: host.domain.sessionId } });
             let first = true, stopContinuations = 0, finalText = '';
             const scope = Object.freeze({ sessionId: host.domain.sessionId, turnId: randomUUID(), ...host.isSubagent ? { isSubagent: true } : {} });
             for (;;) {

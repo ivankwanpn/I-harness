@@ -48,6 +48,7 @@ export function preparedExecution(measurement: PreparedRequestMeasurement, contr
     if (reservation && confirmation) { try { passive?.issue(reservation,confirmation) } catch { /* Passive evidence never changes transport. */ } }
     confirmed = true; issued = true
     try { control.onTransportIssue?.() } catch { /* Liveness observers do not change handoff. */ }
+    passive?.transportIssue()
     } catch (error) {
       if (error && typeof error === 'object') controlFailures.add(error)
       throw error

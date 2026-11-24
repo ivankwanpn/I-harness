@@ -1,11 +1,11 @@
 import type { ProjectCatalog } from "./projects.ts"
-import type { WorkspaceCatalog } from "./workspaces.ts"
+import type { WorkspaceCatalog, WorkspaceEntry } from "./workspaces.ts"
 import type { WorkspaceRuntimeManager } from "./sdk-runtime.ts"
 
 export interface DesktopProjectContext { id: string; name: string; roots: string[]; primaryRoot?: string }
 /** Only native canonical folder IDs become execution paths. Renderers cannot
  * grant arbitrary roots through a scope RPC. */
-export async function projectRuntimeContexts(projects: ProjectCatalog, catalog: WorkspaceCatalog): Promise<DesktopProjectContext[]> {
+export async function projectRuntimeContexts(projects: ProjectCatalog, catalog: WorkspaceCatalog, workspaceId?: string): Promise<DesktopProjectContext[]> {
   return (await projects.list()).map((project) => {
     if (!project.workspaceIds.length) return { id: project.id, name: project.name, roots: [] }
     const roots = project.workspaceIds.map((id) => {
@@ -16,7 +16,15 @@ export async function projectRuntimeContexts(projects: ProjectCatalog, catalog: 
     const primaryRoot = catalog.get(project.primaryWorkspaceId ?? project.workspaceIds[0]!)?.path
     if (!primaryRoot) throw new Error("Project primary folder is unavailable")
     return { id: project.id, name: project.name, roots, primaryRoot }
-  })
+  }).map(scope => scopedProject(scope, workspaceId ? catalog.get(workspaceId) : undefined))
+}
+
+// Session storage remains on its original host. Its isolated checkout is the
+// sole writable root even when a session is moved to another project.
+export function scopedProject(scope: DesktopProjectContext, workspace?: WorkspaceEntry): DesktopProjectContext {
+  return workspace?.worktree && scope.roots.length
+    ? { id: scope.id, name: scope.name, roots: [workspace.path], primaryRoot: workspace.path }
+    : scope
 }
 
 export async function syncLiveProjectContexts(projects: ProjectCatalog, catalog: WorkspaceCatalog, runtimes: WorkspaceRuntimeManager): Promise<void> {
@@ -25,7 +33,7 @@ export async function syncLiveProjectContexts(projects: ProjectCatalog, catalog:
   const outcomes = await Promise.allSettled((await catalog.list()).map(async (workspace) => {
     const runtime = runtimes.peek?.(workspace.id)
     if (!runtime) return
-    try { await runtime.client.request("desktop/project/sync", { projects: scopes }) }
+    try { await runtime.client.request("desktop/project/sync", { projects: scopes.map(project => scopedProject(project, workspace)) }) }
     catch (error) { await runtimes.invalidate?.(workspace.id); throw error }
   }))
   const failures = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected")

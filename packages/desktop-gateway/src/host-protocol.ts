@@ -10,7 +10,7 @@ export interface DesktopActivityReport {
 export type DesktopHostCommand =
   | { type: "ping" }
   | { type: "activity"; requestId: number; workspaceIds?: string[] }
-  | { type: "open"; workspaceId: string; workspacePath: string; activityReports?: 1 }
+  | { type: "open"; workspaceId: string; workspacePath: string; activityReports?: 1; isolatedWorktree?: true }
   | { type: "data"; workspaceId: string; line: string }
   | { type: "close"; workspaceId: string }
   | { type: "shutdown" }
@@ -18,7 +18,7 @@ export type DesktopHostCommand =
 export type DesktopHostEvent =
   | { type: "pong" }
   | ({ type: "activity"; requestId: number } & DesktopActivityReport)
-  | { type: "opened"; workspaceId: string; activityReports?: 1 }
+  | { type: "opened"; workspaceId: string; activityReports?: 1; isolatedWorktree?: true }
   | { type: "closed"; workspaceId: string }
   | { type: "data"; workspaceId: string; line: string }
   | { type: "error"; workspaceId?: string; operation?: "open" | "data" | "close"; message: string }

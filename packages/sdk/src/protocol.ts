@@ -369,6 +369,8 @@ export interface HistoryRange {
 export interface SessionListEntry {
   id: string
   title?: string
+  /** Confirmed direct parent of a user-created conversation branch. */
+  forkParentId?: string
   updatedAt?: number
   turnCount?: number
   contextUsed?: number
@@ -489,13 +491,7 @@ export type TaskCancelStatus = "cancellation-requested" | "already-finished"
  * session-list entry plus KNOWN live fields. Serialized only: no registry
  * object, no client, and by shape NO cost/team/cross-machine member (never
  * fabricated). Absent optional fields = the server cannot know them. */
-export interface DashboardSessionRow {
-  id: string
-  title?: string
-  updatedAt?: number
-  turnCount?: number
-  contextUsed?: number
-  contextTotal?: number
+export interface DashboardSessionRow extends SessionListEntry {
   /** True when the session has a live assembly (honest — a listing-only
    * session is live: false, never a guessed default). */
   live: boolean

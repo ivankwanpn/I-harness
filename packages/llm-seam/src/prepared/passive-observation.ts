@@ -20,7 +20,7 @@ export interface OriginalPassiveObserver { capture(record:PassiveProducerRecord)
 const reservations=new WeakMap<GenerationReservation,{identity:Readonly<PassiveReservationIdentity>;observer:OriginalPassiveObserver}>()
 const clients=new WeakMap<ModelClient,Readonly<PassiveAttribution>>(),prepared=new WeakMap<PreparedModelRequest,Readonly<PassiveAttribution>>()
 const clientObservers=new WeakMap<ModelClient,OriginalPassiveObserver>(),preparedObservers=new WeakMap<PreparedModelRequest,OriginalPassiveObserver>()
-interface PassiveDiagnostics {event(event:LLMStreamEvent):void;finish(outcome:'completed'|'failed'|'cancelled'):void}
+interface PassiveDiagnostics {issue?():void;event(event:LLMStreamEvent):void;finish(outcome:'completed'|'failed'|'cancelled'):void}
 export interface OriginalPassiveRequestContext {projectId?:string;start(measurement:PreparedRequestMeasurement):PassiveDiagnostics}
 const requestContexts=new WeakMap<PreparedModelRequest,OriginalPassiveRequestContext>()
 export function registerOriginalPassiveReservation(reservation:GenerationReservation,identity:PassiveReservationIdentity,observer:OriginalPassiveObserver):void{
@@ -78,6 +78,9 @@ export function createOriginalPassiveExecution(source?:PreparedModelRequest,medi
   safely(original.observer,()=>original!.observer.capture(record))
  }
  return {
+  transportIssue() {
+   try { diagnostics?.issue?.() } catch { /* Diagnostics cannot change transport. */ }
+  },
   issue(reservation:GenerationReservation,confirmation:GenerationIssue){
    original=reservations.get(reservation);if(!original)return
    const i=original.identity
