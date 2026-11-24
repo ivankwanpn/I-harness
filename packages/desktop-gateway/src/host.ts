@@ -44,7 +44,7 @@ import { assertOutsideForkController } from '../../session-persistence/src/fork-
 import { createContextPicker } from "./context-picker.ts"
 import { createDraftSession } from "./draft-session.ts"
 import { createConversationVisibility, createConversationQuery, createSessionRuntimeVisibility } from "./session-visibility.ts"
-import { createCommitLogSearchFallback, createCoordinatorLineage } from "./session-search.ts"
+import { createCommitLogConversationSearch, createCoordinatorLineage } from "./session-search.ts"
 import { createDesktopSubagents } from "./session-subagents.ts"
 import { createInstructionViews } from './instructions/views.ts'
 import { createInstructionSettings } from './instructions/settings.ts'
@@ -270,9 +270,11 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   }
   // The derived in-memory search index belongs to this workspace gateway
   // process. Never call global query cleanup when closing an individual host.
-  const indexedSessionQuery = createFileBackedSessionQuery({ storeRoot: options.sessionDir })
-  defer(() => indexedSessionQuery.close())
-  const sessionQuery = createConversationQuery(coordinator, indexedSessionQuery, commitLogStore ? createCommitLogSearchFallback(coordinator) : undefined, commitLogStore ? createCoordinatorLineage(coordinator) : undefined)
+  const indexedSessionQuery = commitLogStore ? undefined : createFileBackedSessionQuery({ storeRoot: options.sessionDir })
+  if (indexedSessionQuery) defer(() => indexedSessionQuery.close())
+  const sessionQuery = createConversationQuery(coordinator,
+    indexedSessionQuery?.searchConversations ?? createCommitLogConversationSearch(coordinator),
+    indexedSessionQuery?.lineage ?? createCoordinatorLineage(coordinator))
   const nativeCredentials=createCredentialStore(credentialsPath)
   const ownedIndexJobs=createOwnedIndexJobBindings()
   const indexJobOwners=new Map<string,WeakRef<SessionAssembly>>()
@@ -872,7 +874,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
         if (cleaned.has('trust watcher') && cleaned.has('policy watcher') && cleaned.has('instructions') && cleaned.has('plugins') && cleaned.has('plugin observer')) await once('instruction watch', () => instructionWatch.close())
         await once("policy refresh", async () => { await policySync })
         await once("memory", () => memory.close())
-        await once("session search", () => indexedSessionQuery.close())
+        if (indexedSessionQuery) await once("session search", () => indexedSessionQuery.close())
         if (forksJoined&&cleaned.has("session service")&&cleaned.has('native context')) await once("coordinator", () => closeCoordinatorWithRetainedCleanupOperation(coordinator, cleanupOperation))
         if (failures.length) throw new AggregateError(failures.map(item => item.cause),
           `Desktop host cleanup incomplete: ${failures.map(item => item.name).join(", ")}`)

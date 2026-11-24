@@ -1,9 +1,8 @@
 import { expect, it } from 'vitest'
 import type { SessionCoordinator } from '@i-harness/session-persistence'
 import { createSessionQueryTools } from '@i-harness/session-query'
-import type { SessionQuery } from '@i-harness/session-query'
 import { createConversationQuery } from '../src/session-visibility.ts'
-import { createCommitLogSearchFallback, createCoordinatorLineage } from '../src/session-search.ts'
+import { createCommitLogConversationSearch, createCoordinatorLineage } from '../src/session-search.ts'
 
 const longText = 'x'.repeat(200) + ' needle ' + 'y'.repeat(200)
 const sessions: Record<string, { meta: { sessionId: string; parentSession?: string; createdAt: string }; events: { type: string; text?: string }[] }> = {
@@ -16,10 +15,10 @@ const coordinator = {
   profile: async (id: string) => { const value = sessions[id]; if (!value) throw new Error('missing'); return { meta: value.meta, blank: false } },
   snapshot: async (id: string) => { const value = sessions[id]; if (!value) throw new Error('missing'); return { session: { events: value.events } } },
 } as unknown as SessionCoordinator
-const emptyIndex: SessionQuery = { search: async () => [], lineage: async () => [] }
-const build = () => createSessionQueryTools(createConversationQuery(coordinator, emptyIndex, createCommitLogSearchFallback(coordinator), createCoordinatorLineage(coordinator)))
 
-it('session_search reaches the commit-log fallback', async () => {
+const build = () => createSessionQueryTools(createConversationQuery(coordinator, createCommitLogConversationSearch(coordinator), createCoordinatorLineage(coordinator)))
+
+it('session_search uses the commit-log conversation reader', async () => {
   const tool = build().find(entry => entry.name === 'session_search')!
   const result = await tool.execute({ query: 'needle', session_id: 'child' }, {}) as { hits: { sessionId: string; snippet: string }[] }
   expect(result.hits).toHaveLength(1)

@@ -1,38 +1,17 @@
+import { deriveSearchText } from '@i-harness/core-session'
 import type { SessionCoordinator } from '@i-harness/session-persistence'
-import type { LineageNode, SearchHit, SessionQuery } from '@i-harness/session-query'
-import type { SessionSearchFallback } from './session-visibility.ts'
+import { SEARCH_PAGE_SIZE, searchConversationDocuments, type ConversationSearch, type LineageNode, type SessionQuery } from '@i-harness/session-query'
 
-const messageText = (event: { type: string; text?: unknown; output?: unknown; args?: unknown }): string | undefined => {
-  if (event.type === 'user/message' || event.type === 'assistant/message') return typeof event.text === 'string' ? event.text : undefined
-  if (event.type === 'tool/result') return typeof event.output === 'string' ? event.output : event.output === undefined ? undefined : JSON.stringify(event.output)
-  if (event.type === 'tool/call') return event.args === undefined ? undefined : JSON.stringify(event.args)
-  return undefined
-}
-
-const snippetAround = (body: string, at: number, length: number): string => {
-  const start = Math.max(0, at - 40), end = Math.min(body.length, at + length + 80)
-  return (start > 0 ? '…' : '') + body.slice(start, end) + (end < body.length ? '…' : '')
-}
-
-/** Substring search over a commit-log session's events. Used only when the
- *  file-backed index returns nothing for the session. */
-export function createCommitLogSearchFallback(coordinator: SessionCoordinator): SessionSearchFallback {
-  return async (sessionId, text, limit) => {
-    const needle = text.trim().toLowerCase()
-    if (!needle || limit <= 0) return []
-    let events: readonly { type: string; seq?: number; text?: unknown; output?: unknown; args?: unknown }[]
-    try { events = (await coordinator.snapshot!(sessionId)).session.events } catch { return [] }
-    const hits: SearchHit[] = []
-    for (const [index, event] of events.entries()) {
-      const body = messageText(event)
-      if (!body) continue
-      const at = body.toLowerCase().indexOf(needle)
-      if (at < 0) continue
-      hits.push({ sessionId, seq: typeof event.seq === 'number' ? event.seq : index, eventType: event.type as SearchHit['eventType'], snippet: snippetAround(body, at, needle.length), bm25: 0 })
-      if (hits.length >= limit) break
+export function createCommitLogConversationSearch(coordinator: SessionCoordinator): ConversationSearch {
+  return (text, ids, limit) => searchConversationDocuments(text, ids, limit, async function* (sessionId) {
+    if (!coordinator.snapshot) throw new Error("Session snapshots are unavailable")
+    const { events } = (await coordinator.snapshot(sessionId)).session
+    for (let start = 0; start < events.length; start += SEARCH_PAGE_SIZE) {
+      yield events.slice(start, start + SEARCH_PAGE_SIZE).map((event, i) => ({
+        seq: event.seq ?? start + i, eventType: event.type, text: deriveSearchText(event),
+      }))
     }
-    return hits
-  }
+  })
 }
 
 /** Lineage from the coordinator's metadata (commit-log sessions are not in the

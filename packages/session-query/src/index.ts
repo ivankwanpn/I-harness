@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite"
+export { SEARCH_PAGE_SIZE, searchConversationDocuments, type ConversationSearch, type SearchDocument } from "./conversation-search.ts"
 import type { SessionEvent } from "@i-harness/core-session"
 import { closeFileBackedConnections, openNativeDatabase } from "./file-backed/database.ts"
 

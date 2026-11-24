@@ -1,13 +1,15 @@
 import type { DatabaseSync } from "node:sqlite"
 
 export const INDEX_DB_APPLICATION_ID = 0x49485155 // "IHQU"
-export const INDEX_DB_SCHEMA_VERSION = 3
+export const INDEX_DB_SCHEMA_VERSION = 5
 
 const SCHEMA_DDL = `
   CREATE TABLE IF NOT EXISTS indexed_sessions (
     id          TEXT PRIMARY KEY,
     revision    TEXT NOT NULL,
-    fingerprint TEXT NOT NULL
+    fingerprint TEXT NOT NULL,
+    first_doc   INTEGER,
+    last_doc    INTEGER
   ) STRICT;
   CREATE VIRTUAL TABLE IF NOT EXISTS indexed_docs USING fts5(
     session_id  UNINDEXED,
@@ -16,6 +18,10 @@ const SCHEMA_DDL = `
     time        UNINDEXED,
     text,
     tokenize = 'unicode61'
+  );
+  CREATE VIRTUAL TABLE IF NOT EXISTS conversation_grams USING fts5(
+    text, content='', contentless_delete=1, detail=none,
+    tokenize='trigram case_sensitive 1'
   );
   CREATE TABLE IF NOT EXISTS lineage (
     id               TEXT PRIMARY KEY,
@@ -35,6 +41,7 @@ export function runSchemaSetup(db: DatabaseSync): void {
     const versionRow = db.prepare("PRAGMA user_version").get() as { user_version: number }
     if (versionRow.user_version !== INDEX_DB_SCHEMA_VERSION) {
       db.exec("DROP TABLE IF EXISTS lineage")
+      db.exec("DROP TABLE IF EXISTS conversation_grams")
       db.exec("DROP TABLE IF EXISTS indexed_docs")
       db.exec("DROP TABLE IF EXISTS indexed_sessions")
     }

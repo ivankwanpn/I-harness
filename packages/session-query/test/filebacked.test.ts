@@ -1,3 +1,4 @@
+import { INDEX_DB_SCHEMA_VERSION } from "../src/file-backed/schema.ts"
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -31,6 +32,45 @@ function cleanup(dir: string): void {
 }
 
 describe("file-backed session query (reconcile-on-search)", () => {
+  it("reconciles once across the authorized sessions, even when the limit is filled by a later session", async () => {
+    const {dir,id}=await seededStore("工作區 private")
+    try {
+      const writer=composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), {lock:{enabled:true,lockRoot:dir}}, taskDocumentStorageContract)
+      try {
+        for(const sessionId of ["b","c"]){
+          await writer.create({sessionId})
+          await writer.append(sessionId,[{type:"user/message",text:"工作區 "+sessionId}])
+        }
+      } finally { await writer.close() }
+      let inspected=0
+      const query=createFileBackedSessionQuery({storeRoot:dir,onInspect(){inspected++}})
+      await query.searchConversations("工作區",[id],1)
+      inspected=0
+      const hits=await query.searchConversations("工作區",["c","b"],1)
+      expect(hits.map(hit=>[hit.sessionId,hit.seq,hit.snippet])).toEqual([["b",0,"工作區 b"]])
+      expect(inspected).toBe(3)
+      await query.close()
+    } finally { cleanup(dir) }
+  })
+  it("rebuilds a prior owned index before applying trigram candidates", async () => {
+    const { dir, id } = await seededStore("start ſKi 中文內容 end")
+    const path = join(dir, "projection.db")
+    const first = createFileBackedSessionQuery({ storeRoot: dir, dbPath: path })
+    try {
+      await first.search("start")
+      await first.close()
+      const old = new DatabaseSync(path)
+      try { old.exec("DROP TABLE conversation_grams; PRAGMA user_version=4") } finally { old.close() }
+      const current = createFileBackedSessionQuery({ storeRoot: dir, dbPath: path })
+      try {
+        for (const term of ["ski", "文內容", "中文", "ſKi   中文"]) {
+          const hits = await current.searchConversations(term, [id], 10)
+          expect(hits).toMatchObject([{ sessionId: id, seq: 0, snippet: "start ſKi 中文內容 end" }])
+        }
+      } finally { await current.close() }
+    } finally { await first.close(); cleanup(dir) }
+  })
+
   it("joins its accepted read and releases only its own database on close", async () => {
     const a = await seededStore("first workspace"), b = await seededStore("second workspace")
     const one = createFileBackedSessionQuery({ storeRoot: a.dir })
@@ -214,7 +254,7 @@ describe("file-backed session query (reconcile-on-search)", () => {
         const { application_id: app } = check.prepare("PRAGMA application_id").get() as { application_id: number }
         const verRow = check.prepare("PRAGMA user_version").get() as { user_version: number }
         expect(app).toBe(0x49485155)
-        expect(verRow.user_version).toBe(3)
+        expect(verRow.user_version).toBe(INDEX_DB_SCHEMA_VERSION)
         const tables = (check.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' OR type = 'virtual'").all() as { name: string }[]).map((t) => t.name)
         for (const t of ["indexed_sessions", "indexed_docs", "lineage"]) expect(tables).toContain(t)
       } finally {

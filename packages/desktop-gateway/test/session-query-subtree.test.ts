@@ -13,17 +13,13 @@ const coordinator = {
   profile: async (id: string) => { const meta = metas[id]; if (!meta) throw new Error('missing'); return { meta, blank: false } },
 } as unknown as SessionCoordinator
 const hit = (sessionId: string): SearchHit => ({ sessionId, seq: 0, eventType: 'user/message', snippet: 'x', bm25: 0 })
-const query: SessionQuery = {
-  search: async (_text, options = {}) => [hit(options.sessionId!)],
-  lineage: async () => [],
-}
 const lineage: SessionQuery['lineage'] = async (sessionId, options) => {
   if (options.direction !== 'descendants') return []
   return Object.values(metas).filter(meta => meta.parentSession === sessionId).map(meta => ({ sessionId: meta.sessionId, parentSession: meta.parentSession, hasChildren: false }))
 }
 
 it('restricts a search to the requested subtree', async () => {
-  const conversation = createConversationQuery(coordinator, query, undefined, lineage)
+  const conversation = createConversationQuery(coordinator, async (_text, ids) => ids.map(hit), lineage)
   const all = await conversation.search('x')
   expect(all.map(result => result.sessionId).sort()).toEqual(['child', 'other', 'root'])
   const subtree = await conversation.search('x', { subtreeOf: 'root' })

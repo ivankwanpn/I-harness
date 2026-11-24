@@ -1,3 +1,4 @@
+import { INDEX_DB_SCHEMA_VERSION } from "../src/file-backed/schema.ts"
 import { expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
@@ -144,7 +145,7 @@ it('rebuilds a literal version2 persistent cache for canonical-valid inherited-p
     closeSessionQueries()
     const check = new DatabaseSync(dbPath, { readOnly: true })
     try {
-      expect(check.prepare('PRAGMA user_version').get()).toEqual({ user_version: 3 })
+      expect(check.prepare('PRAGMA user_version').get()).toEqual({ user_version: INDEX_DB_SCHEMA_VERSION })
       expect(check.prepare('SELECT revision,fingerprint FROM indexed_sessions WHERE id=?').get('target')).toEqual({ revision, fingerprint: hash(bytes) })
     } finally { check.close() }
     for (const [name, content] of f.files) expect(await readFile(join(f.root, name))).toEqual(content)

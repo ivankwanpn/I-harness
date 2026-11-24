@@ -1,9 +1,5 @@
 import type { SessionCoordinator, SessionMeta } from "@i-harness/session-persistence"
-import type { SearchHit, SessionQuery } from "@i-harness/session-query"
-
-/** Extra per-session search used when the indexed query has no rows for it
- *  (commit-log sessions are not in the file-backed index yet). */
-export type SessionSearchFallback = (sessionId: string, text: string, limit: number) => Promise<SearchHit[]>
+import type { ConversationSearch, SessionQuery } from "@i-harness/session-query"
 
 // Prior builds stored reviewers as ordinary subagents. Recognize only that
 // exact internal request envelope plus its lineage, never an untitled name.
@@ -51,29 +47,33 @@ export function createSessionRuntimeVisibility(coordinator: SessionCoordinator) 
 
 /** UI search excludes child sessions before applying its result limit, so a
  * busy child transcript cannot crowd the user's conversations out of results. */
-export function createConversationQuery(coordinator: SessionCoordinator, query: SessionQuery, fallback?: SessionSearchFallback, lineage: SessionQuery['lineage'] = query.lineage.bind(query)): SessionQuery {
+export function createConversationQuery(coordinator: SessionCoordinator, search: ConversationSearch, lineage: SessionQuery['lineage']): SessionQuery {
   const visible = createConversationVisibility(coordinator)
   return {
     lineage,
     async search(text, options = {}) {
+      if (options.limit !== undefined && !Number.isInteger(options.limit)) throw new Error("Invalid search limit")
       const limit = Math.max(0, Math.min(options.limit ?? 20, 100))
-      const listed = options.sessionId ? [options.sessionId] : await coordinator.list()
-      // `subtreeOf` restricts the search to a session and its descendants; the
-      // per-session query is then asked without the filter.
-      const subtree = options.subtreeOf
-        ? new Set([options.subtreeOf, ...(await lineage(options.subtreeOf, { direction: 'descendants', depth: 16 })).map(node => node.sessionId)])
-        : undefined
-      const ids = subtree ? listed.filter(id => subtree.has(id)) : listed
-      const { subtreeOf: _subtreeOf, ...perSession } = options
-      const hits = []
-      for (const sessionId of ids) {
-        const { meta } = await coordinator.profile(sessionId)
-        if (!await visible(sessionId, meta)) continue
-        const direct = await query.search(text, { ...perSession, sessionId, limit })
-        if (direct.length || !fallback) { hits.push(...direct); continue }
-        hits.push(...await fallback(sessionId, text, limit))
+      if (!text.trim() || !limit) return []
+      const listed = options.sessionId && !options.subtreeOf ? [options.sessionId] : await coordinator.list()
+      const parents = new Map<string,string>()
+      const visibleIds: string[] = []
+      for (const id of listed) {
+        const { meta } = await coordinator.profile(id)
+        if (options.subtreeOf && meta.parentSession) parents.set(id, meta.parentSession)
+        if ((!options.sessionId || id === options.sessionId) && await visible(id, meta)) visibleIds.push(id)
       }
-      return hits.sort((a, b) => a.bm25 - b.bm25).slice(0, limit)
+      if (!options.subtreeOf) return search(text, visibleIds, limit)
+      const root = options.subtreeOf
+      const inSubtree = visibleIds.filter(id => {
+        let current: string | undefined = id
+        for (let depth = 0; current && depth <= 16; depth++) {
+          if (current === root) return true
+          current = parents.get(current)
+        }
+        return false
+      })
+      return search(text, inSubtree, limit)
     },
   }
 }

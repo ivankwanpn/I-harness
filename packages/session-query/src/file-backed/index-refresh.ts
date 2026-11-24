@@ -1,3 +1,4 @@
+import { candidateText } from "./literal-candidates.ts"
 import type { DatabaseSync } from "node:sqlite"
 import { createHash } from "node:crypto"
 import { readFile, stat } from "node:fs/promises"
@@ -27,6 +28,15 @@ export function createIndexRefresh(
   }
 
   const scanStore = createStoreScanner(storeRoot, signalGuard)
+
+  function dropDocuments(id: string): void {
+    db.prepare(`DELETE FROM conversation_grams WHERE rowid BETWEEN
+      (SELECT first_doc FROM indexed_sessions WHERE id = ?) AND
+      (SELECT last_doc FROM indexed_sessions WHERE id = ?)`).run(id, id)
+    db.prepare(`DELETE FROM indexed_docs WHERE rowid BETWEEN
+      (SELECT first_doc FROM indexed_sessions WHERE id = ?) AND
+      (SELECT last_doc FROM indexed_sessions WHERE id = ?) AND session_id = ?`).run(id, id, id)
+  }
 
   async function rebuildSession(id: string, rev: string, file: string): Promise<void> {
     const bytes = await readFile(file)
@@ -62,12 +72,18 @@ export function createIndexRefresh(
     // id's rows + fingerprint) — a torn rebuild is atomic, never half-served.
     db.exec("BEGIN IMMEDIATE")
     try {
-      db.prepare("DELETE FROM indexed_docs WHERE session_id = ?").run(id)
+      dropDocuments(id)
       db.prepare("DELETE FROM lineage WHERE id = ?").run(id)
       const insertDoc = db.prepare("INSERT INTO indexed_docs (session_id, seq, event_type, time, text) VALUES (?, ?, ?, ?, ?)")
+      const insertGrams = db.prepare("INSERT INTO conversation_grams(rowid, text) VALUES (?, ?)")
+      let firstDoc: number | bigint | null = null
+      let lastDoc: number | bigint | null = null
       for (let i = 0; i < events.length; i += 1) {
         const ev = events[i]!
-        insertDoc.run(id, ev.seq ?? i, ev.type, Date.now(), deriveSearchText(ev))
+        const text = deriveSearchText(ev)
+        lastDoc = insertDoc.run(id, ev.seq ?? i, ev.type, Date.now(), text).lastInsertRowid
+        if (text) insertGrams.run(lastDoc, candidateText(text))
+        firstDoc ??= lastDoc
       }
       const created = Date.parse(header.createdAt)
       db.prepare(
@@ -82,9 +98,10 @@ export function createIndexRefresh(
         header.origin ?? null,
       )
       db.prepare(
-        `INSERT INTO indexed_sessions (id, revision, fingerprint) VALUES (?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, fingerprint = excluded.fingerprint`,
-      ).run(id, rev, fingerprint)
+        `INSERT INTO indexed_sessions (id, revision, fingerprint, first_doc, last_doc) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, fingerprint = excluded.fingerprint,
+           first_doc = excluded.first_doc, last_doc = excluded.last_doc`,
+      ).run(id, rev, fingerprint, firstDoc, lastDoc)
       db.exec("COMMIT")
     } catch (err) {
       db.exec("ROLLBACK")
@@ -96,7 +113,7 @@ export function createIndexRefresh(
   async function removeSession(id: string): Promise<void> {
     db.exec("BEGIN IMMEDIATE")
     try {
-      db.prepare("DELETE FROM indexed_docs WHERE session_id = ?").run(id)
+      dropDocuments(id)
       db.prepare("DELETE FROM lineage WHERE id = ?").run(id)
       db.prepare("DELETE FROM indexed_sessions WHERE id = ?").run(id)
       db.exec("COMMIT")

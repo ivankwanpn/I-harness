@@ -6,14 +6,14 @@ import { isRpcSuccess, type RpcMessage } from '@i-harness/sdk'
 import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { createDesktopHost } from '../src/host.ts'
 
-it('searches a commit-log session transcript', async () => {
+it.each(['jsonl', 'commit-log'] as const)('searches a %s transcript with the same literal text contract', async sessionStore => {
   const root = await mkdtemp(join(tmpdir(), 'ih-gateway-scl-search-')), workspace = join(root, 'workspace'), sessionDir = join(root, 'sessions')
   await mkdir(workspace)
   const settingsPath = join(root, 'settings.json'), credentialsPath = join(root, 'credentials.json')
   await writeFile(settingsPath, JSON.stringify({ autoTitle: false, sandboxMode: 'read-only', compaction: { auto: false }, codeMode: { mode: 'off' }, llm: { providers: { fixture: { protocol: 'openai-completions', baseURL: 'http://127.0.0.1:1', apiKeyEnv: 'IH_TURN_KEY', models: [{ id: 'fixture', contextWindow: 32000 }] } }, defaultModel: { provider: 'fixture', model: 'fixture' } } }))
   await writeFile(credentialsPath, JSON.stringify({ refs: { IH_TURN_KEY: 'controlled' } }))
   const frames: RpcMessage[] = []
-  const host = await createDesktopHost({ workspace, sessionDir, settingsPath, credentialsPath, sessionStore: 'commit-log', onWrite: frame => frames.push(frame), buildProviderClient: () => controlledModel(request => ({ async *stream() { yield { type: 'text/chunk', text: 'answer' }; yield { type: 'end' } } } as import('@i-harness/llm-seam').ModelClient).stream(request)) })
+  const host = await createDesktopHost({ workspace, sessionDir, settingsPath, credentialsPath, sessionStore, onWrite: frame => frames.push(frame), buildProviderClient: () => controlledModel(request => ({ async *stream() { yield { type: 'text/chunk', text: 'answer' }; yield { type: 'end' } } } as import('@i-harness/llm-seam').ModelClient).stream(request)) })
   let serial = 0
   const call = async (method: string, params: unknown = {}) => {
     const id = ++serial
@@ -25,9 +25,14 @@ it('searches a commit-log session transcript', async () => {
   try {
     await call('initialize')
     const created = await call('session/create') as { sessionId: string }
-    await call('session/prompt', { sessionId: created.sessionId, prompt: 'unique-search-token please' })
+    await call('session/prompt', { sessionId: created.sessionId, prompt: 'unique-search-token please 請檢查工作區連線狀態 old middle code status ſKi ςΩΣ 🌳🧭🚆 word"quoted' })
     const hits = await call('desktop/session/search', { query: 'unique-search-token' }) as { hits: { sessionId: string; snippet: string }[] }
     expect(hits.hits.some(hit => hit.sessionId === created.sessionId && hit.snippet.includes('unique-search-token'))).toBe(true)
+    for (const query of ['工作區', 'OLD   middle', 'ski', 'Σωσ', '🌳🧭🚆', 'd"q', '作區']) {
+      const result = await call('desktop/session/search', { query }) as {hits: {sessionId: string; seq:number}[]}
+      expect(result.hits.map(hit => hit.sessionId)).toEqual([created.sessionId])
+    }
+    expect(await call('desktop/session/search', {query: 'old status'})).toEqual({hits: []})
     const missing = await call('desktop/session/search', { query: 'token-that-is-not-there' }) as { hits: unknown[] }
     expect(missing.hits).toEqual([])
     const contextHits = await call('desktop/context/search', { contextKind: 'sessions', query: 'unique-search-token', offset: 0 }) as { items: { kind: string; sessionId: string; seq: number; excerpt?: string }[]; total: number }
