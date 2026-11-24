@@ -191,8 +191,10 @@ async function launch() {
     callbacks.set(id, request.resolve)
     page.send(JSON.stringify({ id, method: "Runtime.evaluate", params: { expression, returnByValue: true, awaitPromise: true } }))
     try {
-      const reply = await Promise.race([request.promise, delay(10000, undefined, { ref: false })])
-      if (!reply || reply.error || reply.result.exceptionDetails) throw Error(reply?.error?.message ?? reply?.result?.result?.description ?? "Renderer RPC failed")
+      const timeout = soakMinutes ? 45_000 : 10_000
+      const reply = await Promise.race([request.promise, delay(timeout, undefined, { ref: false })])
+      if (!reply) throw Error("Renderer RPC did not reply within " + timeout + " ms")
+      if (reply.error || reply.result.exceptionDetails) throw Error(reply.error?.message ?? reply.result.result?.description ?? "Renderer RPC failed")
       return reply.result.result.value
     } finally { callbacks.delete(id) }
   }

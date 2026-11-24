@@ -4,10 +4,9 @@ import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { spawn, spawnSync } from "node:child_process"
 import { once } from "node:events"
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, rmdirSync, writeFileSync } from "node:fs"
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmdirSync, writeFileSync } from "node:fs"
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
 import { validateTestRoot, testOwner } from "../scripts/build-installer.mjs"
 
@@ -30,12 +29,13 @@ function setup(input, version) {
   return build
 }
 const previous = setup(values.previous, "0.1.16"), candidate = setup(values.candidate, "0.1.17")
-const installed = join(root, "I-harness")
+const fixture = mkdtempSync(join(root, "version-proof-"))
+const installed = join(fixture, "I-harness")
 const app = join(installed, "I-harness.exe")
 const owner = join(installed, ".i-harness-desktop-install.ini")
 assert(!existsSync(installed), "Use a clean destination inside the owned test namespace")
-const seeds = join(root, "legacy-profile")
-const workspace = join(root, "workspace")
+const seeds = join(fixture, "legacy-profile")
+const workspace = join(fixture, "workspace")
 mkdirSync(seeds); mkdirSync(workspace)
 const keep = join(installed, "unrelated.txt")
 const prefs = join(seeds, "preferences.json")
@@ -44,9 +44,10 @@ mkdirSync(attachments)
 writeFileSync(prefs, JSON.stringify({ theme: "dark", approvedFixturePreference: true }))
 writeFileSync(join(attachments, "example.txt"), "attached before upgrade")
 const profiles = [prefs, join(attachments, "example.txt")]
-const probe = join(root, "profile-probe.mjs")
+const probe = join(fixture, "profile-probe.mjs")
 writeFileSync(probe, `
   import assert from "node:assert/strict"
+  import { createHash } from "node:crypto"
   import { writeFileSync } from "node:fs"
   import { join } from "node:path"
   import { pathToFileURL } from "node:url"
@@ -68,19 +69,38 @@ writeFileSync(probe, `
     assert(reply && "result" in reply, method + " failed to return a result")
     return reply.result
   }
+  let created
   try {
     await call("initialize")
     if (process.argv[2] === "seed") {
-      console.log(JSON.stringify(await call("session/create")))
+      created = await call("session/create")
     } else {
       const id = process.env.IH_UPGRADE_SESSION
       const rows = await call("session/dashboard")
       assert(rows.sessions.some(session => session.id === id))
+      const navigation = await call("desktop/session/navigation/state", { includeCoverage: true })
+      assert.equal((navigation.entries ?? navigation)[id]?.projectId, "legacy-project")
       const history = await call("session/history", { sessionId: id, afterSeq: 0 })
       assert(history.events.some(event => event.type === "user/message" && event.text === "before update"))
       console.log(JSON.stringify({ restored: id, events: history.events.length, node: process.versions.node }))
     }
   } finally { await host.close() }
+  if (created) {
+    const installedBackend = join(root, "resources/gateway/node_modules/@i-harness")
+    const { createSessionCoordinator } = await import(pathToFileURL(join(installedBackend, "session-persistence/src/index.js")))
+    const { createJsonlBackend } = await import(pathToFileURL(join(installedBackend, "session-persistence-jsonl/src/index.js")))
+    const sessions = join(profile, "sessions")
+    const writer = createSessionCoordinator(createJsonlBackend(sessions), { lock: { enabled: true, lockRoot: sessions } })
+    try {
+      await writer.append(created.sessionId, [
+        { type: "turn/start" }, { type: "user/message", text: "before update" },
+        { type: "assistant/message", text: "retained reply" }, { type: "turn/end" },
+      ])
+      const document = "desktop-session-project-" + createHash("sha256").update(created.sessionId).digest("hex")
+      await writer.putDocument(document, { version: 1, projectId: "legacy-project" })
+    } finally { await writer.close() }
+    console.log(JSON.stringify(created))
+  }
 `)
 function run(file, args, options = {}) {
   const result = spawnSync(file, args, { cwd: root, encoding: "utf8", timeout: 240000, windowsHide: true, windowsVerbatimArguments: true, ...options })
@@ -94,7 +114,7 @@ function assertOwner() {
 }
 function uninstall() {
   assertOwner()
-  const copy = join(root, "verified-uninstall.exe")
+  const copy = join(fixture, "verified-uninstall.exe")
   copyFileSync(join(installed, "Uninstall.exe"), copy)
   assert.equal(run(copy, ["/S", "_?=" + installed]).status, 0)
   assert(!existsSync(app))
@@ -116,20 +136,8 @@ writeFileSync(keep, "unowned installation folder file")
 const created = profile("seed")
 assert(typeof created.sessionId === "string")
 env.IH_UPGRADE_SESSION = created.sessionId
-const installedBackend = join(installed, "resources/gateway/node_modules/@i-harness")
-const importPackaged = relativePath => import(pathToFileURL(join(installedBackend, relativePath)))
-const { createSessionCoordinator } = await importPackaged("session-persistence/src/index.js")
-const { createJsonlBackend } = await importPackaged("session-persistence-jsonl/src/index.js")
-const sessions = join(seeds, "sessions")
-const writer = createSessionCoordinator(createJsonlBackend(sessions), { lock: { enabled: true, lockRoot: sessions } })
-try {
-  await writer.append(created.sessionId, [
-    { type: "turn/start" }, { type: "user/message", text: "before update" },
-    { type: "assistant/message", text: "retained reply" }, { type: "turn/end" },
-  ])
-} finally { await writer.close() }
 const original = profile("verify"), digests = profiles.map(hash)
-const runningMarker = join(root, "running-ready")
+const runningMarker = join(fixture, "running-ready")
 const running = spawn(app, ["-e", "require('node:fs').writeFileSync(process.env.IH_UPGRADE_RUNNING, 'ready');setInterval(()=>{},1000)"], {
   env: { ...env, IH_UPGRADE_RUNNING: runningMarker }, windowsHide: true, stdio: "ignore",
 })
@@ -150,7 +158,13 @@ assert(lstatSync(obstruction).isDirectory(), "Test hook must interrupt a real pa
 rmdirSync(obstruction)
 uninstall()
 assert.deepEqual(profiles.map(hash), digests)
+const preserved = join(fixture, "saved-unrelated.txt")
+// A fresh setup accepts an empty installation directory. Put the unrelated
+// file back after the previous setup restores its owned payload.
+assert.equal(readFileSync(keep, "utf8"), "unowned installation folder file")
+renameSync(keep, preserved)
 assert.equal(install(previous).status, 0, "Previous version must be restorable")
+renameSync(preserved, keep)
 assert.equal(profile("verify").restored, original.restored)
 assert.equal(install(candidate).status, 0, "Idle installation must upgrade to the candidate")
 assert.equal(hash(app), candidate.payloadExeSha256)
@@ -162,6 +176,6 @@ assert.equal(readFileSync(keep, "utf8"), "unowned installation folder file")
 assert.deepEqual(profiles.map(hash), digests)
 const receipt = { previous: previous.version, candidate: candidate.version, versions: [previous.payloadId, candidate.payloadId],
   runningProtection: true, copyInterrupted: true, restoredPrevious: true, upgraded: true, retainedEvents: upgraded.events,
-  preservedProfile: true, removedOwnedPayload: true }
-writeFileSync(join(root, "version-upgrade.json"), JSON.stringify(receipt, null, 2) + "\n")
+  preservedProfile: true, preservedProjectBinding: true, removedOwnedPayload: true }
+writeFileSync(join(fixture, "version-upgrade.json"), JSON.stringify(receipt, null, 2) + "\n")
 console.log(JSON.stringify(receipt, null, 2))
