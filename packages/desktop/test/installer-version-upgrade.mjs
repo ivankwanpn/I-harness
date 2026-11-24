@@ -136,6 +136,7 @@ writeFileSync(keep, "unowned installation folder file")
 const created = profile("seed")
 assert(typeof created.sessionId === "string")
 env.IH_UPGRADE_SESSION = created.sessionId
+profiles.push(join(seeds, "settings.json"))
 const original = profile("verify"), digests = profiles.map(hash)
 const runningMarker = join(fixture, "running-ready")
 const running = spawn(app, ["-e", "require('node:fs').writeFileSync(process.env.IH_UPGRADE_RUNNING, 'ready');setInterval(()=>{},1000)"], {
