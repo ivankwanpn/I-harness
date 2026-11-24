@@ -8,12 +8,12 @@ I-harness 是開源的 AI 程式開發工作區。連接你選擇的模型服務
 
 ## 下載
 
-目前提供 **Windows x64 · v0.1.15**，包含 Desktop 與它需要的執行環境。詳見 [0.1.15 更新紀錄](docs/releases/v0.1.15.md)。
+目前提供 **Windows x64 · v0.1.16**，包含 Desktop 與它需要的執行環境。詳見 [0.1.16 更新紀錄](docs/releases/v0.1.16.md)。
 
 | 版本 | 適合你，如果… | 下載 |
 | --- | --- | --- |
-| **安裝版** | 想要一般 Windows 安裝流程、開始功能表捷徑和解除安裝入口 | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.15/I-harness-Setup-0.1.15.exe) |
-| **Portable 版** | 想解壓後直接執行，或自行選擇放置位置 | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.15/I-harness-0.1.15.zip) |
+| **安裝版** | 想要一般 Windows 安裝流程、開始功能表捷徑和解除安裝入口 | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.16/I-harness-Setup-0.1.16.exe) |
+| **Portable 版** | 想解壓後直接執行，或自行選擇放置位置 | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.16/I-harness-0.1.16.zip) |
 
 Portable 版解壓到獨立資料夾後，執行 `I-harness.exe`。讓程式與相鄰的 `resources` 資料夾保持一起。
 

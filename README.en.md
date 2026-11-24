@@ -8,12 +8,12 @@ I-harness is an open source workspace for coding with AI. Connect your preferred
 
 ## Download
 
-**Windows x64 · v0.1.15** includes Desktop and its required runtime. See the [0.1.15 release notes](docs/releases/v0.1.15.md).
+**Windows x64 · v0.1.16** includes Desktop and its required runtime. See the [0.1.16 release notes](docs/releases/v0.1.16.md).
 
 | Edition | Choose it when… | Download |
 | --- | --- | --- |
-| **Installer** | You want a standard Windows installation, Start menu shortcuts and an uninstall entry | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.15/I-harness-Setup-0.1.15.exe) |
-| **Portable** | You prefer extracting the app into a folder of your choice | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.15/I-harness-0.1.15.zip) |
+| **Installer** | You want a standard Windows installation, Start menu shortcuts and an uninstall entry | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.16/I-harness-Setup-0.1.16.exe) |
+| **Portable** | You prefer extracting the app into a folder of your choice | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.16/I-harness-0.1.16.zip) |
 
 Extract the portable ZIP into its own folder and run `I-harness.exe`. Keep the executable beside the `resources` folder.
 
