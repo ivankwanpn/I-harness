@@ -417,7 +417,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
     passiveGeneration:usageObservations?.observer,
     prepareTaskChild:nativeContext.prepareTaskChild,
     instructionEnvironment,
-    telemetry: { close() {}, emit(event) {
+    telemetry: { wantsTurnTokenEstimate: false, close() {}, emit(event) {
       if (timing && typeof event.data.sessionId === "string") {
         if (event.type === "turn/start") timing.mark("turn-start", event.data.sessionId)
         if (event.type === "provider/call") timing.mark("request-projected", event.data.sessionId)

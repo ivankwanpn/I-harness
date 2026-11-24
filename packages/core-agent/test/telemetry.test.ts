@@ -1,11 +1,12 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { createSession } from "@i-harness/core-session"
+import { append, createSession } from "@i-harness/core-session"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import { createMockClient } from "@i-harness/llm-mock"
 import type { Telemetry, TelemetryEvent } from "@i-harness/telemetry"
 import { modelFailureFacts, type ModelClient } from "@i-harness/llm-seam"
 import { createAgent } from "../src/index.ts"
+import { finishObservedTurn } from "../src/agent/finalization.ts"
 
 // M25: telemetry is an independent HOST event stream (separate from the session
 // log; agent-invisible). AgentDeps.telemetry is OPTIONAL — absent = no events
@@ -34,6 +35,25 @@ function makeTools(ctx: ReturnType<typeof createContext>): Tool[] {
 }
 
 describe("core-agent telemetry emit (M25)", () => {
+  it("completes and flushes the turn without calculating an unobserved token estimate", async () => {
+    const session = createSession()
+    append(session, { type: "turn/start" })
+    const { telemetry, events } = spyTelemetry()
+    const tokens = vi.fn(async () => { throw new Error("No consumer for the token estimate") })
+    const stop = vi.fn(async () => {})
+    const flush = vi.fn(async () => {})
+    const lifecycle = { turnOpen: true, stepOpen: false, providerCompleted: true, stepFailed: false }
+    const result = await finishObservedTurn({ session, telemetry: { ...telemetry, wantsTurnTokenEstimate: false }, flush },
+      lifecycle, () => 1, [], { tokens, finalText: () => "finished", stop })
+
+    expect(result.finalText).toBe("finished")
+    expect(session.events.at(-1)?.type).toBe("turn/end")
+    expect(events.map(event => event.type)).toEqual(["turn/end"])
+    expect(tokens).not.toHaveBeenCalled()
+    expect(stop).toHaveBeenCalledWith("finished")
+    expect(flush).toHaveBeenCalledOnce()
+  })
+
   it("preserves model facts through the agent cause while telemetry only records a canonical explanation", async () => {
     const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
     const { telemetry, events } = spyTelemetry()

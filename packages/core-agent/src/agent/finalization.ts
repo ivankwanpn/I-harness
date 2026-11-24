@@ -146,13 +146,15 @@ export async function finishTurn(ctx: PluginContext, deps: TurnFinalizationDeps,
  * observations instead of manufacturing a complete Session. */
 export async function finishObservedTurn(deps:Pick<AgentDeps,'facts'|'sourceFacts'|'flush'|'telemetry'> & {session?:AgentDeps['session']},lifecycle:TurnLifecycle,getSteps:()=>number,reasoning:string[],observations:{tokens():number|Promise<number>;finalText():string;stop(finalText:string):Promise<unknown>}):Promise<AgentResult>{
   await closeTurnBoundary(deps,lifecycle)
-  // M25: turn/end + token/usage at the turn boundary. The token count is the
-  // SAME estimate the M20 budget check uses (activeTokens over the derived
-  // surface); guarded so an absent telemetry never pays for it.
   if (deps.telemetry) {
     deps.telemetry.emit({ type: "turn/end", ts: Date.now(), data: { turns: getSteps() } })
-    const observed=observations.tokens(),tokens=typeof observed==='number'?observed:await observed
-    deps.telemetry.emit({ type: "token/usage", ts: Date.now(), data: { tokens } })
+    // This estimates the final model-neutral conversation. Provider usage and
+    // request admission were already accounted for at the exchange boundary.
+    if (deps.telemetry.wantsTurnTokenEstimate !== false) {
+      const observed = observations.tokens()
+      const tokens = typeof observed === "number" ? observed : await observed
+      deps.telemetry.emit({ type: "token/usage", ts: Date.now(), data: { tokens } })
+    }
   }
   // M14: content may be a parts array (image-bearing); extract text parts
   // only. The final message is an assistant text message, but be robust.
