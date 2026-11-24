@@ -31,7 +31,8 @@ export type DesktopProfileServices = ReturnType<typeof createDesktopProfileServi
 export async function createConfigurationHost(profile: DesktopProfileServices, send: GatewayWrite): Promise<DesktopHost> {
   await new SettingsStore({ path: profile.settingsPath }).loadObserved({ validate: validateDesktopSettingsDocument })
   const handlers: DesktopHandlers = {
-    hasActiveWork: () => profile.accounts.hasActiveLogin(),
+    hasActiveWork: () => false,
+    hasActiveProfileWork: () => profile.accounts.hasActiveLogin(),
     provider: profile.provider, codingPlans: profile.codingPlans,
     autoTitle: createAutoTitleSettings(profile.settingsPath),
     modelRetry: createModelRetrySettings(profile.settingsPath),

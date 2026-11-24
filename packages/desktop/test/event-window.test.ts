@@ -3,6 +3,7 @@ import type { HistoryRange } from "@i-harness/sdk"
 import {
   applyHistory,
   applyNotification,
+  createHistoryPreviewCache,
   emptyEventWindow,
   MAX_RETAINED_EVENTS,
   MAX_RETAINED_LIVE,
@@ -21,6 +22,52 @@ function page(events: WireEvent[], nextSeq: number): HistoryRange {
 }
 
 describe("Desktop event window", () => {
+  it("retains one recent page of durable events per preview and evicts the least recently used session", () => {
+    const cache = createHistoryPreviewCache()
+    const events = Array.from({ length: 1200 }, (_, i) => event(i, String(i)))
+    const active = { ...emptyEventWindow(), events, live: [event(undefined, "streaming")], cursor: 1200 }
+    for (const key of ["a", "b", "c", "d"]) cache.set(key, active)
+    expect(cache.get("a")).toMatchObject({ cursor: 1200, live: [] })
+    cache.set("e", active)
+    expect(cache.get("b")).toBeUndefined()
+    expect(cache.get("a")!.events).toEqual(events.slice(700))
+    expect(active.events).toHaveLength(1200)
+    expect(active.live).toHaveLength(1)
+  })
+
+  it("drops a cached preview when its newest page includes an image and retains the active message", () => {
+    const cache = createHistoryPreviewCache()
+    const original = applyHistory(emptyEventWindow(), page([event(0, "hello")], 1))
+    cache.set("a", original)
+    expect(cache.get("a")).toBeDefined()
+
+    const imageMessage: WireEvent = { type: "user/message", seq: 1, text: "image", images: [{ mediaType: "image/png", dataBase64: "aGVsbG8=" }] }
+    const withImage = applyHistory(original, page([imageMessage], 2))
+    cache.set("a", withImage)
+    expect(cache.get("a")).toBeUndefined()
+    expect(withImage.events.at(-1)).toEqual(imageMessage)
+
+    const text = Array.from({ length: 500 }, (_, index) => event(index + 2, "later text"))
+    cache.set("a", applyHistory(withImage, page(text, 502)))
+    expect(cache.get("a")?.events).toEqual(text)
+  })
+
+  it("keeps stable rows on empty replay and prefers the last durable record in an unordered page", () => {
+    const original = applyHistory(emptyEventWindow(), page([event(0, "zero"), event(2, "old"), event(4, "four")], 5))
+    expect(applyHistory(original, page([], 6)).events).toBe(original.events)
+    const incoming = [event(3, "three"), event(2, "first"), event(undefined, "unsequenced"), event(2, "replacement")]
+    expect(applyHistory(original, page(incoming, 5)).events).toEqual([original.events[0], incoming[3], incoming[0], original.events[2]])
+  })
+
+  it("drops a disjoint cached prefix while keeping newer notifications beyond a refreshed tail", () => {
+    const cached = applyHistory(emptyEventWindow(), page([event(9, "cached")], 10))
+    const withArrival = applyNotification(cached, event(51, "newer live arrival"))
+    const fresh = applyHistory(withArrival, { startSeq: 50, events: [event(50, "fresh")], nextSeq: 51 })
+    expect(fresh.events.map(row => row.seq)).toEqual([50, 51])
+    expect(fresh.cursor).toBe(51)
+    expect(applyHistory(cached, { startSeq: 10, events: [event(10, "adjacent")], nextSeq: 11 }).events).toHaveLength(2)
+  })
+
   it("coalesces live assistant text and drops delayed chunks once its durable reply arrives", () => {
     let state = applyHistory(emptyEventWindow(), page([{ type: "step/start", seq: 5 }], 6))
     const history = state.events

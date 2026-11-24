@@ -18,8 +18,9 @@ export function createStatus(store:Store,lifetime:()=>Pick<ConfigurationOwner,'c
   const usage={request(){metrics.embeddingRequests++;metrics.unreportedRequests++},reported(tokens:number){metrics.reportedInputTokens+=tokens;metrics.unreportedRequests--}}
   function status():CodeRetrievalStatus {
     const {config,closed,stopping,activeJobs}=lifetime(),{indexing,lastJob,settledDiagnostics}=jobs()
-    return {enabled:config.enabled,state:closed||!config.enabled?'disabled':stopping?'stopping':indexing?'indexing':error?'error':store.status().generation?'ready':'unindexed',
-      config:structuredClone(config),...store.status(),metrics:{...metrics},activeJobs,...(indexing?{jobId:indexing.jobId,progress:{...indexing.progress},indexDiagnostics:diagnostics(indexing)}:settledDiagnostics?{indexDiagnostics:{...settledDiagnostics}}:{}),...(lastJob?{lastJob:{...lastJob}}:{}),...(sourceHealth?{sourceHealth:{...sourceHealth,reasons:[...sourceHealth.reasons]}}:{}),...(error?{error}:{})}
+    const stored=store.status()
+    return {enabled:config.enabled,state:closed||!config.enabled?'disabled':stopping?'stopping':indexing?'indexing':error?'error':stored.generation?'ready':'unindexed',
+      config:structuredClone(config),...stored,metrics:{...metrics},activeJobs,...(indexing?{jobId:indexing.jobId,progress:{...indexing.progress},indexDiagnostics:diagnostics(indexing)}:settledDiagnostics?{indexDiagnostics:{...settledDiagnostics}}:{}),...(lastJob?{lastJob:{...lastJob}}:{}),...(sourceHealth?{sourceHealth:{...sourceHealth,reasons:[...sourceHealth.reasons]}}:{}),...(error?{error}:{})}
   }
   return {status,metrics,usage,get error(){return error},setError(value:string|undefined){error=value},setSourceHealth(value:CodeRetrievalStatus['sourceHealth']){sourceHealth=value},
     reset(){error=undefined;sourceHealth=undefined}}

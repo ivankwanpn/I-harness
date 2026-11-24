@@ -33,6 +33,26 @@ function fixture(handle?: (request: DesktopRequest) => unknown) {
 }
 
 describe("project conversation sidebar", () => {
+  it("reads one paired snapshot per workspace when search expands three overlapping projects", async () => {
+    const { props, bridge, emit } = fixture()
+    const sharedProjects = ["p1", "p2", "p3"].map(id => ({ ...projects[0]!, id, name: id, workspaceIds: ["w1"] }))
+    render(<ProjectSidebar {...props} projects={sharedProjects} workspaces={[workspaces[0]!]}
+      selectedWorkspaceId={undefined} selectedProjectId={undefined} selectedSessionId={undefined} dashboard={undefined} />)
+    const request = vi.mocked(bridge.request)
+    await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/session/navigation/state", workspaceId: "w1" }))
+    const counts = () => ["session/dashboard", "desktop/session/navigation/state"].map(kind => request.mock.calls.filter(([input]) => input.kind === kind).length)
+    request.mockClear()
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "Chat" } })
+    await screen.findByText("Chat w1")
+    const expanded = counts()
+    request.mockClear()
+    await act(async () => {
+      emit({ kind: "sdk/notification", workspaceId: "w1", method: "desktop/session/navigation/changed", params: {} })
+      await new Promise(resolve => setTimeout(resolve, 280))
+    })
+    expect({ expanded, refreshed: counts() }).toEqual({ expanded: [1, 1], refreshed: [1, 1] })
+  })
+
   it('discovers unclassified history in inactive assigned folders using metadata without opening their conversation lists', async () => {
     const { props, bridge } = fixture(request => request.kind === 'desktop/session/navigation/state'
       ? { s1: { pinned: true, unread: false } } : undefined)
@@ -94,6 +114,24 @@ describe("project conversation sidebar", () => {
     view.rerender(<ProjectSidebar {...props} dashboard={dashboard("Latest selected chat")} />)
     expect(screen.getByText("Latest selected chat")).toBeTruthy()
     expect(screen.queryByText("Current chat")).toBeNull()
+  })
+
+  it("reuses foreground status details for confirmed rows and rechecks changed membership", async () => {
+    let removed = false
+    const { props, bridge, emit } = fixture(request => removed && request.kind === "session/dashboard" ? { sessions: [] } : undefined)
+    const only = { ...props, workspaces: [workspaces[0]!] }
+    const view = render(<ProjectSidebar {...only} />)
+    await screen.findByText("Current chat")
+    vi.mocked(bridge.request).mockClear()
+    emit({ kind: "sdk/notification", workspaceId: "w1", method: "session/status", params: { sessionId: "s1", status: "idle" } })
+    view.rerender(<ProjectSidebar {...only} dashboard={dashboard("Latest status")} />)
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 280)) })
+    expect(screen.getByText("Latest status")).toBeTruthy()
+    expect(bridge.request).not.toHaveBeenCalled()
+    removed = true
+    view.rerender(<ProjectSidebar {...only} dashboard={{ sessions: [] }} />)
+    await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/session/navigation/state", workspaceId: "w1" }))
+    expect(screen.queryByText("Latest status")).toBeNull()
   })
 
   it("waits for a newly listed conversation's ownership without showing a grouping failure", async () => {
@@ -192,6 +230,26 @@ describe("project conversation sidebar", () => {
     await act(async () => { finish.forEach(resolve => resolve({ s1: { projectId: "p2", pinned: false, unread: false } })) })
     expect(screen.queryByText("Chat w2")).toBeNull()
     expect(screen.getByText("Current chat")).toBeTruthy()
+  })
+
+  it("drops rows, actions and cached foreground details when another bridge reuses the same IDs", async () => {
+    const original = fixture()
+    let finish!: (value: SessionDashboardResult) => void
+    const replacement = fixture(request => request.kind === "session/dashboard" ? new Promise(resolve => { finish = resolve }) : undefined)
+    const props = { ...original.props, workspaces: [workspaces[0]!] }
+    const view = render(<ProjectSidebar {...props} />)
+    await screen.findByText("Current chat")
+    fireEvent.click(screen.getByRole("button", { name: "更多會話操作 Current chat" }))
+    expect(screen.getByRole("menuitem", { name: "重新命名" })).toBeTruthy()
+    view.rerender(<ProjectSidebar {...props} bridge={replacement.bridge} />)
+    expect(screen.queryByText("Current chat")).toBeNull()
+    expect(screen.queryByRole("menuitem")).toBeNull()
+    await waitFor(() => expect(replacement.bridge.request).toHaveBeenCalledWith({ kind: "session/dashboard", workspaceId: "w1" }))
+    await act(async () => { finish(dashboard("New host chat")) })
+    await screen.findByText("New host chat")
+    expect(screen.queryByRole("menuitem")).toBeNull()
+    view.rerender(<ProjectSidebar {...props} bridge={replacement.bridge} dashboard={dashboard("Updated new host chat")} />)
+    expect(screen.getByText("Updated new host chat")).toBeTruthy()
   })
 
   it("refreshes an expanded project's affected folder on durable status but ignores chunks and other workspaces", async () => {

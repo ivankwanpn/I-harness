@@ -12,6 +12,7 @@ import { physicalBytes } from '../../context-output/src/artifact/quota.ts'
 import { createCodeRetrievalService } from '@i-harness/code-retrieval'
 import type { CodeSnapshotReader } from '@i-harness/code-retrieval'
 import { createFileProviderRuntime } from '@i-harness/provider-runtime/file'
+import { normalizeContextSubsystems } from '@i-harness/settings'
 import { createContextSubsystemSettings } from '../src/context-subsystems.ts'
 
 const roots: string[] = []; const closes: (() => Promise<void>)[] = []
@@ -98,6 +99,15 @@ it('rejects unsupported fields, invalid limits, secret values and implicit refer
   const f = await fixture()
   for (const patch of [{ scope: 'global', contextOutput: { enabled: 'yes' } }, { scope: 'global', codeRetrieval: { maxFiles: 0 } }, { scope: 'global', codeRetrieval: { ignorePatterns: Array(17).fill('a') } }, { scope: 'global', codeRetrieval: { embedding: { provider: 'ollama', endpoint: 'http://localhost', model: 'm', apiKey: 'SECRET' } } }, { scope: 'global', references: [{ id: 'r', path: '../external', label: 'reference' }] }, { scope: 'global', bad: true }]) await expect(f.controller.configure(patch)).rejects.toThrow()
   expect(await f.controller.state()).toMatchObject({ context: { enabled: false }, code: { enabled: false } })
+})
+it('keeps a newer workspace override when a policy observation races its configuration', async () => {
+  const f = await fixture()
+  const old = normalizeContextSubsystems({})
+  const configuring = f.controller.configure({ scope: 'workspace', contextOutput: { enabled: true } })
+  const refreshing = f.controller.syncPolicy(Promise.resolve(old))
+  await Promise.all([configuring, refreshing])
+  expect(f.contextOutput.status().enabled).toBe(true)
+  expect((await f.controller.state()).saved.contextOutput.enabled).toBe(true)
 })
 it('applies explicit references, indexes with host actor, and preserves index work during no-op sync', async () => {
   const f = await fixture()

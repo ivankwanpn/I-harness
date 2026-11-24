@@ -1,4 +1,4 @@
-import { normalizeWslExecution, type SettingsStore, type SettingsSandboxMode, type SettingsApprovalMode, type SettingsWindowsSandboxBackend, type SettingsWslExecution, type SettingsWebSearchMode } from "@i-harness/settings"
+import { normalizeWslExecution, type Settings, type SettingsStore, type SettingsSandboxMode, type SettingsApprovalMode, type SettingsWindowsSandboxBackend, type SettingsWslExecution, type SettingsWebSearchMode } from "@i-harness/settings"
 import { withDesktopSettings } from "./settings-file.ts"
 import { validateExecutionSettings } from "./settings-file.ts"
 
@@ -16,8 +16,7 @@ export interface AgentSettingsState {
 export function createAgentSettings(path: string, startup: AgentDefaults, options: { executionStatus?(): Promise<readonly { sessionId: string; status: unknown }[]>; onWindowsSandboxBackendChanged?(backend: SettingsWindowsSandboxBackend): void; onWslExecutionChanged?(configuration: SettingsWslExecution): void | Promise<void>; onWebSearchModeChanged?(mode: SettingsWebSearchMode): void | Promise<void>; onApprovalModeChanged?: (mode: SettingsApprovalMode) => void; onSandboxModeChanged?: (mode: SettingsSandboxMode) => void | Promise<void>; onAutoCompactionChanged?: (enabled: boolean) => void } = {}) {
   const effective = { ...startup, wslExecution: normalizeWslExecution(startup.wslExecution), windowsSandboxBackend: startup.windowsSandboxBackend ?? "legacy" }
   const withStore = <T>(work: (store: SettingsStore) => Promise<T>) => withDesktopSettings(path, work)
-  function snapshot(store: SettingsStore): AgentSettingsState {
-    const value = store.get()
+  function snapshot(value: Settings): AgentSettingsState {
     const saved = defaults(value)
     return { saved, effective: { ...effective, wslExecution: { ...effective.wslExecution } }, source: "settings", restartRequired: saved.windowsSandboxBackend !== effective.windowsSandboxBackend || JSON.stringify(saved.wslExecution) !== JSON.stringify(effective.wslExecution) || (effective.webSearchMode !== undefined && saved.webSearchMode !== effective.webSearchMode) || saved.sandboxMode !== effective.sandboxMode || saved.autoCompaction !== effective.autoCompaction || saved.approvalMode !== effective.approvalMode }
   }
@@ -66,12 +65,13 @@ export function createAgentSettings(path: string, startup: AgentDefaults, option
       effective.approvalMode = "ask-all"
     }
   }
-  const sync = async (): Promise<AgentSettingsState> => {
+  const sync = async (observe?: (saved: Settings) => void): Promise<AgentSettingsState> => {
     try {
       return await withStore(async (store) => {
         const value = store.get()
+        observe?.(value)
         await applyEffective(defaults(value))
-        return snapshot(store)
+        return snapshot(value)
       })
     } catch (error) { await constrain(); throw error }
   }
@@ -101,7 +101,7 @@ export function createAgentSettings(path: string, startup: AgentDefaults, option
         })
         const saved = store.get()
         await applyEffective(defaults(saved))
-        return snapshot(store)
+        return snapshot(saved)
       })
       return diagnostics(state)
     },

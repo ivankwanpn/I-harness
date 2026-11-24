@@ -18,17 +18,68 @@ export interface EventWindow {
 /** One retained session window is bounded; the durable log is the real store. */
 export const MAX_RETAINED_EVENTS = 20_000
 export const MAX_RETAINED_LIVE = 200
+export const RECENT_HISTORY_LIMIT = 500
+const MAX_CACHED_SESSIONS = 4
+
+/** Reopening a conversation paints its last native page while the host
+ * refreshes it. Browsing more conversations must not retain every full log. */
+export function createHistoryPreviewCache() {
+  const windows = new Map<string, EventWindow>()
+  return {
+    get(key: string) {
+      const value = windows.get(key)
+      if (value) {
+        windows.delete(key)
+        windows.set(key, value)
+      }
+      return value
+    },
+    set(key: string, window: EventWindow) {
+      windows.delete(key)
+      const events = window.events.length > RECENT_HISTORY_LIMIT ? window.events.slice(-RECENT_HISTORY_LIMIT) : window.events
+      // Image messages carry the original base64. Restore them from native
+      // history on selection instead of keeping their payloads in the cache.
+      if (events.some(event => event.type === "user/message" && event.images?.length)) return
+      windows.set(key, { ...window, events, live: [], assistantPreview: undefined })
+      if (windows.size > MAX_CACHED_SESSIONS) windows.delete(windows.keys().next().value!)
+    },
+  }
+}
 
 export function emptyEventWindow(): EventWindow {
   return { cursor: 0, events: [], live: [], connection: "online" }
 }
 
-function mergeBySeq(current: WireEvent[], incoming: WireEvent[]): WireEvent[] {
+function orderedBySeq(events: WireEvent[]): WireEvent[] {
+  if (events.every((event, index) => event.seq !== undefined && (!index || event.seq > events[index - 1]!.seq!))) return events
   const bySeq = new Map<number, WireEvent>()
-  for (const event of current) if (event.seq !== undefined) bySeq.set(event.seq, event)
-  // A replayed durable copy replaces the live copy of the same seq.
-  for (const event of incoming) if (event.seq !== undefined) bySeq.set(event.seq, event)
+  for (const event of events) if (event.seq !== undefined) bySeq.set(event.seq, event)
   return [...bySeq.values()].sort((a, b) => a.seq! - b.seq!)
+}
+
+/** The retained log is ordered and unique. Only merge the part touched by a
+ * page, and always prefer the durable replay over a live copy at the same seq. */
+function mergeBySeq(current: WireEvent[], incoming: WireEvent[]): WireEvent[] {
+  const page = orderedBySeq(incoming)
+  if (!page.length) return current
+  if (!current.length) return page
+  const first = page[0]!.seq!
+  if (first > current[current.length - 1]!.seq!) return current.concat(page)
+  let low = 0
+  let high = current.length
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2)
+    if (current[middle]!.seq! < first) low = middle + 1
+    else high = middle
+  }
+  const merged = current.slice(0, low)
+  let index = low
+  for (const event of page) {
+    while (index < current.length && current[index]!.seq! < event.seq!) merged.push(current[index++]!)
+    if (current[index]?.seq === event.seq) index++
+    merged.push(event)
+  }
+  return index < current.length ? merged.concat(current.slice(index)) : merged
 }
 
 function capEvents(events: WireEvent[]): WireEvent[] {
@@ -88,9 +139,14 @@ export function timelineEvents(state: Pick<EventWindow, "events" | "live">): Wir
 }
 
 export function applyHistory(state: EventWindow, page: HistoryRange): EventWindow {
+  // A background session can advance beyond the entire cached page. Keep
+  // subsequent live arrivals, and let the older-page cursor lead into the gap.
+  const previous = page.startSeq !== undefined && page.startSeq > state.cursor
+    ? state.events.filter(event => event.seq! >= page.startSeq!)
+    : state.events
   return {
     cursor: Math.max(state.cursor, page.nextSeq),
-    events: capEvents(mergeBySeq(state.events, page.events.filter(event => (event as { type: string }).type !== "model/activity").map(retainEvent))),
+    events: capEvents(mergeBySeq(previous, page.events.filter(event => (event as { type: string }).type !== "model/activity").map(retainEvent))),
     ...settleLive(state, page.events),
     connection: "online",
   }
@@ -144,7 +200,7 @@ export function historyViewport(page: HistoryRange, startSeq: number): HistoryVi
   return { events: page.events.filter(event => (event as { type: string }).type !== "model/activity").map(retainEvent), startSeq, endSeq: page.nextSeq, hasBefore: startSeq > 0, hasAfter: page.events.length === HISTORY_PAGE_SIZE }
 }
 export function pageHistoryViewport(state: HistoryViewport, page: HistoryRange, startSeq: number, direction: "before" | "after"): HistoryViewport {
-  const merged = mergeBySeq(state.events, page.events.filter(event => (event as { type: string }).type !== "model/activity").map(retainEvent))
+  const merged = mergeBySeq(orderedBySeq(state.events), page.events.filter(event => (event as { type: string }).type !== "model/activity").map(retainEvent))
   const events = direction === "before" ? merged.slice(0, MAX_HISTORY_VIEW_EVENTS) : merged.slice(-MAX_HISTORY_VIEW_EVENTS)
   const first = events[0]?.seq ?? startSeq
   const last = events.at(-1)?.seq

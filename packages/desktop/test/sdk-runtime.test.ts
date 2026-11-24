@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { HarnessClient, RpcNotification, ServerInfo } from "@i-harness/sdk"
@@ -20,6 +20,69 @@ function tempRoot(): string {
   roots.push(root)
   return root
 }
+
+function activityFixture() {
+  const root = tempRoot(), sessionsRoot = join(root, "sessions")
+  const entry = join(root, "gateway", "cli", "src")
+  mkdirSync(sessionsRoot)
+  mkdirSync(entry, { recursive: true })
+  writeFileSync(join(entry, "package.json"), '{"type":"module"}')
+  copyFileSync(new URL("./helpers/activity-host.mjs", import.meta.url), join(entry, "cli.js"))
+  return { root, sessionsRoot, workspace: (id: string) => ({ id, label: id, path: root }) }
+}
+
+it("uses one shared-host probe per decision, requires complete results, and retains profile-owned work", async () => {
+  const f = activityFixture(), manager = createWorkspaceRuntimeManager({ sessionsRoot: f.sessionsRoot, resourcesPath: f.root })
+  try {
+    const [a, b] = await Promise.all([manager.get(f.workspace("a")), manager.get(f.workspace("b"))])
+    expect(a.hostPid).toBe(b.hostPid)
+    expect(await manager.hasActiveWork()).toBe(false)
+    expect(await a.client.request("stats")).toMatchObject({ probes: 1, inner: 0 })
+    for (const value of ["missing", "duplicate", "foreign", "unknown"]) {
+      await b.client.request("mode", { value })
+      expect(await manager.hasActiveWork()).toBe(true)
+    }
+    await b.client.request("mode", { value: "idle" })
+    await a.client.request("login", { active: true })
+    expect(await manager.hasActiveWork()).toBe(true)
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(await manager.evictIdle!(1)).toBe(2)
+    expect(await manager.hasActiveWork()).toBe(true)
+    const reopened = await manager.get(f.workspace("a"))
+    expect(reopened.hostPid).toBe(a.hostPid)
+    await reopened.client.request("login", { active: false })
+    expect(await manager.hasActiveWork()).toBe(false)
+    expect(await reopened.client.request("stats")).toMatchObject({ inner: 0 })
+  } finally { await manager.close() }
+})
+
+it("uses SDK activity when an older shared host does not advertise process reports", async () => {
+  const f = activityFixture(), manager = createWorkspaceRuntimeManager({ sessionsRoot: f.sessionsRoot, resourcesPath: f.root })
+  try {
+    const runtime = await manager.get(f.workspace("legacy"))
+    expect(await manager.hasActiveWork()).toBe(false)
+    expect(await runtime.client.request("stats")).toMatchObject({ probes: 0, inner: 1 })
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(await manager.evictIdle!(1)).toBe(1)
+  } finally { await manager.close() }
+})
+
+it("cannot apply a suspended activity result to a reopened channel of the same name", async () => {
+  const f = activityFixture(), host = createSharedDesktopHost(f.sessionsRoot, f.root)
+  const a = await host.launch(f.workspace("a")), b = await host.launch(f.workspace("b"))
+  try {
+    await Promise.all([a.ready, b.ready])
+    await a.client.request("mode", { value: "hold" })
+    const inspecting = host.inspectActivity(["a", "b"])
+    await vi.waitFor(async () => expect(await b.client.request("stats")).toMatchObject({ held: true }))
+    await a.client.close()
+    const replacement = await host.launch(f.workspace("a"))
+    await replacement.ready
+    await b.client.request("release")
+    expect((await inspecting).idle).toEqual(new Set(["b"]))
+    await replacement.client.close()
+  } finally { await b.client.close(); await host.close() }
+})
 
 it("launches the bundled CLI through a junction using its original entry path", async () => {
   const root = tempRoot()

@@ -112,6 +112,7 @@ const passiveRequests = new Set([
 ])
 
 export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"> & Partial<SdkServer>, send: GatewayWrite, handlers: DesktopHandlers, internalIds: Set<string> = new Set()): {
+  hasActiveWork(): boolean
   handleLine(line: string): Promise<void>
   close(): Promise<void>
 } {
@@ -766,7 +767,16 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
       send(makeFailure(message.id, METHOD_NOT_FOUND, `unknown method: ${message.method}`))
   }
 
+  function hasActiveWork(includeProfile = false): boolean {
+    try {
+      return closed || !initialized || requestsInFlight > 0 || handlers.hasActiveWork?.() !== false
+        || (includeProfile && !!handlers.hasActiveProfileWork && handlers.hasActiveProfileWork() !== false)
+    }
+    catch { return true }
+  }
+
   return {
+    hasActiveWork,
     async handleLine(line) {
       if (closed) return
       const message = decodeFrame(line)
@@ -777,10 +787,7 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
           send(makeFailure(message.id, INVALID_PARAMS, "Runtime activity accepts no parameters"))
           return
         }
-        let active = true
-        try { active = requestsInFlight > 0 || handlers.hasActiveWork() !== false }
-        catch { /* An unavailable owner keeps its process. */ }
-        send(makeSuccess(message.id, { active }))
+        send(makeSuccess(message.id, { active: hasActiveWork(true) }))
         return
       }
       if (passiveRequests.has(message.method)) return dispatch(line, message)

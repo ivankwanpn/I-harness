@@ -2,17 +2,17 @@ import { displayError } from "../design/error-display.ts"
 import type { SessionDashboardResult } from "@i-harness/sdk"
 import type { WorkspaceEntry } from "../../main/workspaces.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useEffect, useRef, type Dispatch, type RefObject, type SetStateAction } from "react"
 import { useLocale, useText } from "../design/i18n.ts"
 import { createRefreshScheduler } from "../session/refresh-scheduler.ts"
-import { affectsSessionDashboard } from "../session/notifications.ts"
 import type { ProjectSidebarProps } from "./ProjectSidebar.tsx"
 import { TaskList, type TaskRowScope } from "./TaskList.tsx"
 import { collectProjectSessions, confirmedSessionNavigation, isSessionNavigationState, projectSessionKey, type WorkspaceSessionSnapshot } from "./project-sessions.ts"
 
 interface ProjectSessionsProps {
   bridge: DesktopBridge
-  revision?: number
+  snapshots: Record<string, WorkspaceSessionSnapshot>
+  readers: RefObject<Map<string, SidebarWorkspaceReader>>
   workspaces: WorkspaceEntry[]
   projectId?: string
   memberWorkspaceIds: ReadonlySet<string>
@@ -27,7 +27,6 @@ interface ProjectSessionsProps {
   onManageArchived: ProjectSidebarProps["onManageArchived"]
   onManageSessions?: ProjectSidebarProps["onManageSessions"]
   filter?: string
-  onOwners?(workspaceId: string, owners: (string | undefined)[]): void
 }
 
 function confirmedDashboard(value: unknown): value is SessionDashboardResult {
@@ -40,123 +39,144 @@ function withDashboardDetails(dashboard: SessionDashboardResult | undefined, det
   // The paired sidebar snapshot owns membership. Foreground reads can update
   // presentation for its rows while a newly listed session awaits its owner.
   const rows = new Map(details.sessions.map(row => [row.id, row]))
+  if (!dashboard.sessions.some(row => rows.has(row.id) && rows.get(row.id) !== row)) return dashboard
   return { ...dashboard, sessions: dashboard.sessions.map(row => rows.get(row.id) ?? row) }
 }
 
-/** One visible list, with source identity retained for every native operation. */
+export type SidebarReadMode = "owners" | "foreground" | "sessions"
+export interface SidebarWorkspaceSnapshot extends WorkspaceSessionSnapshot {
+  owners?: ReadonlySet<string | undefined>
+}
+export interface SidebarWorkspaceReader {
+  mode: SidebarReadMode
+  followsForeground(sessionId: unknown): boolean
+  refresh(): void
+  disconnect(message: string): void
+  reportError(reason: unknown): void
+}
+
+/** Every project that displays this workspace consumes the same paired snapshot. */
+export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, details, readers, setSnapshots }: {
+  bridge: DesktopBridge
+  workspaceId: string
+  mode: SidebarReadMode
+  revision?: number
+  details?: SessionDashboardResult
+  readers: RefObject<Map<string, SidebarWorkspaceReader>>
+  setSnapshots: Dispatch<SetStateAction<Record<string, SidebarWorkspaceSnapshot>>>
+}) {
+  const en = useLocale(state => state.locale) === "en"
+  const foreground = useRef(details)
+  foreground.current = details
+  const paired = useRef<SessionDashboardResult | undefined>(undefined)
+  useEffect(() => {
+    let active = true
+    let generation = 0
+    let initial = true
+    let confirmedRows: WorkspaceSessionSnapshot["navigation"]
+    paired.current = undefined
+    if (mode === "owners") {
+      setSnapshots(previous => previous[workspaceId]?.dashboard || previous[workspaceId]?.navigation ? {
+        ...previous, [workspaceId]: { owners: previous[workspaceId]?.owners },
+      } : previous)
+    }
+    const refresh = createRefreshScheduler(async () => {
+      const ticket = generation
+      const current = () => active && generation === ticket
+      const supplied = foreground.current
+      const initialDetails = initial && mode === "foreground" ? supplied : undefined
+      initial = false
+      let dashboard: SessionDashboardResult | undefined
+      let error: string | undefined
+      if (mode !== "owners") {
+        try {
+          const result = initialDetails ?? await bridge.request({ kind: "session/dashboard", workspaceId })
+          if (!confirmedDashboard(result)) throw new Error(en ? "Conversation list is unavailable" : "無法取得會話列表")
+          dashboard = result
+        } catch (reason) { error = reason instanceof Error ? reason.message : String(reason) }
+        if (!current()) return
+      }
+      // Native creation and moves may finish while the dashboard is loading.
+      // Always confirm the owner after reading the list.
+      let navigation: WorkspaceSessionSnapshot["navigation"]
+      try {
+        const result = await bridge.request({ kind: "desktop/session/navigation/state", workspaceId })
+        if (!isSessionNavigationState(result)) throw new Error(en ? "Conversation ownership is unavailable" : "會話分組狀態無法確認")
+        navigation = result
+      } catch (reason) { error ??= reason instanceof Error ? reason.message : String(reason) }
+      if (!current()) return
+      paired.current = dashboard
+      confirmedRows = dashboard && !dashboard.listingUnavailable ? navigation : undefined
+      const owners = navigation && new Set(Object.values(navigation).flatMap(row => confirmedSessionNavigation(row) ? [row.projectId] : []))
+      setSnapshots(previous => ({ ...previous, [workspaceId]: {
+        // Keep the group's retry control reachable after a failed read. Its
+        // conversation rows always require a currently confirmed navigation.
+        dashboard, navigation: mode === "owners" ? undefined : navigation, owners: owners ?? previous[workspaceId]?.owners, error,
+      } }))
+      if (dashboard && foreground.current !== supplied && membershipChanged(dashboard, foreground.current)) refresh.schedule()
+    })
+    const reader: SidebarWorkspaceReader = {
+      mode,
+      followsForeground(id) {
+        return !!foreground.current && !foreground.current.listingUnavailable && typeof id === "string"
+          && confirmedSessionNavigation(confirmedRows?.[id])
+      },
+      refresh: refresh.schedule,
+      disconnect(message) {
+        if (!active) return
+        generation++
+        confirmedRows = undefined
+        setSnapshots(previous => ({ ...previous, [workspaceId]: { ...previous[workspaceId], navigation: undefined, error: message } }))
+        refresh.schedule()
+      },
+      reportError(reason) {
+        if (active) setSnapshots(previous => ({ ...previous, [workspaceId]: {
+          ...previous[workspaceId], error: reason instanceof Error ? reason.message : String(reason),
+        } }))
+      },
+    }
+    readers.current.set(workspaceId, reader)
+    refresh.schedule(0)
+    return () => { active = false; refresh.dispose(); readers.current.delete(workspaceId) }
+  }, [bridge, workspaceId, mode, revision, en, readers, setSnapshots])
+
+  useEffect(() => {
+    if (!details || details.listingUnavailable || !paired.current) return
+    if (membershipChanged(paired.current, details)) readers.current.get(workspaceId)?.refresh()
+    setSnapshots(previous => {
+      const snapshot = previous[workspaceId]
+      if (!snapshot?.dashboard) return previous
+      const dashboard = withDashboardDetails(snapshot.dashboard, details)
+      return dashboard === snapshot.dashboard ? previous : { ...previous, [workspaceId]: { ...snapshot, dashboard } }
+    })
+  }, [workspaceId, details, readers, setSnapshots])
+  return null
+}
+
+function membershipChanged(paired: SessionDashboardResult, details?: SessionDashboardResult) {
+  if (!details || details.listingUnavailable || paired.listingUnavailable) return false
+  if (paired.sessions.length !== details.sessions.length) return true
+  const ids = new Set(paired.sessions.map(row => row.id))
+  return details.sessions.some(row => !ids.has(row.id))
+}
+
+/** Project grouping is a presentation of the workspace snapshots. */
 export function ProjectSessions(props: ProjectSessionsProps) {
   const t = useText()
   const en = useLocale(state => state.locale) === "en"
-  const { bridge, workspaces, selectedWorkspaceId, selectedSessionId } = props
-  const [snapshots, setSnapshots] = useState<Record<string, WorkspaceSessionSnapshot>>({})
-
-  const workspaceKey = JSON.stringify(workspaces.map(row => row.id))
-  const active = useRef(false)
-  const epoch = useRef(0)
-  const tickets = useRef<Record<string, number>>({})
-  const readers = useRef(new Map<string, ReturnType<typeof createRefreshScheduler>>())
-  const currentSnapshots = useRef(snapshots)
-  currentSnapshots.current = snapshots
-  const supplied = useRef({ workspaceId: selectedWorkspaceId, dashboard: props.dashboard })
-  supplied.current = { workspaceId: selectedWorkspaceId, dashboard: props.dashboard }
-
-  const read = useCallback(async (workspaceId: string, initial: boolean) => {
-    if (!active.current) return
-    const scope = epoch.current
-    const ticket = tickets.current[workspaceId] = (tickets.current[workspaceId] ?? 0) + 1
-    const current = () => active.current && scope === epoch.current && ticket === tickets.current[workspaceId]
-    const initialDashboard = initial && supplied.current.workspaceId === workspaceId ? supplied.current.dashboard : undefined
-    const [sessions] = await Promise.allSettled([
-      initialDashboard ?? bridge.request({ kind: "session/dashboard", workspaceId }),
-    ] as const)
-    if (!current()) return
-    // A newly listed conversation may have been created during an expensive
-    // dashboard read. Observe its saved owner after the dashboard settles.
-    const [navigation] = await Promise.allSettled([bridge.request({ kind: "desktop/session/navigation/state", workspaceId })] as const)
-    if (!current()) return
-    const dashboard = sessions.status === "fulfilled" && confirmedDashboard(sessions.value) ? sessions.value : undefined
-    const confirmedNavigation = navigation.status === "fulfilled" && isSessionNavigationState(navigation.value) ? navigation.value : undefined
-    if (confirmedNavigation) props.onOwners?.(workspaceId, [...new Set(Object.values(confirmedNavigation).flatMap(row => confirmedSessionNavigation(row) ? [row.projectId] : []))])
-    const failed = [sessions, navigation].find(result => result.status === "rejected")
-    setSnapshots(previous => ({ ...previous, [workspaceId]: {
-      dashboard,
-      navigation: confirmedNavigation,
-      error: failed?.status === "rejected" ? failed.reason instanceof Error ? failed.reason.message : String(failed.reason)
-        : !dashboard ? en ? "Conversation list is unavailable" : "無法取得會話列表"
-          : confirmedNavigation ? undefined : en ? "Conversation ownership is unavailable" : "會話分組狀態無法確認",
-    } }))
-  }, [bridge, en, props.onOwners])
-
-  useEffect(() => {
-    active.current = true
-    epoch.current++
-    const ids = new Set(workspaces.map(row => row.id))
-    setSnapshots(current => Object.keys(current).every(id => ids.has(id)) ? current
-      : Object.fromEntries(Object.entries(current).filter(([id]) => ids.has(id))))
-    const refreshers = new Map(workspaces.map(workspace => {
-      let initial = true
-      return [workspace.id, createRefreshScheduler(() => {
-        const job = read(workspace.id, initial)
-        initial = false
-        return job
-      })] as const
-    }))
-    readers.current = refreshers
-    const unsubscribe = bridge.onEvent(event => {
-      if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity" || !ids.has(event.workspaceId)) return
-      if (event.kind === "sdk/disconnected") {
-        tickets.current[event.workspaceId] = (tickets.current[event.workspaceId] ?? 0) + 1
-        setSnapshots(current => ({ ...current, [event.workspaceId]: { ...current[event.workspaceId], navigation: undefined, error: event.message } }))
-        refreshers.get(event.workspaceId)?.schedule()
-        return
-      }
-      if (event.kind === "sdk/ready") { refreshers.get(event.workspaceId)?.schedule(); return }
-      if (affectsSessionDashboard(event.method, event.params)) refreshers.get(event.workspaceId)?.schedule()
-    })
-    for (const refresh of refreshers.values()) refresh.schedule(0)
-    // Native session changes publish notifications. Reconcile out-of-process
-    // changes when the user returns to this window.
-    const refreshOnReturn = () => {
-      if (document.visibilityState === "hidden") return
-      const id = supplied.current.workspaceId
-      if (id) refreshers.get(id)?.schedule()
-    }
-    window.addEventListener("focus", refreshOnReturn)
-    document.addEventListener("visibilitychange", refreshOnReturn)
-    return () => {
-      active.current = false
-      epoch.current++
-      window.removeEventListener("focus", refreshOnReturn)
-      document.removeEventListener("visibilitychange", refreshOnReturn)
-      for (const refresh of refreshers.values()) refresh.dispose()
-      unsubscribe()
-    }
-  }, [bridge, workspaceKey, read, props.revision])
-
-  useEffect(() => {
-    const details = props.dashboard
-    if (!selectedWorkspaceId || !details || details.listingUnavailable) return
-    const paired = currentSnapshots.current[selectedWorkspaceId]?.dashboard
-    if (!paired || paired.listingUnavailable) return
-    const ids = new Set(paired.sessions.map(row => row.id))
-    if (details.sessions.some(row => !ids.has(row.id))) readers.current.get(selectedWorkspaceId)?.schedule()
-    setSnapshots(current => {
-      const snapshot = current[selectedWorkspaceId]
-      return snapshot?.dashboard ? { ...current, [selectedWorkspaceId]: {
-        ...snapshot, dashboard: withDashboardDetails(snapshot.dashboard, details),
-      } } : current
-    })
-  }, [selectedWorkspaceId, props.dashboard])
-  const views = { ...snapshots }
-  if (selectedWorkspaceId && (views[selectedWorkspaceId] || props.dashboard?.listingUnavailable)) views[selectedWorkspaceId] = {
-    ...views[selectedWorkspaceId], dashboard: props.dashboard?.listingUnavailable ? props.dashboard
-      : withDashboardDetails(views[selectedWorkspaceId]?.dashboard, props.dashboard),
-  }
+  const { bridge, workspaces, selectedWorkspaceId, selectedSessionId, snapshots, readers } = props
+  const views = selectedWorkspaceId && props.dashboard ? { ...snapshots, [selectedWorkspaceId]: {
+    ...snapshots[selectedWorkspaceId], dashboard: props.dashboard.listingUnavailable ? props.dashboard
+      : withDashboardDetails(snapshots[selectedWorkspaceId]?.dashboard, props.dashboard),
+  } } : snapshots
   const rows = collectProjectSessions({ ...props, snapshots: views })
   const rowScopes = Object.fromEntries(rows.map(row => [row.key, row.source]))
   const navigation = Object.fromEntries(rows.map(row => [row.key, row.navigation]))
   const attentionCounts = Object.fromEntries(rows.filter(row => row.source.workspaceId === selectedWorkspaceId).map(row => [row.key, props.attentionBySession?.[row.source.sessionId] ?? 0]))
-  const loading = workspaces.some(row => !views[row.id]?.navigation && !views[row.id]?.error && !views[row.id]?.dashboard?.listingUnavailable)
+  const loading = workspaces.some(row => {
+    const snapshot = views[row.id]
+    return !snapshot?.error && !snapshot?.dashboard?.listingUnavailable && (!snapshot?.dashboard || !snapshot.navigation)
+  })
   const hasError = workspaces.some(row => !!views[row.id]?.error)
   const listingUnavailable = workspaces.filter(row => views[row.id]?.dashboard?.listingUnavailable)
   const ownershipUnavailable = workspaces.filter(workspace => {
@@ -167,35 +187,35 @@ export function ProjectSessions(props: ProjectSessionsProps) {
   const showList = rows.length > 0 || !loading && !hasError && listingUnavailable.length === 0 && ownershipUnavailable.length === 0
 
   async function manage(source: TaskRowScope, action: Parameters<ProjectSidebarProps["onManageSession"]>[2], title?: string) {
-    const scope = epoch.current
+    const reader = readers.current.get(source.workspaceId)
     await props.onManageSession(source.workspaceId, source.sessionId, action, title)
-    if (active.current && scope === epoch.current) readers.current.get(source.workspaceId)?.schedule()
+    reader?.refresh()
   }
 
   return <div className="project-sidebar-sessions">
     {workspaces.filter(row => views[row.id]?.error).map(workspace => <p key={workspace.id} role="alert" className="notice error-text">
       {workspaces.length > 1 ? <span>{workspace.label} · </span> : null}<span title={views[workspace.id]!.error}>{displayError(views[workspace.id]!.error).summary}</span>
-      <button type="button" className="link-button" onClick={() => readers.current.get(workspace.id)?.schedule()}>{t("重試")}</button>
+      <button type="button" className="link-button" onClick={() => readers.current.get(workspace.id)?.refresh()}>{t("重試")}</button>
     </p>)}
     {listingUnavailable.map(workspace => <p key={workspace.id} className="notice">{workspaces.length > 1 ? `${workspace.label} · ` : ""}{t("無法取得會話列表")}</p>)}
     {ownershipUnavailable.map(workspace => <p key={workspace.id} role="alert" className="notice error-text">
       {workspaces.length > 1 ? `${workspace.label} · ` : ""}{en ? "Conversation ownership is unavailable" : "會話分組狀態無法確認"}
-      <button type="button" className="link-button" onClick={() => readers.current.get(workspace.id)?.schedule()}>{t("重試")}</button>
+      <button type="button" className="link-button" onClick={() => readers.current.get(workspace.id)?.refresh()}>{t("重試")}</button>
     </p>)}
     {loading ? <p className="notice">{t("正在讀取會話…")}</p> : null}
     {showList ? <TaskList dashboard={{ sessions: rows.map(row => ({ ...row.session, id: row.key })) }} rowScopes={rowScopes} navigation={navigation} showBatchManagement={false}
       selectedId={selectedWorkspaceId && selectedSessionId ? projectSessionKey(selectedWorkspaceId, selectedSessionId) : undefined} attentionCounts={attentionCounts}
       onSelect={(id, source) => {
         if (!source) return
-        const scope = epoch.current
+        const reader = readers.current.get(source.workspaceId)
         props.onSelectSession(source.workspaceId, id, props.projectId)
         if (navigation[projectSessionKey(source.workspaceId, id)]?.unread !== true) return
         void (async () => {
           try {
             await props.onManageSession(source.workspaceId, id, "read")
-            if (active.current && scope === epoch.current) readers.current.get(source.workspaceId)?.schedule()
+            reader?.refresh()
           } catch (reason) {
-            if (active.current && scope === epoch.current) setSnapshots(current => ({ ...current, [source.workspaceId]: { ...current[source.workspaceId], error: reason instanceof Error ? reason.message : String(reason) } }))
+            reader?.reportError(reason)
           }
         })()
       }}

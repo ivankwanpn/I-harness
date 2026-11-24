@@ -39,17 +39,21 @@ function selection(value: unknown): Selection {
   return { provider, model: row.model, ...(row.protocol === undefined ? {} : { protocol: row.protocol as Selection["protocol"] }), ...(row.reasoningEffort === undefined ? {} : { reasoningEffort: row.reasoningEffort as string }) }
 }
 export function createSubagentSettings(path: string, effectiveEnabled: boolean, options: { onEnabledChanged?: (enabled: boolean) => void } = {}) {
-  function stateOf(settings: Settings): SubagentSettingsState {
-    if (settings.plugins.subagentModel !== effectiveEnabled && options.onEnabledChanged) {
-      options.onEnabledChanged(settings.plugins.subagentModel)
-      effectiveEnabled = settings.plugins.subagentModel
+  function syncEnabled(enabled: boolean) {
+    if (enabled !== effectiveEnabled && options.onEnabledChanged) {
+      options.onEnabledChanged(enabled)
+      effectiveEnabled = enabled
     }
+  }
+  function stateOf(settings: Settings): SubagentSettingsState {
+    syncEnabled(settings.plugins.subagentModel)
     const builtins: { name: string; description?: string; tools?: string[] }[] = [...builtinRoles(), { name: "reviewer", description: "Approval reviewer: assesses tool calls using its own selected model.", tools: [] }]
     const roles = settings.agents.roles
     return { enabled: settings.plugins.subagentModel, effectiveEnabled, restartRequired: settings.plugins.subagentModel !== effectiveEnabled,
       roles: [...new Set([...builtins.map((role) => role.name), ...Object.keys(roles)])].map((name) => ({ name, description: builtins.find((role) => role.name === name)?.description, ...(Object.hasOwn(roles, name) ? { selection: roles[name] } : {}), tools: settings.agents.roleTools?.[name] ?? builtins.find((role) => role.name === name)?.tools ?? [] })), toolGroups: ROLE_TOOL_GROUPS.map((group) => ({ ...group, tools: [...group.tools] })) }
   }
   return {
+    syncEnabled,
     state: () => withDesktopSettings(path, async (store) => stateOf(store.get())),
     // The executor's role callback is synchronous. Read only at a spawn/resume
     // boundary, so even another gateway's atomic write is visible immediately;

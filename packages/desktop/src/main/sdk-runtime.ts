@@ -428,8 +428,14 @@ export function createWorkspaceRuntimeManager(options: {
       const activity = activityVersion
       for (let attempt = 0; attempt < 2; attempt++) {
         const lookups = lookupVersion
-        const idle = await Promise.all([...runtimes.values()].map(runtimeIsIdle))
-        if (idle.includes(false) || pending.size > 0 || activityVersion !== activity) return true
+        if (shared?.supportsActivity) {
+          const report = await shared.inspectActivity().catch(() => undefined)
+          if (!report || report.profileActive || report.scopeCount !== runtimes.size || [...runtimes.keys()].some(id => !report.idle.has(id))) return true
+        } else {
+          const idle = await Promise.all([...runtimes.values()].map(runtimeIsIdle))
+          if (idle.includes(false)) return true
+        }
+        if (pending.size > 0 || activityVersion !== activity) return true
         if (lookups === lookupVersion) return false
         // A renderer read can acquire an existing client just after turn/end.
         // Confirm the new access once. A second overlap keeps the process.
@@ -440,13 +446,20 @@ export function createWorkspaceRuntimeManager(options: {
       if (closed || ttlMs <= 0) return 0
       const now = Date.now()
       const epoch = scopeEpoch
-      const retired = await Promise.all([...runtimes].map(async ([id, runtime]) => {
+      const candidates = [...runtimes].flatMap(([id, runtime]) => {
         const observed = lastUsed.get(id)
-        if (!observed || now - observed.at < ttlMs || idleChecks.has(runtime) || closingClients.has(runtime.client)) return false
+        if (!observed || now - observed.at < ttlMs || idleChecks.has(runtime) || retiredClients.has(runtime.client)) return []
         idleChecks.add(runtime)
+        return [{ id, runtime, observed }]
+      })
+      const batch = shared?.supportsActivity && candidates.length > 0
+        ? shared.inspectActivity(candidates.map(candidate => candidate.id)).catch(() => undefined)
+        : undefined
+      const retired = await Promise.all(candidates.map(async ({ id, runtime, observed }) => {
         try {
-          if (!await runtimeIsIdle(runtime)) return false
-          if (closed || scopeEpoch !== epoch || runtimes.get(id) !== runtime || lastUsed.get(id) !== observed || closingClients.has(runtime.client)) return false
+          const idle = batch ? (await batch)?.idle.has(id) : await runtimeIsIdle(runtime)
+          if (!idle) return false
+          if (closed || scopeEpoch !== epoch || runtimes.get(id) !== runtime || lastUsed.get(id) !== observed || retiredClients.has(runtime.client)) return false
           generations.set(id, (generations.get(id) ?? 0) + 1)
           runtimes.delete(id)
           children.delete(id)

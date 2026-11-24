@@ -7,8 +7,9 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { isRpcSuccess, type RpcMessage } from "@i-harness/sdk"
 import { createDesktopHost } from "../src/host.ts"
+import { createDesktopProfileServices } from "../src/configuration-host.ts"
 import * as agentSettingsModule from "../src/agent-settings.ts"
-import * as subagentSettingsModule from "../src/subagent-settings.ts"
+import * as contextSettingsModule from "../src/context-subsystems.ts"
 import * as pluginsModule from "../src/plugins.ts"
 import * as settingsModule from "@i-harness/settings"
 import { toJSONL, type SessionEvent } from '@i-harness/core-session'
@@ -92,10 +93,10 @@ it("leaves locked policy readers idle under watch coverage, and retries a failed
   const create = agentSettingsModule.createAgentSettings
   const reader = vi.spyOn(agentSettingsModule, "createAgentSettings").mockImplementation((...args) => {
     const original = create(...args)
-    return { ...original, async sync() {
+    return { ...original, async sync(...args: Parameters<typeof original.sync>) {
       reads++
       if (failNext) { failNext = false; throw new Error("Injected transient read error") }
-      return original.sync()
+      return original.sync(...args)
     } }
   })
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
@@ -134,23 +135,23 @@ it("waits for both owned policy refreshes before closing even when one refresh r
   let pluginsClosed!: () => void
   const reachedPluginClose = new Promise<void>((done) => { pluginsClosed = done })
   let policyFinished = false
-  let policyWork: Promise<unknown> | undefined
+  let policyWork: Promise<void> | undefined
   const createAgentSettings = agentSettingsModule.createAgentSettings
-  const createSubagentSettings = subagentSettingsModule.createSubagentSettings
+  const createContextSettings = contextSettingsModule.createContextSubsystemSettings
   const createDesktopPlugins = pluginsModule.createDesktopPlugins
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
   vi.spyOn(agentSettingsModule, "createAgentSettings").mockImplementation((...args) => ({
     ...createAgentSettings(...args), sync: async () => { throw new Error("fixture policy refresh failure") },
   }))
-  vi.spyOn(subagentSettingsModule, "createSubagentSettings").mockImplementation((...args) => {
-    const settings = createSubagentSettings(...args)
-    return { ...settings, state: () => {
+  vi.spyOn(contextSettingsModule, "createContextSubsystemSettings").mockImplementation((...args) => {
+    const settings = createContextSettings(...args)
+    return { ...settings, syncPolicy: observed => {
+      if (!observed) return settings.syncPolicy()
       policyWork = held.then(async () => {
-        const result = await settings.state() // acquires the real settings.provider.lock
+        await settings.syncPolicy(observed)
         policyFinished = true
-        return result
       })
-      return policyWork as ReturnType<typeof settings.state>
+      return policyWork
     } }
   })
   vi.spyOn(pluginsModule, "createDesktopPlugins").mockImplementation((path, options) => {
@@ -179,6 +180,50 @@ it("waits for both owned policy refreshes before closing even when one refresh r
     await rm(root, { recursive: true, force: true })
   }
 })
+
+it("applies shared settings to each workspace and keeps the remaining workspace live after its sibling closes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-workspace-policy-"))
+  const settingsPath = join(root, "settings.json")
+  const save = (mode: string, enabled: boolean) => writeFile(settingsPath, JSON.stringify({ sandboxMode: mode, contextSubsystems: { contextOutput: { enabled } } }))
+  await save("workspace-write", false)
+  const profile = createDesktopProfileServices(settingsPath)
+  const hosts: Awaited<ReturnType<typeof createDesktopHost>>[] = []
+  async function open(name: string) {
+    const workspace = join(root, name)
+    await mkdir(workspace)
+    const frames: RpcMessage[] = []
+    const host = await createDesktopHost({ workspace, sessionDir: join(root, name + "-sessions"), profile, onWrite: frame => frames.push(frame) })
+    hosts.push(host)
+    let sequence = 0
+    async function call(method: string) {
+      const id = ++sequence
+      await host.handleLine(JSON.stringify({ jsonrpc: "2.0", id, method, params: {} }))
+      return frames.find(frame => "id" in frame && frame.id === id)
+    }
+    await call("initialize")
+    return { host, call }
+  }
+  try {
+    const a = await open("a"), b = await open("b")
+    await save("read-only", true)
+    await vi.waitFor(async () => {
+      for (const {call} of [a, b]) {
+        expect(await call("desktop/sandbox/state")).toMatchObject({ result: { mode: "read-only" } })
+        expect(await call("desktop/context-subsystems/state")).toMatchObject({ result: { context: { enabled: true } } })
+      }
+    }, { timeout: 5000 })
+    await a.host.close()
+    await save("workspace-write", false)
+    await vi.waitFor(async () => {
+      expect(await b.call("desktop/sandbox/state")).toMatchObject({ result: { mode: "workspace-write" } })
+      expect(await b.call("desktop/context-subsystems/state")).toMatchObject({ result: { context: { enabled: false } } })
+    }, { timeout: 5000 })
+  } finally {
+    await Promise.all(hosts.map(host => host.close()))
+    await profile.close()
+    await rm(root, { recursive: true, force: true })
+  }
+}, 20_000)
 
 it('cold Gateway history preserves retained facts without building providers or assemblies', async()=>{
   const root=await mkdtemp(join(tmpdir(),'ih-retained-gateway-')), workspace=join(root,'workspace'),sessionDir=join(root,'sessions')

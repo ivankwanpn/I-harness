@@ -5,7 +5,7 @@ import { createInterface } from "node:readline"
 import { PassThrough, Writable } from "node:stream"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { HarnessClient } from "@i-harness/sdk"
-import type { DesktopHostCommand, DesktopHostEvent } from "@i-harness/desktop-gateway/src/host-protocol.ts"
+import type { DesktopActivityReport, DesktopHostCommand, DesktopHostEvent } from "@i-harness/desktop-gateway/src/host-protocol.ts"
 import type { LaunchedRuntime } from "./sdk-runtime.ts"
 import type { WorkspaceEntry } from "./workspaces.ts"
 import { createHostCommandWriter } from "./host-command-writer.ts"
@@ -40,9 +40,12 @@ function connect(child: ChildProcessWithoutNullStreams) {
   const channels = new Map<string, Channel>()
   const ended = Promise.withResolvers<void>()
   let stopping = false
+  let supportsActivity = false
   let stderr = ""
   let exitInfo: { code: number | null; signal: string | null } | undefined
   let pong: ReturnType<typeof Promise.withResolvers<void>> | undefined
+  let nextActivityRequest = 0
+  const activityRequests = new Map<number, ReturnType<typeof Promise.withResolvers<DesktopActivityReport>>>()
   let misses = 0
   child.stderr.setEncoding("utf8").on("data", text => { stderr = (stderr + text).slice(-8192) })
   function endChannel(id: string, channel: Channel, error?: Error) {
@@ -68,6 +71,7 @@ function connect(child: ChildProcessWithoutNullStreams) {
     exitInfo = { code, signal }
     const error = new Error("Desktop host exited (" + (signal ?? code) + ")")
     pong?.reject(error)
+    for (const pending of activityRequests.values()) pending.reject(error)
     for (const [id, channel] of channels) endChannel(id, channel, error)
     ended.resolve()
   })
@@ -80,11 +84,16 @@ function connect(child: ChildProcessWithoutNullStreams) {
     try {
       const event: DesktopHostEvent = JSON.parse(text)
       if (event.type === "pong") { pong?.resolve(); return }
+      if (event.type === "activity") { activityRequests.get(event.requestId)?.resolve(event); return }
       if (!event.workspaceId) throw new Error(event.type === "error" ? event.message : "Unscoped host response")
       const channel = channels.get(event.workspaceId)
       if (!channel) throw new Error("Desktop host replied on an unknown workspace")
       switch (event.type) {
-        case "opened": channel.ready = true; channel.opened.resolve(); break
+        case "opened":
+          supportsActivity = event.activityReports === 1
+          channel.ready = true
+          channel.opened.resolve()
+          break
         case "data":
           if (typeof event.line !== "string") throw new Error("Invalid workspace data")
           if (!channel.releasing && !channel.input.writableEnded) channel.input.write(event.line + "\n")
@@ -154,6 +163,30 @@ function connect(child: ChildProcessWithoutNullStreams) {
     exited: ended.promise,
     get stopping() { return stopping },
     get empty() { return channels.size === 0 },
+    get supportsActivity() { return supportsActivity },
+    async inspectActivity(ids?: string[]) {
+      if (!supportsActivity) throw new Error("Host does not support activity reports")
+      // Capture channel objects before writing. A reply about an old channel
+      // cannot release its replacement, even when both use the same ID.
+      const expected = new Map((ids ?? [...channels.keys()]).map(id => [id, channels.get(id)]))
+      const requestId = ++nextActivityRequest
+      const pending = Promise.withResolvers<DesktopActivityReport>()
+      activityRequests.set(requestId, pending)
+      try {
+        send({ type: "activity", requestId, workspaceIds: ids })
+        const report = await deadline(pending.promise, 2500, "Host activity inspection timed out")
+        if (typeof report.profileActive !== "boolean" || !Array.isArray(report.scopes) || report.scopes.length !== expected.size) throw Error("Incomplete host activity report")
+        const seen = new Set<string>(), idle = new Set<string>()
+        for (const row of report.scopes) {
+          if (!Array.isArray(row) || row.length !== 2 || !expected.has(row[0]) || typeof row[1] !== "boolean" || seen.has(row[0])) throw Error("Invalid host activity report")
+          const [id, active] = row
+          seen.add(id)
+          const original = expected.get(id)
+          if (!active && original?.ready && !original.releasing && channels.get(id) === original) idle.add(id)
+        }
+        return { idle, scopeCount: seen.size, profileActive: report.profileActive }
+      } finally { activityRequests.delete(requestId) }
+    },
     open(workspace: WorkspaceEntry): LaunchedRuntime {
       const id = workspace.id
       if (channels.has(id)) throw new Error("Previous workspace scope has not closed")
@@ -181,7 +214,7 @@ function connect(child: ChildProcessWithoutNullStreams) {
       // A simultaneous application quit may retire this launch before the
       // manager reaches its startup await.
       void ready.catch(() => undefined)
-      try { send({ type: "open", workspaceId: id, workspacePath: workspace.path }) }
+      try { send({ type: "open", workspaceId: id, workspacePath: workspace.path, activityReports: 1 }) }
       catch (error) { endChannel(id, channel, error as Error) }
       return { client, ready, hostPid: child.pid, disconnected: channel.disconnected.promise,
         exited: channel.exited.promise, stderrTail: () => channel.diagnostic ?? "", exitInfo: () => exitInfo }
@@ -223,11 +256,23 @@ export function createSharedDesktopHost(sessionsRoot: string, resourcesPath?: st
     return connection
   }
   return {
+    get supportsActivity() { return host?.supportsActivity ?? true },
+    async inspectActivity(ids?: string[]) {
+      if (!host) return { idle: new Set<string>(), scopeCount: 0, profileActive: false }
+      return host.inspectActivity(ids)
+    },
     async launch(workspace: WorkspaceEntry) {
       if (host?.stopping) await deadline(host.exited, 7500, "Previous desktop host has not exited")
       return (host ??= start()).open(workspace)
     },
-    async retireIfEmpty() { if (host?.empty) await host.shutdown() },
+    async retireIfEmpty() {
+      const current = host
+      if (!current?.empty || current.stopping) return
+      if (!current.supportsActivity) { await current.shutdown(); return }
+      // A device login can outlive the workspace that initiated it.
+      const profile = await current.inspectActivity([]).catch(() => undefined)
+      if (host === current && current.empty && profile?.profileActive === false) await current.shutdown()
+    },
     async close() { if (host) await host.shutdown() },
   }
 }

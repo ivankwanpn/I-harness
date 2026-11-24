@@ -54,6 +54,10 @@ it("hosts two real SDK connections with the same session ID and releases them in
     await open("b", b)
     const configuration = "desktop-configuration"
     const settingsInfo = await open(configuration, root)
+    send({ type: "activity", requestId: 1 })
+    expect(await receive(event => event.type === "activity")).toMatchObject({
+      requestId: 1, scopes: [["a", false], ["b", false], [configuration, false]], profileActive: false,
+    })
     expect(settingsInfo.capabilities).toEqual({
       "desktop-runtime-activity": ["1"], "desktop-provider": ["1"], "desktop-usage": ["1", "2"],
       "desktop-model-wait-settings": ["1"], "desktop-model-retry-settings": ["1"], "desktop-auto-title": ["1"],

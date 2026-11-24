@@ -23,6 +23,8 @@ import {
   applyHistory,
   applyNotification,
   emptyEventWindow,
+  createHistoryPreviewCache,
+  RECENT_HISTORY_LIMIT,
   timelineEvents,
   markDisconnected,
   isAssistantPreview,
@@ -49,9 +51,7 @@ import { createRefreshScheduler } from "./session/refresh-scheduler.ts"
 import { RuntimeFeedback } from "./session/RuntimeFeedback.tsx"
 import { createForkOperationController, createForkCallbackAdapters } from './session/fork-operation.ts'
 
-const HISTORY_LIMIT = 500
 const HISTORY_MAX_PAGES = 40
-const historyOnly = (window: EventWindow): EventWindow => ({ ...window, live: [], assistantPreview: undefined })
 const LAST_WORKSPACE = "ih:last-workspace"
 
 function projectWorkspace(project: ProjectEntry, workspaces: readonly WorkspaceEntry[]): string | undefined {
@@ -112,7 +112,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [eventWindow, setEventWindow] = useState<EventWindow>(() => emptyEventWindow())
   const [windowKey, setWindowKey] = useState<string>()
   const [historyLoading, setHistoryLoading] = useState(false)
-  const eventWindowCache = useRef(new Map<string, EventWindow>())
+  const eventWindowCache = useMemo(createHistoryPreviewCache, [bridge])
   const assistantPreviews = useRef(new Map<string, AssistantPreview>())
   const [optimistic, setOptimistic] = useState<{ scope: string; id: string; text: string }>()
   const [model, setModel] = useState<SessionModelState>()
@@ -318,22 +318,24 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   ): Promise<void> => {
     const scope = selection.current
     if (scope.workspaceId !== workspaceId || scope.sessionId !== sessionId) return
+    const generation = disconnectRevision.current
+    const stillSelected = () => selection.current === scope && disconnectRevision.current === generation
     const request = async (params: HistoryPageRequest) => {
-      if (selection.current !== scope) throw new Error("History selection changed")
+      if (!stillSelected()) throw new Error("History selection changed")
       return bridge.request({
         kind: "session/history", workspaceId, sessionId, afterSeq: params.afterSeq, ...(params.beforeSeq === undefined ? {} : { beforeSeq: params.beforeSeq }), limit: params.limit,
       }) as Promise<HistoryRange>
     }
     try {
       const load = afterSeq === 0
-        ? await loadRecentHistory(request, { limit: HISTORY_LIMIT, maxEvents: MAX_RETAINED_EVENTS })
-        : await loadHistory(request, { afterSeq, limit: HISTORY_LIMIT, maxPages: HISTORY_MAX_PAGES })
-      if (selection.current !== scope) return
+        ? await loadRecentHistory(request, { limit: RECENT_HISTORY_LIMIT, maxEvents: MAX_RETAINED_EVENTS })
+        : await loadHistory(request, { afterSeq, limit: RECENT_HISTORY_LIMIT, maxPages: HISTORY_MAX_PAGES })
+      if (!stillSelected()) return
       setEventWindow((current) => {
-        if (selection.current !== scope) return current
+        if (!stillSelected()) return current
         const key = JSON.stringify([workspaceId, sessionId])
-        const next = applyHistory(current, { events: load.events, nextSeq: load.cursor })
-        eventWindowCache.current.set(key, historyOnly(next))
+        const next = applyHistory(current, { events: load.events, nextSeq: load.cursor, ...(afterSeq === 0 ? { startSeq: load.startSeq } : {}) })
+        eventWindowCache.set(key, next)
         const preview = assistantPreviews.current.get(key)
         return preview ? applyNotification(next, preview) : next
       })
@@ -341,9 +343,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       setHistoryError(undefined)
       if (afterSeq === 0 || !load.exhausted) setHistoryCount((load.startSeq ?? 0) > 0 || !load.exhausted ? load.events.length : undefined)
     } catch (reason) {
-      if (selection.current === scope) { setHistoryLoading(false); setHistoryError(reason instanceof Error ? reason.message : String(reason)) }
+      if (stillSelected()) { setHistoryLoading(false); setHistoryError(reason instanceof Error ? reason.message : String(reason)) }
     }
-  }, [bridge])
+  }, [bridge, eventWindowCache])
 
   useEffect(() => {
     let active = true
@@ -445,10 +447,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         setError(undefined)
         if (disconnected.current === workspace) {
           disconnected.current = undefined
+          // Reopening fetches the authoritative tail. A concurrent forward
+          // replay could splice an older disjoint page back into that window.
           setRetryNonce(value => value + 1)
           executionRevision.current = undefined
           refresh()
-          if (selectedSessionId) void pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
         }
         return
       }
@@ -591,8 +594,10 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   useEffect(() => {
     if (selectedWorkspaceId === undefined || selectedSessionId === undefined) return
     let active = true
+    const generation = disconnectRevision.current
+    const stillOpen = () => active && generation === disconnectRevision.current
     const selectionKey = JSON.stringify([selectedWorkspaceId, selectedSessionId])
-    const cached = eventWindowCache.current.get(selectionKey)
+    const cached = eventWindowCache.get(selectionKey)
     const window = cached ?? emptyEventWindow()
     const preview = assistantPreviews.current.get(selectionKey)
     setWindowKey(selectionKey)
@@ -622,21 +627,23 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       const raw = await bridge.request({ kind: "desktop/session/open", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
         .catch(() => undefined)
       const opened = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? raw as OpenResult : undefined
-      if (!active) return
-      if (opened?.history && Array.isArray(opened.history.events)) {
+      if (!stillOpen()) return
+      const history = opened?.history
+      if (history && Array.isArray(history.events)) {
         setEventWindow((current) => {
-          if (!active) return current
-          const next = applyHistory(current, { events: opened.history!.events, nextSeq: opened.history!.nextSeq })
-          eventWindowCache.current.set(selectionKey, historyOnly(next))
+          if (!stillOpen()) return current
+          const next = applyHistory(current, history)
+          eventWindowCache.set(selectionKey, next)
           const live = assistantPreviews.current.get(selectionKey)
           return live ? applyNotification(next, live) : next
         })
         setHistoryLoading(false)
-        if (opened.historyError) setHistoryError(opened.historyError)
+        if (opened?.historyError) setHistoryError(opened.historyError)
       } else {
         if (opened?.historyError) setHistoryError(opened.historyError)
         await pageHistory(selectedWorkspaceId, selectedSessionId, 0)
       }
+      if (!stillOpen()) return
       if (opened && !opened.queueError && Array.isArray(opened.queue)) {
         setQueue(opened.queue)
         setRunning(opened.running === true)
@@ -654,7 +661,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     void interactions.refresh(selectedSessionId).catch(fail)
     void refreshTasks(selectedWorkspaceId, selectedSessionId).catch(fail)
     return () => { active = false }
-  }, [bridge, interactions.refresh, pageHistory, refreshTasks, retryNonce, selectedSessionId, selectedWorkspaceId])
+  }, [bridge, eventWindowCache, interactions.refresh, pageHistory, refreshTasks, retryNonce, selectedSessionId, selectedWorkspaceId])
 
   useEffect(() => {
     if (!selectedWorkspaceId || !selectedSessionId || operation?.kind !== "model" || operation.busy) return

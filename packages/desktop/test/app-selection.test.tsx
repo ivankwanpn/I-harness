@@ -555,6 +555,39 @@ it("pages back through the whole log with a bounded reading window and leaves li
   expect(captured.props!.conversation!.history!.viewport).toBeUndefined()
 })
 
+it.each(["reopen", "reconnect"])("pages into missing history after %s when the native tail outgrows the cache", async mode => {
+  let startSeq = 0
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  const request = fixture(input => {
+    if (input.kind === "desktop/session/open" && input.sessionId === "a") {
+      const events = Array.from({ length: 500 }, (_, i) => ({ type: "user/message", seq: startSeq + i, text: String(startSeq + i) }))
+      return Promise.resolve({ history: { startSeq, nextSeq: startSeq + events.length, events } })
+    }
+    if (input.kind === "session/history" && input.beforeSeq === 1000) {
+      return Promise.resolve({ startSeq: 800, nextSeq: 1000, events: [{ type: "user/message", seq: 999, text: "999" }] })
+    }
+    return undefined
+  }, listener => { emit = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props!.conversation!.rows.at(-1)).toMatchObject({ text: "499" }))
+  startSeq = 1000
+  if (mode === "reconnect") {
+    act(() => emit({ kind: "sdk/disconnected", workspaceId: "w1", message: "fixture" }))
+    act(() => emit({ kind: "sdk/ready", method: "sdk/ready", workspaceId: "w1", runtimeGeneration: 1 }))
+  } else {
+    act(() => captured.props!.onSelectSession("b"))
+    await waitFor(() => expect(captured.props!.selectedSessionId).toBe("b"))
+    act(() => captured.props!.onSelectSession("a"))
+  }
+  await waitFor(() => expect(captured.props!.conversation!.rows.at(-1)).toMatchObject({ text: "1499" }))
+  expect(captured.props!.conversation!.rows[0]).toMatchObject({ text: "1000" })
+  await act(async () => captured.props!.conversation!.history!.earlier!())
+  expect(request).toHaveBeenCalledWith({ kind: "session/history", workspaceId: "w1", sessionId: "a", afterSeq: 0, beforeSeq: 1000, limit: 200 })
+  expect(captured.props!.conversation!.history!.viewport!.events[0]).toMatchObject({ seq: 999 })
+  expect(request.mock.calls.some(([input]) => input.kind === "session/history" && input.sessionId === "a" && input.afterSeq === 500)).toBe(false)
+})
+
 it("retains a successful initial dashboard when a newer background read fails", async () => {
   const initial = defer()
   let reads = 0

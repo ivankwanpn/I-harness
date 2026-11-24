@@ -33,7 +33,7 @@ import { mountChildShellTools } from '@i-harness/session-executor'
 import { reportTaskProjectionIssues } from './task-projection-diagnostics.ts'
 import { createFsWatchService } from '@i-harness/fs-watch'
 import { createSdkServer } from "@i-harness/sdk/server"
-import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
+import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsProviderProtocol, type SettingsContextSubsystems } from "@i-harness/settings"
 import { commitModelSwitch } from "./model-switch.ts"
 import { createSessionManagement } from "./session-management.ts"
 import { createJsonlDashboardSummaryCache, describeSession } from "./session-dashboard-summary.ts"
@@ -137,6 +137,7 @@ export interface DesktopHostOptions {
 }
 
 export interface DesktopHost {
+  hasActiveWork?(): boolean
   handleLine(line: string): Promise<void>
   close(): Promise<void>
 }
@@ -318,7 +319,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
       await projects.configureReferences(references.map(reference => reference.path))
       await nativeContext.configureReferences(references)
     },actionSessionId:nativeContext.humanSessionId})
-  await contextSubsystems.sync();nativeContext.syncAutoRefresh()
+  await contextSubsystems.syncPolicy(); nativeContext.syncAutoRefresh()
   const memory = openMemoryStore({ path: join(options.sessionDir, "memory.sqlite"), scope: options.workspace })
   defer(() => memory.close())
   const additionalTools = [...createMemoryTools(memory, () => memory.enabled()), ...createDesktopGoalTools((id) => service.liveSession(id), notifyWorkflow,id=>service.liveAssembly(id)?.metadataFacts),...createCodeRetrievalTools(nativeContext.codeRetrieval, { exposure: 'direct' })]
@@ -607,7 +608,8 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   const handlers: DesktopHandlers = {
     hasActiveWork: (): boolean => base.hasActiveWork() || interaction.hasPending() || input.hasActiveWork()
       || workflow.hasActiveWork() || terminal.hasActiveWork() || nativeContext.hasActiveWork()
-      || ownedIndexJobs.hasActiveWork() || codexAccounts.hasActiveLogin(),
+      || ownedIndexJobs.hasActiveWork() || (!options.profile && codexAccounts.hasActiveLogin()),
+    hasActiveProfileWork: options.profile ? () => codexAccounts.hasActiveLogin() : undefined,
     workspace: options.workspace, autoTitle, modelRetry: createModelRetrySettings(settingsPath), modelWait: createModelWaitSettings(settingsPath), codeSettings, approvalRules, usageStats,
     assertSession: async id => { const { meta } = await coordinator.profile(id); if (!await isConversation(id, meta)) throw new Error("Conversation unavailable") },
     executionObservation,
@@ -791,11 +793,18 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
     const job = (async () => {
       do {
         policyChanged = false
-        // Keep every lease joined even if another consumer rejects. A change
-        // during this batch gets a trailing read of the latest settings.
+        // Read policy once under the provider lease. Apply role enablement
+        // under that lease; apply context changes in its own serial lane after
+        // the lease settles. A change during this batch triggers a trailing read.
+        let contextSettings: SettingsContextSubsystems | undefined
+        const agentPolicy = agentSettings.sync(saved => {
+          contextSettings = saved.contextSubsystems
+          subagents.syncEnabled(saved.plugins.subagentModel)
+        })
+        const observed = agentPolicy.then(() => contextSettings, () => contextSettings)
         const results = await Promise.allSettled([
-          agentSettings.sync(), subagents.state(),
-          contextSubsystems.sync().then(() => nativeContext.syncAutoRefresh()),
+          agentPolicy,
+          contextSubsystems.syncPolicy(observed).then(() => nativeContext.syncAutoRefresh()),
         ])
         retryPolicy = results.some(result => result.status === "rejected")
         if (retryPolicy) console.warn("[desktop] agent settings refresh failed")
@@ -816,6 +825,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   policyTimer.unref?.()
   syncPolicy()
   return {
+    hasActiveWork: () => shutdownRequested || router.hasActiveWork(),
     handleLine: (line) => shutdownRequested ? Promise.reject(new Error("Desktop host is closing")) : router.handleLine(line),
     close: () => {
       assertOutsideForkController(coordinator)

@@ -39,7 +39,7 @@ async function runDesktopHost(sessionsRoot: string): Promise<number> {
   const output = createDesktopHostOutput(stdoutSink(), DEFAULT_WRITE_BOUND_BYTES, () => { status = 1; stop() })
   const hosts = createWorkspaceHosts(sessionsRoot, async options => basename(options.sessionDir) === DESKTOP_CONFIGURATION_ID
     ? createConfigurationHost(profile, options.onWrite)
-    : (await import("./host.ts")).createDesktopHost({ ...options, profile }), event => output.push(event))
+    : (await import("./host.ts")).createDesktopHost({ ...options, profile }), event => output.push(event), () => profile.accounts.hasActiveLogin())
   function outputFailed() {
     status = 1
     try { output.abort() } catch { /* The parent pipe is already broken. */ }

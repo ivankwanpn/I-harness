@@ -17,7 +17,10 @@ it("retains process-owned account/login services across workspace and settings c
   const workspace = await createDesktopHost({ workspace: root, sessionDir: join(root, "sessions"), profile, onWrite() {} })
   try {
     await settings.handleLine(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }))
+    await workspace.handleLine(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }))
     const login = vi.spyOn(profile.accounts, "hasActiveLogin").mockReturnValue(true)
+    expect(workspace.hasActiveWork?.()).toBe(false)
+    expect(settings.hasActiveWork?.()).toBe(false)
     await workspace.close()
     expect(close).not.toHaveBeenCalled()
     await settings.handleLine(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "desktop/runtime/activity", params: {} }))

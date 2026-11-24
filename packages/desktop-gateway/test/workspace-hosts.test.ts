@@ -90,6 +90,40 @@ it("joins an opening host on close and fences queued handshakes per workspace", 
   await f.channels.close()
 })
 
+it("samples the requested owners together and treats pending, missing or failed owners as busy", async () => {
+  const handshake = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  let busy = false
+  const f = await fixture(async ({ workspace }) => ({
+    async handleLine(line) {
+      const { method } = JSON.parse(line)
+      if (method === "initialize") await handshake.promise
+      if (method === "hold") { busy = true; await release.promise; busy = false }
+    },
+    hasActiveWork() { if (workspace === f.paths[1]) throw Error("Unknown owner"); return busy },
+    async close() {},
+  }))
+  const inspect = async (workspaceIds?: string[]) => {
+    await f.channels.receive({ type: "activity", requestId: 1, workspaceIds })
+    const reply = f.events.at(-1)
+    if (reply?.type !== "activity") throw Error("Expected activity report")
+    return Object.fromEntries(reply.scopes)
+  }
+  await f.open("one")
+  await f.open("two", f.paths[1])
+  const initializing = f.data("one", "initialize")
+  const work = f.data("one", "hold")
+  try {
+    expect(await inspect()).toEqual({ one: true, two: true })
+    handshake.resolve()
+    await initializing
+    expect(await inspect(["one", "gone"])).toEqual({ one: true, gone: true })
+    release.resolve()
+    await work
+    expect(await inspect()).toEqual({ one: false, two: true })
+  } finally { handshake.resolve(); release.resolve(); await f.channels.close() }
+})
+
 it("preserves the failed cleanup owner until retry and allows other workspaces to run", async () => {
   const close = vi.fn(async () => {}).mockRejectedValueOnce(Error("unsettled"))
   const f = await fixture(async options => ({

@@ -80,7 +80,13 @@ export function createContextSubsystemSettings(options: {
   let applicationError: string | undefined
   let appliedReferences: SettingsContextReference[] | undefined
   let queue = Promise.resolve()
-  const serial = <T>(run: () => Promise<T>): Promise<T> => { const next = queue.then(run); queue = next.then(() => {}, () => {}); return next }
+  let queued = 0
+  const serial = <T>(run: () => Promise<T>): Promise<T> => {
+    queued++
+    const next = queue.then(run).finally(() => { queued-- })
+    queue = next.then(() => {}, () => {})
+    return next
+  }
   async function snapshot(): Promise<ContextSubsystemState> {
     return withDesktopSettings(options.settingsPath, async store => {
       const settings = store.get().contextSubsystems
@@ -100,6 +106,15 @@ export function createContextSubsystemSettings(options: {
   }
   return {
     state: () => serial(snapshot),
+    syncPolicy(observed?: Promise<SettingsContextSubsystems | undefined>): Promise<void> {
+      // An earlier queued configure may still change the saved settings after
+      // the supplied read starts. In that case read again inside this lane.
+      const reusable = queued === 0 ? observed : undefined
+      return serial(async () => {
+        const settings = await reusable ?? await withDesktopSettings(options.settingsPath, async store => store.get().contextSubsystems)
+        await apply(effective(settings, options.workspaceKey))
+      })
+    },
     sync: () => serial(async () => { const state = await snapshot(); await apply(state.saved); return snapshot() }),
     configure: (raw: unknown) => serial(async () => {
       const command = object(raw); keys(command, ['scope', 'contextOutput', 'codeRetrieval', 'references', 'resetOverride'])

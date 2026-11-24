@@ -24,6 +24,7 @@ export function createWorkspaceHosts(
   sessionsRoot: string,
   create: (options: DesktopHostOptions) => Promise<DesktopHost>,
   send: (event: DesktopHostEvent) => void,
+  profileHasActiveWork: () => boolean = () => false,
 ) {
   const scopes = new Map<string, Scope>()
   let stopping = false
@@ -41,13 +42,14 @@ export function createWorkspaceHosts(
     void flight.catch(() => { scope.closeFlight = undefined })
     return flight
   }
-  async function open(id: string, workspace: string) {
+  async function open(id: string, workspace: string, activityReports: boolean) {
+    const opened: DesktopHostEvent = { type: "opened", workspaceId: id, ...(activityReports ? { activityReports: 1 as const } : {}) }
     const key = fileKey(id)
     const existing = scopes.get(key)
     if (existing && (existing.id !== id || fileKey(existing.workspace) !== fileKey(workspace) || existing.closeFlight)) throw Error("Workspace channel already in use")
     if (existing && !existing.startupCleanup) {
       if (existing.retiring) throw Error("Workspace channel already in use")
-      if (existing.host) send({ type: "opened", workspaceId: id })
+      if (existing.host) send(opened)
       return
     }
     const sessionDir = join(sessionsRoot, id)
@@ -81,7 +83,7 @@ export function createWorkspaceHosts(
     scopes.set(key, scope)
     try {
       scope.host = await ready
-      if (!scope.retiring) send({ type: "opened", workspaceId: id })
+      if (!scope.retiring) send(opened)
     } catch (error) {
       if (!scope.retiring && !scope.startupCleanup && !scope.host) scopes.delete(key)
       throw error
@@ -100,7 +102,10 @@ export function createWorkspaceHosts(
     scope.active.add(job)
     try { await job }
     catch (error) { if (!scope.retiring) throw error }
-    finally { scope.active.delete(job) }
+    finally {
+      scope.active.delete(job)
+      if (scope.handshake === job) scope.handshake = undefined
+    }
   }
   return {
     async receive(value: unknown) {
@@ -111,13 +116,32 @@ export function createWorkspaceHosts(
         if (!value || typeof value !== "object") throw Error("Invalid desktop host command")
         const cmd = value as Record<string, unknown>
         if (cmd.type === "ping") { send({ type: "pong" }); return }
+        if (cmd.type === "activity") {
+          if (!Number.isSafeInteger(cmd.requestId) || (cmd.requestId as number) < 1) throw Error("Invalid activity request ID")
+          const selected = cmd.workspaceIds
+          if (selected !== undefined && (!Array.isArray(selected) || !selected.every(id => typeof id === "string") || new Set(selected).size !== selected.length)) throw Error("Invalid activity workspace IDs")
+          // Dispatch any data already queued behind a completed initialization
+          // before sampling its owners. An unfinished handshake remains busy.
+          await Promise.resolve()
+          if (stopping) return
+          const ids = selected ?? [...scopes.values()].map(scope => scope.id)
+          const activity = ids.map((id): [string, boolean] => {
+            const scope = scopes.get(fileKey(id))
+            try { return [id, !scope || scope.id !== id || scope.retiring || !!scope.handshake || scope.host?.hasActiveWork?.() !== false] }
+            catch { return [id, true] }
+          })
+          let profileActive = true
+          try { profileActive = profileHasActiveWork() !== false } catch { /* Retain an unconfirmed profile owner. */ }
+          send({ type: "activity", requestId: cmd.requestId as number, scopes: activity, profileActive })
+          return
+        }
         if (cmd.type === "open" || cmd.type === "data" || cmd.type === "close") operation = cmd.type
         if (typeof cmd.workspaceId !== "string" || !/^[a-zA-Z0-9_-]+$/.test(cmd.workspaceId)
           || (process.platform === "win32" && /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(cmd.workspaceId))) throw Error("Invalid workspace identity")
         id = cmd.workspaceId
         if (cmd.type === "open") {
           if (typeof cmd.workspacePath !== "string" || !isAbsolute(cmd.workspacePath)) throw Error("Absolute workspace path required")
-          await open(id, resolve(cmd.workspacePath))
+          await open(id, resolve(cmd.workspacePath), cmd.activityReports === 1)
           return
         }
         const scope = scopes.get(fileKey(id))

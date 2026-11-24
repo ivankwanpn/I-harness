@@ -673,7 +673,8 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       }
     },
     syncAutoRefresh(){
-      const active=!closed&&codeRetrieval.status().enabled&&codeRetrieval.status().config.autoRefresh
+      const config=closed?undefined:codeRetrieval.status().config
+      const active=config?.enabled&&config.autoRefresh
       if(!active&&timer){clearInterval(timer);timer=undefined}
       if(active&&!timer){timer=setInterval(()=>{void autoRefresh()},30000);timer.unref?.();void autoRefresh()}
     },
