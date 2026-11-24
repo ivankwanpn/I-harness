@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { renderConversation, copyConversationData } from '@i-harness/core-session'
-import type { ContextSnapshot } from '@i-harness/context-engine'
+import { isCapturedContextPayload, type ContextSnapshot } from '@i-harness/context-engine'
 import { assertMessagesFromLog, type LLMRequest } from '@i-harness/llm-seam'
 
 /** Construct only from the captured projection and surface. Real-step hooks,
@@ -11,7 +11,10 @@ export function buildContextRequest(
   options: { sessionId?: string; signal?: AbortSignal; requestScope?: LLMRequest['requestScope'] },
 ): LLMRequest {
   const messages = renderConversation(input.conversation)
-  assertMessagesFromLog(messages, input.conversation)
+  // The context engine owns deeply immutable captures. A freshly rendered
+  // request already has those ordered log messages. Keep the usual seam
+  // assertion for callers that supply a projection without that ownership.
+  if (!isCapturedContextPayload(input.conversation)) assertMessagesFromLog(messages, input.conversation)
   const { surface } = input, { sessionId, signal, requestScope } = options
   return {
     requestScope,

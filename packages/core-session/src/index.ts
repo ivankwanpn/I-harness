@@ -54,7 +54,7 @@ export { projectConversation, projectCurrentContext } from "./conversation/proje
 export { readConversationState } from "./conversation/state.ts"
 export type { ConversationState } from "./conversation/state.ts"
 export type { ConversationPayloadCapture } from "./conversation/payload.ts"
-export { renderConversation } from "./conversation/render.ts"
+export { renderConversation, selectConversationMessages } from "./conversation/render.ts"
 export { copyConversationData } from "./conversation/render.ts"
 export type { ConversationSourceRef, ConversationProvenance, ConversationCall, ConversationItem, ConversationDiagnostic, ConversationProjection } from "./conversation/types.ts"
 export { deriveSearchText } from "./projection/search.ts"

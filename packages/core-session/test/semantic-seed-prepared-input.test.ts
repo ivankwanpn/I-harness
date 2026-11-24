@@ -1,5 +1,7 @@
 import { expect, it } from 'vitest'
 import { append, createSession, createNondurableFactOwner, exportConversationSeed, projectConversation } from '../src/index.ts'
+import { installRestoredManagedConversation, readRestoredConversation, restoreManagedConversation } from '../src/managed/restored-view.ts'
+import type { SessionEventView } from '../src/managed/types.ts'
 
 async function prepared(images = false, textFirst = false) {
   const session = createSession(), action = createNondurableFactOwner(session).beginAction()
@@ -27,6 +29,64 @@ async function prepared(images = false, textFirst = false) {
   return {session:detached,raw,derived,admission,observation:completed.observations[0]!,image}
 }
 const all = (session: ReturnType<typeof createSession>) => exportConversationSeed(session,{kind:'anonymous'},{kind:'all'})
+
+async function restoredPreparation() {
+  const fixture = await prepared(true), owner = {};
+  const { session } = fixture;
+  let current = true, restoring = true;
+  const candidate = await restoreManagedConversation({
+    formatVersion: session.formatVersion,
+    prefix: { eventCount: session.events.length, bodyBytes: 0, prefixDigest: 'fixture' },
+    assertCurrent() { if (!current) throw new Error('Lost archive ownership'); },
+    async consume(accept) { await accept(session.events); },
+    async readEvent(index) {
+      if (!restoring) throw new Error('Preparation should use the held batch reader');
+      return session.events[index]!;
+    },
+    async settle() {}, async close() {}, appendCommitted() { throw new Error('Unexpected append'); },
+  }, owner, 'document');
+  restoring = false;
+  return { ...fixture, installed: installRestoredManagedConversation(candidate, owner), invalidate() { current = false; } };
+}
+
+it('hydrates selected message, preparation and admission bodies with one held archive read', async () => {
+  const { installed, raw, derived, admission, session } = await restoredPreparation();
+  const reads: number[][] = [];
+  try {
+    const lease = await installed.prepare(undefined, async ordinals => {
+      reads.push([...ordinals]);
+      return ordinals.map(ordinal => session.events[ordinal]!);
+    });
+    try {
+      expect(reads).toHaveLength(1);
+      expect(reads[0]).toEqual(expect.arrayContaining([raw.seq, derived.seq, admission.seq, raw.inputPreparation!.resultSeq]));
+      expect(readRestoredConversation(lease, { ownerSessionId: 'document' }).projection)
+        .toEqual(projectConversation(session, { ownerSessionId: 'document' }));
+    } finally { await lease.settle(); }
+  } finally { await installed.close(); }
+});
+
+it.each(['message result', 'preparation admission', 'ownership'] as const)('rejects a held batch with changed %s', async conflict => {
+  const { installed, raw, session, invalidate } = await restoredPreparation();
+  let reads = 0;
+  try {
+    await expect(installed.prepare(undefined, async ordinals => {
+      reads++;
+      if (conflict === 'ownership') invalidate();
+      return ordinals.map((ordinal): SessionEventView => {
+        const event = session.events[ordinal]!;
+        if (conflict === 'message result' && event.type === 'user/message' && event.seq === raw.seq) {
+          return { ...event, inputPreparation: { ...event.inputPreparation!, resultSeq: 0 } };
+        }
+        if (conflict === 'preparation admission' && event.type === 'agent/input/preparation' && event.op === 'completed') {
+          return { ...event, admissionSeq: 1 };
+        }
+        return event;
+      });
+    })).rejects.toThrow(conflict === 'ownership' ? 'Lost archive ownership' : 'CONVERSATION_RESTORATION_DEPENDENCY_MISMATCH');
+    expect(reads).toBe(1);
+  } finally { if (conflict !== 'ownership') await installed.close(); }
+});
 
 it.each(['raw','derived','admission','observation'] as const)('refuses selected prepared %s text getters without executing them',async slot=>{
   const fixture=await prepared(),target=fixture[slot],text=target.text

@@ -29,7 +29,20 @@ export function copyConversationData<T>(input: T): DeepMutable<T> {
   return result as DeepMutable<T>
 }
 
-/** Selection is item based: every item's already ordered full bundle is emitted. */
-export function renderConversation(projection: { readonly current?: { readonly messages: readonly ReadonlyMessage[] }; readonly items: readonly { readonly messages: readonly ReadonlyMessage[] }[] }): LLMMessage[] {
+type ConversationMessageSource = {
+  readonly current?: { readonly messages: readonly ReadonlyMessage[] }
+  readonly items: readonly { readonly messages: readonly ReadonlyMessage[] }[]
+}
+
+/** Read-only selection for consumers such as identity digests that don't hand
+ * model input to a mutable protocol adapter. The source still owns the data. */
+export function selectConversationMessages(projection: ConversationMessageSource): readonly ReadonlyMessage[] {
+  const messages = [...(projection.current?.messages ?? [])]
+  for (const item of projection.items) for (const message of item.messages) messages.push(message)
+  return messages
+}
+
+/** Mutable request containers are built once from the ordered source bundles. */
+export function renderConversation(projection: ConversationMessageSource): LLMMessage[] {
   return [...(projection.current?.messages ?? []).map(copyConversationMessage), ...projection.items.flatMap(item => item.messages.map(copyConversationMessage))]
 }

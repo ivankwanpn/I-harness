@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { createJournalStreamDecoder, encodeFactBatch, legacyPrefixDigest, readFactJournal } from '../src/serialization/fact-journal.ts'
+import { createJournalStreamDecoder, decodeFactBatch, encodeFactBatch, legacyPrefixDigest, readFactJournal } from '../src/serialization/fact-journal.ts'
 
 it('matches the original decoder across every byte boundary and ignores a torn suffix', () => {
   const legacy = Buffer.from('{"type":"turn/end","seq":0}\n')
@@ -34,4 +34,22 @@ it('rejects an invalid legacy digest and a missing declared separator', () => {
   expect(() => decoder.finish()).toThrow()
   const wrong = createJournalStreamDecoder({ ...metadata, legacyPrefixDigest: '00'.repeat(32) }, 6, () => {})
   expect(() => wrong.push(legacy)).toThrow()
+})
+
+it('owns the incomplete input across pushes and rejects noncanonical frames', () => {
+  const previous = legacyPrefixDigest(0, new Uint8Array())
+  const metadata = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: previous, separatorBytes: 0 as const }
+  const events = [{ type: 'assistant/message', seq: 0, text: '保留文字' }] as const
+  const frame = Buffer.from(encodeFactBatch('x', previous, events).bytes)
+  const split = Math.floor(frame.length / 2)
+  const first = Buffer.from(frame.subarray(0, split))
+  const observed: unknown[] = []
+  const decoder = createJournalStreamDecoder(metadata, 6, unit => observed.push(...unit))
+  decoder.push(first)
+  first.fill(0)
+  decoder.push(frame.subarray(split))
+  expect(decoder.finish().torn).toBe(false)
+  expect(observed).toEqual(events)
+  const noncanonical = Buffer.from(frame.toString('utf8').replace(',"events":', ', "events":'))
+  expect(() => decodeFactBatch(noncanonical)).toThrow('Invalid fact journal')
 })

@@ -1,5 +1,5 @@
 import { captureContextSnapshot, type ContextSnapshot, type ContextRevision, type RequestSurfaceInput } from "@i-harness/context-engine"
-import { renderConversation, type ContextBindingMetadata, type SessionView as Session } from "@i-harness/core-session"
+import { selectConversationMessages, type ContextBindingMetadata, type SessionView as Session } from "@i-harness/core-session"
 import { projectionFingerprint } from "@i-harness/token-meter"
 import type { ModelClient } from "@i-harness/llm-seam"
 
@@ -19,7 +19,7 @@ export function captureRequestCandidate(session: Session, ownerSessionId: string
   const result = captureContextSnapshot(session, { ownerSessionId, surface })
   if (result.kind === "unsupported") throw Object.assign(new Error(`${result.code}: ${result.component}`), { code: result.code, component: result.component, sourceIds: result.sourceIds })
   const snapshot = result.snapshot
-  return { snapshot, ...selected, projectionRevision, neutralFingerprint: projectionFingerprint(renderConversation(snapshot.conversation)), metadata: snapshot.surface.binding }
+  return { snapshot, ...selected, projectionRevision, neutralFingerprint: projectionFingerprint(selectConversationMessages(snapshot.conversation)), metadata: snapshot.surface.binding }
 }
 
 export function sameRequestCandidate(before: RequestEvidence, current: RequestEvidence): boolean {

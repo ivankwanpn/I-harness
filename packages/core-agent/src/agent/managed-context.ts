@@ -1,7 +1,7 @@
 import { getManagedExecutionAdmissionWait } from '@i-harness/core-session/internal/execution';
 import { captureRestoredContextSnapshot, readRestoredContextCoordinates } from '../../../context-engine/src/snapshot/build.ts';
 import { projectionFingerprint } from '@i-harness/token-meter';
-import { renderConversation, type ContextBindingMetadata, type ExchangeAcceptedEventV2, type ManagedAction, type FactOutcome, type FactPorts, type ProducerFactOutcome, type SettlementFacts } from '@i-harness/core-session';
+import { selectConversationMessages, type ContextBindingMetadata, type ExchangeAcceptedEventV2, type ManagedAction, type FactOutcome, type FactPorts, type ProducerFactOutcome, type SettlementFacts } from '@i-harness/core-session';
 import { snapshotModelData } from '@i-harness/llm-seam';
 import { resolveCompactSpec } from '@i-harness/compaction';
 import type { ManagedAgentHost } from './managed-types.ts';
@@ -135,7 +135,7 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
                 const result = captureRestoredContextSnapshot(lease.archive, { ownerSessionId: host.domain.sessionId, surface: surface() });
                 if (result.kind !== 'captured')
                     throw Object.assign(Error(`${result.code}: ${result.component}`), { code: result.code });
-                const evidence: RequestEvidence = { snapshot: result.snapshot, ...selected(), projectionRevision: lease.observation.projectionRevision, neutralFingerprint: projectionFingerprint(renderConversation(result.snapshot.conversation)), metadata: result.snapshot.surface.binding, instructions: host.requestContext?.capture() };
+                const evidence: RequestEvidence = { snapshot: result.snapshot, ...selected(), projectionRevision: lease.observation.projectionRevision, neutralFingerprint: projectionFingerprint(selectConversationMessages(result.snapshot.conversation)), metadata: result.snapshot.surface.binding, instructions: host.requestContext?.capture() };
                 lease.assertCurrent();
                 host.hooks.assertCurrent(hooks);
                 const prior = active;

@@ -432,16 +432,32 @@ async function hydratePreparation(owned: Candidate, current: () => void, prospec
     }
     const prunedCalls = selectPruneDependencies(pruneView, callIds);
     const prefetched = new Map<number, SessionEventView>();
-    const preload = async (indices: Iterable<number>) => {
-        if (!readEvents) return;
-        const missing = [...new Set(indices)].filter(index => !prefetched.has(index));
-        if (!missing.length) return;
+    if (readEvents && wanted.size) {
+        // A native batch read verifies the entire opened journal. Resolve the
+        // structural preparation coordinates before that read so it also
+        // returns the selected preparation and admission bodies.
+        const requested = new Set([...wanted, ...prunedCalls.values()]);
+        for (const index of wanted) {
+            const result = facts[index]?.preparationResultSeq;
+            if (result === undefined) continue;
+            requested.add(result);
+            const admission = facts[result]?.preparationAdmissionSeq;
+            if (admission !== undefined) requested.add(admission);
+        }
+        const indices = [...requested];
         current();
-        const events = await readEvents(missing);
+        const events = await readEvents(indices);
         current();
-        missing.forEach((index, position) => prefetched.set(index, events[position]!));
-    };
-    if (readEvents) await preload([...wanted, ...prunedCalls.values()]);
+        if (events.length !== indices.length) failure('CONVERSATION_RESTORATION_DEPENDENCY_MISMATCH');
+        indices.forEach((index, position) => {
+            const event = events[position]!, fact = facts[index];
+            const result = event.type === 'user/message' ? event.inputPreparation?.resultSeq : undefined;
+            const admission = event.type === 'agent/input/preparation' && event.op === 'completed' ? event.admissionSeq : undefined;
+            if (event.seq !== index || fact?.preparationResultSeq !== result || fact?.preparationAdmissionSeq !== admission)
+                failure('CONVERSATION_RESTORATION_DEPENDENCY_MISMATCH');
+            prefetched.set(index, event);
+        });
+    }
     const read = async (index: number) => {
         const captured = prefetched.get(index);
         if (captured) return captured;
@@ -462,19 +478,13 @@ async function hydratePreparation(owned: Candidate, current: () => void, prospec
     // Selected preparation text/provenance must use actual original bodies.
     const preparations = [...full.values()].flatMap(event =>
         event.type === 'user/message' && event.inputPreparation ? [event.inputPreparation.resultSeq] : []);
-    if (readEvents) await preload(preparations);
-    const admissions = new Set<number>();
     for (const resultIndex of preparations) {
         const result = full.get(resultIndex) ?? await read(resultIndex);
         full.set(resultIndex, result);
         if (result.type === 'agent/input/preparation' && !full.has(result.admissionSeq)) {
-            if (readEvents) admissions.add(result.admissionSeq);
-            else full.set(result.admissionSeq, await read(result.admissionSeq));
+            full.set(result.admissionSeq, await read(result.admissionSeq));
         }
     }
-    if (readEvents) await preload(admissions);
-    for (const admission of admissions)
-        full.set(admission, await read(admission));
     current();
     return { full, pruned, substitutes, coordinates, state: owned.state.read() };
 }

@@ -4,6 +4,11 @@ import type { Captured } from "../contracts/snapshot.ts"
 // Frozen caller objects and proxies carry no ownership evidence.
 const capturedNodes = new WeakSet<object>()
 
+/** Object identity is proof of an immutable, data-only capture by this module. */
+export function isCapturedData(value: unknown): boolean {
+  return !!value && typeof value === "object" && capturedNodes.has(value)
+}
+
 export class UnsupportedData extends Error {
   constructor() { super("CONTEXT_SNAPSHOT_UNSUPPORTED") }
 }

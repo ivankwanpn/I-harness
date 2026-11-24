@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest'
-import { append, createSession } from '@i-harness/core-session'
+import { append, createSession, renderConversation, selectConversationMessages } from '@i-harness/core-session'
 import { captureContextSnapshot } from '@i-harness/context-engine'
+import { projectionFingerprint } from '@i-harness/token-meter'
 import { buildContextRequest } from '../src/agent/request-input.ts'
 
 function capture() {
@@ -48,4 +49,20 @@ it('accepts only captured conversation/surface and preserves absent optional fie
   expect(request).not.toHaveProperty('sessionId'); expect(request).not.toHaveProperty('promptCache')
   expect(request).not.toHaveProperty('maxOutputTokens'); expect(request).not.toHaveProperty('reasoningEffort')
   expect(request).not.toHaveProperty('signal')
+})
+
+it('preserves the neutral fingerprint when selecting immutable messages', () => {
+  const { snapshot } = capture()
+  expect(projectionFingerprint(selectConversationMessages(snapshot.conversation)))
+    .toBe(projectionFingerprint(renderConversation(snapshot.conversation)))
+})
+
+it('still verifies unowned projections against the seam', () => {
+  const { snapshot } = capture()
+  let reads = 0
+  const conversation = {
+    ...snapshot.conversation,
+    get items() { return ++reads === 1 ? snapshot.conversation.items : [] },
+  }
+  expect(() => buildContextRequest({ conversation, surface: snapshot.surface }, {})).toThrow(/derive from the session log/)
 })

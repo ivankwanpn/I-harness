@@ -1,6 +1,7 @@
 import { validateDeliveryFrame } from '../conversation/delivery.ts'
 import { isDeliveryEventType } from '../events/delivery.ts'
 import { createHash } from 'node:crypto'
+import { types } from 'node:util'
 import type { SessionEvent } from '../events/types.ts'
 import type { BatchKey, EncodedFactBatch, JournalMetadata, JournalPrefix } from '../managed/types.ts'
 import { stringifyJsonData } from './json-data.ts'
@@ -19,6 +20,8 @@ const utf8 = (value: unknown) => Buffer.from(stringifyJsonData(value) ?? fail(),
 const outerStart = Buffer.from('{"recordKind":"session/fact-batch","version":1,')
 const eventKey = Buffer.from(',"events":')
 const closeCore = Buffer.from('}')
+const comma = Buffer.from(',')
+const newline = Buffer.from('\n')
 
 export function legacyPrefixDigest(eventCount: number, body: Uint8Array): string {
   if (!count(eventCount)) fail()
@@ -44,7 +47,7 @@ export function validJournalPrefix(value: JournalPrefix): boolean {
   return count(value.eventCount) && count(value.bodyBytes) && digest(value.prefixDigest)
 }
 
-export function encodeFactBatch(batchId: string, previousPrefixDigest: string, events: readonly import('../managed/types.ts').SessionEventView[]): EncodedFactBatch {
+function factBatchParts(batchId: string, previousPrefixDigest: string, events: readonly import('../managed/types.ts').SessionEventView[]) {
   const firstSeq = events[0]?.seq, eventCount = events.length
   if (typeof batchId !== 'string' || !/^[\x21-\x7e]{1,256}$/.test(batchId) || !digest(previousPrefixDigest)
     || !count(firstSeq) || !eventCount || !count(firstSeq + eventCount)
@@ -56,19 +59,39 @@ export function encodeFactBatch(batchId: string, previousPrefixDigest: string, e
   const batchDigest = hash('ih.fact-batch.v1\0', coreHeader, eventKey, encodedEvents, closeCore)
   const prefixDigest = factPrefixDigest(previousPrefixDigest, batchDigest)
   const trailer = utf8({ batchDigest, prefixDigest }).subarray(1)
-  const bytes = Buffer.concat([outerStart, coreHeader.subarray(1), eventKey, encodedEvents, Buffer.from(','), trailer, Buffer.from('\n')])
-  return { key: Object.freeze({ batchId, firstSeq: firstSeq!, count: eventCount, previousPrefixDigest, batchDigest }), bytes }
+  return {
+    key: Object.freeze({ batchId, firstSeq: firstSeq!, count: eventCount, previousPrefixDigest, batchDigest }),
+    prefixDigest,
+    parts: [outerStart, coreHeader.subarray(1), eventKey, encodedEvents, comma, trailer, newline],
+  }
+}
+
+export function encodeFactBatch(batchId: string, previousPrefixDigest: string, events: readonly import('../managed/types.ts').SessionEventView[]): EncodedFactBatch {
+  const { key, parts } = factBatchParts(batchId, previousPrefixDigest, events)
+  return { key, bytes: Buffer.concat(parts) }
 }
 
 export function decodeFactBatch(bytes: Uint8Array): { key: BatchKey; events: SessionEvent[]; prefixDigest: string } {
-  const buffer = Buffer.from(bytes)
+  return decodeBatchBuffer(Buffer.from(bytes))
+}
+
+function decodeBatchBuffer(buffer: Buffer): ReturnType<typeof decodeFactBatch> {
   if (buffer.at(-1) !== 0x0a) fail()
   let row: Record<string, unknown>
   try { row = JSON.parse(buffer.subarray(0, -1).toString('utf8')) } catch { fail() }
   if (!row! || row!.recordKind !== 'session/fact-batch' || row!.version !== 1 || !Array.isArray(row!.events)) fail()
-  const encoded = encodeFactBatch(row!.batchId as string, row!.previousPrefixDigest as string, row!.events as SessionEvent[])
-  if (row!.firstSeq !== encoded.key.firstSeq || row!.count !== encoded.key.count || !buffer.equals(encoded.bytes)) fail()
-  return { key: encoded.key, events: row!.events as SessionEvent[], prefixDigest: row!.prefixDigest as string }
+  const { key, prefixDigest, parts } = factBatchParts(row!.batchId as string, row!.previousPrefixDigest as string, row!.events as SessionEvent[])
+  if (row!.firstSeq !== key.firstSeq || row!.count !== key.count) fail()
+  let offset = 0
+  // Compare the canonical envelope directly. Validation needs all its bytes,
+  // but replay never needs to allocate a second concatenated frame.
+  for (const part of parts) {
+    const end = offset + part.length
+    if (!buffer.subarray(offset, end).equals(part)) fail()
+    offset = end
+  }
+  if (offset !== buffer.length) fail()
+  return { key, events: row!.events as SessionEvent[], prefixDigest }
 }
 
 /** Decodes complete frames only. A torn final envelope is a private suffix;
@@ -81,11 +104,13 @@ export function readFactJournal(body: Uint8Array, metadata: JournalMetadata, for
 
 /** Internal bootstrap composition only: same physical decoder, no repair. */
 export function readBootstrapFactJournal(body: Uint8Array, metadata: JournalMetadata, formatVersion: number, header: import('../conversation/generation.ts').GenerationHistoryScope) {
-  const decoded = decodeJournal(body, metadata, formatVersion)
+  const frames: DecodedFrame[] = []
+  const decoded = decodeJournal(body, metadata, formatVersion, frames)
   createBootstrapConversationIndex(decoded.events, undefined, formatVersion, header)
-  return decoded
+  return { ...decoded, frames }
 }
-function decodeJournal(body: Uint8Array, metadata: JournalMetadata, formatVersion:number) {
+type DecodedFrame = { prefix: JournalPrefix; batch: EncodedFactBatch }
+function decodeJournal(body: Uint8Array, metadata: JournalMetadata, formatVersion: number, frames?: DecodedFrame[]) {
   if (!validJournalMetadata(metadata)) fail()
   const buffer = Buffer.from(body), legacy = buffer.subarray(0, metadata.legacyBodyBytes)
   if (legacy.length !== metadata.legacyBodyBytes || legacyPrefixDigest(metadata.legacyEventCount, legacy) !== metadata.legacyPrefixDigest) fail()
@@ -97,19 +122,19 @@ function decodeJournal(body: Uint8Array, metadata: JournalMetadata, formatVersio
   let offset = metadata.legacyBodyBytes
   if (metadata.separatorBytes) { if (buffer[offset] !== 0x0a) fail(); offset++ }
   let prefixDigest = metadata.legacyPrefixDigest
-  const frames: { prefix: JournalPrefix; batch: EncodedFactBatch }[] = []
   while (offset < buffer.length) {
     const end = buffer.indexOf(0x0a, offset)
     if (end < 0) break
-    const frame = decodeFactBatch(buffer.subarray(offset, end + 1))
+    const record = buffer.subarray(offset, end + 1)
+    const frame = decodeBatchBuffer(record)
     validateDeliveryFrame(frame.events, formatVersion)
     if (frame.key.firstSeq !== events.length || frame.key.previousPrefixDigest !== prefixDigest) fail()
-    frames.push({ prefix: { eventCount: events.length, bodyBytes: offset, prefixDigest }, batch: { key: frame.key, bytes: buffer.subarray(offset, end + 1) } })
+    frames?.push({ prefix: { eventCount: events.length, bodyBytes: offset, prefixDigest }, batch: { key: frame.key, bytes: record } })
     for (const event of frame.events) events.push(event)
     prefixDigest = frame.prefixDigest
     offset = end + 1
   }
-  return { events, prefix: { eventCount: events.length, bodyBytes: offset, prefixDigest }, torn: offset !== buffer.length, frames }
+  return { events, prefix: { eventCount: events.length, bodyBytes: offset, prefixDigest }, torn: offset !== buffer.length }
 }
 
 /** Incremental physical decoding. The consumer is private and must not publish
@@ -122,7 +147,7 @@ export function createJournalStreamDecoder(metadata: JournalMetadata, formatVers
   let legacyChecked = false, eventCount = 0, bodyBytes = 0, prefixDigest = metadata.legacyPrefixDigest
   let parts: Buffer[] = [], partBytes = 0, finished = false
   function add(bytes: Uint8Array) { if (bytes.length) { parts.push(Buffer.from(bytes)); partBytes += bytes.length } }
-  function take() { const result = Buffer.concat(parts, partBytes); parts = []; partBytes = 0; return result }
+  function take() { const result = parts.length === 1 ? parts[0]! : Buffer.concat(parts, partBytes); parts = []; partBytes = 0; return result }
   function legacyLine(bytes: Buffer) {
     const line = bytes.toString('utf8')
     if (!line.trim()) return
@@ -142,10 +167,16 @@ export function createJournalStreamDecoder(metadata: JournalMetadata, formatVers
     while (start < input.length) {
       const end = input.indexOf(10, start)
       if (end < 0) { add(input.subarray(start)); break }
-      add(input.subarray(start, end + 1)); const record = take()
+      // Unfinished lines own their fragments across pushes. Complete lines
+      // are decoded synchronously while the current chunk is still in scope.
+      let record = input.subarray(start, end + 1)
+      if (partBytes) {
+        add(record)
+        record = take()
+      }
       if (legacy) legacyLine(record.subarray(0, -1))
       else {
-        const frame = decodeFactBatch(record); validateDeliveryFrame(frame.events, formatVersion)
+        const frame = decodeBatchBuffer(record); validateDeliveryFrame(frame.events, formatVersion)
         if (frame.key.firstSeq !== eventCount || frame.key.previousPrefixDigest !== prefixDigest) fail()
         consume(frame.events); eventCount += frame.events.length; prefixDigest = frame.prefixDigest; bodyBytes += record.length
       }
@@ -155,7 +186,7 @@ export function createJournalStreamDecoder(metadata: JournalMetadata, formatVers
   return {
     push(bytes: Uint8Array) {
       if (finished) throw new TypeError('Journal decoder already finished')
-      const input = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      const input = types.isSharedArrayBuffer(bytes.buffer) ? Buffer.from(bytes) : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
       let offset = 0
       if (legacyLeft) {
         const length = Math.min(legacyLeft, input.length), chunk = input.subarray(0, length)

@@ -30,6 +30,8 @@ export interface HistoryFact extends ResultFactMetadata {
   readonly stepStartSeq?: number; readonly assistantSeq?: number; readonly callSeqs?: readonly number[]
   readonly inputId?: string; readonly imageInputId?: string; readonly images?: boolean; readonly sessionScope?: boolean
   readonly preparedRawMessageSeq?: number
+  readonly preparationResultSeq?: number
+  readonly preparationAdmissionSeq?: number
   readonly error?: boolean; readonly disposition?: 'unknown' | 'not-dispatched'
   readonly shadowedSeqs?: readonly number[]; readonly removedSeqs?: readonly number[]; readonly anchorSeq?: number
   readonly replacementId?: string; readonly coverage?: readonly ConversationCoverage[]; readonly insertBefore?: ConversationItemRef
@@ -72,11 +74,13 @@ export function historyFact(event: SessionEventView, index: number, inheritedBou
           : event.isError && (code === 'TOOL_ABORTED_BEFORE_DISPATCH' || code === 'TOOL_CANCELLED_BY_SIBLING') ? { disposition: 'not-dispatched' as const } : {}) }
     }
     case 'user/message': return { ...base, legacyRuntimeContext: index >= inheritedBoundary && (event.provenance ?? event.input?.provenance)?.kind !== 'inherited' && event.internal === true && event.source?.kind === 'plugin' && event.source.plugin === 'i-harness/runtime-context', inputId: event.input?.inputId, imageInputId: event.imageInputId,
+      ...(event.inputPreparation ? { preparationResultSeq: event.inputPreparation.resultSeq } : {}),
       ...(event.inputPreparation && 'rawMessageSeq' in event.inputPreparation ? { preparedRawMessageSeq: event.inputPreparation.rawMessageSeq } : {}),
       ...(event.seedInputContext ? { preparedRawMessageSeq: event.seedInputContext.rawMessageSeq } : {}),
       images: Array.isArray(outcomeField(event, 'images')) && event.images!.length > 0,
       sessionScope: (event.provenance ?? event.input?.provenance)?.scope === 'session' || event.input?.synthetic?.scope === 'session' }
     case 'agent/input/admitted': return { ...base, inputId: event.inputId, images: !!event.images?.length, sessionScope: event.provenance?.scope === 'session' || event.synthetic?.scope === 'session' }
+    case 'agent/input/preparation': return event.op === 'completed' ? { ...base, preparationAdmissionSeq: event.admissionSeq } : base
     case 'agent/input/promoted': case 'agent/input/cancelled': return { ...base, inputId: event.inputId }
     case 'compaction/summary': return { ...base, shadowedSeqs: [...event.shadowedSeqs] }
     case 'compaction/reset': return { ...base, removedSeqs: [...event.removedSeqs ?? []] }
