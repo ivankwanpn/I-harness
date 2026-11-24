@@ -332,7 +332,7 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
             return appendStage(events,owned.index.stage(events,{readCurrentEvent}));
         },
         /** Only the original already-held writer constructs this reader. */
-        async prepareWrite(groups:readonly CapturedFactGroup[],readEvent:(ordinal:number)=>Promise<SessionEventView>,assertCurrent:()=>void,rejectInvalidGroups=false){
+        async prepareWrite(groups:readonly CapturedFactGroup[],readEvent:(ordinal:number)=>Promise<SessionEventView>,assertCurrent:()=>void,rejectInvalidGroups=false,readEvents?:(ordinals:readonly number[])=>Promise<readonly SessionEventView[]>){
             check();const expected=revision,available=new Map<number,SessionEventView>(),events:SessionEventView[]=[],members:{group:CapturedFactGroup;events:readonly SessionEventView[]}[]=[],rejected:{group:CapturedFactGroup;cause:unknown}[]=[];
             // The same staged validator commits while its own installation
             // fence is raised. Source/revision checks remain active there.
@@ -340,6 +340,19 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
             class Missing extends Error{constructor(readonly ordinal:number){super('Writer dependency not prepared')}}
             let readFailed=false;
             const read=async(ordinal:number)=>{try{current();let value=available.get(ordinal);if(!value){value=await readEvent(ordinal);current();if(!value||value.seq!==ordinal)failure('CONVERSATION_RESTORATION_DEPENDENCY_MISMATCH');available.set(ordinal,value)}return value}catch(error){readFailed=true;throw error}};
+            const readBatch = readEvents && (async (ordinals: readonly number[]) => {
+                current();
+                const missing = ordinals.filter(ordinal => !available.has(ordinal));
+                if (missing.length === 1) await read(missing[0]!);
+                else if (missing.length) {
+                    const selected = await readEvents(missing);
+                    current();
+                    if (selected.length !== missing.length || missing.some((ordinal, index) => selected[index]?.seq !== ordinal))
+                        failure('CONVERSATION_RESTORATION_DEPENDENCY_MISMATCH');
+                    missing.forEach((ordinal, index) => available.set(ordinal, selected[index]!));
+                }
+                return ordinals.map(ordinal => available.get(ordinal)!);
+            });
             try{
                 for(const group of groups){
                     let resolved:ReturnType<typeof resolveFactGroupWithDependencies>;
@@ -357,7 +370,7 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
                     members.push(Object.freeze({group,events:Object.freeze(events.slice(first))}));
                 }
                 current();Object.freeze(events);validateDeliveryFrame(events,owned.source.formatVersion);
-                const validation=await prepareConversationAppend(owned.index,events,read,current);current();
+                const validation=await prepareConversationAppend(owned.index,events,read,current,readBatch);current();
                 return {...appendStage(events,validation,validation.discard),members:Object.freeze(members),rejected:Object.freeze(rejected)};
             }finally{available.clear()}
         },

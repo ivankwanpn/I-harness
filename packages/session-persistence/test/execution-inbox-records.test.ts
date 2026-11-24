@@ -1,18 +1,18 @@
 import {afterEach,expect,it,vi} from 'vitest'
-const probe=vi.hoisted(()=>({views:0,ordinals:[] as number[],gate:undefined as undefined|{entered():void;wait:Promise<void>}}))
+const probe=vi.hoisted(()=>({views:0,ordinals:[] as number[],batches:[] as number[][],gate:undefined as undefined|{entered():void;wait:Promise<void>}}))
 vi.mock('@i-harness/core-session',async load=>{const original=await load<typeof import('@i-harness/core-session')>();return {...original,createManagedSessionState(){probe.views++;throw Error('Inbox lookup constructed a complete view')}}})
-vi.mock('../../session-persistence-jsonl/src/backend/archive-reader.ts',async load=>{const original=await load<typeof import('../../session-persistence-jsonl/src/backend/archive-reader.ts')>();return {...original,async readSessionArchive(...args:Parameters<typeof original.readSessionArchive>){const result=await original.readSessionArchive(...args);if(args[4]){probe.ordinals.push(...args[4].ordinals);const gate=probe.gate;if(gate){probe.gate=undefined;gate.entered();await gate.wait}}return result}}})
+vi.mock('../../session-persistence-jsonl/src/backend/archive-reader.ts',async load=>{const original=await load<typeof import('../../session-persistence-jsonl/src/backend/archive-reader.ts')>();return {...original,async readSessionArchive(...args:Parameters<typeof original.readSessionArchive>){const result=await original.readSessionArchive(...args);if(args[4]){probe.ordinals.push(...args[4].ordinals);probe.batches.push([...args[4].ordinals]);const gate=probe.gate;if(gate){probe.gate=undefined;gate.entered();await gate.wait}}return result}}})
 import {mkdtemp} from 'node:fs/promises'
 import {appendFileSync} from 'node:fs'
 import {join} from 'node:path'
-import {committedFactSeqs} from '@i-harness/core-session'
+import {committedFactSeqs,contextUsageAnchorId,type AcceptedRequestAttributionV1} from '@i-harness/core-session'
 import {createJsonlBackend} from '@i-harness/session-persistence-jsonl'
 import {composeJsonlTaskTransitionCoordinator} from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
 import {taskDocumentStorageContract} from '../../subagent/src/task/storage-contract.ts'
 import {acquireManagedExecution} from '../src/execution-internal.ts'
 import {readRestoredConversation} from '@i-harness/core-session/internal/restoration'
 const coordinators:ReturnType<typeof composeJsonlTaskTransitionCoordinator>[]=[]
-afterEach(async()=>{probe.gate=undefined;for(const c of coordinators.splice(0))await c.close();probe.views=0;probe.ordinals=[]})
+afterEach(async()=>{probe.gate=undefined;for(const c of coordinators.splice(0))await c.close();probe.views=0;probe.ordinals=[];probe.batches=[]})
 async function fixture(){const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'inbox-records-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract);coordinators.push(coordinator);await coordinator.create({sessionId:'inbox'});return {root,backend,coordinator}}
 
 async function persistedExchanges() {
@@ -87,6 +87,42 @@ it('reuses the verified archive for cold validation and opens the held reader fo
   expect(rendered).toContain('original response 7')
  }finally{await lease.settle()}
  expect(probe.views).toBe(0)
+},20000)
+
+it('validates a warm usage append with one archive read for the remaining exchange dependencies',async()=>{
+ const {backend,coordinator}=await fixture()
+ const execution=await acquireManagedExecution(coordinator,'inbox')
+ const action=execution.owner.beginAction()
+ try{
+  const digest='a'.repeat(64),actionId='action',attemptId='attempt',exchangeId='exchange'
+  const request:AcceptedRequestAttributionV1={
+   version:1,ownerSessionId:'inbox',observationLifetimeId:'live',candidateId:'candidate',sendId:'send',
+   semanticId:digest,payloadId:digest,payloadKind:'http-json-body',executionEpochId:'epoch',coldCompatible:false,
+   snapshot:{semanticRevision:digest,protectionRevision:digest,branchId:digest,contextEpoch:digest,surfaceRevision:digest},
+   projectionRevision:0,
+  }
+  committedFactSeqs(await action.facts.agent.lifecycle({type:'conversation/semantics',version:1,mode:'accepted-exchange-v1'}))
+  const [stepSeq]=committedFactSeqs(await action.facts.agent.lifecycle({type:'step/start',actionId,attemptId}))
+  const [assistantSeq,acceptedSeq]=committedFactSeqs(await action.captureModelExchange({type:'assistant/message',text:'warm answer'},{
+   type:'model/exchange-accepted',version:2,request,exchangeId,actionId,attemptId,
+   stepStartSeq:{kind:'prior',seq:stepSeq!,expectedType:'step/start'},
+   assistantSeq:{kind:'group',position:0,expectedType:'assistant/message'},callSeqs:[],
+  }).admit())
+  const accepted={acceptedSeq:acceptedSeq!,exchangeId,actionId,attemptId}
+  const sample={
+   version:2,accepted,request,bindingId:digest,shapeId:digest,pricingVersion:'projected-pricing-v2',
+   normalizationVersion:'input-usage-v1',usageSemantics:'includes-cache',prefixId:digest,
+   unitCount:1,heuristicPrefixTokens:10,reportedInputTokens:100,
+  } as const
+  const checkpoint={...sample,anchorId:contextUsageAnchorId(sample)}
+  probe.batches=[]
+  const [usageSeq]=committedFactSeqs(await action.facts.agent.usage({
+   type:'context/usage',version:2,op:'sample',
+   checkpoint:{...checkpoint,accepted:{...accepted,acceptedSeq:{kind:'prior',seq:acceptedSeq!,expectedType:'model/exchange-accepted'}}},
+  }))
+  expect(probe.batches).toEqual([[acceptedSeq],[stepSeq,assistantSeq]])
+  expect((await backend.read('inbox')).events[usageSeq!]).toMatchObject({type:'context/usage',checkpoint})
+ }finally{action.finish();await execution.close()}
 },20000)
 
 it('rejects a changed archive before publishing the cold execution attachment',async()=>{

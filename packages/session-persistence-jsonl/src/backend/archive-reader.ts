@@ -56,6 +56,12 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
         const chunk = buffer.subarray(0, bytesRead);
         let start = 0;
         while (start < chunk.length) {
+            // The archive owner needs exact header and birth lines. After
+            // qualification, the managed decoder owns the remaining framing.
+            if (decoder && needed === 0) {
+                decoder.push(chunk.subarray(start));
+                break;
+            }
             const end = chunk.indexOf(10, start);
             if (end < 0) { add(chunk.subarray(start)); break; }
             add(chunk.subarray(start, end + 1));

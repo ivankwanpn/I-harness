@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { createConversationValidationScan, inspectConversationValidationScan, readConversationGenerations, readConversationDeliveries, takeConversationValidationScan } from '../src/conversation/validation.ts';
+import { createConversationValidationScan, inspectConversationValidationScan, prepareConversationAppend, readConversationGenerations, readConversationDeliveries, takeConversationValidationScan } from '../src/conversation/validation.ts';
 import { createConversationValidationIndex } from '../src/index.ts';
 import type { SessionEvent } from '../src/events/types.ts';
 it('scans original complete validation and selection without retaining the source array', async () => {
@@ -68,6 +68,47 @@ it('refuses unfinished preparation linkage at the original finish boundary', asy
         await scan.push([event]);
     expect(() => scan.finish()).toThrow('prepared input requires atomic promotion linkage');
 });
+
+async function preparedAppendFixture() {
+    const { events, formatVersion } = await preparedFixture();
+    const first = events.findIndex(event => event.type === 'agent/input/promoted');
+    const scan = createConversationValidationScan({ formatVersion, readEvent: async ordinal => events[ordinal]! });
+    await scan.push(events.slice(0, first));
+    const index = takeConversationValidationScan(scan.finish());
+    return { events, suffix: events.slice(first), index, first };
+}
+
+it('batches committed setup bodies and keeps later same-suffix references local', async () => {
+    const { events, suffix, index, first } = await preparedAppendFixture();
+    const single = async () => { throw Error('Unexpected single dependency read'); };
+    const reads: (readonly number[])[] = [];
+    const prepared = await prepareConversationAppend(index, suffix, single, () => {}, async ordinals => {
+        reads.push(ordinals);
+        return ordinals.map(ordinal => events[ordinal]!);
+    });
+    expect(reads).toEqual([[3, 0]]);
+    expect(index.eventCount).toBe(first);
+    prepared.commit();
+    expect(index.eventCount).toBe(events.length);
+});
+
+it('refuses a reordered or stale dependency batch without committing the suffix', async () => {
+    const { events, suffix, index, first } = await preparedAppendFixture();
+    const single = async (ordinal: number) => events[ordinal]!;
+    await expect(prepareConversationAppend(index, suffix, single, () => {}, async ordinals =>
+        ordinals.map(ordinal => events[ordinal]!).reverse())).rejects.toThrow('invalid dependency batch');
+    let current = true;
+    const checkCurrent = () => { if (!current) throw Error('Lost writer ownership'); };
+    await expect(prepareConversationAppend(index, suffix, single, checkCurrent, async ordinals => {
+        current = false;
+        return ordinals.map(ordinal => events[ordinal]!);
+    })).rejects.toThrow('Lost writer ownership');
+    expect(index.eventCount).toBe(first);
+    const retry = await prepareConversationAppend(index, suffix, single, () => {});
+    retry.commit();
+    expect(index.eventCount).toBe(events.length);
+});
+
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readFactJournal } from '../src/index.ts';

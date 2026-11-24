@@ -11,7 +11,7 @@ import { aggregateErrors } from './error-classification.ts'
 import { factPrefixDigest } from '../serialization/fact-journal.ts'
 import type { OriginalConversationRestorationSource } from '../conversation/restoration-input.ts'
 import type { CapturedFactGroup } from './groups.ts'
-import type { EncodedFactBatch,FactReceipt,FactOutcome,BatchKey,JournalPrefix } from './types.ts'
+import type { EncodedFactBatch,FactReceipt,FactOutcome,BatchKey,JournalPrefix,SessionEventView } from './types.ts'
 import type { ManagedExecutionIdentity,ManagedExecutionOwner,ManagedExecutionDomain,OriginalExecutionWriterBinding,OriginalWriterDependencyScope,OriginalExecutionCaptureHooks,ExecutionObservation,PreparedExecutionRequest } from './execution-types.ts'
 import {freezeJsonData,isStrictFactData} from './capture.ts'
 import {captureOriginalRestorationSource} from './restoration-source.ts'
@@ -571,10 +571,15 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       while(debt.size){const reads=[...debt].map(scope=>admissionReads.get(scope));if(reads.some(read=>!read))throw new TypeError('Writer dependency cleanup unresolved');await Promise.all(reads);assertHeld();if(closed)throw new TypeError('Original writer closed');if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'})}
       const expected=original.prefix,scope=captureWriterDependencies(open(expected))
       debt.add(scope);activeDependencyScopes.add(scope);markBusy() // installed before the first asynchronous read/open
-      const check=scope.assertCurrent.bind(scope),readOriginal=scope.readEvent.bind(scope),read=async(ordinal:number)=>{const event=await readOriginal(ordinal);return compatibility?.view.events[ordinal]??liveEvents.get(ordinal)?.deref()??event},close=scope.close.bind(scope)
+      const check=scope.assertCurrent.bind(scope),close=scope.close.bind(scope)
+      const localEvent=(ordinal:number,event:SessionEventView)=>compatibility?.view.events[ordinal]??liveEvents.get(ordinal)?.deref()??event
+      const read=async(ordinal:number)=>localEvent(ordinal,await scope.readEvent(ordinal))
+      const readEvents=scope.readEvents?.bind(scope)
+      const readBatch=readEvents&&(async(ordinals:readonly number[])=>
+        (await readEvents(ordinals)).map((event,index)=>localEvent(ordinals[index]!,event)))
       let reading=true,prepared:Awaited<ReturnType<typeof original.prepareWrite>>|undefined,primary:unknown,failed=false
       const current=()=>{assertHeld();if(reading){check();if(original.prefix!==expected)throw new TypeError('Writer prefix changed during preparation')}}
-      try{current();prepared=await original.prepareWrite(groups,read,current,rejectInvalidGroups);current()}catch(error){failed=true;primary=error}
+      try{current();prepared=await original.prepareWrite(groups,read,current,rejectInvalidGroups,readBatch);current()}catch(error){failed=true;primary=error}
       try{await close();activeDependencyScopes.delete(scope);debt.delete(scope)}catch(cleanup){activeDependencyScopes.delete(scope);prepared?.discard();const cause=failed?new AggregateError([primary,cleanup],'Writer preparation and exact dependency cleanup failed'):cleanup;dependencyFailure={cause};signalUnavailable(cause,!sameHeldOwner());throw cause}finally{reading=false}
       if(failed){signalReady();throw primary}
       try{assertHeld()}catch(error){prepared?.discard();throw error}

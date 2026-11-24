@@ -215,6 +215,33 @@ it('uses bounded positional short reads across multibyte text and a record large
     expect((await f.backend.read('a')).events.at(-1)).toEqual(event);
     expect(reads).toBeGreaterThan(30);
 });
+it('streams managed frames across short reads and resumes at the next frame', async () => {
+    const f = await managed();
+    const expected: SessionEvent[] = [
+        { type: 'user/message', text: '雪😀'.repeat(22000), seq: 0 },
+        { type: 'plan/mode', mode: 'on', seq: 1 },
+    ];
+    const first = encodeFactBatch('large', f.journal.legacyPrefixDigest, expected.slice(0, 1));
+    const prefix = readFactJournal(first.bytes, f.journal, 14).prefix;
+    const second = encodeFactBatch('next', prefix.prefixDigest, expected.slice(1));
+    const header = Buffer.from(JSON.stringify({ formatVersion: 14, sessionId: 'a', journal: f.journal }) + '\n');
+    await fs.writeFile(f.path, Buffer.concat([header, first.bytes, second.bytes]));
+    let reads = 0;
+    vi.mocked(fs.open).mockImplementation(async (...args) => {
+        const handle = await actualOpen(...args);
+        if (args[0] === f.path) {
+            const read = handle.read.bind(handle);
+            handle.read = (async (buffer: Buffer, offset: number, length: number, position: number) => {
+                reads++;
+                expect(length).toBeLessThanOrEqual(65536);
+                return read(buffer, offset, Math.min(length, 4093), position);
+            }) as typeof handle.read;
+        }
+        return handle;
+    });
+    expect((await f.backend.read('a')).events).toEqual(expected);
+    expect(reads).toBeGreaterThan(30);
+});
 it.each([1, 2, 3, 4, 5])('preserves pre6 format%s malformed-middle stopping and valid final-line behavior', async (version) => { const f = await fixture(); await fs.writeFile(f.path, JSON.stringify({ formatVersion: version, sessionId: 'a' }) + '\n{"type":"user/message","text":"first"}\n{broken\n{"type":"user/message","text":"last"}'); expect((await f.backend.read('a')).events).toEqual([{ type: 'user/message', text: 'first' }]); });
 it('matches managed legacy bytes with an explicit separator', async () => { const f = await fixture(), legacy = Buffer.from('{"type":"user/message","text":"雪","seq":0}'), journal = { version: 1 as const, legacyBodyBytes: legacy.length, legacyEventCount: 1, legacyPrefixDigest: legacyPrefixDigest(1, legacy), separatorBytes: 1 as const }; const frame = encodeFactBatch('after', journal.legacyPrefixDigest, [{ type: 'plan/mode', mode: 'on', seq: 1 }]); const body = Buffer.concat([legacy, Buffer.from('\n'), frame.bytes]); await fs.writeFile(f.path, Buffer.concat([Buffer.from(JSON.stringify({ formatVersion: 14, sessionId: 'a', journal }) + '\n'), body])); expect((await f.backend.read('a')).events).toEqual(readFactJournal(body, journal, 14).events); });
 it('new coordinator construction cannot reopen admission while original close still joins a read', async () => { const f = await fixture(), first = createSessionCoordinator(f.backend), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(); vi.mocked(fs.open).mockImplementation(async (...args) => { const h = await actualOpen(...args); if (args[0] === f.path) {

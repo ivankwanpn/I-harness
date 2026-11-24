@@ -56,13 +56,14 @@ const generationObservations = new WeakMap<ConversationValidationIndex, () => re
 const callObservations=new WeakMap<ConversationValidationIndex,(id:string)=>boolean>();
 export function hasConversationToolCall(index:ConversationValidationIndex,id:string):boolean{const read=callObservations.get(index);if(!read)throw TypeError('Original conversation call index required');return read(id)}
 type PreparedConversationAppend=ReturnType<ConversationValidationIndex['stage']>&{discard():void};
-const appendPreparations = new WeakMap<ConversationValidationIndex,(events:readonly SessionEvent[],readEvent:(ordinal:number)=>Promise<SessionEvent>,assertCurrent:()=>void)=>Promise<PreparedConversationAppend>>();
+type ReadAppendEvents = (ordinals: readonly number[]) => Promise<readonly SessionEvent[]>;
+const appendPreparations = new WeakMap<ConversationValidationIndex,(events:readonly SessionEvent[],readEvent:(ordinal:number)=>Promise<SessionEvent>,assertCurrent:()=>void,readEvents?:ReadAppendEvents)=>Promise<PreparedConversationAppend>>();
 /** Original constructor's staged validator, using only the already-held
  * writer's dependency reader. Never reacquires a document or transition. */
-export function prepareConversationAppend(index:ConversationValidationIndex,events:readonly SessionEvent[],readEvent:(ordinal:number)=>Promise<SessionEvent>,assertCurrent:()=>void){
+export function prepareConversationAppend(index:ConversationValidationIndex,events:readonly SessionEvent[],readEvent:(ordinal:number)=>Promise<SessionEvent>,assertCurrent:()=>void,readEvents?:ReadAppendEvents){
     const prepare=appendPreparations.get(index);
     if(!prepare)throw new TypeError('Original conversation index required');
-    return prepare(events,readEvent,assertCurrent);
+    return prepare(events,readEvent,assertCurrent,readEvents);
 }
 export function readConversationGenerations(index: ConversationValidationIndex) {
     return generationObservations.get(index)?.();
@@ -397,7 +398,7 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
         },
     };
     callObservations.set(index,id=>callsById.has(id));
-    appendPreparations.set(index,async(suffix,readEvent,assertCurrent)=>{
+    appendPreparations.set(index,async(suffix,readEvent,assertCurrent,readEvents)=>{
         const expected=revision,available=new Map<number,SessionEvent>(),first=count;
         let discarded=false;
         const current=()=>{assertCurrent();if(discarded||revision!==expected)fail('stale staged suffix')};
@@ -411,7 +412,22 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
                 validateBootstrapReadiness([...Array.from({length:prefixLength},(_,position)=>available.get(position)!),...suffix],formatVersion,scope,capability);
             }
             for(const event of suffix){
-                for(const dependency of staged.dependencies(event))if(dependency<first&&!available.has(dependency)){available.set(dependency,await readEvent(dependency));current()}
+                const missing = staged.dependencies(event).filter(ordinal => ordinal < first && !available.has(ordinal));
+                if (readEvents && missing.length) {
+                    const members = await readEvents(Object.freeze(missing));
+                    current();
+                    if (members.length !== missing.length) fail('invalid dependency batch');
+                    for (const [index, ordinal] of missing.entries()) {
+                        const member = members[index];
+                        if (member?.seq !== ordinal) fail('invalid dependency batch');
+                        available.set(ordinal, member);
+                    }
+                } else {
+                    for (const ordinal of missing) {
+                        available.set(ordinal, await readEvent(ordinal));
+                        current();
+                    }
+                }
                 staged.advance(event);
             }
             current();const prepared=staged.finish();
