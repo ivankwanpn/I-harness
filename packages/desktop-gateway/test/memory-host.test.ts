@@ -106,12 +106,14 @@ it("admits a workspace during a memory transaction and leaves its sibling respon
     const b = await connect("b")
     expect(await b("desktop/memory/state")).toMatchObject({ result: { enabled: true } })
     const started = performance.now()
-    const [write, ping] = await Promise.all([b("desktop/memory/note", { title: "note", text: "once" }), a("ping")])
+    let completed = false
+    const write = b("desktop/memory/note", { title: "note", text: "once" }).then(result => { completed = true; return result })
+    const ping = await a("ping")
     expect(ping).toMatchObject({ result: { ok: true } })
-    expect(write).toMatchObject({ error: { message: expect.stringMatching(/locked|busy/i) } })
     expect(performance.now() - started).toBeLessThan(2500) // prior synchronous SQLite timeout was 5000 ms
+    expect(completed).toBe(false)
     blocker.exec("ROLLBACK")
-    expect(isRpcSuccess(await b("desktop/memory/note", { title: "note", text: "once" }))).toBe(true)
+    expect(isRpcSuccess(await write)).toBe(true)
     expect(await b("desktop/memory/list")).toMatchObject({ result: { notes: [expect.objectContaining({ title: "note" })] } })
   } finally {
     blocker?.close()

@@ -1,7 +1,7 @@
 import type { RpcMessage } from "@i-harness/sdk"
 import type { ProviderRuntime } from "@i-harness/provider-runtime"
 import type { SessionQuery } from "@i-harness/session-query"
-import type { MemoryStore } from "@i-harness/memory"
+import type { createDesktopMemory } from "./memory-wire.ts"
 import type { InteractionBridge } from "./interaction.ts"
 import type { WorkspaceReview } from "./review.ts"
 import type { createSessionManagement } from "./session-management.ts"
@@ -73,7 +73,7 @@ export interface DesktopHandlers {
   sessionReload?(sessionId: string): Promise<void>
   provider?: ProviderRuntime
   codingPlans?: ReturnType<typeof import("./coding-plans.ts").createCodingPlans>
-  memory?: MemoryStore
+  memory?: Pick<ReturnType<typeof createDesktopMemory>, "request">
   compact?: (sessionId: string, instructions: string | undefined, signal: AbortSignal) => Promise<import('@i-harness/sdk').SessionCompactResult>
   sessionQuery?: SessionQuery
   sandboxState?: () => SandboxState | Promise<SandboxState>

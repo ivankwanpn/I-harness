@@ -25,7 +25,8 @@ import { createJsonlCommitCoordinator } from "@i-harness/session-persistence-jso
 import { asSessionCoordinator } from "@i-harness/session-persistence/internal/commit-facade"
 import { taskDocumentStorageContract } from "@i-harness/session-persistence/internal/task-state"
 import { createFileBackedSessionQuery } from "@i-harness/session-query"
-import { openMemoryStore, createMemoryTools } from "@i-harness/memory"
+import { openMemoryStore } from "@i-harness/memory"
+import { createDesktopMemory } from "./memory-wire.ts"
 import type { SessionService, SessionProjectContext, SessionAssembly } from "@i-harness/session-executor"
 import { createDurableSessionLoader, createSessionService, createInstructionEnvironment, readPendingRewindIntents, type SessionServiceOptions } from "@i-harness/session-executor"
 import { acquireChildManagedExecution } from '../../session-executor/src/host-managed-execution.ts'
@@ -323,8 +324,9 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   // A synchronous busy wait here would also stall unrelated workspaces.
   const memory = openMemoryStore({ path: join(options.sessionDir, "memory.sqlite"), scope: options.workspace,
     lazy: true, busyTimeoutMs: options.profile ? 0 : undefined })
-  defer(() => memory.close())
-  const additionalTools = [...createMemoryTools(memory, () => memory.enabled()), ...createDesktopGoalTools((id) => service.liveSession(id), notifyWorkflow,id=>service.liveAssembly(id)?.metadataFacts),...createCodeRetrievalTools(nativeContext.codeRetrieval, { exposure: 'direct' })]
+  const workspaceMemory = createDesktopMemory(memory, !!options.profile)
+  defer(() => { workspaceMemory.stop(); memory.close() })
+  const additionalTools = [...workspaceMemory.tools, ...createDesktopGoalTools((id) => service.liveSession(id), notifyWorkflow,id=>service.liveAssembly(id)?.metadataFacts),...createCodeRetrievalTools(nativeContext.codeRetrieval, { exposure: 'direct' })]
   const instructionWatch = createFsWatchService()
   defer(() => instructionWatch.close())
   const plugins = createDesktopPlugins(join(dirname(settingsPath), "plugins"), { watch: instructionWatch, workspace: options.workspace })
@@ -501,7 +503,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
         return composeOwnedGatewayDefault(original,{
           task,indexJobs:ownedIndexJobs,selection:ownedSelection,bindings:ownedApprovalBindings,output:output.service,subagentStaleAfterMs:600000,
           bindHookContext(read){if(ownedHookContexts.has(id))throw Error('Original hook context already installed');original.retain(()=>{if(ownedHookContexts.get(id)===read)ownedHookContexts.delete(id)});ownedHookContexts.set(id,read)},
-          leaves:{workspace:options.workspace,webCacheRoot:join(options.sessionDir,'web-cache'),webSearchMode:()=>webSearchMode,resolveCredential:ref=>nativeCredentials.resolve(ref),sessionQuery,videoAudioAnalyzer:input=>runtime.analyzeVideoAudio?.(input)??Promise.resolve({status:'unconfigured',reason:'Video audio analysis is unavailable in this provider runtime.'}),additionalTools:[...createMemoryTools(memory,()=>memory.enabled()),...createCodeRetrievalTools(nativeContext.codeRetrieval, { exposure: 'direct' })]},
+          leaves:{workspace:options.workspace,webCacheRoot:join(options.sessionDir,'web-cache'),webSearchMode:()=>webSearchMode,resolveCredential:ref=>nativeCredentials.resolve(ref),sessionQuery,videoAudioAnalyzer:input=>runtime.analyzeVideoAudio?.(input)??Promise.resolve({status:'unconfigured',reason:'Video audio analysis is unavailable in this provider runtime.'}),additionalTools:[...workspaceMemory.tools,...createCodeRetrievalTools(nativeContext.codeRetrieval, { exposure: 'direct' })]},
           extensions:{roles:task.roles,workspace:options.workspace,configDir:dirname(settingsPath),startSource:(()=>{const observed=original.execution.observe(),source=observed.hasConversationMessages?'resume':'startup';observed.assertCurrent();return source})(),report:messages=>plugins.report(id,messages),interaction,policy:()=>({workspace:options.workspace,sandbox:mode,approval:approvalMode,project:()=>projectContexts.get(id)?.(),executionAuthority:executionAuthorities.get(id),hookConfigs:[],grantPaths:[resolveHookTrustPath(dirname(settingsPath)),join(dirname(settingsPath),'hook-authoring-grants.json')],pluginAuthority:{}})},
           surface:{policyPrompt:parts.policy,shellPrompt:parts.shell,projectPrompt:parts.project,schemas:live.modelToolSchemas,goalChanged:()=>notifyWorkflow(id),async reconcileAuthority(){instructions.manager.diagnostics.invalidate();ownedChildHosts.get(id)?.invalidateDiagnostics();await ownedNative.reconcile(id)}},
         })
@@ -649,7 +651,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
       mutate: async (id, action, title) => { const result = await management.mutate(id, action, title); if (action === "delete") approvalRules.removeSession(id); return result } },
     provider: runtime,
     codingPlans,
-    memory,
+    memory: workspaceMemory,
     compact: (sessionId, instructions, signal) => fence.run(sessionId, async () => {
       signal.throwIfAborted()
       const state = service.queueState(sessionId)
@@ -836,6 +838,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
       if (closing) return closing
       const cleanupOperation = createRetainedCleanupOperation()
       shutdownRequested = true
+      workspaceMemory.stop()
       let pluginFenceFailure: { cause: unknown } | undefined
       try { stopPluginObserver.dispose() } catch (cause) { pluginFenceFailure = { cause } }
       instructionEnvironment.dispose()

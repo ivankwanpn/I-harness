@@ -30,7 +30,7 @@ interface MemoryHit {
 export interface MemoryStore {
   enabled(): boolean
   setEnabled(enabled: boolean): void
-  add(input: { title: string; text: string; sessionId?: string }): MemoryNote
+  add(input: { title: string; text: string; sessionId?: string }, enabled?: () => boolean): MemoryNote
   read(id: string): MemoryNote
   list(limit?: number): Omit<MemoryNote, "text">[]
   search(query: string, limit?: number): MemoryHit[]
@@ -113,7 +113,11 @@ export function openMemoryStore(options: { path: string; scope: string; redactor
     const connection = database()
     connection.exec("BEGIN IMMEDIATE")
     try { const result = fn(); connection.exec("COMMIT"); return result }
-    catch (error) { connection.exec("ROLLBACK"); throw error }
+    catch (error) {
+      try { connection.exec("ROLLBACK") }
+      catch (rollback) { throw new AggregateError([error, rollback], "Memory transaction rollback failed") }
+      throw error
+    }
   }
   const store: MemoryStore = {
     enabled() { return prepare("SELECT enabled FROM preferences WHERE scope=?").get(scope)?.enabled === 1 },
@@ -121,12 +125,13 @@ export function openMemoryStore(options: { path: string; scope: string; redactor
       if (typeof enabled !== "boolean") throw new Error("enabled must be boolean")
       prepare("INSERT INTO preferences(scope, enabled) VALUES (?, ?) ON CONFLICT(scope) DO UPDATE SET enabled=excluded.enabled").run(scope, enabled ? 1 : 0)
     },
-    add(input) {
+    add(input, enabled) {
       const title = bounded(String(redactor.redact(bounded(input.title, "title", 256))), "title", 256)
       const text = bounded(String(redactor.redact(bounded(input.text, "text", 16384))), "text", 16384)
       const sessionId = input.sessionId === undefined ? null : bounded(input.sessionId, "sessionId", 256)
       const note = withRevision({ id: randomUUID(), title, text, sessionId, createdAt: Date.now() })
       transaction(() => {
+        if (enabled && !enabled()) throw new Error("memory is disabled")
         prepare("INSERT INTO notes(id, scope, title, text, sessionId, createdAt) VALUES (?, ?, ?, ?, ?, ?)").run(note.id, scope, title, text, sessionId, note.createdAt)
         prepare("INSERT INTO notes_fts(id, scope, title, text) VALUES (?, ?, ?, ?)").run(note.id, scope, title, text)
       })

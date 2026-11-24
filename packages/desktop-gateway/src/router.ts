@@ -17,7 +17,6 @@ import { randomUUID } from "node:crypto"
 import { createSurfaceSubscriptions } from './observation/subscriptions.ts'
 import { ScheduleInputError } from "@i-harness/schedule"
 import { ModelUnavailableError } from "@i-harness/session-executor"
-import { memoryRequest } from "./memory-wire.ts"
 import { boundSearchHits } from "./search-bounds.ts"
 import { providerCommand } from "./provider-wire.ts"
 import { createProviderProbes } from "./provider-probes.ts"
@@ -75,8 +74,10 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.sessions) capabilities["desktop-sessions"] = ["1"]
     if (handlers.provider !== undefined) capabilities["desktop-provider"] = ["1"]
     if (handlers.usageStats !== undefined) capabilities["desktop-usage"] = handlers.usageStats.queryV2?["1","2"]:["1"]
-    if (handlers.memory !== undefined) capabilities["desktop-memory"] = ["1"]
-    if (handlers.memory?.update) capabilities["desktop-memory-authoring"] = ["1"]
+    if (handlers.memory) {
+      capabilities["desktop-memory"] = ["1"]
+      capabilities["desktop-memory-authoring"] = ["1"]
+    }
     if (handlers.compact !== undefined) capabilities["desktop-compaction"] = ["1"]
     if (handlers.sessionQuery !== undefined) capabilities["desktop-session-search"] = ["1"]
     if (handlers.sandboxState !== undefined) capabilities["desktop-sandbox"] = ["1"]
@@ -608,7 +609,7 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
         return
       }
       if (message.method.startsWith("desktop/memory/") && handlers.memory !== undefined) {
-        try { send(makeSuccess(message.id, memoryRequest(handlers.memory, message.method, message.params))) }
+        try { send(makeSuccess(message.id, await handlers.memory.request(message.method, message.params))) }
         catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
         return
       }

@@ -35,7 +35,7 @@ export function createMemoryTools(store: MemoryStore, enabled: () => boolean = (
           throw new Error("invalid or oversized memory note")
         }
         if (!enabled()) return { saved: false, reason: "disabled" }
-        return { saved: true, note: store.add({ ...args, ...(exec.sessionId ? { sessionId: exec.sessionId } : {}) }) }
+        return { saved: true, note: store.add({ ...args, ...(exec.sessionId ? { sessionId: exec.sessionId } : {}) }, enabled) }
       },
     },
   ]
