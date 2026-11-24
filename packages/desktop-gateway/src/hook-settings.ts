@@ -25,6 +25,7 @@ export function createHookSettings(configDir: string, paths: () => Promise<strin
     for (const configPath of [...new Set([...await paths(), ...authoredPaths])]) {
       try {
         const loaded = await loadHooksConfig(configPath, dirname(configPath), createAuthoredHookApprovals(configDir, configPath), {
+          cwd: options?.workspace,
           claudePluginRoot: installedPluginHookRoot(configDir, configPath),
           onUnsupported: row => result.errors.push({ configPath, message: row.message, kind: "unsupported-handler", source: "plugin", format: "claude-plugin", handlerId: row.id, event: row.event }),
         })

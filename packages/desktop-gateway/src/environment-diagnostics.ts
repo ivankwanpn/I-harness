@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 import { existsSync } from "node:fs"
-import { delimiter, isAbsolute, join } from "node:path"
+import { delimiter, isAbsolute, resolve } from "node:path"
 import type { SessionService } from "@i-harness/session-executor"
 import type { AgentShellSettingsState } from "./agent-shell.ts"
 import { resourceId } from "./execution.ts"
@@ -17,24 +17,24 @@ export interface EnvironmentDiagnosticsView {
 }
 export type DiagnosticsRequest = { kind: "desktop/environment/diagnostics"; workspaceId: string; sessionId?: string; probe?: boolean }
 
-function executable(command: string): string | undefined {
+function executable(command: string, cwd: string): string | undefined {
   if (isAbsolute(command)) return existsSync(command) ? command : undefined
   const names = process.platform === "win32" ? [`${command}.exe`, command] : [command]
   const pathKey = Object.keys(process.env).find(key => key.toLowerCase() === "path")
   for (const directory of (pathKey ? process.env[pathKey] ?? "" : "").split(delimiter)) {
     if (!directory) continue
-    for (const name of names) { const path = join(directory.replace(/^"|"$/g, ""), name); if (existsSync(path)) return path }
+    for (const name of names) { const path = resolve(cwd, directory.replace(/^"|"$/g, ""), name); if (existsSync(path)) return path }
   }
   return undefined
 }
 
 /** Fixed host diagnostics only; never interpolates input into a shell command. */
-export async function probeExecutable(name: string, command?: string, args: string[] = ["--version"]): Promise<ExecutableDiagnostic> {
+export async function probeExecutable(name: string, command?: string, args: string[] = ["--version"], cwd = process.cwd()): Promise<ExecutableDiagnostic> {
   if (!command) return { name, status: "unconfigured" }
-  const path = executable(command)
+  const path = executable(command, cwd)
   if (!path) return { name, command, status: "not-installed" }
   return new Promise(resolve => {
-    const child = spawn(path, args, { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
+    const child = spawn(path, args, { cwd, shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
     let output = "", overflow = false, settled = false
     const done = (status: ExecutableDiagnostic["status"], error?: string) => {
       if (settled) return
@@ -53,7 +53,7 @@ export async function probeExecutable(name: string, command?: string, args: stri
   })
 }
 
-export function createDesktopDiagnostics(service: Pick<SessionService, "liveAssembly">, options: { shell: { state(): Promise<AgentShellSettingsState> }; sessionStore?: "jsonl" | "commit-log" }) {
+export function createDesktopDiagnostics(service: Pick<SessionService, "liveAssembly">, options: { shell: { state(): Promise<AgentShellSettingsState> }; sessionStore?: "jsonl" | "commit-log"; workspace?: string }) {
   return {
     async read(sessionId?: string, probe = false): Promise<EnvironmentDiagnosticsView> {
       if (typeof probe !== "boolean") throw new Error("Invalid executable probe flag")
@@ -72,7 +72,7 @@ export function createDesktopDiagnostics(service: Pick<SessionService, "liveAsse
         : shell.resolved?.dialect === "powershell" ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"] : ["--version"]
       const specs = [{ name: "Agent Shell", command: shell.resolved?.command, args: shellArgs }, { name: "Node.js", command: process.execPath, args: ["--version"] }, { name: "Git", command: "git", args: ["--version"] }, { name: "ripgrep", command: "rg", args: ["--version"] }]
       const executables = probe ? await Promise.all(specs.map(spec => spec.name === "Agent Shell" && shell.executionTarget === "wsl"
-        ? Promise.resolve({ name: spec.name, command: spec.command, status: "untested" as const, error: "Use WSL diagnostics to inspect the Linux executable." }) : probeExecutable(spec.name, spec.command, spec.args)))
+        ? Promise.resolve({ name: spec.name, command: spec.command, status: "untested" as const, error: "Use WSL diagnostics to inspect the Linux executable." }) : probeExecutable(spec.name, spec.command, spec.args, options.workspace)))
         : specs.map(spec => ({ name: spec.name, command: spec.command, status: spec.command ? "untested" as const : "unconfigured" as const }))
       if (!shell.resolved && shell.error) executables[0] = { name: "Agent Shell", status: "unavailable", error: shell.error }
       return { live: Boolean(assembly), ...(sessionId ? { sessionId } : {}), ...(state ? { effectiveMode: state.codeMode } : {}), sessionStore: options.sessionStore ?? "jsonl", tools,

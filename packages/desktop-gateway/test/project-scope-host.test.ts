@@ -1,7 +1,7 @@
-import { mkdtemp, mkdir, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, expect, it } from "vitest"
+import { afterEach, expect, it, vi } from "vitest"
 import { createForkOperation, createSessionCoordinator, type ForkOutcome, type ForkPrepareResult } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { isRpcSuccess, type RpcMessage } from "@i-harness/sdk"
@@ -9,6 +9,61 @@ import { createDesktopHost } from "../src/host.ts"
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true }))) })
+
+it("keeps files, session state and search isolated across two live workspaces with the same session ID", async () => {
+  const root = await mkdtemp(join(tmpdir(), "desktop-shared-workspaces-")); roots.push(root)
+  const hosts: Awaited<ReturnType<typeof createDesktopHost>>[] = []
+  async function openWorkspace(label: string) {
+    const workspace = join(root, label), sessionDir = join(root, label + "-sessions")
+    await mkdir(workspace)
+    await writeFile(join(workspace, "local.txt"), `file-content-${label}`)
+    const writer = createSessionCoordinator(createJsonlBackend(sessionDir))
+    try {
+      await writer.create({ sessionId: "duplicate", title: label })
+      await writer.append("duplicate", [{ type: "user/message", text: label }])
+    } finally { await writer.close() }
+    const replies = new Map<string | number, RpcMessage>()
+    const host = await createDesktopHost({ workspace, sessionDir, settingsPath: join(root, "settings.json"),
+      onWrite: frame => { if ("id" in frame && frame.id !== null) replies.set(frame.id, frame) } })
+    hosts.push(host)
+    let id = 0
+    const request = async (method: string, params: unknown = {}) => {
+      const requestId = ++id
+      await host.handleLine(JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params }))
+      const result = replies.get(requestId)
+      if (!result || !isRpcSuccess(result)) throw Error(JSON.stringify(result))
+      return result.result
+    }
+    await request("initialize")
+    return { request, host }
+  }
+  try {
+    const [one, two] = await Promise.all([openWorkspace("alpha"), openWorkspace("bravo")])
+    const inspect = async (side: typeof one, label: string, foreign: string) => {
+      expect(await side.request("session/list")).toMatchObject({ sessions: [{ id: "duplicate", title: label }] })
+      expect(await side.request("desktop/review/file", { path: "local.txt" })).toMatchObject({ kind: "text", text: `file-content-${label}` })
+      expect(await side.request("desktop/session/search", { query: foreign })).toMatchObject({ hits: [] })
+      expect(await side.request("desktop/session/search", { query: label })).toMatchObject({ hits: [expect.objectContaining({ sessionId: "duplicate" })] })
+    }
+    await Promise.all([inspect(one, "alpha", "bravo"), inspect(two, "bravo", "alpha")])
+    await one.request("desktop/session/manage", { action: "pin", sessionId: "duplicate" })
+    expect(await two.request("desktop/session/navigation/state")).toMatchObject({ duplicate: { pinned: false } })
+    if (process.platform === "win32") {
+      await Promise.all([{ side: one, label: "alpha" }, { side: two, label: "bravo" }].map(async ({ side, label }) => {
+        const terminal = await side.request("desktop/terminal/open", { shell: "cmd" }) as { id: string }
+        try {
+          await side.request("desktop/terminal/write", { id: terminal.id, data: "type local.txt\r" })
+          await vi.waitFor(async () => {
+            const { data } = await side.request("desktop/terminal/read", { id: terminal.id }) as { data: string }
+            expect(data).toContain(`file-content-${label}`)
+          }, { timeout: 10000, interval: 50 })
+        } finally { await side.request("desktop/terminal/close", { id: terminal.id }) }
+      }))
+    }
+    await one.host.close()
+    await inspect(two, "bravo", "alpha")
+  } finally { await Promise.all(hosts.map(host => host.close())) }
+}, 60_000)
 
 it.each([false, true])("reports the completed-turn fork precondition and lists a real child with project ownership (completed=%s)", async (completed) => {
   const root = await mkdtemp(join(tmpdir(), "desktop-project-fork-")); roots.push(root)

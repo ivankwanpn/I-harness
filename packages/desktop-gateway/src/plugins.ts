@@ -11,9 +11,9 @@ function text(value: unknown): string {
   if (typeof value !== "string" || !value.trim() || value.length > 4096 || value.includes("\0")) throw new Error("Invalid plugin parameter")
   return value
 }
-export function createDesktopPlugins(root: string, options: { watch: FsWatchService }) {
+export function createDesktopPlugins(root: string, options: { watch: FsWatchService; workspace?: string }) {
   let watchError: string | undefined
-  const managed = createManagedPluginRegistry({ root }, { acquireStateWatch(path) {
+  const managed = createManagedPluginRegistry({ root, workspace: options.workspace }, { acquireStateWatch(path) {
     const lease = options.watch.acquire({ roots: [path], persistent: false })
     const normalize = (value: string) => { const absolute = resolve(value); return process.platform === "win32" ? absolute.toLowerCase() : absolute }
     const selected = normalize(path)

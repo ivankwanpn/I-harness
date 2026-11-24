@@ -161,10 +161,12 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void, 
       view: { ...structuredClone(view), expiresAt, state: "interrupted" },
       timer: undefined as unknown as ReturnType<typeof setTimeout>,
     }
-    row.timer = expiryTimer(row)
     waiting.set(view.requestId, row)
   }
   if (saved.length !== waiting.size) options.persistence?.write(snapshot())
+  // Restoring the persisted snapshot can fail. Install timers only after the
+  // snapshot has been reconciled and the returned bridge can own them.
+  for (const row of waiting.values()) row.timer = expiryTimer(row)
 
   function enqueue(
     sessionId: string,

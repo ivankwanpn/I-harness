@@ -68,14 +68,28 @@ export interface BoundedWriterOptions extends BoundedWriterSink {
   boundBytes: number
 }
 
-export interface BoundedWriter {
+export interface BoundedWriter<T = RpcMessage> {
   /** Enqueue one message (encoded here). Dropped silently once overloaded. */
-  push(message: RpcMessage): void
+  push(message: T): void
   /** Bytes currently queued behind backpressure (0 once the bound broke). */
   pendingBytes(): number
 }
 
 export function createBoundedWriter(opts: BoundedWriterOptions): BoundedWriter {
+  return createBoundedFrameWriter(opts, encodeFrame, (at, dropped) => encodeFrame(makeFailure(
+    null,
+    SERVER_OVERLOAD,
+    `output bound exceeded: ${at} bytes queued over ${opts.boundBytes} (${dropped} frame(s) dropped); closing — reconnect and resume via session/history`,
+    { kind: 'overload', retryable: true },
+  )))
+}
+
+/** Share the byte accounting and drain barrier with framed host transports. */
+export function createBoundedFrameWriter<T>(
+  opts: BoundedWriterOptions,
+  encode: (message: T) => string,
+  overloadFrame: (queuedBytes: number, dropped: number) => string,
+): BoundedWriter<T> {
   if (!Number.isInteger(opts.boundBytes) || opts.boundBytes <= 0) {
     throw new Error(`createBoundedWriter: boundBytes must be a positive integer (got ${opts.boundBytes})`)
   }
@@ -133,12 +147,7 @@ export function createBoundedWriter(opts: BoundedWriterOptions): BoundedWriter {
     cancelDrain?.()
     cancelDrain = undefined
     try {
-      opts.write(encodeFrame(makeFailure(
-        null,
-        SERVER_OVERLOAD,
-        `output bound exceeded: ${at} bytes queued over ${opts.boundBytes} (${dropped} frame(s) dropped); closing — reconnect and resume via session/history`,
-        { kind: 'overload', retryable: true },
-      )))
+      opts.write(overloadFrame(at, dropped))
     } catch { /* the terminal frame is best effort */ }
     try {
       opts.end()
@@ -148,7 +157,7 @@ export function createBoundedWriter(opts: BoundedWriterOptions): BoundedWriter {
   return {
     push(message) {
       if (over) return // the stream is over: after the overload frame, silence
-      const chunk = encodeFrame(message)
+      const chunk = encode(message)
       queue.push(chunk)
       pending += Buffer.byteLength(chunk)
       // Flush BEFORE the bound check: a frame the sink accepts is delivered,

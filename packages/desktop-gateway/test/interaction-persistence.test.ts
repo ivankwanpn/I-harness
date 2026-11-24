@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import type { QuestionProvider } from "@i-harness/interaction"
 import type { SessionAssembly } from "@i-harness/session-executor"
@@ -16,6 +16,17 @@ function row(requestId = "r1"): PendingInteraction {
 }
 
 describe("workspace interaction snapshots", () => {
+  it("leaves no expiry timers behind if pruning a restored snapshot fails", () => {
+    vi.useFakeTimers()
+    try {
+      const persistence = {
+        read: () => [row("live"), { ...row("expired"), expiresAt: Date.now() - 1 }],
+        write() { throw Error("Snapshot write failed") },
+      }
+      expect(() => createInteractionBridge(() => {}, { persistence })).toThrow("Snapshot write failed")
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
+  })
   it("recovers disk state after a process restart and consumes it durably", async () => {
     const path = await directory()
     const store = await openInteractionPersistence(path, join(path, "workspace"))

@@ -19,9 +19,13 @@ export function openNativeDatabase(path: string, options: ConstructorParameters<
 // index.ts's closeSessionQueries): a file-backed query that persisted its
 // index must be closed before the host/test removes the directory.
 const openConnections = new Set<DatabaseSync>()
+export function closeFileBackedDatabase(db: DatabaseSync): void {
+  if (!openConnections.has(db)) return
+  db.close()
+  openConnections.delete(db)
+}
 export function closeFileBackedConnections(): void {
-  for (const db of openConnections) db.close()
-  openConnections.clear()
+  for (const db of openConnections) closeFileBackedDatabase(db)
 }
 
 function openIndexDatabase(path: string): DatabaseSync {

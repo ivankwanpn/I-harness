@@ -7,7 +7,7 @@ export * from '@i-harness/session-persistence/selected-results-fork-contract'
 export { modelFailureFacts, safeModelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 export type { ImageInput, ImageMediaType } from "@i-harness/core-session"
 // M68 batch A: the host-side outbound bound (apps/cli wires it to stdout).
-export { createBoundedWriter, DEFAULT_WRITE_BOUND_BYTES } from "./bounded-writer.ts"
+export { createBoundedWriter, createBoundedFrameWriter, DEFAULT_WRITE_BOUND_BYTES } from "./bounded-writer.ts"
 export {
   HarnessClient,
   HarnessSession,

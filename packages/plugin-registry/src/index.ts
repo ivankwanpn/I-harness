@@ -25,7 +25,7 @@
  *     refreshSource() re-pulls.
  */
 
-import { existsSync, statSync } from "node:fs"
+import { existsSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { inspectCapabilities } from "./capability.ts"
@@ -42,6 +42,7 @@ import {
 import { materializePlugin } from "./materialize.ts"
 import {
   cacheNameForSource,
+  localMarketplaceDirectory,
   fetchSource,
   MarketplaceFetchError,
   parseManifest,
@@ -161,10 +162,12 @@ export function validateCompatibility(
 export class PluginRegistry {
   private readonly root: string
   private readonly cacheDir: string
+  private readonly workspace?: string
   private readonly existingCommandNames: () => string[]
 
   constructor(opts: RegistryOptions) {
     this.root = resolve(opts.root)
+    this.workspace = opts.workspace === undefined ? undefined : resolve(opts.workspace)
     this.cacheDir = join(this.root, "cache")
     const existing = opts.existingCommandNames ?? []
     this.existingCommandNames = typeof existing === "function" ? existing : () => existing
@@ -199,10 +202,12 @@ export class PluginRegistry {
     if (trimmed === "") {
       throw new MarketplaceFetchError("marketplace source is empty", "manifest-invalid")
     }
-    const { manifest } = await fetchSource(trimmed, this.cacheDir)
+    const address = this.workspace === undefined ? trimmed : localMarketplaceDirectory(trimmed, this.workspace) ?? trimmed
+    const { manifest } = await fetchSource(address, this.cacheDir, this.workspace)
     const state = await loadState(this.root)
-    const exact = state.sources.find((s) => s.source === trimmed)
+    const exact = state.sources.find((s) => s.source === address || (s.source === trimmed && s.name === manifest.name))
     if (exact !== undefined) {
+      exact.source = address
       exact.lastUpdated = Date.now()
       await saveState(this.root, state)
       return { source: { ...exact }, plugins: manifest.plugins }
@@ -213,7 +218,7 @@ export class PluginRegistry {
         `a marketplace named "${manifest.name}" is already registered from ${sameName.source}`,
       )
     }
-    const info: PluginSourceInfo = { name: manifest.name, source: trimmed, lastUpdated: Date.now() }
+    const info: PluginSourceInfo = { name: manifest.name, source: address, lastUpdated: Date.now() }
     state.sources.push(info)
     await saveState(this.root, state)
     return { source: info, plugins: manifest.plugins }
@@ -224,7 +229,7 @@ export class PluginRegistry {
     const state = await loadState(this.root)
     const src = state.sources.find((s) => s.name === name)
     if (src === undefined) throw new SourceNotFoundError(`source not found: ${name}`)
-    await fetchSource(src.source, this.cacheDir) // throws on failure; state untouched
+    await fetchSource(src.source, this.cacheDir, this.workspace) // throws on failure; state untouched
     src.lastUpdated = Date.now()
     await saveState(this.root, state)
   }
@@ -513,8 +518,8 @@ export class PluginRegistry {
    */
   private async collectSource(source: string, fetchMissing = true): Promise<{ manifest: MarketplaceManifest; manifestDir: string }> {
     try {
-      if (existsSync(source) && statSync(source).isDirectory()) {
-        const manifestDir = resolve(source)
+      const manifestDir = localMarketplaceDirectory(source, this.workspace ?? process.cwd())
+      if (manifestDir) {
         return { manifestDir, manifest: parseManifest("", manifestDir) }
       }
       const cached = join(this.cacheDir, cacheNameForSource(source))
@@ -526,7 +531,7 @@ export class PluginRegistry {
         }
       }
       if (!fetchMissing) throw new Error("Marketplace cache unavailable; refresh this source explicitly")
-      return await fetchSource(source, this.cacheDir)
+      return await fetchSource(source, this.cacheDir, this.workspace)
     } catch (e) {
       if (e instanceof MarketplaceFetchError) throw e
       const reason = e instanceof Error ? e.message : String(e)

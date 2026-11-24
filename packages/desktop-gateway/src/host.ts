@@ -111,6 +111,9 @@ import { createCodeRetrievalTools } from "@i-harness/code-retrieval"
 import { createCredentialStore } from "@i-harness/credentials"
 import { createCodexManagement } from "@i-harness/coding-plans"
 import { createCodingPlans } from "./coding-plans.ts"
+import type { DesktopProfileServices } from "./configuration-host.ts"
+import { DesktopHostStartupError } from "./host-startup-error.ts"
+export { DesktopHostStartupError } from "./host-startup-error.ts"
 import { openInteractionPersistence } from "./interaction-persistence.ts"
 import { createWorkspaceReview } from "./review.ts"
 import type { DesktopHandlers, SandboxState } from "./types.ts"
@@ -118,6 +121,7 @@ import type { DesktopHandlers, SandboxState } from "./types.ts"
 export interface DesktopHostOptions {
   workspace: string
   sessionDir: string
+  profile?: DesktopProfileServices
   settingsPath?: string
   credentialsPath?: string
   wslSettings?: WslSettingsOptions
@@ -139,17 +143,44 @@ export interface DesktopHost {
 
 const DESKTOP_GUARDIAN_POLICY = "Review every Agent tool call. Approve only clearly safe, in-scope actions. Return allow when a person should decide because the action is risky or uncertain. Deny clearly malicious or out-of-scope actions. Never execute a tool yourself."
 
+type StartupCleanup = () => void | Promise<void>
+
 export async function createDesktopHost(options: DesktopHostOptions): Promise<DesktopHost> {
+  const acquired: StartupCleanup[] = []
+  async function rollback() {
+    // Pop after success: a failed owner can still depend on earlier owners.
+    while (acquired.length) {
+      await acquired[acquired.length - 1]!()
+      acquired.pop()
+    }
+  }
+  try {
+    const host = await startDesktopHost(options, close => acquired.push(close))
+    acquired.length = 0
+    return host
+  } catch (cause) {
+    try { await rollback() }
+    catch (cleanup) {
+      let retry: Promise<void> | undefined
+      throw new DesktopHostStartupError(cause, cleanup, () => retry ??= rollback().finally(() => { retry = undefined }))
+    }
+    throw cause
+  }
+}
+
+async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: StartupCleanup) => void): Promise<DesktopHost> {
   if (!isAbsolute(options.workspace) || !isAbsolute(options.sessionDir)) {
     throw new Error("workspace and sessionDir must be absolute paths")
   }
   const recordObservations=options.experimentalUsageObservations!==false
-  const settingsPath = resolveSettingsPath(options.settingsPath === undefined ? {} : { path: options.settingsPath })
+  const settingsPath = options.profile?.settingsPath ?? resolveSettingsPath(options.settingsPath === undefined ? {} : { path: options.settingsPath })
+  const credentialsPath = options.profile?.credentialsPath ?? options.credentialsPath ?? join(dirname(settingsPath), "credentials.json")
   const settings = new SettingsStore({ path: settingsPath })
   // A fresh missing profile selects this store's native first-run defaults.
   await settings.loadObserved({ validate: validateDesktopSettingsDocument })
-  const usageStore = createUsageStore(join(dirname(settingsPath), "usage-stats"))
+  const usageStore = options.profile?.usageStore ?? createUsageStore(join(dirname(settingsPath), "usage-stats"))
   const usageObservations=recordObservations?createUsageObservationSink({record:value=>usageStore.recordObservation(value)}):undefined
+  defer(() => usageObservations?.close())
   const usageCapture = createUsageCapture({ observationMode:!!usageObservations,passiveObserver:usageObservations?.observer,workspace: options.workspace, record: record => usageStore.record(record), projectFor: id => projects.projectFor(id),projectSnapshotFor:id=>projects.projectSnapshotFor(id),
     onRequestFacts: facts => options.onWrite(makeNotification("desktop/context/diagnostic", facts)),
     onWarning: warnings => options.onWrite(makeNotification("desktop/usage/recording-warning", { workspace: options.workspace, warnings })) })
@@ -159,12 +190,13 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   let wslExecution = { ...settings.get().wslExecution }
   let webSearchMode = settings.get().webSearchMode
   let approvalMode = settings.get().approvalMode
-  const codexAccounts = createCodexManagement({ directory: join(dirname(options.credentialsPath ?? join(dirname(settingsPath), "credentials.json")), "coding-plans", "openai-codex") })
-  const runtime = createFileProviderRuntime({ settingsPath, credentialsPath: options.credentialsPath ?? join(dirname(settingsPath), "credentials.json"), codex: codexAccounts,
+  const codexAccounts = options.profile?.accounts ?? createCodexManagement({ directory: join(dirname(credentialsPath), "coding-plans", "openai-codex") })
+  const runtime = createFileProviderRuntime({ settingsPath, credentialsPath, codex: codexAccounts,
     passiveUsageWorkspace:usageObservations?options.workspace:undefined,
     passiveUsageProjectSnapshotFor:usageObservations?id=>projects.projectSnapshotFor(id):undefined,
     buildClient: usageCapture.buildClient(options.buildProviderClient ?? buildModelClient) })
-  const codingPlans = createCodingPlans(codexAccounts, runtime)
+  const codingPlans = options.profile?.codingPlans ?? createCodingPlans(codexAccounts, runtime)
+  if (!options.profile) defer(() => codingPlans.close())
   await mkdir(options.sessionDir, { recursive: true })
   // An explicit host option wins; then the settings document; then the
   // environment. Absent everywhere keeps the legacy store.
@@ -181,6 +213,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         lock: { enabled: true, lockRoot: options.sessionDir },
         originalExecutionFoldFactory: createOwnedMetadataFold,
       })
+  defer(() => coordinator.close())
   const compactionSignals = new Map<string, AbortSignal>()
   const isConversation = createConversationVisibility(coordinator)
   const fence = createSessionManagementFence()
@@ -189,6 +222,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const drainSession = async (id: string) => { await service.closeSession(id); await approvals.flush() }
   const projects = createProjectScopeBroker(coordinator, options.workspace, createSessionRuntimeVisibility(coordinator), { fence, assertIdle: id => management.assertIdle(id), drainSession,
     authorityChanged: ids => service.reconcileExecutionAuthority(ids) })
+  defer(() => projects.close())
   const projectContexts = new Map<string, () => SessionProjectContext | undefined>()
   const executionAuthorities = new Map<string, NonNullable<SessionServiceOptions["executionAuthority"]>>()
   const extensionInputs = new Map<string, RuntimeInputs>()
@@ -233,8 +267,10 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   }
   // The derived in-memory search index belongs to this workspace gateway
   // process. Never call global query cleanup when closing an individual host.
-  const sessionQuery = createConversationQuery(coordinator, createFileBackedSessionQuery({ storeRoot: options.sessionDir }), commitLogStore ? createCommitLogSearchFallback(coordinator) : undefined, commitLogStore ? createCoordinatorLineage(coordinator) : undefined)
-  const nativeCredentials=createCredentialStore(options.credentialsPath ?? join(dirname(settingsPath),"credentials.json"))
+  const indexedSessionQuery = createFileBackedSessionQuery({ storeRoot: options.sessionDir })
+  defer(() => indexedSessionQuery.close())
+  const sessionQuery = createConversationQuery(coordinator, indexedSessionQuery, commitLogStore ? createCommitLogSearchFallback(coordinator) : undefined, commitLogStore ? createCoordinatorLineage(coordinator) : undefined)
+  const nativeCredentials=createCredentialStore(credentialsPath)
   const ownedIndexJobs=createOwnedIndexJobBindings()
   const indexJobOwners=new Map<string,WeakRef<SessionAssembly>>()
   const liveIndexJobOwners=()=>{
@@ -275,6 +311,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       return ownedIndexJobs.register(access.sessionId,{id:job.jobId,kind:'code-context',label:'Index code sources (cancel preserves stored index)',cancel:job.cancel})
     },
   })
+  defer(() => nativeContext.close())
   const contextSubsystems=createContextSubsystemSettings({settingsPath,workspaceKey:nativeContext.workspaceKey,workspaceId:nativeContext.workspaceId,
     contextOutput:nativeContext.contextOutput,codeRetrieval:nativeContext.codeRetrieval,
     onReferencesChanged: async references => {
@@ -283,10 +320,14 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     },actionSessionId:nativeContext.humanSessionId})
   await contextSubsystems.sync();nativeContext.syncAutoRefresh()
   const memory = openMemoryStore({ path: join(options.sessionDir, "memory.sqlite"), scope: options.workspace })
+  defer(() => memory.close())
   const additionalTools = [...createMemoryTools(memory, () => memory.enabled()), ...createDesktopGoalTools((id) => service.liveSession(id), notifyWorkflow,id=>service.liveAssembly(id)?.metadataFacts),...createCodeRetrievalTools(nativeContext.codeRetrieval, { exposure: 'direct' })]
   const instructionWatch = createFsWatchService()
-  const plugins = createDesktopPlugins(join(dirname(settingsPath), "plugins"), { watch: instructionWatch })
+  defer(() => instructionWatch.close())
+  const plugins = createDesktopPlugins(join(dirname(settingsPath), "plugins"), { watch: instructionWatch, workspace: options.workspace })
+  defer(() => plugins.close())
   const terminal = createDesktopTerminal(options.workspace)
+  defer(() => terminal.close())
   let roleModelsEnabled = settings.get().plugins.subagentModel
   let autoCompactionEnabled = settings.get().compaction.auto
   const subagents = createSubagentSettings(settingsPath, roleModelsEnabled, { onEnabledChanged(next) { roleModelsEnabled = next } })
@@ -304,11 +345,12 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const approvalRules = notifyApprovalRuleChanges(approvalRulesBase, approvalRulesChanged)
 
   const instructionEnvironment = createInstructionEnvironment({ settingsPath, watch: instructionWatch })
+  defer(() => instructionEnvironment.close())
   const isolatedGuardianFor=(sessionId:string):GuardianIsolatedConfig=>({
       pool: reviewerPool,
       permissionContext: () => `${options.workspace}\n${mode}\n${approvalMode}`,
       resolveBinding: async (selection) => {
-        const fingerprint = async () => createHash("sha256").update(await readFile(settingsPath, "utf8").catch(() => "")).update(await readFile(options.credentialsPath ?? join(dirname(settingsPath), "credentials.json"), "utf8").catch(() => "")).digest("hex")
+        const fingerprint = async () => createHash("sha256").update(await readFile(settingsPath, "utf8").catch(() => "")).update(await readFile(credentialsPath, "utf8").catch(() => "")).digest("hex")
         const before = await fingerprint()
         const chosen = selection ?? (await coordinator.profile(sessionId)).meta.modelSelection
         const state = await runtime.resolveModel(chosen ? { sessionSelection: chosen } : {})
@@ -465,6 +507,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   }
   enrollFirstPartySelection(Object.freeze({options:serviceOptions,prepare:ownedSelection.prepare,refresh:ownedSelection.refresh,release:ownedSelection.release}))
   const service: SessionService = createSessionService(serviceOptions)
+  defer(() => service.close())
   const codeSettings = createCodeModeSettings(settingsPath, service)
   const rawInput = createDesktopInput(coordinator, service, {
     managedPreparation: true,
@@ -487,6 +530,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       signal.throwIfAborted()
     },
   })
+  defer(() => interaction.close())
   const agentSettings = createAgentSettings(settingsPath, { sandboxMode: mode, windowsSandboxBackend, wslExecution, webSearchMode, autoCompaction: settings.get().compaction.auto, approvalMode }, {
     onWindowsSandboxBackendChanged(next) { windowsSandboxBackend = next },
     onWslExecutionChanged(next) { wslExecution = { ...next } },
@@ -516,8 +560,10 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     }
   }
   const stopPluginObserver = plugins.bindRefresh(() => service.refreshExtensions())
+  defer(() => stopPluginObserver.close())
   mcp.bindRefresh(() => plugins.refresh())
   const offInteraction = onOriginalHostAssembly(service,(assembly) => { interaction.attach(assembly);liveIndexJobOwners();if(assembly.sessionId)indexJobOwners.set(assembly.sessionId,new WeakRef(assembly)) })
+  defer(offInteraction)
   const sessionSubagents = createDesktopSubagents(coordinator, service, {
     async readResult(access, ref, args) {
       const sameScope = async () => { if ((await nativeContext.sourceFor(access.sessionId)).sourceId !== (await nativeContext.sourceFor(access.ownerSessionId)).sourceId) throw new Error("Child result source is outside the current parent scope") }
@@ -527,6 +573,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       return page
     },
     onChanged: sessionId => options.onWrite(makeNotification("desktop/session/subagents/changed", { sessionId })) })
+  defer(() => sessionSubagents.close())
   const instructions = createInstructionViews(coordinator, service, async input => {
     const { meta } = await coordinator.profile(input.sessionId)
     if (!await isConversation(input.sessionId, meta)) throw new Error('Conversation unavailable')
@@ -566,7 +613,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     executionObservation,
     execution: { ...execution, stop: (id, cellId) => fence.run(id, () => execution.stop(id, cellId)) },
     agentProcesses: { ...agentProcesses, control: (id, command) => fence.run(id, () => agentProcesses.control(id, command)) },
-    diagnostics: createDesktopDiagnostics(service, { shell: agentShell, sessionStore: commitLogStore ? 'commit-log' : 'jsonl' }),
+    diagnostics: createDesktopDiagnostics(service, { shell: agentShell, sessionStore: commitLogStore ? 'commit-log' : 'jsonl', workspace: options.workspace }),
     taskProjection: async (id, options) => {
       if (!service.taskProjectionIntegrity) throw new Error("Task projection unavailable")
       return service.taskProjectionIntegrity(id, options)
@@ -724,6 +771,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     },
     onWrite: createGatewayWrite(options.onWrite, handlers, internalIds),
   })
+  defer(() => base.close())
   const router = createDesktopRouter(base, options.onWrite, handlers, internalIds)
   let closing: Promise<void> | undefined
   let shutdownRequested = false
@@ -732,6 +780,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const trustWatcher = watchSettings([resolveHookTrustPath(dirname(settingsPath)), mcpPath], async () => {
     if (!shutdownRequested) await mcp.refresh().catch(() => { /* Settings surfaces expose live refresh failures. */ })
   }, { service: instructionWatch })
+  defer(() => { shutdownRequested = true; return trustWatcher.close() })
   let policySync: Promise<void> | undefined
   let policyChanged = false
   let retryPolicy = false
@@ -759,9 +808,11 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     }).catch(() => { retryPolicy = true })
   }
   const policyWatcher = watchSettings(settingsPath, syncPolicy, { service: instructionWatch })
+  defer(async () => { shutdownRequested = true; await policyWatcher.close(); await policySync })
   const policyTimer = setInterval(() => {
     if (!policySync && (retryPolicy || policyWatcher.getState().kind !== "covered")) syncPolicy()
   }, 1000)
+  defer(() => clearInterval(policyTimer))
   policyTimer.unref?.()
   syncPolicy()
   return {
@@ -800,7 +851,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         // Join every selected-fork holder before the native context that owns
         // its source claims is closed; a blocked close keeps its debt reported.
         await once('selected fork controller',()=>selectedFork.close?.()??Promise.resolve())
-        await once("coding plans", () => codingPlans.close())
+        if (!options.profile) await once("coding plans", () => codingPlans.close())
         await once("WSL settings", () => wslSettings.close())
         await once("session subagents", () => sessionSubagents.close())
         await once('instruction subscriptions', () => instructions.close())
@@ -822,6 +873,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         if (cleaned.has('trust watcher') && cleaned.has('policy watcher') && cleaned.has('instructions') && cleaned.has('plugins') && cleaned.has('plugin observer')) await once('instruction watch', () => instructionWatch.close())
         await once("policy refresh", async () => { await policySync })
         await once("memory", () => memory.close())
+        await once("session search", () => indexedSessionQuery.close())
         if (forksJoined&&cleaned.has("session service")&&cleaned.has('native context')) await once("coordinator", () => closeCoordinatorWithRetainedCleanupOperation(coordinator, cleanupOperation))
         if (failures.length) throw new AggregateError(failures.map(item => item.cause),
           `Desktop host cleanup incomplete: ${failures.map(item => item.name).join(", ")}`)

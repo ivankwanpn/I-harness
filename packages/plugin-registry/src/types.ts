@@ -136,6 +136,8 @@ export interface RegistryOptions {
   /** Registry root (e.g. ~/.i-harness/plugins): state.json, cache/, installed
    * copies and the materialized skills/ + commands/ trees live under it. */
   root: string
+  /** Base for local marketplace paths supplied by this caller. */
+  workspace?: string
   /** Command names already claimed by the host (e.g. the programmatic
    * interaction catalog). A function is accepted so commands registered after
    * construction are honored; defaults to an empty catalog (no conflicts).

@@ -1,7 +1,8 @@
+import { DESKTOP_CONFIGURATION_ID } from "@i-harness/desktop-gateway/src/host-protocol.ts"
 import { app, BrowserWindow, dialog, ipcMain, shell, clipboard, type Tray } from "electron"
 import { join } from "node:path"
 import { registerDesktopIpc, closeDesktopSurfaceWindows } from "./ipc.ts"
-import { createWorkspaceRuntimeManager, launchBundledGateway, type WorkspaceRuntimeManager } from "./sdk-runtime.ts"
+import { createWorkspaceRuntimeManager, type WorkspaceRuntimeManager } from "./sdk-runtime.ts"
 import { createDesktopWindow } from "./window.ts"
 import { createWorkspaceCatalog, type WorkspaceCatalog } from "./workspaces.ts"
 import { createProjectCatalog } from "./projects.ts"
@@ -47,9 +48,7 @@ app.whenReady().then(() => {
   const manager = createWorkspaceRuntimeManager({
     projectContexts: () => projectRuntimeContexts(projects, workspaces),
     sessionsRoot: join(app.getPath("userData"), "sessions"),
-    ...(app.isPackaged
-      ? { launch: (workspace, sessionDir) => launchBundledGateway(process.resourcesPath, workspace, sessionDir) }
-      : {}),
+    ...(app.isPackaged ? { resourcesPath: process.resourcesPath } : {}),
   })
   catalog = workspaces
   runtimes = manager
@@ -71,7 +70,7 @@ app.whenReady().then(() => {
     reveal: async directory => { const failure = await shell.openPath(directory); if (failure) throw new Error("Diagnostic folder could not be opened") },
   })
   const stopDiagnostics = manager.onEvent(diagnostics.observe)
-  const globalProviders = createGlobalProviderSettings(async () => {const runtime=await manager.get({ id: "desktop-configuration", path: app.getPath("userData"), label: "本機設定" });return {request:runtime.client.request.bind(runtime.client),capabilities:runtime.info.capabilities}}, { openExternal: url => shell.openExternal(url), usageWarnings: usageWarnings.read })
+  const globalProviders = createGlobalProviderSettings(async () => {const runtime=await manager.get({ id: DESKTOP_CONFIGURATION_ID, path: app.getPath("userData"), label: "本機設定" });return {request:runtime.client.request.bind(runtime.client),capabilities:runtime.info.capabilities}}, { openExternal: url => shell.openExternal(url), usageWarnings: usageWarnings.read })
   const notifications = createNotificationHistory(join(app.getPath("userData"), "notifications-v1.json"))
   const drafts = new AttachmentDraftStore(join(app.getPath("userData"), "unsent-drafts-v1"))
   drainNativeSettings = async () => {

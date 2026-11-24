@@ -51,6 +51,22 @@ describe("mountLspClient lifecycle", () => {
     expect(exitIdx).toBeGreaterThan(shutdownIdx)
   })
 
+  it("isolates identically named servers in independent session registries", async () => {
+    const owners = await Promise.all(["alpha", "beta"].map(async () => {
+      const ctx = createContext()
+      const tools = createToolRegistry(ctx)
+      const handle = await mountLspClient(ctx, tools, config(), {
+        spawner: createFakeLspServer({ initialize: { capabilities: CAPS }, shutdown: null }).spawner,
+      })
+      return { tools, handle }
+    }))
+    try {
+      await owners[0]!.handle.unmount()
+      expect(owners[0]!.tools.get("lsp")).toBeUndefined()
+      expect(owners[1]!.tools.get("lsp")).toBeDefined()
+    } finally { await Promise.all(owners.map(({ handle }) => handle.unmount())) }
+  })
+
   it("throws on a duplicate live serverName", async () => {
     const ctx = createContext()
     const tools = createToolRegistry(ctx)

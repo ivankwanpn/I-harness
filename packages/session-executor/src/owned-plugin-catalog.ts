@@ -5,6 +5,7 @@ import { registerSkills, createSkillsSection, scanMentionedSkillNames, skillGetN
 import type { RoleRegistry } from "@i-harness/subagent"
 import { createPluginCapabilities } from "./plugin-capabilities.ts"
 import { mountLspClient, type LspMountHandle, type LspServerConfig } from "@i-harness/lsp"
+import { resolve } from "node:path"
 const catalogs = new WeakSet<object>()
 export function isOwnedPluginCatalog(value: object): boolean { return catalogs.has(value) }
 
@@ -30,7 +31,7 @@ export function createOwnedPluginCatalog(options: OwnedPluginCatalogOptions) {
   const mcpResults = new Map<string, boolean>(), roleResults = new Map<string, boolean>()
   const skills = registerSkills(options.ctx, options.tools, { workspace: options.workspace, extraDirs: skillDirs, ...(options.globalSkillDir === undefined ? {} : { globalDir: options.globalSkillDir }) })
   const capabilities = createPluginCapabilities({ skillDirs, handles, roles: options.roles, mcpResults, roleResults,
-    mount: config => mountMcpClient(options.ctx, options.tools, options.prepareMcpConfig?.(config) ?? config, options.mcpDeps), warn: options.report })
+    mount: config => mountMcpClient(options.ctx, options.tools, options.prepareMcpConfig?.(config) ?? config, { ...options.mcpDeps, workspace: options.workspace }), warn: options.report })
   let closed = false, closeFlight: Promise<void> | undefined, skillsClosed = false
   onExecutionEvent(options.ctx, "agent/pre-step", () => {
     if (closed) return
@@ -50,7 +51,7 @@ export function createOwnedPluginCatalog(options: OwnedPluginCatalogOptions) {
     mentionedSkills: (text: string) => scanMentionedSkillNames(text, skills.registry),
     mountLsp(config: LspServerConfig, deps?: Parameters<typeof mountLspClient>[3]): Promise<void> {
       if (closed) return Promise.reject(new Error("Owned plugin catalog is closed"))
-      const pending = mountLspClient(options.ctx, options.tools, { ...config, cwd: config.cwd ?? options.workspace }, deps).then(handle => { lspHandles.add(handle) })
+      const pending = mountLspClient(options.ctx, options.tools, { ...config, cwd: resolve(options.workspace, config.cwd ?? ".") }, deps).then(handle => { lspHandles.add(handle) })
       pendingLsp.add(pending)
       void pending.then(() => pendingLsp.delete(pending), () => pendingLsp.delete(pending))
       return pending

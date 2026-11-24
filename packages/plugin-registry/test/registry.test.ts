@@ -119,6 +119,17 @@ function makeRegistry(opts: { existingCommandNames?: string[] | (() => string[])
 const NO_RUNTIME = { skillDirs: [], mcpServerConfigs: {}, commandDescriptors: [], agentDescriptors: [], hookConfigs: [] }
 
 describe("PluginRegistry: sources", () => {
+  it("keeps a registered local marketplace bound to its original workspace", async () => {
+    const a = join(root, "a"), b = join(root, "b"), registry = join(root, "registry")
+    await cp(FIXTURE_DIR, join(a, "market"), { recursive: true })
+    await mkdir(b)
+    const first = new PluginRegistry({ root: registry, workspace: a })
+    const second = new PluginRegistry({ root: registry, workspace: b })
+    const result = await first.addSource("./market")
+    expect(result.source.source).toBe(join(a, "market"))
+    await second.refreshSource(result.source.name)
+    expect((await second.catalog()).plugins.map(plugin => plugin.name)).toEqual(["hello", "proxy"])
+  })
   it("fresh root: empty sources, empty catalog, empty runtime", async () => {
     const r = makeRegistry()
     expect(await r.listSources()).toEqual([])

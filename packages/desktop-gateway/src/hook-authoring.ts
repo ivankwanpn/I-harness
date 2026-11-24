@@ -99,7 +99,7 @@ export function createHookAuthoring(workspace: string, configDir: string, refres
         await mkdir(dirname(path), { recursive: true })
         try {
           await writeFile(temporary, body, { flag: "wx" })
-          const loaded = await loadHooksConfig(temporary, dirname(path), { isApproved: () => false })
+          const loaded = await loadHooksConfig(temporary, dirname(path), { isApproved: () => false }, { cwd: workspace })
           if (loaded.length > 100 || new Set(loaded.map(row => row.spec.id)).size !== loaded.length) throw new Error("Hook config requires at most 100 unique handler IDs")
           for (const row of loaded) {
             readResourceFile(dirname(path), resolve(dirname(path), row.spec.trust.script))

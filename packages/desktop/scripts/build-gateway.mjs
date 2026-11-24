@@ -108,13 +108,10 @@ mkdirSync(join(outDir, "cli", "src"), { recursive: true })
 cpSync(join(gatewayRoot, "package.json"), join(outDir, "cli", "package.json"))
 writeFileSync(join(outDir, "cli", "src", "host.ts"), 'export * from "../../node_modules/@i-harness/desktop-gateway/src/host.ts"\n')
 writeFileSync(join(outDir, "cli", "src", "cli.ts"), `import { pathToFileURL } from "node:url"
-import { main } from "../../node_modules/@i-harness/desktop-gateway/src/cli.ts"
+import { main, runGatewayCli } from "../../node_modules/@i-harness/desktop-gateway/src/cli.ts"
 export { main }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  void main(process.argv.slice(2)).then(code => { process.exitCode = code }, error => {
-    console.error("[desktop-gateway] fatal: " + (error instanceof Error ? error.message : String(error)))
-    process.exitCode = 1
-  })
+  runGatewayCli(process.argv.slice(2))
 }
 `)
 for (const dependency of dependenciesOf(gatewayRoot)) {

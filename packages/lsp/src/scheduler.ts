@@ -15,12 +15,9 @@ export interface LspMountHandle {
   unmount(): Promise<void>
 }
 
-// Module-level reservation so a serverName can only ever be live once (a
-// second mount with the same name is a hard error, not a silent shadow).
-// M18 core supports ONE LSP server per run: a second mount with a DIFFERENT
-// serverName is also a hard error (fail-loud, explicit — multi-server is an
-// M18 non-goal).
-const liveServerNames = new Set<string>()
+// The tool pair is unique within its owning registry. Independent sessions
+// can mount their own language servers in the same host process.
+const liveServers = new WeakMap<ToolRegistry, string>()
 const ONE_SERVER_MESSAGE = "lsp: only one LSP server per run is supported (M18 core)"
 
 export async function mountLspClient(
@@ -30,15 +27,15 @@ export async function mountLspClient(
   deps?: { spawner?: (spec: InstanceSpec) => ReturnType<typeof import("node:child_process").spawn> },
 ): Promise<LspMountHandle> {
   validateLspConfig(config)
-  if (liveServerNames.has(config.serverName)) {
+  if (liveServers.get(tools) === config.serverName) {
     throw new Error(`lsp: serverName "${config.serverName}" is already reserved by a live instance`)
   }
   // Any live instance already mounted → reject (the duplicate-name check above
   // wins for the same name; this covers two DIFFERENT names).
-  if (liveServerNames.size > 0) {
+  if (liveServers.has(tools)) {
     throw new Error(ONE_SERVER_MESSAGE)
   }
-  liveServerNames.add(config.serverName)
+  liveServers.set(tools, config.serverName)
 
   const spec: InstanceSpec = {
     command: config.command,
@@ -75,7 +72,7 @@ export async function mountLspClient(
     // (e.g. lsp_diagnostics register throws after lsp was registered) must not
     // leave orphaned tools behind.
     for (const name of toolNames) tools.unregister(name)
-    liveServerNames.delete(config.serverName)
+    liveServers.delete(tools)
     throw err
   }
   let unmounted = false
@@ -89,7 +86,7 @@ export async function mountLspClient(
       try {
         await instance!.dispose()
       } finally {
-        liveServerNames.delete(config.serverName)
+        liveServers.delete(tools)
         for (const name of toolNames) tools.unregister(name)
       }
     },

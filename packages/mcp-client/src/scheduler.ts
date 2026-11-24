@@ -32,6 +32,7 @@ export interface McpMountHandle {
 }
 
 export interface McpMountDeps {
+  workspace?: string
   // Injection seam (tests): a custom connect — the reconnect supervisor rebuilds
   // each generation through this same seam. `opts` carries the list_changed
   // observation point (M6-D3); a fake that ignores it simply never reports.
@@ -111,7 +112,7 @@ export async function mountMcpClient(
   try {
     supervisor = createMcpSupervisor(config, {
       tools,
-      connect: deps?.connect ?? ((c, o) => createConnectedClient(c, o)),
+      connect: (c, o) => (deps?.connect ?? createConnectedClient)(c, deps?.workspace === undefined ? o : { ...o, workspace: deps.workspace }),
       onStatus: deps?.onStatus ?? defaultStatusLogger,
     })
     await supervisor.start()

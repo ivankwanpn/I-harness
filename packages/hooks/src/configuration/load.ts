@@ -42,7 +42,7 @@ export async function loadHooksConfig(
   configPath: string,
   configDir: string,
   approvals?: { isApproved(sha256: string): boolean },
-  options: ClaudePluginHooksOptions = {},
+  options: ClaudePluginHooksOptions & { cwd?: string } = {},
 ): Promise<LoadedHandler[]> {
   let text: string
   try {
@@ -74,6 +74,9 @@ export async function loadHooksConfig(
   const loaded: LoadedHandler[] = []
   for (const entry of cfg.handlers) {
     const spec = validateSpec(entry, configPath)
+    // Capture relative command directories before both the trust check and
+    // execution. Native handlers without a directory run beside their script.
+    if (spec.command.cwd !== undefined && options.cwd !== undefined) spec.command.cwd = resolve(options.cwd, spec.command.cwd)
     compileMatcher(spec.matcher) // regex validity is a config error
     let trustError: string | undefined
     let unapproved = false

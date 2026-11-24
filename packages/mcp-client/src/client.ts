@@ -38,14 +38,14 @@ const RawCallToolResultSchema = z.object({
 
 /** M26-B1b: roots 設定 → roots/list 回應的 uri 陣列。絕對路徑 → file://（Windows 盤符安全），
  *  http/https URL 原樣，相對路徑對 cwd resolve（fail-closed：非空字串已在 validateMcpConfig 擋）。 */
-export function resolveRootUris(roots: string[]): string[] {
+export function resolveRootUris(roots: string[], workspace = process.cwd()): string[] {
   return roots.map((r) => {
     // Windows 盤符（C:\..）先於 scheme 判斷——"c:" 不是 URL protocol
     if (/^[a-zA-Z]:[\\/]/.test(r) || isAbsolute(r)) return pathToFileURL(r).href
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(r)) {
       try { return new URL(r).href } catch { /* fall through: 看作相對路徑 */ }
     }
-    return pathToFileURL(resolve(r)).href
+    return pathToFileURL(resolve(workspace, r)).href
   })
 }
 
@@ -78,6 +78,8 @@ export interface ConnectedMcpClient {
  *  would drain `tools/list` synchronously INSIDE the notification callback,
  *  which the spec forbids. */
 export interface McpConnectOptions {
+  /** Base directory of the owning session for local roots and stdio children. */
+  workspace?: string
   /** Fired when the server announces `notifications/tools/list_changed`. */
   onToolsChanged?: () => void
 }
@@ -128,6 +130,9 @@ async function connectWithAuth(
 }
 
 export async function createConnectedClient(config: McpServerConfig, opts?: McpConnectOptions): Promise<ConnectedMcpClient> {
+  if (config.transport === "stdio" && opts?.workspace !== undefined) {
+    config = { ...config, cwd: resolve(opts.workspace, config.cwd ?? ".") }
+  }
   // M26-B1: OAuth 組裝——先綁回調端口才能得出 redirectUrl（端口 0 = 系統分配；EADDRINUSE fail-closed）。
   let oauthServer: OAuthCallbackServer | undefined
   let oauthProvider: IHOAuthClientProvider | undefined
@@ -188,7 +193,7 @@ export async function createConnectedClient(config: McpServerConfig, opts?: McpC
       client.setNotificationHandler(ToolListChangedNotificationSchema, () => onToolsChanged())
     }
     client.setRequestHandler(ListRootsRequestSchema, () => ({
-      roots: resolveRootUris(config.roots ?? []).map((uri) => ({
+      roots: resolveRootUris(config.roots ?? [], opts?.workspace).map((uri) => ({
         uri,
         name: basename(new URL(uri).pathname) || uri,
       })),

@@ -38,6 +38,28 @@ function git(root: string, ...args: string[]) {
   return execFileSync("git", args, { cwd: root }).toString("utf8")
 }
 
+it("stages and commits to the selected workspace with the configured identity when the parent environment names another repo", async () => {
+  const own = repo(), other = repo()
+  const review = trackedReview(own)
+  writeFileSync(join(own, "source.txt"), "new content\n")
+  const otherHead = git(other, "rev-parse", "HEAD")
+  try {
+    vi.stubEnv("GIT_DIR", join(other, ".git"))
+    vi.stubEnv("GIT_COMMON_DIR", join(other, ".git"))
+    vi.stubEnv("GIT_WORK_TREE", other)
+    vi.stubEnv("GIT_INDEX_FILE", join(other, ".git", "index"))
+    vi.stubEnv("GIT_AUTHOR_NAME", "Configured Author")
+    vi.stubEnv("GIT_AUTHOR_EMAIL", "configured@example.test")
+    expect(await review.stage("source.txt")).toEqual({ kind: "ok" })
+    expect(await review.commit("Workspace-only change")).toMatchObject({ kind: "committed" })
+    expect(process.env.GIT_DIR).toBe(join(other, ".git"))
+  } finally { vi.unstubAllEnvs() }
+  expect(git(own, "show", "HEAD:source.txt")).toBe("new content\n")
+  expect(git(own, "log", "-1", "--format=%an <%ae>").trim()).toBe("Configured Author <configured@example.test>")
+  expect(git(other, "rev-parse", "HEAD")).toBe(otherHead)
+  expect(git(other, "status", "--porcelain")).toBe("")
+})
+
 async function revision(review: ReturnType<typeof createWorkspaceReview>, path = "source.txt") {
   const file = await review.file(path)
   expect(file.kind).toBe("text")

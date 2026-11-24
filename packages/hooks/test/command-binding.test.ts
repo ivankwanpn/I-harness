@@ -31,6 +31,19 @@ async function fixture() {
   return { root, script, configPath, spec, approvals: { isApproved: (hash: string) => hash === sha256 } }
 }
 
+it("captures each workspace's relative native hook cwd for validation and dispatch", async () => {
+  const fixtures = await Promise.all([fixture(), fixture()])
+  await Promise.all(fixtures.map(async f => {
+    const cwd = join(f.root, "work")
+    await mkdir(cwd)
+    f.spec.command = { cmd: process.execPath, args: ["../approved.cjs"], cwd: "work" }
+    await writeFile(f.configPath, JSON.stringify({ version: 1, handlers: [f.spec] }))
+    const [loaded] = await loadHooksConfig(f.configPath, f.root, f.approvals, { cwd: f.root })
+    expect(loaded).toMatchObject({ valid: true, spec: { command: { cwd } } })
+    await expect(runHookHandler(loaded!.spec, { event: "pre-tool", tool: { name: "read", args: {} } }, f.root)).resolves.toEqual({})
+  }))
+})
+
 it("audit A.2 regression: refuses an approved harmless artifact while command.cmd executes unrelated inline code", async () => {
   const f = await fixture()
   expect(f.spec.command.cmd).not.toBe(f.script)

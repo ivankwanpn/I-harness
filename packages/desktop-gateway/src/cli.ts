@@ -1,30 +1,90 @@
 #!/usr/bin/env node
 import { createInterface } from "node:readline"
-import { isAbsolute } from "node:path"
+import { basename, isAbsolute } from "node:path"
 import { pathToFileURL } from "node:url"
 import { DEFAULT_WRITE_BOUND_BYTES, decodeFrame, isRpcRequest } from "@i-harness/sdk"
-import { createDesktopHost } from "./host.ts"
-import { createGatewayOutput } from "./output.ts"
+import type { DesktopHost } from "./host.ts"
+import { createDesktopHostOutput, createGatewayOutput, type GatewayOutputSink } from "./output.ts"
+import { createWorkspaceHosts } from "./workspace-hosts.ts"
+import { createConfigurationHost, createDesktopProfileServices } from "./configuration-host.ts"
+import { DESKTOP_CONFIGURATION_ID } from "./host-protocol.ts"
 import { closeSystemFetch } from "@i-harness/http-transport"
 
-export async function main(args: string[]): Promise<number> {
-  if (args.length !== 2 || args[0] !== "--session-dir" || !isAbsolute(args[1]!)) {
-    console.error("usage: desktop-gateway --session-dir ABSOLUTE_DIR")
-    return 1
-  }
-
-  let requestClose = () => {}
-  const output = createGatewayOutput({
+function stdoutSink(): GatewayOutputSink {
+  return {
     write: (chunk) => process.stdout.write(chunk),
     end: () => process.stdout.end(),
     onDrain: (callback) => {
       process.stdout.once("drain", callback)
       return () => { process.stdout.off("drain", callback) }
     },
-  }, DEFAULT_WRITE_BOUND_BYTES, () => requestClose())
+  }
+}
 
-  let host: Awaited<ReturnType<typeof createDesktopHost>>
+async function runDesktopHost(sessionsRoot: string): Promise<number> {
+  const profile = createDesktopProfileServices()
+  const done = Promise.withResolvers<void>()
+  const lines = createInterface({ input: process.stdin, terminal: false })
+  let stopping = false
+  let status = 0
+  function stop() {
+    if (stopping) return
+    stopping = true
+    lines.close()
+    // The parent can keep its write end open while it awaits the process exit.
+    // readline.close() alone leaves the Windows stdin pipe referenced.
+    process.stdin.destroy()
+    done.resolve()
+  }
+  const output = createDesktopHostOutput(stdoutSink(), DEFAULT_WRITE_BOUND_BYTES, () => { status = 1; stop() })
+  const hosts = createWorkspaceHosts(sessionsRoot, async options => basename(options.sessionDir) === DESKTOP_CONFIGURATION_ID
+    ? createConfigurationHost(profile, options.onWrite)
+    : (await import("./host.ts")).createDesktopHost({ ...options, profile }), event => output.push(event))
+  function outputFailed() {
+    status = 1
+    try { output.abort() } catch { /* The parent pipe is already broken. */ }
+    stop()
+  }
+  lines.on("line", line => {
+    if (stopping) return
+    let command: unknown
+    try { command = JSON.parse(line) } catch { command = undefined }
+    if ((command as { type?: unknown } | null)?.type === "shutdown") { stop(); return }
+    void hosts.receive(command).catch(outputFailed)
+  })
+  lines.once("close", stop)
+  process.once("SIGINT", stop)
+  process.once("SIGTERM", stop)
+  process.stdout.once("error", outputFailed)
   try {
+    await done.promise
+    try { await hosts.close() } finally { await profile.close() }
+  } finally {
+    try { await closeSystemFetch() } finally {
+      await output.finish()
+      process.off("SIGINT", stop)
+      process.off("SIGTERM", stop)
+      process.stdout.off("error", outputFailed)
+    }
+  }
+  return status
+}
+
+export async function main(args: string[]): Promise<number> {
+  if (args.length === 3 && args[0] === "--desktop-host" && args[1] === "--sessions-root" && isAbsolute(args[2]!)) {
+    return runDesktopHost(args[2]!)
+  }
+  if (args.length !== 2 || args[0] !== "--session-dir" || !isAbsolute(args[1]!)) {
+    console.error("usage: desktop-gateway --desktop-host --sessions-root ABSOLUTE_DIR | --session-dir ABSOLUTE_DIR")
+    return 1
+  }
+
+  let requestClose = () => {}
+  const output = createGatewayOutput(stdoutSink(), DEFAULT_WRITE_BOUND_BYTES, () => requestClose())
+
+  let host: DesktopHost
+  try {
+    const { createDesktopHost } = await import("./host.ts")
     host = await createDesktopHost({
       workspace: process.cwd(),
       sessionDir: args[1],
@@ -94,30 +154,32 @@ export async function main(args: string[]): Promise<number> {
 // The gateway is a long-lived child of the desktop app. A rejected
 // fire-and-forget task (for example an optional title request) must be
 // reported, not allowed to terminate the whole session process.
-function reportFatal(reason: unknown): void {
+function reportFatal(reason: unknown, shared: boolean): void {
   const message = reason instanceof Error ? reason.stack ?? reason.message : String(reason)
   console.error(`[desktop-gateway] fatal: ${message}`)
   try {
     // A structured fatal notification lets the desktop show the real failure
     // before/with the process exit instead of only "subprocess exited".
-    process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method: "desktop/gateway/fatal", params: { message: reason instanceof Error ? reason.message : String(reason), diagnostic: message.slice(0, 8192) } })}\n`)
+    const frame = shared ? { type: "error", message: message.slice(0, 8192) }
+      : { jsonrpc: "2.0", method: "desktop/gateway/fatal", params: { message: reason instanceof Error ? reason.message : String(reason), diagnostic: message.slice(0, 8192) } }
+    process.stdout.write(`${JSON.stringify(frame)}\n`)
   } catch { /* stderr remains the fallback diagnostic */ }
 }
 
-process.on("unhandledRejection", (reason) => {
-  const message = reason instanceof Error ? reason.stack ?? reason.message : String(reason)
-  console.error(`[desktop-gateway] unhandled rejection: ${message}`)
-})
-
-process.on("uncaughtException", (error) => {
-  reportFatal(error)
-  process.exitCode = 1
-})
+export function runGatewayCli(args: string[]): void {
+  process.on("unhandledRejection", (reason) => {
+    const message = reason instanceof Error ? reason.stack ?? reason.message : String(reason)
+    console.error(`[desktop-gateway] unhandled rejection: ${message}`)
+  })
+  const fatal = (error: unknown) => {
+    const shared = args[0] === "--desktop-host"
+    reportFatal(error, shared)
+    if (shared) process.exit(1)
+    process.exitCode = 1
+  }
+  process.on("uncaughtException", fatal)
+  void main(args).then(code => { process.exitCode = code }, fatal)
+}
 
 const entry = process.argv[1]
-if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
-  void main(process.argv.slice(2)).then((code) => { process.exitCode = code }, (error) => {
-    reportFatal(error)
-    process.exitCode = 1
-  })
-}
+if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) runGatewayCli(process.argv.slice(2))

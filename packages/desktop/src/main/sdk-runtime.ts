@@ -1,15 +1,14 @@
-import { spawn } from "node:child_process"
-import { realpathSync } from "node:fs"
 import { mkdir } from "node:fs/promises"
-import { join, resolve } from "node:path"
-import { fileURLToPath, pathToFileURL } from "node:url"
-import { HarnessClient, type ServerInfo } from "@i-harness/sdk"
+import { join } from "node:path"
+import type { HarnessClient, ServerInfo } from "@i-harness/sdk"
+import { DESKTOP_CONFIGURATION_ID } from "@i-harness/desktop-gateway/src/host-protocol.ts"
 import { DESKTOP_NOTIFICATION_METHODS, type DesktopEvent, type DesktopNotificationMethod } from "../shared/bridge.ts"
 
 const FORWARDED_NOTIFICATIONS = new Set<DesktopNotificationMethod>(DESKTOP_NOTIFICATION_METHODS)
 function isForwardedNotification(method: string): method is DesktopNotificationMethod { return FORWARDED_NOTIFICATIONS.has(method as DesktopNotificationMethod) }
 import type { WorkspaceEntry } from "./workspaces.ts"
 import type { DesktopProjectContext } from "./project-runtime.ts"
+import { createSharedDesktopHost } from "./shared-desktop-host.ts"
 
 export interface SandboxState {
   mode: "read-only" | "workspace-write" | "danger-full-access"
@@ -18,16 +17,21 @@ export interface SandboxState {
 }
 
 export interface WorkspaceRuntime {
+  hostPid?: number
   client: HarnessClient
   info: ServerInfo
   sandbox?: SandboxState
-  /** Exact original connection cleanup/exit receipt; never a replacement runtime. */
+  /** Cleanup receipt for the original workspace connection. */
   whenClosed?(): Promise<void> | undefined
 }
 
 export interface LaunchedRuntime {
+  hostPid?: number
   client: HarnessClient
-  /** Resolves when the SDK subprocess is gone (exit or spawn failure). */
+  ready?: Promise<void>
+  /** Routing can be lost before the logical workspace finishes cleanup. */
+  disconnected?: Promise<void>
+  /** Resolves when the owning workspace is released or its process exits. */
   exited: Promise<void>
   /** Last stderr bytes of the child, for exit diagnostics. */
   stderrTail?: () => string
@@ -85,58 +89,6 @@ export function validateSandboxState(value: unknown): SandboxState {
   return { mode: mode as SandboxState["mode"], source: "settings", wired: true }
 }
 
-/**
- * D0 launcher: the bundled SDK client drives the approved local gateway CLI
- * over stdio. Electron runs its own binary as Node for the child so the
- * development source (tsx loader + gateway entry) loads without a build.
- */
-export function launchLocalGateway(workspace: WorkspaceEntry, sessionDir: string): LaunchedRuntime {
-  const repoRoot = resolve(fileURLToPath(new URL("../../../../", import.meta.url)))
-  const tsxLoader = pathToFileURL(join(repoRoot, "node_modules", "tsx", "dist", "loader.mjs")).href
-  const gatewayEntry = join(repoRoot, "packages", "desktop-gateway", "src", "cli.ts")
-  const child = spawn(process.execPath, ["--import", tsxLoader, gatewayEntry, "--session-dir", sessionDir], {
-    cwd: workspace.path,
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
-    stdio: ["pipe", "pipe", "pipe"],
-    windowsHide: true,
-  })
-  const stderrTail = captureChildStream(child.stderr)
-  let exitInfo: { code: number | null; signal: string | null } | undefined
-  const exited = new Promise<void>((resolveExit) => {
-    child.once("exit", (code, signal) => { exitInfo = { code, signal }; resolveExit() })
-    child.once("error", () => { if (child.pid === undefined) { exitInfo = { code: null, signal: null }; resolveExit() } })
-  })
-  return { client: new HarnessClient(child.stdout, child.stdin, { child }), exited, stderrTail, exitInfo: () => exitInfo }
-}
-
-/**
- * Packaged launcher: the same tsx + source-tree startup the e2e tests
- * exercise, but rooted in `<resources>/gateway` instead of the repo checkout.
- */
-export function launchBundledGateway(
-  resourcesPath: string,
-  workspace: WorkspaceEntry,
-  sessionDir: string,
-): LaunchedRuntime {
-  const gatewayRoot = join(resourcesPath, "gateway")
-  // Node resolves the module URL to the real entry path. Pass that same path
-  // to the CLI so its direct-launch check also works through a junction.
-  const gatewayEntry = realpathSync.native(join(gatewayRoot, "cli", "src", "cli.js"))
-  const child = spawn(process.execPath, [gatewayEntry, "--session-dir", sessionDir], {
-    cwd: workspace.path,
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
-    stdio: ["pipe", "pipe", "pipe"],
-    windowsHide: true,
-  })
-  const stderrTail = captureChildStream(child.stderr)
-  let exitInfo: { code: number | null; signal: string | null } | undefined
-  const exited = new Promise<void>((resolveExit) => {
-    child.once("exit", (code, signal) => { exitInfo = { code, signal }; resolveExit() })
-    child.once("error", () => { if (child.pid === undefined) { exitInfo = { code: null, signal: null }; resolveExit() } })
-  })
-  return { client: new HarnessClient(child.stdout, child.stdin, { child }), exited, stderrTail, exitInfo: () => exitInfo }
-}
-
 /** Both idle eviction and application close require affirmative evidence that
  * the matching runtime has no work. Older gateways report this in two parts. */
 async function runtimeIsIdle(runtime: WorkspaceRuntime): Promise<boolean> {
@@ -165,17 +117,19 @@ async function runtimeIsIdle(runtime: WorkspaceRuntime): Promise<boolean> {
 
 export function createWorkspaceRuntimeManager(options: {
   sessionsRoot: string
+  resourcesPath?: string
   projectContexts?: () => Promise<DesktopProjectContext[]>
   launch?: (workspace: WorkspaceEntry, sessionDir: string) => LaunchedRuntime
 }): WorkspaceRuntimeManager {
-  const launch = options.launch ?? launchLocalGateway
+  const shared = options.launch ? undefined : createSharedDesktopHost(options.sessionsRoot, options.resourcesPath)
+  const needsProjectScope = (id: string) => !!options.projectContexts && (!shared || id !== DESKTOP_CONFIGURATION_ID)
   const listeners = new Set<(event: DesktopEvent) => void>()
   const runtimes = new Map<string, WorkspaceRuntime>()
   const pending = new Map<string, Promise<WorkspaceRuntime>>()
   const children = new Map<string, LaunchedRuntime>()
-  // Routing can be withdrawn before shutdown. Only the original OS exit
+  // Routing can be withdrawn before shutdown. Only the original release receipt
   // releases ownership of the workspace's session directory.
-  const processOwners = new Map<string, LaunchedRuntime>()
+  const workspaceOwners = new Map<string, LaunchedRuntime>()
   const generations = new Map<string, number>()
   type RecoveryState = { count: number; since: number; retryAt: number; timer?: NodeJS.Timeout }
   const restartWindow = new Map<string, RecoveryState>()
@@ -184,6 +138,7 @@ export function createWorkspaceRuntimeManager(options: {
   const lastUsed = new Map<string, { at: number }>()
   const idleChecks = new Set<WorkspaceRuntime>()
   const closingClients = new WeakMap<HarnessClient, Promise<void>>()
+  const retiredClients = new WeakSet<HarnessClient>()
   let closed = false
   let closeFlight: Promise<void> | undefined
   let activityVersion = 0
@@ -198,13 +153,17 @@ export function createWorkspaceRuntimeManager(options: {
   function closeClient(client: HarnessClient): Promise<void> {
     let closing = closingClients.get(client)
     if (!closing) {
+      retiredClients.add(client)
       closing = Promise.resolve().then(() => client.close())
       closingClients.set(client, closing)
+      // A shared host retains failed scope cleanup for an explicit retry.
+      // Legacy clients keep their original OS termination receipt.
+      if (shared) void closing.catch(() => { if (closingClients.get(client) === closing) closingClients.delete(client) })
     }
     return closing
   }
 
-  async function stopChild(launched: LaunchedRuntime): Promise<void> {
+  async function stopWorkspace(launched: LaunchedRuntime): Promise<void> {
     await closeClient(launched.client)
     await launched.exited
   }
@@ -227,21 +186,23 @@ export function createWorkspaceRuntimeManager(options: {
 
   async function start(workspace: WorkspaceEntry, generation: number): Promise<WorkspaceRuntime> {
     const sessionDir = join(options.sessionsRoot, workspace.id)
-    await mkdir(sessionDir, { recursive: true })
+    await mkdir(shared ? options.sessionsRoot : sessionDir, { recursive: true })
     assertCurrent(workspace.id, generation)
-    const preceding = processOwners.get(workspace.id)
+    const preceding = workspaceOwners.get(workspace.id)
     if (preceding !== undefined) {
-      await stopChild(preceding)
+      await stopWorkspace(preceding)
       assertCurrent(workspace.id, generation)
     }
-    const launched = launch(workspace, sessionDir)
-    processOwners.set(workspace.id, launched)
+    const launched = options.launch ? options.launch(workspace, sessionDir) : await shared!.launch(workspace)
+    workspaceOwners.set(workspace.id, launched)
     void launched.exited.then(() => {
-      if (processOwners.get(workspace.id) === launched) processOwners.delete(workspace.id)
+      if (workspaceOwners.get(workspace.id) === launched) workspaceOwners.delete(workspace.id)
     })
     touch(workspace.id)
     children.set(workspace.id, launched)
     try {
+      assertCurrent(workspace.id, generation)
+      if (launched.ready) { await launched.ready; assertCurrent(workspace.id, generation) }
       const info = await launched.client.initialize()
       assertCurrent(workspace.id, generation)
       if (info.protocolVersion !== 3) {
@@ -250,7 +211,7 @@ export function createWorkspaceRuntimeManager(options: {
       const sandbox = info.capabilities["desktop-sandbox"]?.includes("1")
         ? validateSandboxState(await launched.client.request("desktop/sandbox/state", {}))
         : undefined
-      if (options.projectContexts) {
+      if (needsProjectScope(workspace.id)) {
         if (!info.capabilities["desktop-project-scope"]?.includes("1")) throw new Error("Gateway does not support project execution scopes")
       }
       launched.client.onNotification((frame) => {
@@ -268,13 +229,13 @@ export function createWorkspaceRuntimeManager(options: {
           ? { ...frame.params, runtimeGeneration: generation } : frame.params
         emit({ kind: "sdk/notification", workspaceId: workspace.id, method: frame.method, params })
       },()=>{void manager.invalidate!(workspace.id).catch(()=>{})})
-      return { client: launched.client, info, sandbox, whenClosed: () => {
+      return { client: launched.client, info, sandbox, hostPid: launched.hostPid, whenClosed: () => {
         const closing=closingClients.get(launched.client)
         return closing ? closing.then(()=>launched.exited,()=>launched.exited) : children.get(workspace.id)!==launched ? launched.exited : undefined
       } }
     } catch (error) {
       if (children.get(workspace.id) === launched) children.delete(workspace.id)
-      await stopChild(launched).catch(() => undefined)
+      await stopWorkspace(launched).catch(() => undefined)
       throw error
     }
   }
@@ -313,13 +274,13 @@ export function createWorkspaceRuntimeManager(options: {
     },
     peek(id) {
       const runtime = runtimes.get(id)
-      return runtime && !closingClients.has(runtime.client) ? runtime : undefined
+      return runtime && !retiredClients.has(runtime.client) ? runtime : undefined
     },
     pendingRuntime: (id) => pending.get(id),
     async invalidate(id) {
       const runtime = runtimes.get(id)
       const starting = pending.get(id)
-      const child = processOwners.get(id)
+      const child = workspaceOwners.get(id)
       if (!runtime && !starting && !child) return
       const generation = generations.get(id) ?? 0
       const health = healthTimers.get(id)
@@ -330,7 +291,7 @@ export function createWorkspaceRuntimeManager(options: {
       children.delete(id)
       try {emit({ kind: "sdk/disconnected", workspaceId: id, message: "Project execution scope changed; reconnect to continue.", close: { generation, reason: "scope-changed" } })} catch { /* The original generation is fenced; failed forwarding cannot skip child cleanup. */ }
       try {
-        if (child) await stopChild(child)
+        if (child) await stopWorkspace(child)
         else if (runtime) await closeClient(runtime.client)
       } finally {
         if (starting) await starting.catch(() => undefined)
@@ -350,6 +311,7 @@ export function createWorkspaceRuntimeManager(options: {
         const projects = await options.projectContexts()
         if (closed) throw new Error("runtime manager is closed")
         const outcomes = await Promise.allSettled([...runtimes.entries()].map(async ([id, runtime]) => {
+          if (!needsProjectScope(id)) return
           try { await runtime.client.request("desktop/project/sync", { projects }) }
           catch (error) {
             // A concurrent replacement owns its own lifecycle.
@@ -369,7 +331,7 @@ export function createWorkspaceRuntimeManager(options: {
       touch(workspace.id)
       lookupVersion++
       const ready = runtimes.get(workspace.id)
-      if (ready !== undefined) return closingClients.has(ready.client) ? Promise.reject(new Error("Gateway recovery is pending.")) : Promise.resolve(ready)
+      if (ready !== undefined) return retiredClients.has(ready.client) ? Promise.reject(new Error("Gateway recovery is pending.")) : Promise.resolve(ready)
       const inflight = pending.get(workspace.id)
       if (inflight !== undefined) return inflight
       const recovery = recoveryState(workspace.id)
@@ -381,7 +343,7 @@ export function createWorkspaceRuntimeManager(options: {
         .then(async (runtime) => {
           try {
             assertCurrent(workspace.id, generation)
-            if (options.projectContexts) {
+            if (options.projectContexts && needsProjectScope(workspace.id)) {
               let syncedEpoch: number
               do {
                 syncedEpoch = scopeEpoch
@@ -400,26 +362,28 @@ export function createWorkspaceRuntimeManager(options: {
           runtimes.set(workspace.id, runtime)
           // Successful initialization does not erase a recent crash loop.
           let healthMisses = 0
-          const health = setInterval(() => {
-            if (closed || (generations.get(workspace.id) ?? 0) !== generation || runtimes.get(workspace.id) !== runtime) return
-            void runtime.client.request("ping", {}, 10_000).then(() => { healthMisses = 0 }, () => {
-              if (closed || runtimes.get(workspace.id) !== runtime || healthTimers.get(workspace.id) !== health) return
-              if (++healthMisses < 2) return
-              clearInterval(health)
-              healthTimers.delete(workspace.id)
-              // Withdraw routing before listeners can try to use the dying host.
-              void closeClient(runtime.client).catch(() => undefined)
-              try { emit({ kind: "sdk/disconnected", workspaceId: workspace.id, message: "Gateway health check failed twice; restarting.", close: { generation, reason: "unhealthy" } }) }
-              catch { /* View delivery cannot prevent process recovery. */ }
-            })
-          }, 20_000)
-          health.unref()
-          healthTimers.set(workspace.id, health)
+          if (!shared) {
+            const health = setInterval(() => {
+              if (closed || (generations.get(workspace.id) ?? 0) !== generation || runtimes.get(workspace.id) !== runtime) return
+              void runtime.client.request("ping", {}, 10_000).then(() => { healthMisses = 0 }, () => {
+                if (closed || runtimes.get(workspace.id) !== runtime || healthTimers.get(workspace.id) !== health) return
+                if (++healthMisses < 2) return
+                clearInterval(health)
+                healthTimers.delete(workspace.id)
+                // Withdraw routing before listeners can try to use the dying host.
+                void closeClient(runtime.client).catch(() => undefined)
+                try { emit({ kind: "sdk/disconnected", workspaceId: workspace.id, message: "Gateway health check failed twice; restarting.", close: { generation, reason: "unhealthy" } }) }
+                catch { /* View delivery cannot prevent process recovery. */ }
+              })
+            }, 20_000)
+            health.unref()
+            healthTimers.set(workspace.id, health)
+          }
           try {emit({kind:'sdk/ready',method:'sdk/ready',workspaceId:workspace.id,runtimeGeneration:generation})} catch(error) {void manager.invalidate!(workspace.id).catch(()=>{});throw error}
           activityVersion += 1
           const launched = children.get(workspace.id)
           if (launched !== undefined) {
-            void launched.exited.then(() => {
+            void (launched.disconnected ?? launched.exited).then(() => {
               if (runtimes.get(workspace.id)?.client !== runtime.client) return
               runtimes.delete(workspace.id)
               children.delete(workspace.id)
@@ -489,11 +453,12 @@ export function createWorkspaceRuntimeManager(options: {
           lastUsed.delete(id)
           const health = healthTimers.get(id)
           if (health !== undefined) { clearInterval(health); healthTimers.delete(id) }
-          const child = processOwners.get(id)
-          if (child) await stopChild(child)
+          const child = workspaceOwners.get(id)
+          if (child) await stopWorkspace(child)
           return true
         } finally { idleChecks.delete(runtime) }
       }))
+      await shared?.retireIfEmpty()
       return retired.filter(Boolean).length
     },
     close() {
@@ -504,16 +469,17 @@ export function createWorkspaceRuntimeManager(options: {
         restartWindow.clear()
         for (const timer of healthTimers.values()) clearInterval(timer)
         healthTimers.clear()
-        const owners = [...processOwners]
+        const owners = [...workspaceOwners]
         const closingIds = [...new Set([...runtimes.keys(), ...owners.map(([id]) => id)])]
         const starters = [...pending.values()]
         children.clear()
         runtimes.clear()
         pending.clear()
-        const stopped = await Promise.allSettled(owners.map(([, child]) => stopChild(child)))
+        const stopped = await Promise.allSettled(owners.map(([, child]) => stopWorkspace(child)))
         await Promise.allSettled([...starters, scopeSyncTail])
         const errors = stopped.flatMap(result => result.status === "rejected" ? [result.reason] : [])
         if (errors.length) throw new AggregateError(errors, "Gateway shutdown incomplete")
+        await shared?.close()
         for (const id of closingIds) { try { emit({ kind: "sdk/disconnected", workspaceId: id, message: "Runtime manager closed.", close: { generation: generations.get(id) ?? 0, reason: "manager-closed" } }) } catch { /* Diagnostics cannot fail owner close. */ } }
         listeners.clear()
       })

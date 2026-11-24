@@ -11,7 +11,7 @@ pnpm install --frozen-lockfile
 pnpm --filter @i-harness/desktop dev
 ```
 
-Desktop hosts the interface, native windows, terminals and browser surfaces. Its gateway uses the same session, provider, permission, persistence and tool implementation as the rest of I-harness.
+Electron owns the interface, native windows and a single on-demand backend process. The backend routes each SDK connection by workspace and retains independent execution roots, session stores, permissions and tool lifetimes. Account management, global preferences and usage storage belong to the profile. Opening global settings uses a dedicated channel without constructing a workspace executor. Closing a workspace drains its channel; the last idle channel permits the backend process to exit. A physical host crash disconnects every attached workspace, and recovery reopens their durable stores.
 
 ## Build and distribute
 

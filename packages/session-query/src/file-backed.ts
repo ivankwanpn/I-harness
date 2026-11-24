@@ -1,4 +1,4 @@
-import { openFileBackedDatabase } from "./file-backed/database.ts"
+import { closeFileBackedDatabase, openFileBackedDatabase } from "./file-backed/database.ts"
 import { createIndexRefresh } from "./file-backed/index-refresh.ts"
 import { createIndexedQuery } from "./file-backed/query.ts"
 import type { FileBackedQueryOptions } from "./file-backed/contracts.ts"
@@ -9,12 +9,29 @@ export { SessionQueryError, type SessionQueryErrorCode, type InspectOutcome, typ
 export { closeFileBackedConnections } from "./file-backed/database.ts"
 
 /** Read-only JSONL authority with a separately owned, rebuildable SQLite index. */
-export function createFileBackedSessionQuery(opts: FileBackedQueryOptions): SessionQuery {
+export function createFileBackedSessionQuery(opts: FileBackedQueryOptions): SessionQuery & { close(): Promise<void> } {
   const storeRoot = opts.storeRoot
   const dbPath = opts.dbPath ?? ":memory:"
   const { signal, onInspect } = opts
 
   const db = openFileBackedDatabase(dbPath)
   const reconcile = createIndexRefresh(db, storeRoot, signal, onInspect)
-  return createIndexedQuery(db, reconcile)
+  const query = createIndexedQuery(db, reconcile)
+  let closing = false
+  const reads = new Set<Promise<unknown>>()
+  function run<T>(start: () => Promise<T>): Promise<T> {
+    if (closing) return Promise.reject(new Error("Session search index is closed"))
+    const pending = start()
+    reads.add(pending)
+    return pending.finally(() => reads.delete(pending))
+  }
+  return {
+    search: (text, options) => run(() => query.search(text, options)),
+    lineage: (id, options) => run(() => query.lineage(id, options)),
+    async close() {
+      closing = true
+      await Promise.allSettled([...reads])
+      closeFileBackedDatabase(db)
+    },
+  }
 }

@@ -1,7 +1,8 @@
 import { beforeEach, expect, it, vi } from "vitest"
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { join, resolve, sep } from "node:path"
 import { encodeFrame, makeRequest } from "@i-harness/sdk"
+import { openInteractionPersistence } from "../src/interaction-persistence.ts"
 
 const observed = vi.hoisted(() => ({ terminalClose: vi.fn(async () => {}), pluginsClose: vi.fn(), causal: false,
   service: undefined as import("@i-harness/session-executor").SessionService | undefined,
@@ -51,7 +52,13 @@ vi.mock("../src/plugins.ts", async importOriginal => {
   } }
 })
 
-import { createDesktopHost } from "../src/host.ts"
+import { createDesktopHost, DesktopHostStartupError } from "../src/host.ts"
+import { openMemoryStore } from "@i-harness/memory"
+
+vi.mock("@i-harness/memory", async load => {
+  const actual = await load<typeof import("@i-harness/memory")>()
+  return { ...actual, openMemoryStore: vi.fn(actual.openMemoryStore) }
+})
 
 beforeEach(() => { vi.clearAllMocks(); observed.causal = false; observed.detached = false; observed.allowLeaseClose = false; observed.terminalClose.mockImplementation(async () => {}) })
 
@@ -74,6 +81,36 @@ function cleanup(f: ReturnType<typeof fixture>): void {
   if (!actual.startsWith(parent + sep)) throw new Error("Host fixture cleanup escaped workspace .tmp")
   rmSync(actual, { recursive: true, force: true })
 }
+
+it("releases the original startup resources after a failed interaction restore and preserves a live sibling", async () => {
+  const healthy = fixture(), broken = fixture()
+  const frames: unknown[] = []
+  const sibling = await createDesktopHost({ ...healthy, onWrite: frame => frames.push(frame) })
+  let reopened: Awaited<ReturnType<typeof createDesktopHost>> | undefined
+  try {
+    const pending = await openInteractionPersistence(broken.sessionDir, broken.workspace)
+    pending.write([])
+    const doc = readdirSync(broken.sessionDir).find(name => name.startsWith("interaction-pending-"))!
+    writeFileSync(join(broken.sessionDir, doc), "{")
+    observed.terminalClose.mockRejectedValueOnce(Error("terminal cleanup temporarily unavailable"))
+    const error = await createDesktopHost({ ...broken, onWrite() {} }).catch((cause: unknown) => cause)
+    expect(error).toBeInstanceOf(DesktopHostStartupError)
+    const debt = error as DesktopHostStartupError
+    expect(debt.cause).toBeInstanceOf(Error)
+    expect((debt.cause as Error).message).toContain("restore pending interactions")
+    const stores = vi.mocked(openMemoryStore).mock.results
+    const abandoned = stores.at(-1)!.value
+    await Promise.all([debt.retryCleanup(), debt.retryCleanup()])
+    expect(observed.terminalClose).toHaveBeenCalledTimes(2)
+    expect(() => abandoned.enabled()).toThrow()
+    pending.write([])
+    reopened = await createDesktopHost({ ...broken, onWrite() {} })
+    expect(vi.mocked(openMemoryStore).mock.results.at(-1)!.value.enabled()).toBe(false)
+    await sibling.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
+    await sibling.handleLine(encodeFrame(makeRequest(2, "ping", {})))
+    expect(frames.at(-1)).toMatchObject({ id: 2, result: { ok: true } })
+  } finally { await reopened?.close(); await sibling.close(); cleanup(broken); cleanup(healthy) }
+})
 
 it("retries failed terminal cleanup, closes unrelated services and does not reopen admissions", async () => {
   const f = fixture()

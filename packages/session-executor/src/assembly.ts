@@ -60,6 +60,7 @@ import { PLAN_MODE_SYSTEM_PROMPT, ensurePlanModeTool } from "@i-harness/plan-mod
 import { registerToolSearch } from "@i-harness/tool-search"
 import { createFsSearchTools } from "@i-harness/fs-search"
 import { createScheduleDriver } from "@i-harness/schedule/driver"
+import { resolve } from "node:path"
 import { createScheduleTools } from "@i-harness/schedule/tools"
 // BUG-1 (m49 audit): node:sqlite's ExperimentalWarning is suppressed by the
 // session-query package itself (a module side effect that evaluates before
@@ -1191,6 +1192,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     }
     return { ...cfg, auth }
   }
+  const mcpDeps = { workspace: opts.workspace, ...(opts.telemetry ? { onStatus: mcpStatusHook } : {}) }
 
   const mcpHandles: McpMountHandle[] = []
   let pluginCapabilities: ReturnType<typeof createPluginCapabilities> | undefined
@@ -1266,7 +1268,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     retireInstructionHost = childInstructionHost.retire.bind(childInstructionHost)
     closeInstructionHost = childInstructionHost.close.bind(childInstructionHost)
     for (const cfg of opts.mcp ?? []) {
-      mcpHandles.push(await mountMcpClient(ctx, tools, prepareMcpConfig(cfg), opts.telemetry ? { onStatus: mcpStatusHook } : undefined))
+      mcpHandles.push(await mountMcpClient(ctx, tools, prepareMcpConfig(cfg), mcpDeps))
     }
     // Plugin MCP servers — per-server containment (live-agent precedent): a
     // server this host cannot serve degrades to a warn; the result map reports.
@@ -1305,7 +1307,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       }
     })
     for (const cfg of opts.lsp ?? []) {
-      lspHandles.push(await mountLspClient(ctx, tools, { ...cfg, cwd: cfg.cwd ?? opts.workspace }))
+      lspHandles.push(await mountLspClient(ctx, tools, { ...cfg, cwd: resolve(opts.workspace, cfg.cwd ?? ".") }))
     }
     workflowMount = registerWorkflow(ctx, tools, { workspace: opts.workspace, exec: execService, steps: createScopedWorkflowExec(assemblyExecPair, opts.workspace, sandboxPolicyNow), ...(opts.sessionId !== undefined ? { owner: opts.sessionId } : {}) })
     // ONE resolver for every role-carrying spawn in this assembly: the subagent
@@ -1457,7 +1459,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     pluginCapabilities = createPluginCapabilities({
       skillDirs: pluginSkillDirs, handles: mcpHandles, roles: subagent.roles,
       mcpResults: pluginMcpResults, roleResults: pluginAgentResults,
-      mount: (config) => mountMcpClient(ctx, tools, prepareMcpConfig(config), opts.telemetry ? { onStatus: mcpStatusHook } : undefined),
+      mount: (config) => mountMcpClient(ctx, tools, prepareMcpConfig(config), mcpDeps),
       warn: (message) => d.warn(message),
     })
     await pluginCapabilities.update(opts, false)

@@ -19,7 +19,7 @@
  */
 
 import { execFile } from "node:child_process"
-import { existsSync, readFileSync, statSync } from "node:fs"
+import { readFileSync, statSync } from "node:fs"
 import { mkdir, rm, writeFile } from "node:fs/promises"
 import { basename, join, resolve } from "node:path"
 import { promisify } from "node:util"
@@ -310,11 +310,12 @@ export function parseManifest(text: string, sourceDir: string): MarketplaceManif
   }
 }
 
-function isLocalDirectory(source: string): boolean {
+export function localMarketplaceDirectory(source: string, cwd: string): string | undefined {
+  const directory = resolve(cwd, source)
   try {
-    return existsSync(source) && statSync(source).isDirectory()
+    return statSync(directory).isDirectory() ? directory : undefined
   } catch {
-    return false
+    return undefined
   }
 }
 
@@ -397,13 +398,14 @@ async function fetchHttp(source: string, cacheRoot: string): Promise<{ manifestD
   return { manifestDir: dir, manifest }
 }
 
-async function fetchGit(url: string, cacheRoot: string): Promise<{ manifestDir: string; manifest: MarketplaceManifest }> {
+async function fetchGit(url: string, cacheRoot: string, cwd: string): Promise<{ manifestDir: string; manifest: MarketplaceManifest }> {
   const dest = join(cacheRoot, cacheNameForSource(url))
   // Re-pull: cacheDir already holding this source is removed before cloning.
   await rm(dest, { recursive: true, force: true })
   await mkdir(cacheRoot, { recursive: true })
   try {
     await execFileAsync("git", ["clone", "--depth", "1", "--", url, dest], {
+      cwd,
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
       timeout: GIT_CLONE_TIMEOUT_MS,
       maxBuffer: 10 * 1024 * 1024,
@@ -426,10 +428,12 @@ async function fetchGit(url: string, cacheRoot: string): Promise<{ manifestDir: 
 export async function fetchSource(
   source: string,
   cacheDir: string,
+  cwd = process.cwd(),
 ): Promise<{ manifestDir: string; manifest: MarketplaceManifest }> {
   const s = source.trim()
-  if (isLocalDirectory(s)) return fetchLocal(s)
+  const directory = localMarketplaceDirectory(s, cwd)
+  if (directory) return fetchLocal(directory)
   if (/^https?:\/\//i.test(s)) return fetchHttp(s, resolve(cacheDir))
-  if (isOwnerRepoShape(s)) return fetchGit(ownerRepoToGitUrl(s), resolve(cacheDir))
-  return fetchGit(s, resolve(cacheDir))
+  if (isOwnerRepoShape(s)) return fetchGit(ownerRepoToGitUrl(s), resolve(cacheDir), cwd)
+  return fetchGit(s, resolve(cacheDir), cwd)
 }

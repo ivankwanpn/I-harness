@@ -65,6 +65,14 @@ const MAX_FILE_BYTES = 1024 * 1024
 
 interface GitResult { data: Buffer; truncated: boolean; code: number | null; missing: boolean }
 
+// Git launched from a hook or worktree may inherit a repository selection
+// that takes precedence over cwd. Review operations select their own repo.
+const repositoryEnvironment = new Set([
+  "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_QUARANTINE_PATH", "GIT_NAMESPACE", "GIT_SHALLOW_FILE",
+  "GIT_GRAFT_FILE", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_IMPLICIT_WORK_TREE",
+])
+
 function runGit(root: string, args: string[], maxBytes: number, control: {
   signal: AbortSignal
   active: Set<ChildProcessWithoutNullStreams>
@@ -77,7 +85,10 @@ function runGit(root: string, args: string[], maxBytes: number, control: {
     if (control.signal.aborted) { reject(new Error("review closed")); return }
     const child = spawn(control.command, [...control.prefixArgs, "-c", "core.fsmonitor=false", "-c", "diff.external=", "-c", `core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`, ...args], {
       cwd: root, shell: false, windowsHide: true,
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", ...control.extraEnv },
+      env: {
+        ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !repositoryEnvironment.has(name.toUpperCase()))),
+        GIT_OPTIONAL_LOCKS: "0", ...control.extraEnv,
+      },
     })
     control.active.add(child)
     child.stderr.resume() // Never let an untrusted diagnostic fill the pipe.

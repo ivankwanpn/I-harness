@@ -111,7 +111,7 @@ const passiveRequests = new Set([
   "desktop/session/input/state", "desktop/sandbox/state",
 ])
 
-export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handlers: DesktopHandlers, internalIds: Set<string> = new Set()): {
+export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"> & Partial<SdkServer>, send: GatewayWrite, handlers: DesktopHandlers, internalIds: Set<string> = new Set()): {
   handleLine(line: string): Promise<void>
   close(): Promise<void>
 } {

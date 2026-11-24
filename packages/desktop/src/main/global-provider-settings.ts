@@ -16,10 +16,8 @@ const id = (value: unknown): value is string => typeof value === "string" && val
 const token = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value)
 const waitSeconds = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && (value === 0 || value >= 30 && value <= 3600)
 
-/** A configuration-only gateway has no catalog workspace or conversation. Its
- * provider runtime uses the same settings/credentials as later workspace hosts.
- * Keeping these operations in that shipped gateway avoids raw TS dependencies
- * entering Electron main. Provider endpoint probes remain explicit UI actions. */
+/** The shared host exposes profile settings on a separate SDK channel.
+ * This channel has no session store or workspace execution authority. */
 export function createGlobalProviderSettings(client: () => Promise<ConfigurationClient>, options: { openExternal?(url: string): Promise<void>; usageWarnings?(): Promise<string[]> } = {}) {
   let closed = false
   const jobs = new Set<Promise<unknown>>()

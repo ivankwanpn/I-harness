@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { HarnessClient, RpcNotification, ServerInfo } from "@i-harness/sdk"
-import { createWorkspaceRuntimeManager, launchBundledGateway } from "../src/main/sdk-runtime.ts"
+import { createWorkspaceRuntimeManager } from "../src/main/sdk-runtime.ts"
+import { createSharedDesktopHost } from "../src/main/shared-desktop-host.ts"
 import type { DesktopEvent } from "../src/shared/bridge.ts"
 import type { WorkspaceEntry } from "../src/main/workspaces.ts"
 import type { DesktopProjectContext } from "../src/main/project-runtime.ts"
@@ -32,23 +33,52 @@ it("launches the bundled CLI through a junction using its original entry path", 
     import { pathToFileURL } from "node:url";
     if (pathToFileURL(process.argv[1]).href === import.meta.url) {
       const lines = createInterface({input: process.stdin});
+      let retry = true;
       lines.on("line", line => {
-        const {id, method} = JSON.parse(line);
+        const frame=JSON.parse(line), {workspaceId}=frame;
+        const send=value=>process.stdout.write(JSON.stringify(value)+"\\n");
+        if(frame.type==="shutdown"){lines.close();process.stdin.pause();return}
+        if(frame.type==="open"){send({type:"opened",workspaceId});return}
+        if(frame.type==="close"){
+          if(workspaceId==="retry" && retry){retry=false;send({type:"error",operation:"close",workspaceId,message:"cleanup still pending"});return}
+          send({type:"closed",workspaceId});return
+        }
+        const {id, method} = JSON.parse(frame.line);
+        if(method==="fail-channel"){
+          send({type:"error",workspaceId,operation:"data",message:"Failed workspace RPC"});
+          send({type:"data",workspaceId,line:JSON.stringify({jsonrpc:"2.0",id,result:{obsolete:true}})});
+          return;
+        }
         const result = method === "initialize"
           ? {name: "joined-entry", version: "1.0.0", protocolVersion: 3, capabilities: {}}
           : {ok: true};
-        if (id !== undefined) process.stdout.write(JSON.stringify({jsonrpc: "2.0", id, result}) + "\\n");
-        if (method === "shutdown") { lines.close(); process.stdin.pause(); }
+        if (id !== undefined) send({type:"data",workspaceId,line:JSON.stringify({jsonrpc: "2.0", id, result})});
       });
     }
   `)
   symlinkSync(resources, linkedResources, process.platform === "win32" ? "junction" : "dir")
-  const launch = launchBundledGateway(linkedResources, { id: "linked", label: "linked", path: root }, join(root, "sessions"))
+  const shared = createSharedDesktopHost(root, linkedResources)
+  const launch = await shared.launch({ id: "linked", label: "linked", path: root })
   try {
+    await launch.ready
     expect(await launch.client.initialize()).toMatchObject({ name: "joined-entry", protocolVersion: 3 })
+    const retry = await shared.launch({ id: "retry", label: "retry", path: root })
+    await retry.ready
+    expect(retry.hostPid).toBe(launch.hostPid)
+    await expect(retry.client.close()).rejects.toThrow("cleanup still pending")
+    await expect(launch.client.request("ping")).resolves.toEqual({ok:true})
+    await retry.client.close()
+    await retry.exited
+    const broken = await shared.launch({ id: "broken", label: "broken", path: root })
+    await broken.ready
+    await expect(broken.client.request("fail-channel")).rejects.toThrow()
+    await broken.client.close()
+    await broken.exited
+    expect(await launch.client.request("ping")).toEqual({ok:true})
   } finally {
     await launch.client.close()
     await launch.exited
+    await shared.close()
   }
 })
 

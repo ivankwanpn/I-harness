@@ -31,6 +31,19 @@ function cleanup(dir: string): void {
 }
 
 describe("file-backed session query (reconcile-on-search)", () => {
+  it("joins its accepted read and releases only its own database on close", async () => {
+    const a = await seededStore("first workspace"), b = await seededStore("second workspace")
+    const one = createFileBackedSessionQuery({ storeRoot: a.dir })
+    const two = createFileBackedSessionQuery({ storeRoot: b.dir })
+    try {
+      const pending = one.search("first")
+      const closed = one.close()
+      await expect(one.search("first")).rejects.toThrow("closed")
+      expect(await pending).toHaveLength(1)
+      await closed
+      expect(await two.search("second")).toHaveLength(1)
+    } finally { await Promise.all([one.close(), two.close()]); cleanup(a.dir); cleanup(b.dir) }
+  })
   it("indexes on first search (reconcile-on-search)", async () => {
     const { dir, id } = await seededStore()
     try {
