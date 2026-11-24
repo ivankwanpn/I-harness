@@ -41,7 +41,7 @@ import { SchedulePane } from "../session/SchedulePane.tsx"
 import { Timeline } from "../session/Timeline.tsx"
 import { PendingPanel, type InteractionReply } from "../interaction/PendingPanel.tsx"
 import type { PendingInteraction } from "../interaction/pending.ts"
-import { ReviewPane, type ReviewChanges, type ReviewText } from "../review/ReviewPane.tsx"
+import { ReviewPane, type ReviewText } from "../review/ReviewPane.tsx"
 import { ProjectFilesPane } from "../review/ProjectFilesPane.tsx"
 import { SessionChangesPane } from "../review/SessionChangesPane.tsx"
 import { ProjectGitPane } from "../review/ProjectGitPane.tsx"
@@ -104,10 +104,6 @@ export interface ConversationView {
 export interface ReviewView {
   projectFiles?: import("../review/ProjectFilesPane.tsx").ProjectFilesPaneProps
   onSaveFile?: import("../review/ReviewPane.tsx").ReviewPaneProps["onSaveFile"]
-  onStage?: import("../review/ReviewPane.tsx").ReviewPaneProps["onStage"]
-  onUnstage?: import("../review/ReviewPane.tsx").ReviewPaneProps["onUnstage"]
-  onCommit?: import("../review/ReviewPane.tsx").ReviewPaneProps["onCommit"]
-  changes?: ReviewChanges
   error?: string
   selected?: { path: string; mode: "diff" | "preview" }
   diff?: ReviewText
@@ -633,7 +629,7 @@ export function Workbench({
         {visitedWork.current.tabs.has("reminders") && selectedWorkspaceId && selectedSessionId && panes.reminders.available ? <div className="retained-work-pane" hidden={workPaneTab !== "reminders"}><SchedulePane key={`${selectedWorkspaceId}:${selectedSessionId}`} active={workVisible && workPaneTab === "reminders"} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} canCreate={conversation?.modelState?.status === "ready" && !conversation.running && !conversation.queue?.length && conversation.operation?.busy !== true} /></div> : null}
         {visitedWorkspacePanes.current.tabs.has("files") && review && selectedWorkspaceId ? <div className="retained-work-pane" hidden={workPaneTab !== "files"}>
           {review.projectFiles ? <ProjectFilesPane {...review.projectFiles} contentSearchAvailable={capabilities["desktop-project-content-search"]?.includes("1") === true} membershipRevision={fileMembershipRevision} />
-            : <ReviewPane {...review} draftOwner={bridge} workspaceId={selectedWorkspaceId} title={t("檔案")} view="files" onStage={undefined} onUnstage={undefined} onCommit={undefined} />}
+            : <ReviewPane {...review} draftOwner={bridge} workspaceId={selectedWorkspaceId} title={t("檔案")} view="files" />}
         </div> : null}
         {visitedWork.current.tabs.has("changes") && conversation && selectedSessionId ? <div className="retained-work-pane" hidden={workPaneTab !== "changes"}>
           <SessionChangesPane key={JSON.stringify([selectedProjectId, selectedWorkspaceId, selectedSessionId])} rows={conversation.rows} navigation={fileNavigation} historyNotice={conversation.historyNotice} />

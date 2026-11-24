@@ -61,29 +61,28 @@ function truncate(text: string, bytes: number): string {
   return result
 }
 
-/** The host supplies the database location and scope. No caller-provided
- * note identifier is ever interpreted as a filesystem path. */
-export function openMemoryStore(options: { path: string; scope: string; redactor?: Redactor }): MemoryStore {
-  if (!isAbsolute(options.path)) throw new Error("memory database path must be absolute")
-  const scope = bounded(options.scope, "scope", 4096)
-  mkdirSync(dirname(options.path), { recursive: true })
+function openDatabase(path: string, busyTimeoutMs: number): DatabaseSync {
+  mkdirSync(dirname(path), { recursive: true })
   try {
-    if (lstatSync(options.path).isSymbolicLink()) throw new Error("memory database cannot be a symlink")
+    if (lstatSync(path).isSymbolicLink()) throw new Error("memory database cannot be a symlink")
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
   }
-  const db = new DatabaseSync(options.path)
-  const redactor = options.redactor ?? createRedactor()
-  let closed = false
+  const db = new DatabaseSync(path, { timeout: busyTimeoutMs })
   const applicationId = 0x49484d45
   try {
-    db.exec("PRAGMA busy_timeout=5000")
     const identity = db.prepare("PRAGMA application_id").get() as { application_id: number }
     const version = db.prepare("PRAGMA user_version").get() as { user_version: number }
-    const tables = db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").get() as { n: number }
-    if ((identity.application_id !== applicationId && (identity.application_id !== 0 || tables.n !== 0)) || version.user_version > 1) {
+    const objects = db.prepare(`SELECT count(*) AS total,
+      count(*) FILTER (WHERE (type='table' AND name IN ('notes', 'preferences', 'notes_fts'))
+                          OR (type='index' AND name='notes_scope')) AS required
+      FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'`).get() as { total: number; required: number }
+    if ((identity.application_id !== applicationId && (identity.application_id !== 0 || objects.total !== 0)) || version.user_version > 1) {
       throw new Error("foreign or unsupported memory database")
     }
+    // A current database needs no schema writes. In particular, ordinary
+    // readers can use it while another process holds a reserved write lock.
+    if (identity.application_id === applicationId && version.user_version === 1 && objects.required === 4) return db
     db.exec("BEGIN IMMEDIATE")
     db.exec("CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, scope TEXT NOT NULL, title TEXT NOT NULL, text TEXT NOT NULL, sessionId TEXT, createdAt INTEGER NOT NULL)")
     db.exec("CREATE INDEX IF NOT EXISTS notes_scope ON notes(scope, createdAt)")
@@ -93,16 +92,34 @@ export function openMemoryStore(options: { path: string; scope: string; redactor
     db.exec("PRAGMA user_version=1")
     db.exec("COMMIT")
   } catch (error) { db.close(); throw error }
+  return db
+}
+
+/** The desktop host can register memory tools without opening an optional
+ * workspace database. Identity validation still runs before its first use. */
+export function openMemoryStore(options: { path: string; scope: string; redactor?: Redactor; lazy?: boolean; busyTimeoutMs?: number }): MemoryStore {
+  const { path, busyTimeoutMs = 5000 } = options
+  if (!isAbsolute(path)) throw new Error("memory database path must be absolute")
+  const scope = bounded(options.scope, "scope", 4096)
+  const redactor = options.redactor ?? createRedactor()
+  let db = options.lazy ? undefined : openDatabase(path, busyTimeoutMs)
+  let closed = false
+  function database(): DatabaseSync {
+    if (closed) throw new Error("memory store is closed")
+    return db ??= openDatabase(path, busyTimeoutMs)
+  }
+  const prepare = (sql: string) => database().prepare(sql)
   function transaction<T>(fn: () => T): T {
-    db.exec("BEGIN IMMEDIATE")
-    try { const result = fn(); db.exec("COMMIT"); return result }
-    catch (error) { db.exec("ROLLBACK"); throw error }
+    const connection = database()
+    connection.exec("BEGIN IMMEDIATE")
+    try { const result = fn(); connection.exec("COMMIT"); return result }
+    catch (error) { connection.exec("ROLLBACK"); throw error }
   }
   const store: MemoryStore = {
-    enabled() { return db.prepare("SELECT enabled FROM preferences WHERE scope=?").get(scope)?.enabled === 1 },
+    enabled() { return prepare("SELECT enabled FROM preferences WHERE scope=?").get(scope)?.enabled === 1 },
     setEnabled(enabled) {
       if (typeof enabled !== "boolean") throw new Error("enabled must be boolean")
-      db.prepare("INSERT INTO preferences(scope, enabled) VALUES (?, ?) ON CONFLICT(scope) DO UPDATE SET enabled=excluded.enabled").run(scope, enabled ? 1 : 0)
+      prepare("INSERT INTO preferences(scope, enabled) VALUES (?, ?) ON CONFLICT(scope) DO UPDATE SET enabled=excluded.enabled").run(scope, enabled ? 1 : 0)
     },
     add(input) {
       const title = bounded(String(redactor.redact(bounded(input.title, "title", 256))), "title", 256)
@@ -110,31 +127,31 @@ export function openMemoryStore(options: { path: string; scope: string; redactor
       const sessionId = input.sessionId === undefined ? null : bounded(input.sessionId, "sessionId", 256)
       const note = withRevision({ id: randomUUID(), title, text, sessionId, createdAt: Date.now() })
       transaction(() => {
-        db.prepare("INSERT INTO notes(id, scope, title, text, sessionId, createdAt) VALUES (?, ?, ?, ?, ?, ?)").run(note.id, scope, title, text, sessionId, note.createdAt)
-        db.prepare("INSERT INTO notes_fts(id, scope, title, text) VALUES (?, ?, ?, ?)").run(note.id, scope, title, text)
+        prepare("INSERT INTO notes(id, scope, title, text, sessionId, createdAt) VALUES (?, ?, ?, ?, ?, ?)").run(note.id, scope, title, text, sessionId, note.createdAt)
+        prepare("INSERT INTO notes_fts(id, scope, title, text) VALUES (?, ?, ?, ?)").run(note.id, scope, title, text)
       })
       return note
     },
     read(id) {
       bounded(id, "id", 256)
-      const note = db.prepare("SELECT id, title, text, sessionId, createdAt FROM notes WHERE id=? AND scope=?").get(id, scope)
+      const note = prepare("SELECT id, title, text, sessionId, createdAt FROM notes WHERE id=? AND scope=?").get(id, scope)
       if (!note) throw new Error("memory note not found")
       return withRevision(note as unknown as Omit<MemoryNote, "revision">)
     },
     list(limit) {
-      return (db.prepare("SELECT id, title, text, sessionId, createdAt FROM notes WHERE scope=? ORDER BY createdAt DESC, id LIMIT ?").all(scope, limitOf(limit)) as unknown as Omit<MemoryNote, "revision">[]).map(row => { const { text: _text, ...note } = withRevision(row); return note })
+      return (prepare("SELECT id, title, text, sessionId, createdAt FROM notes WHERE scope=? ORDER BY createdAt DESC, id LIMIT ?").all(scope, limitOf(limit)) as unknown as Omit<MemoryNote, "revision">[]).map(row => { const { text: _text, ...note } = withRevision(row); return note })
     },
     search(query, limit) {
       bounded(query, "query", 1024)
       const terms = query.trim().split(/\s+/)
       const match = terms.map(term => '"' + term.replaceAll('"', '""') + '"').join(" ")
-      const rows = db.prepare("SELECT n.id, n.title, n.sessionId, snippet(notes_fts, 3, '', '', '…', 24) AS snippet FROM notes_fts JOIN notes n ON n.id=notes_fts.id WHERE notes_fts MATCH ? AND n.scope=? ORDER BY bm25(notes_fts), n.id LIMIT ?").all(match, scope, limitOf(limit)) as unknown as MemoryHit[]
+      const rows = prepare("SELECT n.id, n.title, n.sessionId, snippet(notes_fts, 3, '', '', '…', 24) AS snippet FROM notes_fts JOIN notes n ON n.id=notes_fts.id WHERE notes_fts MATCH ? AND n.scope=? ORDER BY bm25(notes_fts), n.id LIMIT ?").all(match, scope, limitOf(limit)) as unknown as MemoryHit[]
       // unicode61 groups unspaced CJK sentences into one token. Fill remaining
       // slots with scoped literal substring hits so Chinese phrases remain
       // discoverable. FTS-ranked results keep priority; inputs stay parameters.
       if (rows.length < limitOf(limit)) {
         const clauses = terms.map(() => "instr(lower(title || ' ' || text), lower(?)) > 0").join(" AND ")
-        const fallback = db.prepare("SELECT id, title, sessionId, substr(text, max(1, instr(lower(text), lower(?))-80), 240) AS snippet FROM notes WHERE scope=? AND " + clauses + " ORDER BY createdAt DESC, id LIMIT ?")
+        const fallback = prepare("SELECT id, title, sessionId, substr(text, max(1, instr(lower(text), lower(?))-80), 240) AS snippet FROM notes WHERE scope=? AND " + clauses + " ORDER BY createdAt DESC, id LIMIT ?")
           .all(terms[0]!, scope, ...terms, limitOf(limit)) as unknown as MemoryHit[]
         const seen = new Set(rows.map(row => row.id))
         for (const row of fallback) if (!seen.has(row.id) && rows.length < limitOf(limit)) { rows.push(row); seen.add(row.id) }
@@ -161,9 +178,9 @@ export function openMemoryStore(options: { path: string; scope: string; redactor
     forget(id) {
       bounded(id, "id", 256)
       return transaction(() => {
-        const deleted = db.prepare("DELETE FROM notes WHERE id=? AND scope=?").run(id, scope)
+        const deleted = prepare("DELETE FROM notes WHERE id=? AND scope=?").run(id, scope)
         if (deleted.changes === 0) return false
-        db.prepare("DELETE FROM notes_fts WHERE id=? AND scope=?").run(id, scope)
+        prepare("DELETE FROM notes_fts WHERE id=? AND scope=?").run(id, scope)
         return true
       })
     },
@@ -175,9 +192,9 @@ export function openMemoryStore(options: { path: string; scope: string; redactor
         if (previous.revision !== input.expectedRevision) return { kind: "conflict", note: previous }
         const title = bounded(String(redactor.redact(bounded(input.title, "title", 256))), "title", 256)
         const text = bounded(String(redactor.redact(bounded(input.text, "text", 16384))), "text", 16384)
-        db.prepare("UPDATE notes SET title=?, text=? WHERE id=? AND scope=?").run(title, text, input.id, scope)
-        db.prepare("DELETE FROM notes_fts WHERE id=? AND scope=?").run(input.id, scope)
-        db.prepare("INSERT INTO notes_fts(id, scope, title, text) VALUES (?, ?, ?, ?)").run(input.id, scope, title, text)
+        prepare("UPDATE notes SET title=?, text=? WHERE id=? AND scope=?").run(title, text, input.id, scope)
+        prepare("DELETE FROM notes_fts WHERE id=? AND scope=?").run(input.id, scope)
+        prepare("INSERT INTO notes_fts(id, scope, title, text) VALUES (?, ?, ?, ?)").run(input.id, scope, title, text)
         return { kind: "saved", note: store.read(input.id) }
       })
     },
@@ -190,13 +207,13 @@ export function openMemoryStore(options: { path: string; scope: string; redactor
           if (note.revision !== target.expectedRevision) return { kind: "conflict", note }
         }
         for (const { id } of targets) {
-          db.prepare("DELETE FROM notes WHERE id=? AND scope=?").run(id, scope)
-          db.prepare("DELETE FROM notes_fts WHERE id=? AND scope=?").run(id, scope)
+          prepare("DELETE FROM notes WHERE id=? AND scope=?").run(id, scope)
+          prepare("DELETE FROM notes_fts WHERE id=? AND scope=?").run(id, scope)
         }
         return { kind: "forgotten", ids: targets.map(row => row.id) }
       })
     },
-    close() { if (!closed) { closed = true; db.close() } },
+    close() { if (!closed) { db?.close(); closed = true } },
   }
   return store
 }

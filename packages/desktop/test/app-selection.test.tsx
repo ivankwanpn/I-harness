@@ -521,6 +521,20 @@ it("recognizes a warm workspace while refreshing its project data", async () => 
   expect(captured.props?.capabilitiesReady).toBe(true)
 })
 
+it("switches between projects without scanning Git before a review is requested", async () => {
+  const request = fixture(input => {
+    if (input.kind === "workspace/list") return Promise.resolve([{ id: "w1", path: "D:/a", label: "A" }, { id: "w2", path: "D:/b", label: "B" }])
+    if (input.kind === "projects/list") return Promise.resolve([{ id: "p1", name: "First", workspaceIds: ["w1"] }, { id: "p2", name: "Other", workspaceIds: ["w2"] }])
+    return undefined
+  })
+  await waitFor(() => expect(captured.props).toMatchObject({ selectedWorkspaceId: "w1", connection: "online" }))
+  act(() => captured.props!.onSelectProject!("p2"))
+  await waitFor(() => expect(captured.props).toMatchObject({ selectedWorkspaceId: "w2", connection: "online" }))
+  act(() => captured.props!.onSelectProject!("p1"))
+  await waitFor(() => expect(captured.props).toMatchObject({ selectedWorkspaceId: "w1", connection: "online" }))
+  expect(request.mock.calls.flatMap(([input]) => input.kind === "desktop/review/changes" ? [input.workspaceId] : [])).toEqual([])
+})
+
 it("pages back through the whole log with a bounded reading window and leaves live replay at the tail", async () => {
   const head = 2600
   const events = (from: number, to: number): WireEvent[] => Array.from({ length: to - from }, (_, offset) => ({ type: "user/message", seq: from + offset, text: `Message ${from + offset}` }))
@@ -661,13 +675,12 @@ it("clears a selected review detail when refresh reports no remaining changes", 
     : request.kind === "desktop/review/diff"
       ? Promise.resolve({ kind: "text", text: "+after", truncated: false, bytes: 6 })
       : undefined)
-  await waitFor(() => expect(captured.props?.review?.changes).toMatchObject({ kind: "ok", files: [{ path: "note.txt" }] }))
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
   act(() => captured.props!.review!.onSelect("note.txt", "diff"))
   await waitFor(() => expect(captured.props?.review?.diff).toMatchObject({ text: "+after" }))
   files = []
   act(() => captured.props!.review!.onRefresh())
-  await waitFor(() => expect(captured.props?.review?.changes).toMatchObject({ kind: "ok", files: [] }))
-  expect(captured.props!.review!.selected).toBeUndefined()
+  await waitFor(() => expect(captured.props!.review!.selected).toBeUndefined())
   expect(captured.props!.review!.diff).toBeUndefined()
 })
 

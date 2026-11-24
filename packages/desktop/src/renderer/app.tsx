@@ -133,7 +133,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [connection, setConnection] = useState<"online" | "offline" | "connecting" | "reconnecting">("connecting")
   const interactions = usePendingInteractions(bridge, selectedWorkspaceId)
   const pending = interactions.pending
-  const [reviewChanges, setReviewChanges] = useState<ReviewChanges>()
   const [reviewError, setReviewError] = useState<string>()
   const [reviewSelected, setReviewSelected] = useState<{ path: string; mode: "diff" | "preview" }>()
   const [reviewDiff, setReviewDiff] = useState<ReviewText>()
@@ -157,7 +156,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   }
   const reviewRequest = useRef(0)
   const navigationVersion = useRef(0)
-  const reviewChangesRequest = useRef(0)
   const modelRequest = useRef(0)
   const dashboardRequest = useRef(0)
   const dashboardApplied = useRef(0)
@@ -293,21 +291,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         setWorkStateResult(undefined)
         setWorkStateFailure({ scope, message: reason instanceof Error ? reason.message : String(reason) })
       }
-    }
-  }, [bridge])
-
-  const refreshChanges = useCallback(async (workspaceId: string): Promise<ReviewChanges | undefined> => {
-    const scope = workspaceSelection.current
-    if (scope.workspaceId !== workspaceId) return
-    const request = ++reviewChangesRequest.current
-    try {
-      const result = await bridge.request({ kind: "desktop/review/changes", workspaceId }) as ReviewChanges
-      if (workspaceSelection.current !== scope || reviewChangesRequest.current !== request) return
-      setReviewChanges(result)
-      setReviewError(undefined)
-      return result
-    } catch (reason) {
-      if (workspaceSelection.current === scope && reviewChangesRequest.current === request) setReviewError(reason instanceof Error ? reason.message : String(reason))
     }
   }, [bridge])
 
@@ -560,19 +543,18 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   }, [workStateEnabled, selectedWorkspaceId, selectedSessionId, retryNonce, refreshWorkState])
 
   useEffect(() => {
-    if (selectedWorkspaceId === undefined) return
-    setReviewChanges(undefined)
+    reviewRequest.current++
     setReviewSelected(undefined)
     setReviewDiff(undefined)
     setReviewPreview(undefined)
     setReviewError(undefined)
-    void refreshChanges(selectedWorkspaceId)
-  }, [refreshChanges, selectedWorkspaceId])
+  }, [bridge, selectedWorkspaceId])
 
   const selectReview = useCallback(async (path: string, mode: "diff" | "preview"): Promise<void> => {
     if (selectedWorkspaceId === undefined) return
     const scope = workspaceSelection.current
     const request = ++reviewRequest.current
+    setReviewError(undefined)
     setReviewSelected({ path, mode })
     setReviewDiff(undefined)
     setReviewPreview(undefined)
@@ -794,7 +776,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           }
           void refreshTasks(selectedWorkspaceId, selectedSessionId)
           void refreshDashboard(selectedWorkspaceId)
-          void refreshChanges(selectedWorkspaceId)
         },
         onCancel: async () => {
           const scope = selection.current
@@ -944,50 +925,32 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         projectFiles: selectedWorkspaceId && capabilities["desktop-project-files"]?.includes("1") ? { selection: { workspaceId: selectedWorkspaceId, ...(selectedSessionId ? { sessionId: selectedSessionId } : {}), ...(selectedBinding?.projectId ? { projectId: selectedBinding.projectId } : activeProjectId ? { projectId: activeProjectId } : {}) }, request: projectFileRequest, openFile: projectOpenFile, externalOpenFile } : undefined,
         onSaveFile: async (path, text, expectedRevision) => {
           if (!selectedWorkspaceId) throw new Error("No workspace selected")
-          const result = await bridge.request({ kind: "desktop/review/file/save", workspaceId: selectedWorkspaceId, path, text, expectedRevision }) as import("./review/SourceFileEditor.tsx").ReviewSaveResult
-          if (result.kind === "saved") void refreshChanges(selectedWorkspaceId)
-          return result
+          return await bridge.request({ kind: "desktop/review/file/save", workspaceId: selectedWorkspaceId, path, text, expectedRevision }) as import("./review/SourceFileEditor.tsx").ReviewSaveResult
         },
-        onStage: async (path) => {
-          if (!selectedWorkspaceId) throw new Error("No workspace selected")
-          const result = await bridge.request({ kind: "desktop/review/stage", workspaceId: selectedWorkspaceId, path }) as import("./review/ReviewPane.tsx").ReviewGitResult
-          await refreshChanges(selectedWorkspaceId)
-          return result
-        },
-        onUnstage: async (path) => {
-          if (!selectedWorkspaceId) throw new Error("No workspace selected")
-          const result = await bridge.request({ kind: "desktop/review/unstage", workspaceId: selectedWorkspaceId, path }) as import("./review/ReviewPane.tsx").ReviewGitResult
-          await refreshChanges(selectedWorkspaceId)
-          return result
-        },
-        onCommit: async (message) => {
-          if (!selectedWorkspaceId) throw new Error("No workspace selected")
-          const result = await bridge.request({ kind: "desktop/review/commit", workspaceId: selectedWorkspaceId, message }) as import("./review/ReviewPane.tsx").ReviewCommitResult
-          await refreshChanges(selectedWorkspaceId)
-          return result
-        },
-        changes: reviewChanges,
         error: reviewError,
         selected: reviewSelected,
         diff: reviewDiff,
         preview: reviewPreview,
         onSelect: (path, mode) => { void selectReview(path, mode) },
         onRefresh: () => {
-          if (selectedWorkspaceId === undefined) return
+          if (!selectedWorkspaceId || !reviewSelected) return
+          const { path, mode } = reviewSelected
+          if (mode === "preview") { void selectReview(path, mode); return }
           const scope = workspaceSelection.current
-          const detailRequest = reviewRequest.current
-          const selected = reviewSelected
-          void refreshChanges(selectedWorkspaceId).then((changes) => {
-            if (!changes || workspaceSelection.current !== scope || reviewRequest.current !== detailRequest) return
-            const row = changes.kind === "ok" ? changes.files.find((file) => file.path === selected?.path) : undefined
-            if (selected && (selected.mode === "preview" || row?.canDiff)) {
-              void selectReview(selected.path, selected.mode)
+          const ticket = ++reviewRequest.current
+          void bridge.request({ kind: "desktop/review/changes", workspaceId: selectedWorkspaceId }).then(value => {
+            const changes = value as ReviewChanges
+            if (workspaceSelection.current !== scope || reviewRequest.current !== ticket) return
+            if (changes.kind === "ok" && changes.files.some(file => file.path === path && file.canDiff)) {
+              void selectReview(path, mode)
               return
             }
-            reviewRequest.current++ // invalidate an old diff/preview request
+            setReviewError(undefined)
             setReviewSelected(undefined)
             setReviewDiff(undefined)
             setReviewPreview(undefined)
+          }).catch(reason => {
+            if (workspaceSelection.current === scope && reviewRequest.current === ticket) setReviewError(reason instanceof Error ? reason.message : String(reason))
           })
         },
       }}
@@ -1006,7 +969,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       onRewindComplete={(workspaceId, sessionId) => {
         if (selection.current.workspaceId !== workspaceId) return
         void refreshDashboard(workspaceId)
-        void refreshChanges(workspaceId)
         if (selection.current.sessionId === sessionId) setRetryNonce((value) => value + 1)
       }}
       onManageSession={async (sessionId, action, title) => {

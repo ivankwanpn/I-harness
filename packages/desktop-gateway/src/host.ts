@@ -320,7 +320,9 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
       await nativeContext.configureReferences(references)
     },actionSessionId:nativeContext.humanSessionId})
   await contextSubsystems.syncPolicy(); nativeContext.syncAutoRefresh()
-  const memory = openMemoryStore({ path: join(options.sessionDir, "memory.sqlite"), scope: options.workspace })
+  // A synchronous busy wait here would also stall unrelated workspaces.
+  const memory = openMemoryStore({ path: join(options.sessionDir, "memory.sqlite"), scope: options.workspace,
+    lazy: true, busyTimeoutMs: options.profile ? 0 : undefined })
   defer(() => memory.close())
   const additionalTools = [...createMemoryTools(memory, () => memory.enabled()), ...createDesktopGoalTools((id) => service.liveSession(id), notifyWorkflow,id=>service.liveAssembly(id)?.metadataFacts),...createCodeRetrievalTools(nativeContext.codeRetrieval, { exposure: 'direct' })]
   const instructionWatch = createFsWatchService()
