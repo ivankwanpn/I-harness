@@ -3,6 +3,7 @@ import {validJournalPrefix,type JournalPrefix,type SessionEventView} from '@i-ha
 import type {OriginalWriterDependencyScope} from '@i-harness/core-session/internal/execution'
 import type {createArchiveReadOwner} from './archive-read-owner.ts'
 import {readSessionArchive} from './archive-reader.ts'
+import type {VerifiedArchiveBody} from './verified-archive-body.ts'
 import {types} from 'node:util'
 import {associateExecutionDependencies} from '../../../session-persistence/src/execution-internal.ts'
 
@@ -11,6 +12,7 @@ const owners=new WeakMap<object,Opener>()
 /** Private original JSONL construction. This read port cannot issue facts. */
 export function associateOwnedExecutionReader(backend:PersistenceBackend,ports:{assertOriginal():void;filePath(id:string):string;assertNotDeleted(kind:string,id:string):Promise<void>;archive:ReturnType<typeof createArchiveReadOwner>;register(id:string,held:HeldFactOwner):void;settleBirth(id:string,held:HeldFactOwner):Promise<void>;qualify(id:string,held:HeldFactOwner,prefix:Parameters<NonNullable<Parameters<typeof readSessionArchive>[3]>>[0]):Promise<void>}){
  if(owners.has(backend))throw TypeError('Owned dependency reader already associated')
+ const verifiedBodies=new WeakMap<HeldFactOwner,VerifiedArchiveBody>()
  owners.set(backend,(id,held,prefix)=>{
   ports.assertOriginal();if(!isHeldFactOwner(held)||held.owner.sessionId!==id)throw TypeError('Original held writer required')
   if(!prefix||types.isProxy(prefix)||![Object.prototype,null].includes(Object.getPrototypeOf(prefix))||Reflect.ownKeys(prefix).length!==3||['eventCount','bodyBytes','prefixDigest'].some(key=>{const field=Object.getOwnPropertyDescriptor(prefix,key);return !field||!('value'in field)||!field.enumerable})||!validJournalPrefix(prefix))throw TypeError('Original writer prefix required')
@@ -30,18 +32,25 @@ export function associateOwnedExecutionReader(backend:PersistenceBackend,ports:{
    const selected=new Set(requested)
    if(selected.size!==requested.length)throw RangeError('Duplicate dependency ordinal')
    if(!requested.length)return []
-   return original.read(async(handle,extent)=>{
+   const observation=await original.read(async(handle,extent)=>{
     await ports.assertNotDeleted('session',id);check()
-    const result=await readSessionArchive(handle,extent,false,birth=>ports.qualify(id,held,birth),{ordinals:selected,prefix:expected,assertCurrent:check})
+    const result=await readSessionArchive(handle,extent,false,birth=>ports.qualify(id,held,birth),{
+     ordinals:selected,prefix:expected,assertCurrent:check,verified:verifiedBodies.get(held),
+    })
     if(result.header.sessionId!==id)throw Error('Owned dependency header mismatch')
     const records=new Map(result.events.map(event=>[event.seq,event]))
     await ports.assertNotDeleted('session',id);check()
-    return requested.map(ordinal=>{
+    const events=requested.map(ordinal=>{
      const event=records.get(ordinal)
      if(!event)throw Error('Owned dependency ordinal mismatch')
      return event
     })
+    return {events,verified:result.verified}
    })
+   original.assertCurrent()
+   const latest=verifiedBodies.get(held)
+   if(observation.verified&&(!latest||latest.prefix.bodyBytes<=expected.bodyBytes))verifiedBodies.set(held,observation.verified)
+   return observation.events
   }
   const scope:OriginalWriterDependencyScope=Object.freeze({assertCurrent(){if(this!==scope)throw TypeError('Foreign dependency receiver');original.assertCurrent()},async readEvent(ordinal:number){
    if(this!==scope)throw TypeError('Foreign dependency receiver')

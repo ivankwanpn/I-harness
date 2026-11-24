@@ -2,7 +2,11 @@ import { createJsonlBackend } from '../src/index.ts'
 import { it, expect } from 'vitest'
 import { mkdtemp, writeFile, readFile, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { resolveSelectedBirth } from '../src/backend/selected-birth.ts'
+import { createBootstrapHeaderBackend } from '../src/backend/bootstrap-header.ts'
+import { createOwnership } from '../../session-persistence/src/coordinator/ownership.ts'
+import { heldFactOwner } from '../../session-persistence/src/coordinator/fact-owner.ts'
 it('refuses a selected header without its original stage without modifying it', async () => {
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'birth-')), path=join(root,'target.jsonl')
  const raw=Buffer.from('{"formatVersion":13,"sessionId":"target","semanticSeed":{"version":3}}\n')
@@ -27,8 +31,22 @@ it('resolves a complete birth with selected results without repairing a torn suf
  const complete=encodeFactBatch('bootstrap:op:complete',decodeFactBatch(first.bytes).prefixDigest,[{type:'session/bootstrap',version:1,seq:seed.records.length,operationId:'op',manifestDigest:meta.semanticSeed.manifestDigest,dependencyClosureDigest:seed.dependencyDigest,seedLength:seed.records.length}])
  const raw=Buffer.concat([Buffer.from(built.headerBytes),Buffer.from(first.bytes),Buffer.from(complete.bytes),Buffer.from('{')]);await writeFile(path,raw);await writeFile(selectedBootstrapPaths(path,route).stage,built.stageBytes)
  const birth=await resolveSelectedBirth(path,'target',async()=>{});expect(birth?.route).toEqual(route);expect(birth?.facts.resultPageCount).toBe(1);expect(await readFile(path)).toEqual(raw)
- const observed = await createJsonlBackend(root).read('target'); expect(observed.meta?.semanticSeed?.version).toBe(3); expect(observed.events).toHaveLength(seed.records.length+1); expect(await readFile(path)).toEqual(raw)
- await unlink(selectedBootstrapPaths(path,route).stage); await expect(resolveSelectedBirth(path,'target',async()=>{})).rejects.toThrow(); expect(await readFile(path)).toEqual(raw)
+ const backend=createJsonlBackend(root), observed = await backend.read('target'); expect(observed.meta?.semanticSeed?.version).toBe(3); expect(observed.events).toHaveLength(seed.records.length+1); expect(await readFile(path)).toEqual(raw)
+ const ownership=createOwnership(backend,{lock:{enabled:true}}),claim=await ownership.pinOwnership('target')
+ const owner=heldFactOwner({sessionId:'target',incarnation:'selected-header-read'},ownership,()=>claim.assertHeld())
+ const tracked=createBootstrapHeaderBackend(id=>join(root,id+'.jsonl'),async()=>{},root)
+ tracked.trackHeaderOwner('target',owner)
+ try {
+  await expect(tracked.resolveTrackedBirth('target',owner)).resolves.toMatchObject({route,digest:createHash('sha256').update(raw).digest('hex')})
+  await unlink(selectedBootstrapPaths(path,route).stage)
+  await expect(tracked.resolveTrackedBirth('target',owner)).rejects.toThrow()
+  await expect(resolveSelectedBirth(path,'target',async()=>{})).rejects.toThrow()
+  expect(await readFile(path)).toEqual(raw)
+ } finally {
+  await tracked.settleTrackedHeaderIO('target',owner)
+  await claim.release()
+  await Promise.all(ownership.releaseHeldLocks())
+ }
  await writeFile(selectedBootstrapPaths(path,route).stage,built.stageBytes); await writeFile(path,Buffer.concat([Buffer.from(built.headerBytes),Buffer.from(first.bytes)]));await expect(resolveSelectedBirth(path,'target',async()=>{})).rejects.toThrow()
 })
 

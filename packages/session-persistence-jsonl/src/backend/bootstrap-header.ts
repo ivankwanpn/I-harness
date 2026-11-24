@@ -16,6 +16,7 @@ import { captureBootstrapRoute, routeInvocation, type BootstrapRoute, type Boots
 import { preserveBootstrapBirth } from './fact-journal.ts'
 import { resolveSelectedBirth } from './selected-birth.ts'
 import { lookupSelectedBootstrapStage } from './selected-bootstrap-stage.ts'
+import { HEADER_READ_MAX_BYTES } from './header-limit.ts'
 
 export async function bootstrapArtifacts(path:string):Promise<string[]> {
   const prefix=basename(path)+'.bootstrap-'
@@ -72,8 +73,9 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
     try { await Reflect.apply(resource.close, resource.handle, []); ledger?.handles.delete(resource) }
     catch (error) { resource.failed = true; resource.cause = error; throw error }
   }
-  async function ownedRead(path:string,id:string,owner:HeldFactOwner,limit?:number):Promise<Buffer|undefined> {
-    if (!headerLedgers.has(owner.owner)) return limit === undefined ? optional(path) : bounded(path,limit)
+  async function ownedRead(path:string,id:string,owner:HeldFactOwner,mode?:number|'header'):Promise<Buffer|undefined> {
+    const headerOnly = mode === 'header', limit = typeof mode === 'number' ? mode : undefined
+    if (!headerOnly && !headerLedgers.has(owner.owner)) return limit === undefined ? optional(path) : bounded(path,limit)
     let opened:Awaited<ReturnType<typeof ownedOpen>>, pathBefore:BigIntStats
     try {
       const observed = await lstat(path,{bigint:true}); scope(id,owner)
@@ -83,11 +85,21 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
     try {
       scope(id,owner); const before = await opened.resource.handle.stat({ bigint: true }); scope(id,owner)
       if (!before.isFile() || before.ino <= 0n || !sameRevision(before,pathBefore) || before.size < 0n || before.size > BigInt(Number.MAX_SAFE_INTEGER) || limit !== undefined && before.size > BigInt(limit)) throw new Error('Bootstrap stage exceeds byte limit or changed')
-      const length = Number(before.size), bytes = Buffer.alloc(length + 1); let offset = 0
-      while (offset < bytes.length) { scope(id,owner); const read = await opened.resource.handle.read(bytes, offset, Math.min(65536, bytes.length - offset), offset); if (!read.bytesRead) break; offset += read.bytesRead }
+      const length = Number(before.size)
+      const bytes = Buffer.alloc(headerOnly ? Math.min(length, HEADER_READ_MAX_BYTES) : length + 1)
+      let offset = 0, lineEnd = -1
+      while (offset < bytes.length) {
+        scope(id,owner)
+        const read = await opened.resource.handle.read(bytes, offset, Math.min(65536, bytes.length - offset), offset)
+        if (!read.bytesRead) break
+        if (headerOnly) lineEnd = bytes.subarray(0, offset + read.bytesRead).indexOf(10, offset)
+        offset += read.bytesRead
+        if (lineEnd >= 0) break
+      }
       const after = await opened.resource.handle.stat({ bigint: true }), pathAfter = await lstat(path,{bigint:true}); scope(id,owner)
-      if (!pathAfter.isFile() || pathAfter.isSymbolicLink() || offset !== length || !sameRevision(after,before) || !sameRevision(pathAfter,before)) throw new Error('Bootstrap file changed')
-      return bytes.subarray(0, length)
+      const complete = headerOnly ? lineEnd >= 0 || offset === bytes.length : offset === length
+      if (!pathAfter.isFile() || pathAfter.isSymbolicLink() || !complete || !sameRevision(after,before) || !sameRevision(pathAfter,before)) throw new Error('Bootstrap file changed')
+      return bytes.subarray(0, lineEnd >= 0 ? lineEnd + 1 : offset)
     }
     finally { await ownedClose(opened.resource,opened.ledger) }
   }
@@ -164,9 +176,30 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
   }
   function resolveTrackedBirth(id:string,owner:HeldFactOwner) {
     return trackHeaderFlight(id,owner,async()=>{
-      scope(id,owner); await assertNotDeleted('session',id); const path=filePath(id), raw=await ownedRead(path,id,owner); if(!raw)throw new Error('Bootstrap parent unavailable')
-      const end=raw.indexOf(10); if(end<0)throw new Error('Invalid bootstrap header'); const meta=parseHeader(raw.subarray(0,end).toString('utf8'))
-      if(!meta.semanticSeed) { if((await bootstrapNamespace(path)).length)throw new Error('Foreign bootstrap namespace'); return undefined }
+      scope(id,owner)
+      await assertNotDeleted('session',id)
+      const path = filePath(id)
+      let raw: Buffer | undefined
+      let header = await ownedRead(path,id,owner,'header')
+      if (!header) throw new Error('Bootstrap parent unavailable')
+      let end = header.indexOf(10)
+      // Existing oversized headers still use the original whole-file check.
+      if (end < 0 && header.length === HEADER_READ_MAX_BYTES) {
+        raw = await ownedRead(path,id,owner)
+        if (!raw) throw new Error('Bootstrap parent unavailable')
+        header = raw
+        end = header.indexOf(10)
+      }
+      if (end < 0) throw new Error('Invalid bootstrap header')
+      const meta = parseHeader(header.subarray(0,end).toString('utf8'))
+      if (!meta.semanticSeed) {
+        if ((await bootstrapNamespace(path)).length) throw new Error('Foreign bootstrap namespace')
+        await assertNotDeleted('session',id)
+        scope(id,owner)
+        return undefined
+      }
+      raw ??= await ownedRead(path,id,owner)
+      if (!raw || !raw.subarray(0,end+1).equals(header.subarray(0,end+1))) throw new Error('Bootstrap parent header changed')
       const io={ namespace:()=>bootstrapNamespace(path), read:(artifact:string,limit:number)=>ownedRead(artifact,id,owner,limit), assertCurrent:()=>scope(id,owner) }
       if(meta.semanticSeed.version===3) {
         const birth=await resolveSelectedBirth(path,id,assertNotDeleted,{stage:io,readJournal:async()=>{const bytes=await ownedRead(path,id,owner);if(!bytes)throw new Error('Selected parent unavailable');return bytes}})

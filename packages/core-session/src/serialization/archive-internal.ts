@@ -1,1 +1,1 @@
-export { createJournalStreamDecoder } from './fact-journal.ts'
+export { createJournalStreamDecoder, type JournalFrameExtent } from './fact-journal.ts'
