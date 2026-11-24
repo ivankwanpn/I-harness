@@ -1,30 +1,39 @@
 // Run with Node from .node-version: node --import tsx scripts/bench/desktop-latency.mjs
 import assert from "node:assert/strict"
-import { execFile, spawn } from "node:child_process"
+import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
 import { once } from "node:events"
-import { appendFile, cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
+import { appendFile, cp, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises"
 import { createServer } from "node:http"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
-import { parseArgs, promisify } from "node:util"
+import { parseArgs } from "node:util"
 import { setTimeout as delay } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { timingScope } from "../../packages/desktop-gateway/src/timing-trace.ts"
 import { createJsonlBackend } from "../../packages/session-persistence-jsonl/src/index.ts"
-import { createSessionCoordinator } from "../../packages/session-persistence/src/index.ts"
+import { createReadOnlySessionCoordinator, createSessionCoordinator } from "../../packages/session-persistence/src/index.ts"
+import { installRendererSoakObserver, rendererState, sampleDesktopProcesses, sumProcessRoles } from "./desktop-soak.mjs"
 
 const { values } = parseArgs({ options: {
   exe: { type: "string" }, rounds: { type: "string", default: "3" }, "require-trace": { type: "boolean" },
   "live-config": { type: "string" }, "live-tool": { type: "boolean" },
   "soak-minutes": { type: "string" },
+  "soak-cycles": { type: "string" },
+  "soak-sample-seconds": { type: "string", default: "60" },
   recovery: { type: "boolean" },
 } })
 const live = values["live-config"]
-const soakMinutes = Number(values["soak-minutes"] ?? 0)
-assert(Number.isSafeInteger(soakMinutes) && soakMinutes >= 0 && soakMinutes <= 480 && !(soakMinutes && live), "Soak requires 1–480 minutes with the local fixture")
-assert(!values.recovery || !soakMinutes && !live, "Recovery uses an independent local fixture")
+const soakMinutes = values["soak-minutes"] === undefined ? undefined : Number(values["soak-minutes"])
+const soakCycles = values["soak-cycles"] === undefined ? undefined : Number(values["soak-cycles"])
+const soak = soakMinutes !== undefined || soakCycles !== undefined
+assert(soakMinutes === undefined || Number.isSafeInteger(soakMinutes) && soakMinutes >= 1 && soakMinutes <= 480, "Soak duration must be 1–480 minutes")
+assert(soakCycles === undefined || Number.isSafeInteger(soakCycles) && soakCycles >= 1 && soakCycles <= 600, "Soak workload must be 1–600 parallel cycles")
+assert(!soak || !live && (soakMinutes === undefined || soakCycles === undefined), "Choose one local soak mode")
+const soakSampleSeconds = Number(values["soak-sample-seconds"])
+assert(Number.isSafeInteger(soakSampleSeconds) && soakSampleSeconds >= 1 && soakSampleSeconds <= 600, "Soak sample interval must be 1–600 seconds")
+assert(!values.recovery || !soak && !live, "Recovery uses an independent local fixture")
 const rounds = Number(values.rounds)
 assert(Number.isInteger(rounds) && rounds >= 1 && rounds <= 20, "rounds must be between 1 and 20")
 const desktop = fileURLToPath(new URL("../../packages/desktop/", import.meta.url))
@@ -86,6 +95,7 @@ const provider = createServer(async (request, response) => {
       send({ type: "response.output_text.delta", delta: "Finished " + tag })
     }
     send({ type: "response.completed", response: { usage: { input_tokens: 10, output_tokens: 6 } } })
+    mark.ended = clock()
     response.end()
   } catch {
     if (!response.headersSent) response.writeHead(500)
@@ -191,7 +201,7 @@ async function launch() {
     callbacks.set(id, request.resolve)
     page.send(JSON.stringify({ id, method: "Runtime.evaluate", params: { expression, returnByValue: true, awaitPromise: true } }))
     try {
-      const timeout = soakMinutes ? 45_000 : 10_000
+      const timeout = soak ? 45_000 : 10_000
       const reply = await Promise.race([request.promise, delay(timeout, undefined, { ref: false })])
       if (!reply) throw Error("Renderer RPC did not reply within " + timeout + " ms")
       if (reply.error || reply.result.exceptionDetails) throw Error(reply.error?.message ?? reply.result.result?.description ?? "Renderer RPC failed")
@@ -211,42 +221,8 @@ async function close() {
   finally { page?.close() }
 }
 
-async function processSample(pid) {
-  if (process.platform !== "win32") return []
-  const command = `
-    $found = @(Get-CimInstance Win32_Process)
-    $ids = @(${pid})
-    for ($level=0; $level -lt 5; $level++) {
-      $ids += @($found | Where-Object { $ids -contains $_.ParentProcessId -and $ids -notcontains $_.ProcessId } | ForEach-Object ProcessId)
-    }
-    @(Get-Process -Id $ids -ErrorAction SilentlyContinue | ForEach-Object {
-      @{pid=$_.Id;name=$_.ProcessName;cpuSeconds=$_.CPU;workingSet=$_.WorkingSet64;privateBytes=$_.PrivateMemorySize64}
-    }) | ConvertTo-Json -Compress -AsArray
-  `
-  const { stdout } = await promisify(execFile)("pwsh", ["-NoProfile", "-NonInteractive", "-Command", command], { windowsHide: true, timeout: 20000 })
-  return stdout.trim() ? JSON.parse(stdout) : []
-}
-
 async function startRendererSampler(evaluate) {
-  await evaluate(`(() => {
-    const interval = 50
-    let last = performance.now()
-    const empty = () => ({ callbacks: 0, maxGapMs: 0, gapsOver100Ms: 0 })
-    let sample = empty()
-    const timer = setInterval(() => {
-      const now = performance.now(), gap = now-last
-      sample.callbacks++
-      sample.maxGapMs = Math.max(gap, sample.maxGapMs)
-      if (gap > 100) sample.gapsOver100Ms++
-      last = now
-    }, interval)
-    window.ihSoakSample = () => {
-      const taken = { ...sample, backgrounded: document.hidden, heapBytes: performance.memory?.usedJSHeapSize }
-      sample = empty()
-      return taken
-    }
-    window.addEventListener("pagehide", () => clearInterval(timer), { once: true })
-  })()`)
+  await evaluate(`(${installRendererSoakObserver})(${rendererState})`)
 }
 
 async function verifyRecovery(evaluate) {
@@ -260,7 +236,7 @@ async function verifyRecovery(evaluate) {
     assert.equal(result, 1, "One durable input for " + text)
   }
   const drop = "fixture-latency-drop-0"
-  const marked = await submit(evaluate, drop)
+  const { pressed: marked } = await submit(evaluate, drop)
   await until(() => evaluate(`window.ihDesktop.request({kind:"desktop/diagnostics/list",workspaceId:"a",sessionId:"empty"})
     .then(result=>result.entries.some(entry=>entry.kind==="session/error"&&entry.timestamp>=${Math.floor(marked)}))`), "transport failure is visible")
   await admission(drop)
@@ -319,39 +295,52 @@ async function submit(evaluate, tag, prompt = tag) {
   return evaluate(`(() => {
     const target = document.querySelector(${JSON.stringify(sendButton)})
     const tag = ${JSON.stringify(tag)}
+    const state = ${rendererState}
     window.ihLatencySamples ??= Object.create(null)
-    const sample = { pressed: performance.timeOrigin + performance.now() }
+    const sample = { pressed: performance.timeOrigin + performance.now(), submitState: state() }
     window.ihLatencySamples[tag] = sample
     const next = () => {
-      const text = [...document.querySelectorAll(".timeline-assistant")].filter(el => el.getClientRects().length > 0).map(el => el.innerText)
       const at = performance.timeOrigin + performance.now()
-      if (text.some(line => ${Boolean(live)} ? !!line.trim() : line.includes("Started " + tag))) sample.firstText ??= at
-      if (text.some(line => line.includes("Finished " + tag))) sample.finished ??= at
+      if (!document.hidden) {
+        const text = [...document.querySelectorAll(".timeline-assistant")].filter(el => el.getClientRects().length > 0).map(el => el.innerText.trim())
+        if (sample.firstText === undefined && text.some(line => ${Boolean(live)} ? !!line : line.includes("Started " + tag))) {
+          sample.firstText = at
+          sample.firstTextState = state()
+        }
+        if (text.some(line => line === "Finished " + tag)) {
+          sample.finished = at
+          sample.finalTextState = state()
+        }
+      }
       if (!sample.finished && at - sample.pressed < 60000) requestAnimationFrame(next)
     }
     target.click()
     requestAnimationFrame(next)
-    return sample.pressed
+    return sample
   })()`)
 }
-async function waitForParallelReply(evaluate, workspace, tag) {
+async function waitForReply(evaluate, workspace, session, tag, submitted) {
   let checkedAt = 0
   return until(async () => {
     const key = JSON.stringify(tag)
     const sample = await evaluate(`window.ihLatencySamples[${key}]`)
     if (sample?.finished) return sample
-    // When the OS throttles a background window it may not deliver a paint
-    // sample. Use a separate durable observation during soak and keep the
-    // missing paint visible in the report.
-    if (soakMinutes && sample && Date.now() - sample.pressed > 10_000 && Date.now() >= checkedAt + 5000) {
-      checkedAt = Date.now()
+    // When the window is hidden there may be no animation frames. The
+    // provider's response only tells us when to check committed history.
+    // A record of that check is independent of the animation-frame series.
+    const ended = responseMarks.get(tag)?.[1]?.ended
+    const now = clock()
+    if (soak && ended !== undefined && now - ended >= 500 && now >= checkedAt + 2000) {
+      checkedAt = now
+      const state = await evaluate(`(${rendererState})()`)
+      if (state.visibility !== "hidden" && now - ended < 3000) return undefined
       const completed = await evaluate(`window.ihDesktop.request({kind:"session/history",workspaceId:${JSON.stringify(workspace.id)},
-        sessionId:"long",afterSeq:0,beforeSeq:Number.MAX_SAFE_INTEGER,limit:40})
-        .then(history=>history.events.some(event=>event.type==="assistant/message"&&event.text.includes("Finished "+${key})))`)
-      if (completed) return { ...sample, finished: clock(), paintMissing: true }
+        sessionId:${JSON.stringify(session)},afterSeq:0,beforeSeq:Number.MAX_SAFE_INTEGER,limit:40})
+        .then(history=>history.events.some(event=>event.type==="assistant/message"&&event.text.trim()==="Finished "+${key}))`)
+      if (completed) return { ...submitted, ...sample, finished: clock(), paintMissing: true, durableReplyState: state }
     }
     return undefined
-  }, "parallel " + workspace.id + " finished")
+  }, tag + " finished")
 }
 function summarize(trials, traces) {
   const round = value => value === undefined ? undefined : Number(value.toFixed(1))
@@ -365,7 +354,7 @@ function summarize(trials, traces) {
       for (const name of phases)
       assert(marks.some(mark => mark.phase === name), `Missing ${name} for ${trial.tag}`)
     }
-    if (!live && !soakMinutes && trial.scenario !== "parallel-background") assert(trial.firstText, "Expected to observe the first content while selected")
+    if (!live && !soak && trial.scenario !== "parallel-background") assert(trial.firstText, "Expected to observe the first content while selected")
     const offset = at => at === undefined ? undefined : round(at - trial.pressed)
     const loopback = responseMarks.get(trial.tag)
     if (!live) assert.equal(loopback?.length, 2, "The fixture must exercise one tool, then a second provider request")
@@ -375,31 +364,79 @@ function summarize(trials, traces) {
       turnStartMs: offset(phase("turn-start")), requestProjectedMs: offset(phase("request-projected")), requestAssessedMs: offset(phase("request-assessed")),
       providerIssuedMs: offset(issued?.at), providerEventMs: offset(phase("provider-first-event", issued?.attempt)),
       providerTextMs: offset(phase("provider-first-text", issued?.attempt)), firstToolMs: offset(phase("tool-start")),
-      firstTextInFrameMs: offset(trial.firstText),
-      ...(trial.paintMissing ? { finalPaintMissing: true, durableReplyObservedMs: offset(trial.finished) } : { finalTextInFrameMs: offset(trial.finished) }),
+      submitState: trial.submitState, firstTextState: trial.firstTextState, firstTextInFrameMs: offset(trial.firstText),
+      ...(trial.paintMissing ? { finalPaintMissing: true, durableReplyObservedMs: offset(trial.finished), durableReplyState: trial.durableReplyState }
+        : { finalTextInFrameMs: offset(trial.finished), finalTextState: trial.finalTextState }),
       ...(loopback ? { fixtureReceivedMs: offset(loopback[0].received), fixtureFirstTextMs: offset(loopback[0].firstText),
         fixtureNextRequestMs: offset(loopback[1].received), inputBytes: loopback[0].inputBytes } : {}) }
   })
+}
+
+async function verifySoakReplies(trials) {
+  const histories = []
+  for (const workspace of workspaces) {
+    const directory = join(profile, "sessions", workspace.id)
+    const reader = createReadOnlySessionCoordinator(createJsonlBackend(directory))
+    try {
+      for (const sessionId of ["empty", "long"]) {
+        const requested = trials.filter(trial => trial.workspace.id === workspace.id && trial.session === sessionId)
+        if (!requested.length) continue
+        const expected = new Map(requested.map(trial => ["Finished " + trial.tag, 0]))
+        const { session } = await reader.snapshot(sessionId)
+        for (const event of session.events) {
+          if (event.type !== "assistant/message") continue
+          const text = event.text.trim()
+          if (expected.has(text)) expected.set(text, expected.get(text) + 1)
+        }
+        assert([...expected.values()].every(count => count === 1), "Expected exactly one committed reply per trial in " + workspace.id + "/" + sessionId)
+        const journal = await stat(join(directory, sessionId + ".jsonl"))
+        histories.push({ workspace: workspace.id, sessionId, replies: expected.size, journalBytes: journal.size })
+      }
+    } finally { await reader.close() }
+  }
+  return histories
 }
 
 async function runLatency(evaluate) {
   const trials = []
   const soakSamples = []
   const started = performance.now()
-  const deadline = started + soakMinutes * 60_000
+  const deadline = soakMinutes === undefined ? undefined : started + soakMinutes * 60_000
   let nextSample = started
   const heartbeatFile = join(root, "soak-heartbeat.jsonl")
-  if (soakMinutes) {
+  async function sampleSoak(parallelCycles) {
+    let renderer = await evaluate("window.ihSoakSample?.() ?? null")
+    if (!renderer) {
+      await startRendererSampler(evaluate)
+      renderer = { ...await evaluate("window.ihSoakSample()"), reset: true }
+    }
+    const elapsedMs = Math.round(performance.now() - started)
+    const [processes, journalBytes] = await Promise.all([
+      sampleDesktopProcesses(child.pid),
+      Promise.all(workspaces.map(async workspace => {
+        const journal = await stat(join(profile, "sessions", workspace.id, "long.jsonl"))
+        return { workspace: workspace.id, bytes: journal.size }
+      })),
+    ])
+    const sample = { elapsedMs, parallelCycles, renderer, processes, roles: sumProcessRoles(processes), journalBytes }
+    soakSamples.push(sample)
+    await appendFile(heartbeatFile, JSON.stringify(sample) + "\n")
+    console.log(JSON.stringify(sample))
+    nextSample = performance.now() + soakSampleSeconds * 1000
+  }
+  if (soak) {
     await startRendererSampler(evaluate)
-    await appendFile(heartbeatFile, JSON.stringify({ startedAt: new Date().toISOString(), minutes: soakMinutes, pid: child.pid }) + "\n")
-    console.log(JSON.stringify({ root, heartbeatFile, pid: child.pid, minutes: soakMinutes }))
+    const identity = { startedAt: new Date().toISOString(), minutes: soakMinutes, targetCycles: soakCycles, sampleSeconds: soakSampleSeconds, pid: child.pid }
+    await appendFile(heartbeatFile, JSON.stringify(identity) + "\n")
+    console.log(JSON.stringify({ root, heartbeatFile, ...identity }))
+    await sampleSoak(0)
   }
   async function run(workspace, session, scenario, round) {
     const tag = `fixture-latency-${scenario}-${round}`
     const activation = await select(evaluate, workspace, session)
-    await submit(evaluate, tag)
+    const submitted = await submit(evaluate, tag)
     trials.push({ workspace, session, scenario, tag, activation,
-      ...await until(() => evaluate(`window.ihLatencySamples[${JSON.stringify(tag)}]?.finished && window.ihLatencySamples[${JSON.stringify(tag)}]`), tag) })
+      ...await waitForReply(evaluate, workspace, session, tag, submitted) })
   }
   if (live) {
     const tag = "fixture-latency-live-0"
@@ -423,52 +460,51 @@ async function runLatency(evaluate) {
     await run(workspaces[0], "empty", "cold", 0)
     for (let index = 0; index < rounds; index++) await run(workspaces[0], "empty", "warm", index)
   }
-  for (let index = 0; !live && (index < rounds || soakMinutes && performance.now() < deadline); index++) {
+  let parallelCycles = 0
+  for (let index = 0; !live && (index < (soakCycles ?? rounds) || deadline !== undefined && performance.now() < deadline); index++) {
     const a = "fixture-latency-parallela-" + index
     const b = "fixture-latency-parallelb-" + index
     const startA = await select(evaluate, workspaces[0], "long")
-    await submit(evaluate, a)
+    const submittedA = await submit(evaluate, a)
     await until(() => responseMarks.get(a)?.length === 1, "first concurrent request")
     const startB = await select(evaluate, workspaces[1], "long")
-    await submit(evaluate, b)
-    const sampleB = await waitForParallelReply(evaluate, workspaces[1], b)
+    const submittedB = await submit(evaluate, b)
+    const sampleB = await waitForReply(evaluate, workspaces[1], "long", b, submittedB)
     await select(evaluate, workspaces[0], "long")
-    const sampleA = await waitForParallelReply(evaluate, workspaces[0], a)
+    const sampleA = await waitForReply(evaluate, workspaces[0], "long", a, submittedA)
     trials.push({ workspace: workspaces[0], session: "long", scenario: "parallel-background", tag: a, activation: startA, ...sampleA })
     trials.push({ workspace: workspaces[1], session: "long", scenario: "parallel-foreground", tag: b, activation: startB, ...sampleB })
-    if (soakMinutes) {
+    parallelCycles++
+    if (soak) {
       await evaluate(`(() => {
         delete window.ihLatencySamples[${JSON.stringify(a)}]
         delete window.ihLatencySamples[${JSON.stringify(b)}]
       })()`)
-      if (performance.now() >= nextSample || performance.now() >= deadline) {
-        let renderer = await evaluate("window.ihSoakSample?.() ?? null")
-        if (!renderer) {
-          await startRendererSampler(evaluate)
-          renderer = { ...await evaluate("window.ihSoakSample()"), reset: true }
-        }
-        const sample = {
-          elapsedMs: Math.round(performance.now() - started), parallelCycles: index + 1,
-          renderer, processes: await processSample(child.pid),
-        }
-        soakSamples.push(sample)
-        await appendFile(heartbeatFile, JSON.stringify(sample) + "\n")
-        console.log(JSON.stringify(sample))
-        nextSample = performance.now() + 60_000
-      }
-      const rest = Math.min(20_000, deadline - performance.now())
+      if (performance.now() >= nextSample && (deadline === undefined || performance.now() < deadline)) await sampleSoak(parallelCycles)
+      const rest = deadline === undefined ? 0 : Math.min(20_000, deadline - performance.now())
       if (rest > 0) await delay(rest)
     }
   }
-  if (soakMinutes) assert(performance.now() >= deadline, "Soak must reach the requested duration")
+  const workloadElapsedMs = Math.round(performance.now() - started)
+  if (soak) {
+    if (soakMinutes !== undefined) assert(workloadElapsedMs >= soakMinutes * 60_000, "Soak must reach the requested duration")
+    if (soakCycles !== undefined) assert.equal(parallelCycles, soakCycles, "Soak must complete the requested workload")
+    await sampleSoak(parallelCycles)
+    if (process.platform === "win32") {
+      assert(soakSamples.some(sample => sample.roles?.["desktop-host"] && sample.roles?.renderer),
+        "Soak did not capture a shared Desktop host and renderer resource sample")
+    }
+  }
   await close()
+  if (soak) assert.equal(child.exitCode, 0, "Desktop must exit normally after the soak")
+  const persisted = soak ? await verifySoakReplies(trials) : undefined
   const records = await readFile(trace, "utf8").then(text => text.trimEnd().split("\n").map(line => JSON.parse(line)), error => {
     if (error.code !== "ENOENT") throw error
     return []
   })
   const report = { root, executable: electron, fixture: live ? "explicit live provider profile" : "local Responses with a read tool", rounds: live ? 1 : rounds,
-    ...(soakMinutes ? { soakMinutes, soakSamples } : {}),
-    rendererMeasurement: "First animation frame with the expected visible DOM text. Background A may be restored from history.",
+    ...(soak ? { soakMinutes, soakCycles, soakSampleSeconds, workloadElapsedMs, parallelCycles, soakSamples, persisted, desktopExited: true } : {}),
+    rendererMeasurement: "First animation frame with the expected DOM text in a visible document. State separates focused, unfocused, and hidden windows, and foreground timer statistics exclude connection or visibility transitions. Background A may be restored from history.",
     trials: summarize(trials, records) }
   return report
 }
