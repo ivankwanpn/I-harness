@@ -19,10 +19,12 @@ const { values } = parseArgs({ options: {
   exe: { type: "string" }, rounds: { type: "string", default: "3" }, "require-trace": { type: "boolean" },
   "live-config": { type: "string" }, "live-tool": { type: "boolean" },
   "soak-minutes": { type: "string" },
+  recovery: { type: "boolean" },
 } })
 const live = values["live-config"]
 const soakMinutes = Number(values["soak-minutes"] ?? 0)
 assert(Number.isSafeInteger(soakMinutes) && soakMinutes >= 0 && soakMinutes <= 480 && !(soakMinutes && live), "Soak requires 1–480 minutes with the local fixture")
+assert(!values.recovery || !soakMinutes && !live, "Recovery uses an independent local fixture")
 const rounds = Number(values.rounds)
 assert(Number.isInteger(rounds) && rounds >= 1 && rounds <= 20, "rounds must be between 1 and 20")
 const desktop = fileURLToPath(new URL("../../packages/desktop/", import.meta.url))
@@ -49,6 +51,13 @@ const provider = createServer(async (request, response) => {
     responseMarks.set(tag, marks)
     const mark = { received: clock(), inputBytes: payload.length }
     marks.push(mark)
+    if (tag.includes("-drop-") || tag.includes("-cancel-")) {
+      response.writeHead(200, { "Content-Type": "text/event-stream" })
+      response.write("data: " + JSON.stringify({ type: "response.output_text.delta", delta: "Started " + tag }) + "\n\n")
+      if (tag.includes("-drop-")) { await delay(100); response.destroy(); return }
+      await once(response, "close")
+      return
+    }
     if (marks.length === 1 && tag.includes("-parallel")) {
       const token = tag.match(/\d+$/)[0]
       const barrier = dual.get(token) ?? { release: Promise.withResolvers(), count: 0 }
@@ -237,6 +246,35 @@ async function startRendererSampler(evaluate) {
     window.addEventListener("pagehide", () => clearInterval(timer), { once: true })
   })()`)
 }
+
+async function verifyRecovery(evaluate) {
+  const workspace = workspaces[0], session = "empty"
+  await select(evaluate, workspace, session)
+  await evaluate('window.ihDesktop.request({kind:"desktop/global-retry/configure",maxRetries:0})')
+  const admission = async text => {
+    const result = await evaluate(`window.ihDesktop.request({kind:"session/history",workspaceId:"a",sessionId:"empty",
+      afterSeq:0,beforeSeq:Number.MAX_SAFE_INTEGER,limit:50}).then(result=>result.events
+        .filter(event=>event.type==="agent/input/admitted"&&event.text===${JSON.stringify(text)}).length)`)
+    assert.equal(result, 1, "One durable input for " + text)
+  }
+  const drop = "fixture-latency-drop-0"
+  const marked = await submit(evaluate, drop)
+  await until(() => evaluate(`window.ihDesktop.request({kind:"desktop/diagnostics/list",workspaceId:"a",sessionId:"empty"})
+    .then(result=>result.entries.some(entry=>entry.kind==="session/error"&&entry.timestamp>=${Math.floor(marked)}))`), "transport failure is visible")
+  await admission(drop)
+  const cancel = "fixture-latency-cancel-0"
+  await submit(evaluate, cancel)
+  await until(() => responseMarks.get(cancel)?.length === 1, "held provider stream")
+  await until(() => evaluate(`!!document.querySelector('.composer-send[data-state="running"]')`), "visible stop control")
+  await evaluate(`document.querySelector('.composer-send[data-state="running"]').click()`)
+  await until(() => evaluate(`!document.querySelector('.composer-send[data-state="running"]')`), "stopped execution")
+  await admission(cancel)
+  const retry = "fixture-latency-warm-0"
+  await submit(evaluate, retry)
+  await until(() => evaluate(`window.ihLatencySamples[${JSON.stringify(retry)}]?.finished`), "subsequent reply")
+  await admission(retry)
+  return { transportFailureVisible: true, stoppedFromComposer: true, subsequentReply: true, admissions: 3 }
+}
 const projectRow = label => `[...document.querySelectorAll(".project-sidebar-project-select")].find(el => el.textContent.trim() === ${JSON.stringify(label)})`
 const sessionRow = title => `[...document.querySelectorAll(".project-sidebar-sessions .row-button")].find(el => el.querySelector(".row-label")?.textContent === ${JSON.stringify(title)})`
 const sendButton = 'button.composer-send[data-can-send="1"]'
@@ -342,9 +380,7 @@ function summarize(trials, traces) {
   })
 }
 
-try {
-  await prepare()
-  const evaluate = await launch()
+async function runLatency(evaluate) {
   const trials = []
   const soakSamples = []
   const started = performance.now()
@@ -404,9 +440,14 @@ try {
         delete window.ihLatencySamples[${JSON.stringify(b)}]
       })()`)
       if (performance.now() >= nextSample || performance.now() >= deadline) {
+        let renderer = await evaluate("window.ihSoakSample?.() ?? null")
+        if (!renderer) {
+          await startRendererSampler(evaluate)
+          renderer = { ...await evaluate("window.ihSoakSample()"), reset: true }
+        }
         const sample = {
           elapsedMs: Math.round(performance.now() - started), parallelCycles: index + 1,
-          renderer: await evaluate("window.ihSoakSample()"), processes: await processSample(child.pid),
+          renderer, processes: await processSample(child.pid),
         }
         soakSamples.push(sample)
         await appendFile(heartbeatFile, JSON.stringify(sample) + "\n")
@@ -427,8 +468,23 @@ try {
     ...(soakMinutes ? { soakMinutes, soakSamples } : {}),
     rendererMeasurement: "First animation frame with the expected visible DOM text. Background A may be restored from history.",
     trials: summarize(trials, records) }
-  await write(join(root, "receipt.json"), report)
-  console.log(JSON.stringify(report, null, 2))
+  return report
+}
+
+try {
+  await prepare()
+  const evaluate = await launch()
+  if (values.recovery) {
+    const recovery = await verifyRecovery(evaluate)
+    await close()
+    const report = { root, executable: electron, recovery }
+    await write(join(root, "recovery.json"), report)
+    console.log(JSON.stringify(report))
+  } else {
+    const report = await runLatency(evaluate)
+    await write(join(root, "receipt.json"), report)
+    console.log(JSON.stringify(report, null, 2))
+  }
 } finally {
   try { await close() } finally {
     if (provider.listening) {
