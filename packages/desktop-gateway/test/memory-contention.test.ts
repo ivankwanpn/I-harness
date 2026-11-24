@@ -59,3 +59,23 @@ it("observes another writer disabling memory before a pending note can commit", 
     expect(f.store.list()).toEqual([])
   } finally { await f.close() }
 })
+
+it("honors the newest configuration and a separately confirmed user deletion", async () => {
+  const f = await fixture()
+  try {
+    f.held.exec("ROLLBACK")
+    const note = f.store.add({ title: "remove", text: "confirmed" })
+    f.held.exec("BEGIN IMMEDIATE")
+    const older = expect(f.memory.request("desktop/memory/configure", { enabled: true })).rejects.toBeDefined()
+    const remove = f.memory.request("desktop/memory/forget-many", {
+      confirmed: true, targets: [{ id: note.id, expectedRevision: note.revision }],
+    })
+    const disable = f.memory.request("desktop/memory/configure", { enabled: false })
+    await older
+    f.held.exec("ROLLBACK")
+    await expect(disable).resolves.toEqual({ enabled: false })
+    await expect(remove).resolves.toMatchObject({ kind: "forgotten", ids: [note.id] })
+    expect(f.store.enabled()).toBe(false)
+    expect(f.store.list()).toEqual([])
+  } finally { await f.close() }
+})
