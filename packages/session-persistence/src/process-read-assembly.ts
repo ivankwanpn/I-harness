@@ -3,14 +3,13 @@ import type { ProcessReadStorage } from './coordinator/process-read-storage.ts'
 import { createSessionCoordinatorCore } from './coordinator-factory.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { ManagedArtifactRef } from '@i-harness/core-session'
-import { createColdProcessReadOwner, type ProcessReadObservation, type ProcessReadOptions, type ProcessReadScopeRunner, type ProcessReadUpdate, type ProcessReadScopeControl } from './coordinator/process-read-owner.ts'
+import { createColdProcessReadOwner, type ProcessReadObservation, type ProcessReadOptions, type ProcessReadScopeRunner, type ProcessReadUpdate, type ProcessReadScopeControl, type ProcessReadVisibility } from './coordinator/process-read-owner.ts'
 import { createManagedProcessReadOwner } from './coordinator/process-read-managed-owner.ts'
-import type { createProcessReadVisibility } from './coordinator/process-read-visibility.ts'
 import type { SessionCoordinator } from './coordinator/types.ts'
 import type { TaskDocumentConfiguration } from './coordinator/task-document-operation.ts'
 import type { TaskTransitionConfiguration } from './coordinator/task-document-transition.ts'
 
-type Scope = { coordinator: SessionCoordinator; id: string; observation: ProcessReadObservation; visibility: ReturnType<typeof createProcessReadVisibility>; control: ProcessReadScopeControl; assertOriginal(): void; failed: boolean }
+type Scope = { coordinator: SessionCoordinator; id: string; observation: ProcessReadObservation; visibility: ProcessReadVisibility; control: ProcessReadScopeControl; assertOriginal(): void; failed: boolean }
 const active = new AsyncLocalStorage<Scope>()
 /** Checked lookup only; no caller can install a view or predicate. */
 export function lookupProcessReadContext(coordinator: SessionCoordinator, id: string) {

@@ -715,7 +715,12 @@ export function createJsonlBackend(root: string, options?: {
   })
   const assertOriginal = artifactOwner.assertOriginal
 
-  associateArchiveReadResources(backend, archiveReads.association, originalArchiveRead)
+  associateArchiveReadResources(backend, {
+    attach() {
+      const participant = archiveReads.association.attach()
+      return { ...participant, fence() { participant.fence(); capability.retireColdTranscript() } }
+    },
+  }, originalArchiveRead)
   const hasOriginalArchiveRead = () => Object.getOwnPropertyDescriptor(backend, 'read')?.value === originalArchiveRead
   if (hasOriginalArchiveRead()) {
     associateColdArchiveHistoryReader(backend, createColdArchiveHistoryReader({

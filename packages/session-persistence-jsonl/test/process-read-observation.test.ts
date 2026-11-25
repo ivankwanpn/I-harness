@@ -1,27 +1,140 @@
 import { appendFile, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import type { BigIntStats } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { createJsonlBackend } from '../src/index.ts';
 import { lookupJsonlProcessRead } from '../src/backend-factory.ts';
-import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session';
+import { CURRENT_FORMAT_VERSION, encodeFactBatch, legacyPrefixDigest } from '@i-harness/core-session';
+import { createSessionCoordinator } from '@i-harness/session-persistence';
 import * as observationModule from '../src/backend/process-read.ts';
 
-const closeInterposition = vi.hoisted(() => ({ path: '', invalidIdentity: false, statFailure: undefined as undefined | { path: string; value: unknown }, run: undefined as undefined | (() => Promise<void>) }));
+const closeInterposition = vi.hoisted(() => ({ path: '', invalidIdentity: false, statFailure: undefined as undefined | { path: string; value: unknown },
+    unchangedTimestamps: undefined as undefined | { path: string; mtimeNs: bigint; ctimeNs: bigint },
+    reads: undefined as undefined | { path: string; chunks: { length:number; bytesRead:number }[] },
+    run: undefined as undefined | (() => Promise<void>) }));
 vi.mock('node:fs/promises', async importOriginal => {
     const actual = await importOriginal<typeof import('node:fs/promises')>();
+    const timestamps = (path: string, stat: BigIntStats) => {
+        const prior = closeInterposition.unchangedTimestamps;
+        return prior?.path === path ? Object.assign(stat, { mtimeNs: prior.mtimeNs, ctimeNs: prior.ctimeNs }) : stat;
+    };
     return { ...actual, lstat: async (...args: Parameters<typeof actual.lstat>) => {
         if (closeInterposition.statFailure?.path === String(args[0])) throw closeInterposition.statFailure.value;
         const stat = await actual.lstat(...args);
-        return closeInterposition.invalidIdentity ? Object.assign(stat, { ino: 0n }) : stat;
+        return closeInterposition.invalidIdentity ? Object.assign(stat, { ino: 0n }) : timestamps(String(args[0]), stat as BigIntStats);
     }, open: async (...args: Parameters<typeof actual.open>) => {
         const handle = await actual.open(...args);
+        if (closeInterposition.unchangedTimestamps?.path === String(args[0])) {
+            const stat = handle.stat.bind(handle);
+            handle.stat = (async (options: { bigint: true }) => timestamps(String(args[0]), await stat(options))) as typeof handle.stat;
+        }
+        const traced = closeInterposition.reads;
+        if (traced?.path === String(args[0])) {
+            const read = handle.read.bind(handle);
+            handle.read = (async (buffer: Buffer, offset: number, length: number, position: number) => {
+                const result = await read(buffer, offset, length, position);
+                traced.chunks.push({ length, bytesRead: result.bytesRead });
+                return result;
+            }) as typeof handle.read;
+        }
         if (String(args[0]) === closeInterposition.path && closeInterposition.run) {
             const close = handle.close.bind(handle);
             handle.close = async () => { await close(); const run = closeInterposition.run; closeInterposition.run = undefined; await run?.(); };
         }
         return handle;
     } };
+});
+
+it('reuses only finished cold transcript data and still observes the selected documents fresh', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-cold-reuse-')), backend = createJsonlBackend(root);
+    const path = join(root, 's.jsonl');
+    try {
+        await backend.create('s', { sessionId: 's', formatVersion: CURRENT_FORMAT_VERSION, createdAt: '2026-01-01T00:00:00.000Z' });
+        const batch = encodeFactBatch('observed-transcript', legacyPrefixDigest(0, new Uint8Array()), [
+            { type: 'tool/call', seq: 0, callId: 'read', name: 'read', args: { nested: { text: 'x'.repeat(131072) } } },
+        ]);
+        await appendFile(path, batch.bytes);
+        await backend.putDocument('one', { value: 'first' });
+        await backend.putDocument('two', { value: 'second' });
+        const capability = lookupJsonlProcessRead(backend)!;
+        const first = await capability.capture('s', ['one']);
+        const premature = await capability.capture('s', []);
+        expect(first.reusableInitial).toBe(true);
+        expect(premature.initial).not.toBe(first.initial);
+        await first.finish();
+        const size = (await readFile(path)).length;
+        const trace = { path, chunks: [] as { length:number; bytesRead:number }[] };
+        closeInterposition.reads = trace;
+        const next = await capability.capture('s', ['two']);
+        expect(next.reusableInitial).toBe(true);
+        expect(next.initial).toBe(first.initial);
+        expect(Object.isFrozen(next.initial.events)).toBe(true);
+        const event = next.initial.events[0];
+        if (event?.type !== 'tool/call') throw new Error('Missing original nested tool call');
+        expect(Object.isFrozen((event.args as { nested: object }).nested)).toBe(true);
+        expect(next.documents.has('one')).toBe(false);
+        expect(next.documents.get('two')).toEqual({ kind: 'present', value: { value: 'second' } });
+        expect(trace.chunks.reduce((sum, chunk) => sum + chunk.bytesRead, 0)).toBe(size);
+        await next.finish();
+        expect(trace.chunks.reduce((sum, chunk) => sum + chunk.bytesRead, 0)).toBe(2 * size);
+        expect(trace.chunks.every(chunk => chunk.length <= 65536)).toBe(true);
+    } finally { closeInterposition.reads = undefined; await rm(root, { recursive: true, force: true }); }
+});
+
+it('uses a full digest rather than unchanged inode, extent and timestamps for a candidate hit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-cold-hit-digest-')), backend = createJsonlBackend(root);
+    const path = join(root, 's.jsonl');
+    try {
+        await backend.create('s', { sessionId: 's', formatVersion: CURRENT_FORMAT_VERSION, createdAt: '2026-01-01T00:00:00.000Z', title: 'before' });
+        const capability = lookupJsonlProcessRead(backend)!, original = await capability.capture('s', []);
+        await original.finish();
+        const { lstat } = await import('node:fs/promises'), stats = await lstat(path, { bigint: true });
+        const before = await readFile(path, 'utf8'), changed = before.replace('"before"', '"change"');
+        expect(changed).not.toBe(before);
+        expect(Buffer.byteLength(changed)).toBe(Buffer.byteLength(before));
+        await writeFile(path, changed);
+        closeInterposition.unchangedTimestamps = { path, mtimeNs: stats.mtimeNs, ctimeNs: stats.ctimeNs };
+        const next = await capability.capture('s', []);
+        expect(next.initial).not.toBe(original.initial);
+        expect(next.initial.header).toMatchObject({ title: 'change' });
+        await next.finish();
+        const reused = await capability.capture('s', []);
+        expect(reused.initial).toBe(next.initial);
+        await reused.finish();
+    } finally { closeInterposition.unchangedTimestamps = undefined; await rm(root, { recursive: true, force: true }); }
+});
+
+it('does not treat a cache-hit descriptor close failure as a miss', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-cold-hit-close-')), backend = createJsonlBackend(root);
+    try {
+        await backend.create('s', { sessionId: 's', formatVersion: CURRENT_FORMAT_VERSION, createdAt: '2026-01-01T00:00:00.000Z' });
+        const capability = lookupJsonlProcessRead(backend)!, original = await capability.capture('s', []);
+        await original.finish();
+        closeInterposition.path = join(root, 's.jsonl');
+        closeInterposition.run = async () => { throw new Error('injected transcript descriptor close failure'); };
+        await expect(capability.capture('s', [])).rejects.toThrow('injected transcript descriptor close failure');
+    } finally { closeInterposition.run = undefined; await rm(root, { recursive: true, force: true }); }
+});
+
+it('retires both the cached transcript and unfinished observations with the original read fence', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-cold-reuse-fence-')), backend = createJsonlBackend(root);
+    const firstCoordinator = createSessionCoordinator(backend);
+    try {
+        await firstCoordinator.create({ sessionId: 's' });
+        const capability = lookupJsonlProcessRead(backend)!, first = await capability.capture('s', []);
+        await first.finish();
+        const pending = await capability.capture('s', []);
+        expect(pending.initial).toBe(first.initial);
+        await firstCoordinator.close();
+        await expect(pending.finish()).rejects.toThrow();
+        const nextCoordinator = createSessionCoordinator(backend);
+        try {
+            const next = await capability.capture('s', []);
+            expect(next.initial).not.toBe(first.initial);
+            await next.finish();
+        } finally { await nextCoordinator.close(); }
+    } finally { await firstCoordinator.close(); await rm(root, { recursive: true, force: true }); }
 });
 
 for (const cause of [null, undefined]) it(`preserves a thrown ${String(cause)} document failure instead of treating it as absence`, async () => {

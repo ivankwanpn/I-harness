@@ -114,7 +114,7 @@ it('reads real catalog members through the injected native service without visib
     expect(selected).toMatchObject({ kind: 'frames', page: { frames: [{ data: 'eA==' }] } })
     expect(selectedPages).toBe(3)
     expect(trace.selectionBatchSizes).toEqual([1])
-    expect(trace.fullReads).toBe(0); expect(trace.snapshots).toBe(0); expect(trace.gatewayBuilds).toBe(1); expect(trace.builds).toBe(1); expect(trace.decodes).toBe(1)
+    expect(trace.fullReads).toBe(0); expect(trace.snapshots).toBe(0); expect(trace.gatewayBuilds).toBe(1); expect(trace.builds).toBe(0); expect(trace.decodes).toBe(0)
     expect(trace.reads.filter(read => read.position === 0 && read.length === historyBytes + 1 && read.bytes === historyBytes)).toHaveLength(2)
     console.log(JSON.stringify({ control: 'gateway-selected-dto-catalog-body', selectedPages, historyBytes, witnessBytePasses: 2, gatewayBuilds: trace.gatewayBuilds, visibilityBuilds: trace.builds, journalDecodes: trace.decodes, snapshots: trace.snapshots, fullReadFileCalls: trace.fullReads, catalogAndPinIO: 'original membership IO remains separately required' }))
     selectedPages = 0; trace.reads = []; trace.fullReads = 0; trace.snapshots = 0; trace.gatewayBuilds = 0; trace.selectionBatchSizes = []; trace.builds = 0; trace.decodes = 0; trace.active = true
@@ -123,6 +123,8 @@ it('reads real catalog members through the injected native service without visib
     expect(passiveRows.jobs).toContainEqual(expect.objectContaining({ jobId: 'bash-1', outputAvailable: true, live: false, canCancel: false }))
     expect(selectedPages).toBe(0); expect(reader.hasAssembly('s')).toBe(false); expect(trace.snapshots).toBe(0); expect(trace.fullReads).toBe(0); expect(trace.gatewayBuilds).toBe(1)
     expect(trace.selectionBatchSizes).toEqual([2])
+    expect(trace.builds).toBe(0); expect(trace.decodes).toBe(0)
+    expect(trace.reads.filter(read => read.position === 0 && read.length === historyBytes + 1 && read.bytes === historyBytes)).toHaveLength(2)
     console.log(JSON.stringify({ control: 'gateway-passive-process-list', artifactPages: selectedPages, gatewayBuilds: trace.gatewayBuilds, selectionBatchSizes: trace.selectionBatchSizes, snapshots: trace.snapshots, fullReadFileCalls: trace.fullReads, hasAssembly: reader.hasAssembly('s') }))
     let wrongSourceBodyPages = 0, wrongSourceCatalogPages = 0
     const sourceChecked = createAgentProcesses(coordinator, reader, { runRead: createAgentProcessReadRunner({ coordinator, service: reader, isConversation, fence, resultReadScopeFor: resolveScope,

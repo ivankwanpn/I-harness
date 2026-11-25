@@ -10,10 +10,24 @@ export interface ProcessReadInitial { readonly session: SessionView; readonly hi
 export type ProcessReadUpdate = { readonly kind: 'unchanged'; readonly highWater: number } | { readonly kind: 'suffix'; readonly from: number; readonly to: number; readonly events: readonly SessionEventView[] }
 export interface ProcessReadObservation { readonly initial: ProcessReadInitial; check(): Promise<ProcessReadUpdate>; assertCurrent(): void }
 export interface ProcessReadScopeControl { assertExit(): void; assertPageAdmission(): void }
-export type ProcessReadScopeRunner = <T>(observation: ProcessReadObservation, visibility: ReturnType<typeof createProcessReadVisibility>, run: () => Promise<T>, control: ProcessReadScopeControl) => Promise<T>
+export type ProcessReadVisibility = Pick<ReturnType<typeof createProcessReadVisibility>, 'contains'>
+export type ProcessReadScopeRunner = <T>(observation: ProcessReadObservation, visibility: ProcessReadVisibility, run: () => Promise<T>, control: ProcessReadScopeControl) => Promise<T>
+
+function prepareColdTranscript(initial: SessionView) {
+  const events = initial.events as SessionEvent[], meta = initial.header as SessionMeta | undefined
+  preflightSessionFormat(initial.formatVersion, events, meta)
+  if (guardIgnorable(events).length !== events.length) throw new Error('PROCESS_READ_UNAVAILABLE')
+  const session = freezeJsonData(buildSession(meta, events))
+  const visibility = createProcessReadVisibility()
+  visibility.add(session.events)
+  return { session, visibility: Object.freeze({ contains: visibility.contains }) }
+}
 
 /** Internal lifecycle; the composition owner is solely responsible for run. */
 export function createColdProcessReadOwner(storage: ProcessReadStorage, latches: ReturnType<typeof createProcessReadLatches>) {
+  // The backend owns the lifetime of its bounded immutable key. Prepared
+  // data carries neither a latch nor any request's document or artifact scope.
+  const preparedTranscripts = new WeakMap<SessionView, ReturnType<typeof prepareColdTranscript>>()
   return { async run<T, U>(id: string, options: ProcessReadOptions, work: (observation: ProcessReadObservation) => Promise<T>, publish: (candidate: T, observation: ProcessReadObservation, last: ProcessReadUpdate) => Promise<U>, scope: ProcessReadScopeRunner = (_observation, _visibility, run) => run()): Promise<U> {
     const keys = [...new Set(options.documentKeys)].sort()
     if (keys.length > 32 || keys.some(key => typeof key !== 'string')) throw new TypeError('Invalid process read document keys')
@@ -22,11 +36,11 @@ export function createColdProcessReadOwner(storage: ProcessReadStorage, latches:
     try {
       const raw = await storage.capture(id, keys)
       latch.assertCurrent()
-      const events = raw.initial.events as SessionEvent[], meta = raw.initial.header as SessionMeta | undefined
-      preflightSessionFormat(raw.initial.formatVersion, events, meta)
-      if (guardIgnorable(events).length !== events.length) throw new Error('PROCESS_READ_UNAVAILABLE')
-      const session = freezeJsonData(buildSession(meta, events)), highWater = events.length
-      const visibility = createProcessReadVisibility(); visibility.add(session.events)
+      const source = raw.initial
+      const reusable = raw.reusableInitial === true && Object.isFrozen(source) && Object.isFrozen(source.events)
+      const cached = reusable ? preparedTranscripts.get(source) : undefined
+      const prepared = cached ?? prepareColdTranscript(source)
+      const { session, visibility } = prepared, highWater = session.events.length
       const initial: ProcessReadInitial = Object.freeze({ session, highWater, documents: raw.documents })
       const assertCurrent = () => {
         try { if (state !== 'active' && state !== 'verified') throw new Error('PROCESS_READ_UNAVAILABLE'); latch.assertCurrent() }
@@ -54,6 +68,7 @@ export function createColdProcessReadOwner(storage: ProcessReadStorage, latches:
       const last: ProcessReadUpdate = Object.freeze({ kind: 'unchanged', highWater })
       const result = await scope(observation, visibility, () => publish(candidate, observation, last), control)
       assertCurrent()
+      if (reusable && !cached) preparedTranscripts.set(source, prepared)
       return result
     } finally { state = 'retired'; latch.retire() }
   } }
