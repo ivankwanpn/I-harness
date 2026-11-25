@@ -1,5 +1,6 @@
 import { expect, it } from "vitest"
 import { stringifyJsonData, canonicalJsonData, lowerJsonData, streamJsonData } from "../src/index.ts"
+import { captureData } from '../src/serialization/context-data.ts'
 import { runInNewContext } from 'node:vm'
 
 it("preserves source JSON enumeration, omissions, proto data and Unicode with a literal old-output oracle", () => {
@@ -10,6 +11,51 @@ it("preserves source JSON enumeration, omissions, proto data and Unicode with a 
   expect(canonicalJsonData(value)).toBe('{"10":"ten","2":"two","__proto__":{"ok":true},"b":1,"unicode":"é🙂\\ud800"}')
   expect(stringifyJsonData([undefined, null, -0, Infinity])).toBe('[null,null,0,null]')
   expect(stringifyJsonData(undefined)).toBeUndefined()
+})
+
+it('uses exact capture ownership for frozen data without repeating slot validation', () => {
+  const plain = Object.freeze({ z: Object.freeze([Object.freeze({ b: 'é🙂\ud800' })]), '10': 'ten', '2': 'two' })
+  const captured = captureData(plain)
+  const canonical = canonicalJsonData(plain), sourceOrder = stringifyJsonData(plain)
+  const ownedNodes = new Set<object>([captured, captured.z, captured.z[0]!])
+  const original = Object.getOwnPropertyDescriptors
+  const reads = { owned: 0, plain: 0 }
+  Object.getOwnPropertyDescriptors = function (value) {
+    if (ownedNodes.has(value as object)) reads.owned++
+    if (value === plain) reads.plain++
+    return original(value)
+  }
+  let actualCanonical: string, actualSourceOrder: string | undefined
+  try {
+    actualCanonical = canonicalJsonData(captured)
+    actualSourceOrder = stringifyJsonData(captured)
+    canonicalJsonData(plain)
+  } finally { Object.getOwnPropertyDescriptors = original }
+  expect(actualCanonical).toBe(canonical)
+  expect(actualSourceOrder).toBe(sourceOrder)
+  expect(reads).toEqual({ owned: 0, plain: 1 })
+})
+
+it('honors a later inherited serializer on an owned node and keeps ordinary fallback', () => {
+  const captured = captureData({ toJSON: 'own data', values: [1, 2] })
+  const descriptor = Object.getOwnPropertyDescriptor(Array.prototype, 'toJSON')
+  let reads = 0, canonicalReads = 0, error: unknown, encoded: string | undefined
+  Object.defineProperty(Array.prototype, 'toJSON', { configurable: true, get() {
+    reads++
+    return (key: string) => `array for ${key}`
+  } })
+  try {
+    try { canonicalJsonData(captured) } catch (cause) { error = cause }
+    canonicalReads = reads
+    encoded = stringifyJsonData(captured)
+  } finally {
+    if (descriptor) Object.defineProperty(Array.prototype, 'toJSON', descriptor)
+    else Reflect.deleteProperty(Array.prototype, 'toJSON')
+  }
+  expect(error).toBeInstanceOf(TypeError)
+  expect(canonicalReads).toBe(0)
+  expect(encoded).toBe('{"toJSON":"own data","values":"array for values"}')
+  expect(reads).toBe(1)
 })
 
 it("retains legacy native serialization for toJSON, accessors and opaque instances", () => {

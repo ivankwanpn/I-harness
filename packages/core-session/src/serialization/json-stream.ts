@@ -1,20 +1,31 @@
+import { isCapturedData } from './context-data.ts'
+
 /** Iterative native JSON property semantics and bounded string escaping. */
 interface JsonStreamOptions { lexical?: boolean; lower?: boolean; emit?: boolean; dataOnly?: boolean }
 export class UnsupportedJsonData extends TypeError { constructor() { super('Canonical encoding requires JSON data') } }
 const nativeJson = JSON as typeof JSON & { isRawJSON?(value: unknown): boolean; rawJSON?(text: string): object }
 const isNativeRawJSON = nativeJson.isRawJSON, createNativeRawJSON = nativeJson.rawJSON
 type Container = unknown[] | Record<string, unknown>
-type Frame = { source: object; target?: Container; keys?: string[]; descriptors?: PropertyDescriptorMap; index: number; length: number; array: boolean; emitted: number }
+type Frame = { source: object; target?: Container; keys?: string[]; descriptors?: PropertyDescriptorMap; ownedData: boolean; index: number; length: number; array: boolean; emitted: number }
+
+function dataPrototype(value: object, array: boolean): object | null {
+  const prototype = Object.getPrototypeOf(value)
+  if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) throw new UnsupportedJsonData()
+  if (isNativeRawJSON?.(value)) throw new UnsupportedJsonData()
+  return prototype
+}
+
+function assertDataSerializer(value: object, array: boolean, prototype: object | null): void {
+  const toJSON = Object.getOwnPropertyDescriptor(value, 'toJSON') ?? (prototype && Object.getOwnPropertyDescriptor(prototype, 'toJSON')) ?? (array && Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON'))
+  if (toJSON && (!('value' in toJSON) || typeof toJSON.value === 'function')) throw new UnsupportedJsonData()
+}
 
 /** The data wrappers preserve their original supported-data fence. Inspecting
  * descriptors never calls source getters/toJSON before a native fallback. */
 function dataContainer(value: object, array: boolean): PropertyDescriptorMap {
-  const prototype = Object.getPrototypeOf(value)
-  if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) throw new UnsupportedJsonData()
-  if (isNativeRawJSON?.(value)) throw new UnsupportedJsonData()
+  const prototype = dataPrototype(value, array)
   const descriptors = Object.getOwnPropertyDescriptors(value)
-  const toJSON = Object.getOwnPropertyDescriptor(value, 'toJSON') ?? (prototype && Object.getOwnPropertyDescriptor(prototype, 'toJSON')) ?? (array && Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON'))
-  if (toJSON && (!('value' in toJSON) || typeof toJSON.value === 'function')) throw new UnsupportedJsonData()
+  assertDataSerializer(value, array, prototype)
   for (const key of Object.keys(descriptors)) if (descriptors[key]!.enumerable && !('value' in descriptors[key]!)) throw new UnsupportedJsonData()
   return descriptors
 }
@@ -94,12 +105,17 @@ export function* streamJsonData(input: unknown, options: JsonStreamOptions = {})
           lowered = options.lower ? createNativeRawJSON!(raw) : undefined
         } else {
           if (ancestors.has(value)) throw new TypeError('Converting circular structure to JSON')
-          const array = Array.isArray(value), descriptors = options.dataOnly ? dataContainer(value, array) : undefined
+          const array = Array.isArray(value)
+          // Captured nodes are exact, frozen data containers with no holes or
+          // accessors. Still honor the current prototype's serializer policy.
+          const ownedData = options.dataOnly === true && isCapturedData(value)
+          if (ownedData) assertDataSerializer(value, array, dataPrototype(value, array))
+          const descriptors = options.dataOnly && !ownedData ? dataContainer(value, array) : undefined
           const keys = array ? undefined : descriptors ? Object.keys(descriptors).filter(key => descriptors[key]!.enumerable) : Object.keys(value)
           if (options.lexical) keys?.sort()
           lowered = options.lower ? array ? [] : {} : undefined
           ancestors.add(value)
-          stack.push({ source: value, ...(options.lower ? { target: lowered as Container } : {}), keys, descriptors, index: 0, length: array ? value.length : keys!.length, array, emitted: 0 })
+          stack.push({ source: value, ...(options.lower ? { target: lowered as Container } : {}), keys, descriptors, ownedData, index: 0, length: array ? value.length : keys!.length, array, emitted: 0 })
           if (options.emit !== false) yield array ? '[' : '{'
         }
       }
@@ -116,7 +132,8 @@ export function* streamJsonData(input: unknown, options: JsonStreamOptions = {})
     }
     const index = frame.index++, key = frame.array ? String(index) : frame.keys![index]!
     if (frame.descriptors && (!frame.descriptors[key] && key in frame.source || frame.descriptors[key] && !('value' in frame.descriptors[key]!))) throw new UnsupportedJsonData()
-    let value = frame.descriptors ? dataValue(frame.descriptors[key]?.value) : normalize(frame.source, key)
+    let value = frame.ownedData ? Reflect.get(frame.source, key)
+      : frame.descriptors ? dataValue(frame.descriptors[key]?.value) : normalize(frame.source, key)
     if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
       if (!frame.array) continue
       value = null
