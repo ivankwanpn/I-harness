@@ -1,18 +1,61 @@
 import { ProjectionCounter } from '@i-harness/token-meter'
 import { createPreparedHttpPayload, preparedModelClient } from '@i-harness/llm-seam'
 import { expect, it, vi } from 'vitest'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createContext } from '@i-harness/core-plugin'
 import { createSession } from '@i-harness/core-session'
 import { createToolRegistry } from '@i-harness/core-tools'
+import type { AuthorityState } from '@i-harness/sandbox'
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
 import { createLoopbackProvider } from '../../core-agent/test/helpers/provider-loopback.ts'
 import { runIsolatedGuardianReview } from '../../guard-approval/src/guardian/isolated-reviewer.ts'
 import { createProjectInstructionEnvironment } from '../src/context/instructions/host.ts'
 import { createIsolatedInstructionHost } from '../src/context/instructions/isolated.ts'
 import { rmWorkspaceSync } from './helpers.ts'
+
+it('anchors moved-session discovery in an authorized primary root and fences stale isolated leases', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-isolated-moved-'))
+  const storage = join(root, 'storage'), cwd = join(storage, 'nested')
+  const first = join(root, 'first-project'), second = join(root, 'second-project')
+  await Promise.all([mkdir(cwd, { recursive: true }), mkdir(first), mkdir(second)])
+  await Promise.all([
+    writeFile(join(cwd, 'AGENTS.md'), 'ORIGINAL_NESTED_RULE'),
+    writeFile(join(first, 'AGENTS.md'), 'FIRST_PRIMARY_RULE'),
+    writeFile(join(second, 'AGENTS.md'), 'SECOND_PRIMARY_RULE'),
+  ])
+  const environment = createProjectInstructionEnvironment()
+  let authority: AuthorityState = { kind: 'bound', revision: 'original', primaryRoot: storage, roots: [storage], references: [] }
+  const host = createIsolatedInstructionHost({ cwd, environment, authority: () => authority, available: () => true })
+  const input = { signal: new AbortController().signal, lifetime: { available: () => true } }
+  try {
+    const original = await host.create(input)
+    expect(original.text).toContain('ORIGINAL_NESTED_RULE')
+    await original.close()
+
+    const moved = { kind: 'bound' as const, revision: 'moved', primaryRoot: first, roots: [first, second], references: [cwd] }
+    authority = moved
+    const firstLease = await host.create(input)
+    expect(firstLease.text).toContain('FIRST_PRIMARY_RULE')
+    expect(firstLease.text).not.toContain('ORIGINAL_NESTED_RULE')
+    expect(firstLease.text).not.toContain('SECOND_PRIMARY_RULE')
+
+    authority = { ...moved, primaryRoot: second }
+    expect(() => firstLease.assertCurrent()).toThrow('Observed instructions unavailable')
+    await firstLease.close()
+
+    const secondLease = await host.create(input)
+    expect(secondLease.text).toContain('SECOND_PRIMARY_RULE')
+    expect(secondLease.text).not.toContain('FIRST_PRIMARY_RULE')
+    await secondLease.close()
+
+    authority = { ...moved, primaryRoot: cwd }
+    await expect(host.create(input)).rejects.toMatchObject({ code: 'CONTEXT_INPUT_STALE' })
+    authority = { kind: 'revoked', revision: 'revoked', reason: 'Project removed' }
+    await expect(host.create(input)).rejects.toMatchObject({ code: 'CONTEXT_INPUT_STALE' })
+  } finally { await host.close(); await environment.close(); rmWorkspaceSync(root) }
+})
 
 it('sends the original isolated source in the actual first approval request', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'ih-isolated-source-')); await writeFile(join(cwd, 'AGENTS.md'), 'ISOLATED_PHYSICAL_RULE')

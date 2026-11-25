@@ -7,6 +7,7 @@ import type { SessionCoordinator } from '@i-harness/session-persistence'
 import { INVALID_PARAMS, isRpcSuccess, type RpcMessage } from '@i-harness/sdk'
 import { createSdkServer } from '@i-harness/sdk/server'
 import { fromJSONL } from '@i-harness/core-session'
+import type { LLMRequest } from '@i-harness/llm-seam'
 import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import * as projectScope from '../src/project-scope.ts'
 import { createDesktopHost } from '../src/host.ts'
@@ -19,7 +20,7 @@ async function fixture() {
   await Promise.all([mkdir(workspace), mkdir(other)])
   const settingsPath = join(root, 'settings.json'), credentialsPath = join(root, 'credentials.json')
   await writeFile(settingsPath, JSON.stringify({ autoTitle: false, sandboxMode: 'read-only', codeMode: { mode: 'off' },
-    compaction: { auto: false }, llm: { providers: { fixture: { protocol: 'openai-completions', baseURL: 'http://127.0.0.1:1',
+    instructions: { enabled: true }, compaction: { auto: false }, llm: { providers: { fixture: { protocol: 'openai-completions', baseURL: 'http://127.0.0.1:1',
       apiKeyEnv: 'IH_PROJECT_CHECK_FIXTURE', models: [{ id: 'fixture', contextWindow: 32000 }] } },
     defaultModel: { provider: 'fixture', model: 'fixture' } } }))
   await writeFile(credentialsPath, JSON.stringify({ refs: { IH_PROJECT_CHECK_FIXTURE: 'fixture-only' } }))
@@ -32,7 +33,7 @@ async function fixture() {
   })
   const serviceFactory = vi.spyOn(executor, 'createSessionService').mockImplementation(options => service = makeService(options))
   const frames: RpcMessage[] = []
-  const produceReply = vi.fn(async function* () {
+  const produceReply = vi.fn(async function* (_request: LLMRequest) {
     yield { type: 'text/chunk' as const, text: 'fixture answer' }
     yield { type: 'end' as const }
   })
@@ -61,19 +62,20 @@ async function fixture() {
       return result.result
     }
     const saved = (id: string) => readFile(join(sessionDir, `${id}.jsonl`))
-    const finished = async (id: string) => {
+    const finished = async (id: string, ordinal = 1) => {
       const terminal = await vi.waitFor(() => {
-        const reply = frames.findLast(frame => {
+        const reply = frames.filter(frame => {
           if (!('method' in frame) || frame.method !== 'session/status') return false
           const { sessionId, status } = frame.params as { sessionId: string; status: string }
           return sessionId === id && (status === 'completed' || status === 'error')
-        })
+        })[ordinal - 1]
         expect(reply).toBeDefined()
         return reply
       }, { timeout: 20_000 })
       expect(terminal).toMatchObject({ params: { status: 'completed' } })
     }
-    return { workspace, other, coordinator, service, produceReply, call, succeed, saved, finished, close }
+    const idle = () => vi.waitFor(() => expect(host?.hasActiveWork?.()).toBe(false), { timeout: 20_000 })
+    return { workspace, other, coordinator, service, produceReply, call, succeed, saved, finished, idle, close }
   } catch (error) { await close(); throw error }
 }
 
@@ -90,12 +92,15 @@ it('checks the original project root once before attaching public input and pres
     await f.succeed('desktop/session/project/bind', { sessionId: 'visible', projectId: 'p' })
 
     const visits: string[] = []
-    const readProfile = f.coordinator.profile.bind(f.coordinator), prepareInput = f.service.managedInputFor!.bind(f.service)
+    const method = f.service.managedInputFor
+    if (typeof method !== 'function') throw new Error('Missing managed input preparation')
+    const service = f.service as typeof f.service & { managedInputFor: typeof method }
+    const readProfile = f.coordinator.profile.bind(f.coordinator), prepareInput = method.bind(service)
     const profile = vi.spyOn(f.coordinator, 'profile').mockImplementation(async id => {
       if (id === 'visible') visits.push('profile')
       return readProfile(id)
     })
-    const attach = vi.spyOn(f.service, 'managedInputFor').mockImplementation((id, options) => {
+    const attach = vi.spyOn(service, 'managedInputFor').mockImplementation((id, options) => {
       if (id === 'visible') visits.push('attach')
       return prepareInput(id, options)
     })
@@ -124,17 +129,25 @@ it('checks the original project root once before attaching public input and pres
   } finally { await f.close() }
 }, 45_000)
 
-it('refuses public input during a project move and accepts it after the new scope is saved', async () => {
+it('blocks input during a project move and uses the destination instructions after the move', async () => {
   const f = await fixture()
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const originRule = 'ORIGIN_PROJECT_INSTRUCTION_SENTINEL', destinationRule = 'DESTINATION_PROJECT_INSTRUCTION_SENTINEL'
   let moving: Promise<unknown> | undefined
   try {
+    await Promise.all([writeFile(join(f.workspace, 'AGENTS.md'), originRule), writeFile(join(f.other, 'AGENTS.md'), destinationRule)])
     await f.succeed('initialize')
     await f.coordinator.create({ sessionId: 'moving' })
-    for (const [id, roots] of [['p', [f.workspace]], ['q', [f.workspace, f.other]]] as const) {
-      await f.succeed('desktop/project/configure', { project: { id, name: id, roots, primaryRoot: f.workspace } })
+    for (const [id, folder] of [['p', f.workspace], ['q', f.other]] as const) {
+      await f.succeed('desktop/project/configure', { project: { id, name: id, roots: [folder], primaryRoot: folder } })
     }
     await f.succeed('desktop/session/project/bind', { sessionId: 'moving', projectId: 'p' })
+    await f.succeed('desktop/session/input/submit', { ...submit('moving', 'before-move-input'), text: 'first fixture input' })
+    await f.finished('moving')
+    await f.idle()
+    expect(f.produceReply).toHaveBeenCalledOnce()
+    const initialRequest = f.produceReply.mock.calls[0]![0]
+    expect(JSON.stringify([initialRequest.systemPrompt, initialRequest.messages])).toContain(originRule)
     const before = await f.saved('moving')
     const adopt = f.coordinator.adoptOwnership.bind(f.coordinator)
     const holding = vi.spyOn(f.coordinator, 'adoptOwnership').mockImplementation(async id => {
@@ -147,13 +160,18 @@ it('refuses public input during a project move and accepts it after the new scop
       expect(reachedFence).toBe(true)
       expect(await f.call('desktop/session/input/submit', submit('moving'))).toMatchObject({ error: { code: INVALID_PARAMS } })
       expect(await f.saved('moving')).toEqual(before)
-      expect(f.produceReply).not.toHaveBeenCalled()
+      expect(f.produceReply).toHaveBeenCalledOnce()
     } finally { release.resolve(); holding.mockRestore() }
-    expect(await moving).toMatchObject({ results: [{ sessionId: 'moving', ok: true }] })
+    expect(await moving).toMatchObject({ results: [{ sessionId: 'moving', projectId: 'q', executionWorkspace: f.workspace, ok: true }] })
     expect(await f.succeed('desktop/session/project/state', { sessionId: 'moving' })).toMatchObject({ projectId: 'q' })
     expect(await f.succeed('desktop/session/input/submit', submit('moving'))).toMatchObject({ accepted: true })
-    await f.finished('moving')
-    expect(f.produceReply).toHaveBeenCalledOnce()
+    await f.finished('moving', 2)
+    expect(f.produceReply).toHaveBeenCalledTimes(2)
+    const request = f.produceReply.mock.calls[1]![0]
+    const context = JSON.stringify([request.systemPrompt, request.messages])
+    expect(context).toContain(destinationRule)
+    expect(context).not.toContain(originRule)
+    expect(fromJSONL((await f.saved('moving')).toString()).events.filter(event => event.type === 'assistant/message' && event.text === 'fixture answer')).toHaveLength(2)
   } finally { release.resolve(); await moving?.catch(() => {}); await f.close() }
 }, 45_000)
 

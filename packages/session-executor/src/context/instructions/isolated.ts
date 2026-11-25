@@ -4,7 +4,7 @@ import type { ExecutionConfirmation } from '@i-harness/llm-seam'
 import { openOwnedPreparedStream, readDrainedOwnedExecutionConfirmation, type OwnedPreparedStreamInvocation } from '@i-harness/llm-seam/internal/stream-lifetime'
 import type { InstructionEnvironment } from './contracts.ts'
 import { instructionView } from './views.ts'
-import { contained } from './targets.ts'
+import { resolveInstructionDiscoveryScope } from './targets.ts'
 
 const unavailable = () => Object.assign(new Error('Observed instructions unavailable'), { code: 'CONTEXT_INPUT_STALE' })
 function originalMethod<T extends (...args: any[]) => any>(owner: object, name: string): T {
@@ -29,11 +29,9 @@ export function createIsolatedInstructionHost(options: { environment: Instructio
   let retired = false
   const scope = () => {
     if (retired || !hostAvailable()) throw unavailable()
-    const authority = authorityNow()
-    if (authority.kind === 'revoked' || authority.kind === 'unavailable') throw unavailable()
-    const roots = authority.kind === 'bound' ? authority.roots : [authority.workspaceRoot]
-    if (!roots.some(root => contained(root, options.cwd))) throw unavailable()
-    return { roots, identity: JSON.stringify([authority.revision, roots]) }
+    const current = resolveInstructionDiscoveryScope(authorityNow(), options.cwd)
+    if (!current) throw unavailable()
+    return current
   }
   const create: IsolatedInstructionFactory = async input => {
     const closeGeneration = input.generation ? originalMethod<typeof input.generation.close>(input.generation, 'close') : undefined
@@ -81,8 +79,8 @@ export function createIsolatedInstructionHost(options: { environment: Instructio
       await policyReady()
       const policy = policyCurrent(), authority = scope()
       if (fenced || input.signal.aborted || !lifetimeAvailable() || policy.kind !== 'ready') throw unavailable()
-      view = instructionView(options.environment.host.create({ cwd: options.cwd, roots: authority.roots, ...policy.policy }))
-      const snapshot = await view.service.prepare([{ path: options.cwd, kind: 'directory' }])
+      view = instructionView(options.environment.host.create({ cwd: authority.cwd, roots: authority.roots, ...policy.policy }))
+      const snapshot = await view.service.prepare([{ path: authority.cwd, kind: 'directory' }])
       const identity = JSON.stringify([policy.generation, authority.identity, snapshot.fingerprint, snapshot.candidates, snapshot.applicable])
       let stale = false
       const checkCurrent = (readSource: boolean, finalizing = false) => {

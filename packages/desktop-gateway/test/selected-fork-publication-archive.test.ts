@@ -89,7 +89,10 @@ it('keeps a failed pending fork out of the archive and ordinary restore', async 
     expect({ listedAsArchived, restored, visibleAfterRestore }).toEqual({ listedAsArchived: false, restored: false, visibleAfterRestore: false })
     const before = await storedSession(fixture.sessionDir, id)
     const modelCalls = client.stats.modelCalls
-    const attach = vi.spyOn(sessionService, 'managedInputFor')
+    const method = sessionService.managedInputFor
+    if (typeof method !== 'function') throw new Error('Missing managed input preparation')
+    const service = sessionService as typeof sessionService & { managedInputFor: typeof method }
+    const attach = vi.spyOn(service, 'managedInputFor')
     try {
       await expect(client.call('desktop/session/input/submit', {
         sessionId: id, text: 'fixture input', delivery: 'queue', clientToken: 'pending-checked-input',
