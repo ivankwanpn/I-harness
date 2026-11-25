@@ -25,6 +25,7 @@ export interface OwnedShellMount {
  readonly service:import('@i-harness/exec').ExecService
  readonly workflowSteps:import('@i-harness/exec/direct-reservation').WorkflowStepFactory
  listJobViews(): ReturnType<NativeExecService['listJobViews']>
+ hasActiveJobs(): boolean
 }
 
 export function mountOwnedShell(original:ManagedRegistryConstruction,workspace:string,options:OwnedShellOptions,output:OwnedShellOutput,approvalInstalled:boolean,acquiredExecution?:ExecExecutionHost):OwnedShellMount{
@@ -49,5 +50,6 @@ export function mountOwnedShell(original:ManagedRegistryConstruction,workspace:s
  return Object.freeze({
   service:scoped.service,workflowSteps:createScopedWorkflowExec(pair,workspace,()=>undefined),
   listJobViews:pair.service.listJobViews.bind(pair.service),
+  hasActiveJobs:pair.service.hasActiveJobs.bind(pair.service),
  })
 }

@@ -66,6 +66,8 @@ export function createDeliveryDrain(options: {
   return {
     signal() { if (retired) return; signalRevision++; clear(); dirty = true; void run() },
     reconcile() { if (retired) return Promise.resolve(); signalRevision++; clear(); dirty = true; return run() },
+    // A dormant retry has no admitted reconciliation or scheduled input.
+    hasActiveWork() { return !retired && (dirty || running !== undefined || inFlight.size > 0) && options.current() },
     retire() { retired = true; dirty = false; clear() },
     join() { return running ?? Promise.resolve() },
   }

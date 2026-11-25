@@ -9,6 +9,7 @@ import {compileExecutionPolicy} from '@i-harness/sandbox-policy'
 import {captureRequest} from '../../sandbox-wsl/src/admission.ts'
 import {createContextOutputService} from '@i-harness/context-output'
 import {registerApprovalAnswerer} from '@i-harness/interaction'
+import { decodeFactBatch } from '@i-harness/core-session'
 import {subscribeManagedExecution,subscribeManagedExecutionReadiness} from '@i-harness/core-session/internal/execution'
 import {createJsonlBackend} from '../../session-persistence-jsonl/src/index.ts'
 import {composeJsonlTaskTransitionCoordinator} from '../../session-persistence-jsonl/src/task-document-factory.ts'
@@ -113,7 +114,23 @@ it.each(['session','service'] as const)('retires private delivery at clean %s cl
 
 it('wakes the original private service after a background Shell receipt',async()=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-shell-wake-'))
- const backend=createJsonlBackend(join(root,'sessions')),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract);await coordinator.create({sessionId:'main'})
+ const terminal = Promise.withResolvers<void>(), releaseTerminal = Promise.withResolvers<void>()
+ const receiving = Promise.withResolvers<void>(), releaseReceipt = Promise.withResolvers<void>()
+ const backend = createJsonlBackend(join(root, 'sessions'), { wrapOwnedBatch: append => async (...args) => {
+   if (args[0] === 'main') {
+     const events = decodeFactBatch(args[3].bytes).events
+     if (events.some(event => event.type === 'exec/end')) {
+       terminal.resolve()
+       await releaseTerminal.promise
+     }
+     if (events.some(event => event.type === 'agent/delivery-received' && event.key.kind === 'exec')) {
+       receiving.resolve()
+       await releaseReceipt.promise
+     }
+   }
+   return append(...args)
+ } })
+ const coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract);await coordinator.create({sessionId:'main'})
  const output=createContextOutputService({root:join(root,'results'),workspaceId:'fixture',config:{enabled:false}});let launches=0,releases=0
  const outputReady=Promise.withResolvers<void>()
  const done=Promise.withResolvers<void>()
@@ -139,15 +156,32 @@ it('wakes the original private service after a background Shell receipt',async()
   expect(service.inspectActivity?.('main')).toMatchObject({ active: true })
   expect(originalManagedRuntimeFor(service, 'other')).toBeUndefined()
   done.resolve()
+  await terminal.promise
+  expect(service.inspectActivity?.('main')).toMatchObject({ running: false, queued: 0, active: true })
+  expect(server.requests).toHaveLength(2)
+  releaseTerminal.resolve()
+  await receiving.promise
+  expect(service.inspectActivity?.('main')).toMatchObject({ running: false, queued: 0, active: true })
+  expect(server.requests).toHaveLength(2)
+  releaseReceipt.resolve()
   await Promise.race([woken.promise,new Promise((_,reject)=>setTimeout(()=>reject(Error('original receipt did not wake service')),35000))])
   expect(server.requests).toHaveLength(4)
   expect(JSON.stringify(server.requests[2]!.body)).toContain('exec_result')
   expect(JSON.stringify(server.requests[3]!.body)).toContain(Buffer.from('actual native output').toString('base64'))
+  await expect.poll(() => service.inspectActivity?.('main')).toMatchObject({ running: false, queued: 0, active: false })
+  const events = (await backend.read('main')).events
+  const delivery = events.filter(event => event.type === 'agent/delivery-received' && event.key.kind === 'exec')
+  expect(delivery).toHaveLength(1)
+  const receipt = delivery[0]
+  if (receipt?.type !== 'agent/delivery-received') throw new Error('Expected original Exec receipt')
+  expect(events.filter(event => event.type === 'agent/input/promoted' && event.inputId === receipt.inputId)).toHaveLength(1)
   await service.closeSession('main')
   expect(() => runtime.processes()).toThrow('Original managed runtime retired')
  } finally {
   outputReady.resolve()
   done.resolve()
+  releaseTerminal.resolve()
+  releaseReceipt.resolve()
   await service.close()
   await coordinator.close()
   await server.close()

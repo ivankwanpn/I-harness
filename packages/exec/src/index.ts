@@ -170,6 +170,8 @@ export interface NativeExecService extends ExecService {
   listJobs(): NativeBackgroundJobView[]
   getJobView(jobId: string): NativeBackgroundJobView
   listJobViews(): NativeBackgroundJobView[]
+  /** Passive status of visible native jobs and their in-flight delivery work. */
+  hasActiveJobs(): boolean
 }
 
 export function registerExec(ctx: PluginContext, deps?: ExecServiceOptions): NativeExecService {

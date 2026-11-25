@@ -382,6 +382,7 @@ export interface SessionAssembly {
   stopCodeCell?(cellId: string): Promise<void>
   /** The real assembly-local exec registry and exact owner-filtered workflow store. */
   backgroundJobs?(): SessionBackgroundJob[]
+  hasActiveBackgroundJobs?(): boolean
   /** Retry durable parent messages only after the host publishes its lane. */
   drainParentNotifications?(ordinaryOnly?: boolean): Promise<void>
   /** Original retained source settlement only: no recipient admission/wake. */
@@ -1756,6 +1757,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         await codeModeMount.terminateCell(cellId)
       } } : {}),
       backgroundJobs: () => projectSessionBackgroundJobs(assemblyExec.listJobViews(), workflowMount!.executor.listJobs(), opts.sessionId),
+      hasActiveBackgroundJobs: () => assemblyExec.hasActiveJobs()
+        || workflowMount!.executor.listJobs().some(job => job.owner === opts.sessionId && job.status === 'running'),
       // M49 Task 12: the projection owns NO registry object — rows only. The
       // workflow group comes from THIS workflow executor's real store rows
       // (mounted unconditionally above — the non-null claim is the mount

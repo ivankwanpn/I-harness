@@ -238,6 +238,12 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
       return view(job)
     },
     listJobViews() { return [...jobs.values()].filter(job => canAccess(job.owner)).map(view) },
+    hasActiveJobs() {
+      for (const job of jobs.values()) {
+        if (canAccess(job.owner) && (job.status === 'running' || captureDeliveries.get(job.capture)?.hasActiveWork())) return true
+      }
+      return false
+    },
     async observeJobOutput(jobId, { signal, jobInstanceId, sourceId } = {}) {
       const job = jobs.get(jobId)
       if (!job || disposed || !canAccess(job.owner)) throw new Error('unknown job: ' + jobId)

@@ -13,7 +13,18 @@ import { createDeliveryDrain, isRetryableDeliveryError } from '../src/service/de
 it('preserves an original readiness signal arriving before a blocked observation rejects',async()=>{
  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>(),scheduled=Promise.withResolvers<void>();let reads=0
  const drain=createDeliveryDrain({current:()=>true,async reconcile(){if(reads===0){entered.resolve();await release.promise}},pending(){if(reads++===0)throw Error('original observation busy');return ['original-input']},schedule(id,settled){expect(id).toBe('original-input');scheduled.resolve();settled();return true},report(){}})
- try{drain.signal();await entered.promise;drain.signal();release.resolve();await scheduled.promise;expect(reads).toBe(2)}finally{drain.retire();await drain.join().catch(()=>{})}
+ try {
+   expect(drain.hasActiveWork()).toBe(false)
+   drain.signal()
+   await entered.promise
+   expect(drain.hasActiveWork()).toBe(true)
+   drain.signal()
+   release.resolve()
+   await scheduled.promise
+   await drain.join()
+   expect(reads).toBe(2)
+   expect(drain.hasActiveWork()).toBe(false)
+ } finally { drain.retire(); await drain.join().catch(()=>{}) }
 })
 import { receivedInputsFor } from '../src/lifecycle/received-inputs.ts'
 import { createSessionService } from '../src/service.ts'
@@ -104,11 +115,13 @@ it('one positively classified original unknown uses capped backoff and retiremen
     await drain.reconcile()
     for (const delay of [100, 500, 2000, 5000, 5000]) {
       expect(vi.getTimerCount()).toBe(1)
+      expect(drain.hasActiveWork()).toBe(false)
       const prior = attempts
       await vi.advanceTimersByTimeAsync(delay - 1); expect(attempts).toBe(prior)
       await vi.advanceTimersByTimeAsync(1); expect(attempts).toBe(prior + 1)
     }
     drain.retire(); expect(vi.getTimerCount()).toBe(0)
+    expect(drain.hasActiveWork()).toBe(false)
   } finally { drain.retire(); vi.useRealTimers() }
 })
 
@@ -140,7 +153,9 @@ it('registration settlement alone does not retry but a real signal during that r
     schedule(_id, settled) { registrations++; completions.push(settled); return true }, report() {} })
   try {
     await drain.reconcile(); expect(registrations).toBe(1)
+    expect(drain.hasActiveWork()).toBe(true)
     completions[0]!(); await drain.join(); expect(registrations).toBe(1)
+    expect(drain.hasActiveWork()).toBe(false)
     drain.signal(); await drain.join(); expect(registrations).toBe(2)
     drain.signal(); await drain.join(); expect(registrations).toBe(2)
     completions[1]!(); await drain.join(); expect(registrations).toBe(3)
@@ -153,8 +168,10 @@ it('retirement prevents a signalled in-flight registration from scheduling throu
   const drain = createDeliveryDrain({ current: () => true, reconcile: async () => {}, pending: () => ['original-input'],
     schedule(_id, settled) { registrations++; completion = settled; return true }, report() {} })
   await drain.reconcile(); drain.signal(); await drain.join()
+  expect(drain.hasActiveWork()).toBe(true)
   drain.retire(); completion!(); await drain.join()
   expect(registrations).toBe(1)
+  expect(drain.hasActiveWork()).toBe(false)
 })
 
 it.each([undefined, null, false, 0, ''])('falsey reconciliation failure does not reset classified retry backoff (%j)', async failure => {

@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { createExecutionLease, type TransportExecutionBackend } from '@i-harness/sandbox'
 import { compileExecutionPolicy } from '@i-harness/sandbox-policy'
-import { createExecService } from '../src/index.ts'
+import { withExecCallerScope } from '../src/index.ts'
+import { createExecServiceWithReservation } from '../src/service.ts'
 
 vi.mock('node:crypto', async original => {
   const actual = await original<typeof import('node:crypto')>()
@@ -38,9 +39,9 @@ function fixture(incompleteRelease = false) {
       } }
     },
   }
-  const exec = createExecService({ execution: { defaultOwner: { sessionId: 'reservation-owner' }, selectBackend: () => backend, validateAuthority() {},
+  const { service: exec, port } = createExecServiceWithReservation({ execution: { defaultOwner: { sessionId: 'reservation-owner' }, selectBackend: () => backend, validateAuthority() {},
     resolvePolicy: owner => compileExecutionPolicy({ mode: 'danger-full-access', owner, authority: { kind: 'unbound', revision: 'reservation', workspaceRoot: resolve('.') } }) } })
-  return { exec, admit, executions, preparations: () => preparations, failNext() { failNext = true }, allowRelease() { incompleteRelease = false } }
+  return { exec, port, admit, executions, preparations: () => preparations, failNext() { failNext = true }, allowRelease() { incompleteRelease = false } }
 }
 
 const token = '12345678-1234-4123-8123-123456789abc' as ReturnType<typeof randomUUID>
@@ -83,6 +84,42 @@ it('allows overlapping different UUIDs with distinct native receipts and indepen
     expect(f.exec.getJobView(second.jobId).status).toBe('running')
     expect(f.executions[1]!.cancellations).toBe(0)
     await f.exec.killJob(second.jobId)
+  } finally { f.admit(); for (const execution of f.executions) execution.finish(); await f.exec.dispose() }
+})
+
+it('reports the original running job or its pending delivery without attempting cleanup', async () => {
+  const f = fixture()
+  let delivering = false
+  const hasActiveWork = vi.fn(() => delivering)
+  const close = vi.fn(async () => {})
+  const isClean = vi.fn(() => false)
+  const reservation = f.port.reserve()
+  f.port.attachDelivery(reservation, {
+    prepareAttempt() {}, async admit() {}, issued() {}, assertAdmissionCurrent() {}, bind() {}, failed() {},
+    async promoted() {}, close, hasActiveWork, isClean,
+  })
+  try {
+    expect(f.exec.hasActiveJobs()).toBe(false)
+    f.admit()
+    const job = await f.port.start(reservation, { argv: ['controlled'] }, 'background')
+    if (!('jobId' in job)) throw new Error('Expected original background job')
+    const { jobId } = job
+    expect(f.exec.hasActiveJobs()).toBe(true)
+    expect(withExecCallerScope({ sessionId: 'other' }, () => f.exec.hasActiveJobs())).toBe(false)
+    const completed = Promise.withResolvers<void>()
+    const unsubscribe = f.exec.subscribeJob!(jobId, view => { if (view.status === 'completed') completed.resolve() })
+    try {
+      delivering = true
+      f.executions[0]!.finish()
+      await completed.promise
+      expect(f.exec.getJobView(jobId).status).toBe('completed')
+      expect(f.exec.hasActiveJobs()).toBe(true)
+      delivering = false
+      expect(f.exec.hasActiveJobs()).toBe(false)
+      expect(hasActiveWork).toHaveBeenCalledTimes(2)
+      expect(close).not.toHaveBeenCalled()
+      expect(isClean).not.toHaveBeenCalled()
+    } finally { unsubscribe() }
   } finally { f.admit(); for (const execution of f.executions) execution.finish(); await f.exec.dispose() }
 })
 

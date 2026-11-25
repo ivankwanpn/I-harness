@@ -26,7 +26,7 @@ it('parent close joins the original active Exec producer before draining its ins
 },15000)
 
 it('original Exec terminal admits one receipt and wakes idle existing lane after complete native IO and retention',async()=>{
- const f=await createExecDeliveryFixture(backend=>{physical.backend=backend},{holdIo:true})
+ const f=await createExecDeliveryFixture(backend=>{physical.backend=backend},{holdIo:true,holdReceipt:true})
  try{
    await f.start();expect(f.requests).toHaveLength(2);expect(f.launches()).toBe(1)
    expect(readDeliveries(f.document.view).execPending()).toHaveLength(0)
@@ -34,6 +34,11 @@ it('original Exec terminal admits one receipt and wakes idle existing lane after
    expect(f.document.view.events.filter(e=>e.type==='exec/end')).toHaveLength(0);expect(f.requests).toHaveLength(2)
    f.releaseIo();await f.terminal
    expect(f.document.view.events.find(e=>e.type==='exec/end')).toMatchObject({execution:{dispatch:'dispatched',outcome:'succeeded'},dependency:{retention:{kind:'artifact',ref:{codec:'exec-frames-v1'}}}})
+   await f.receiptPrepared
+   expect(f.service.inspectActivity?.('parent')).toMatchObject({ running: false, queued: 0, active: true })
+   expect(f.document.view.events.some(e=>e.type==='agent/delivery-received')).toBe(false)
+   expect(f.requests).toHaveLength(2)
+   f.releaseReceipt()
    await vi.waitFor(()=>expect(f.document.view.events.filter(e=>e.type==='agent/delivery-received'&&e.key.kind==='exec')).toHaveLength(1),{timeout:2000})
    await f.consumed
    await vi.waitFor(()=>expect(f.requests).toHaveLength(3),{timeout:2000})
@@ -49,6 +54,7 @@ it('original Exec terminal admits one receipt and wakes idle existing lane after
    expect(await f.service.readResultPage!('parent',query)).toEqual(page)
    f.service.queue('parent');f.service.queueState('parent');f.service.liveSession('parent')
    expect(f.requests).toHaveLength(3)
+   await vi.waitFor(()=>expect(f.service.inspectActivity?.('parent')?.active).toBe(false),{timeout:2000})
  }finally{await f.close()}
 },15000)
 

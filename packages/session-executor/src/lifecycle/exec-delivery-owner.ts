@@ -33,6 +33,7 @@ function createOriginalOwner(issuer:OriginalExecSourceIssuer,input:PrivateExecPr
   let handoffOutcome:ProducerFactOutcome|undefined,handoffEverIssued=false,handoffRetired=false
   let handoffFlight:Promise<boolean>|undefined
   let flight:Promise<void>|undefined
+  let closing = 0
   let admissionCurrent=()=>true
   let retireReservation=()=>{}
   const available=Promise.withResolvers<void>()
@@ -111,8 +112,10 @@ function createOriginalOwner(issuer:OriginalExecSourceIssuer,input:PrivateExecPr
   // Retirement follows that owner's close acknowledgment, whichever caller joins.
   source.close=async function(){
     if(this!==source)throw new Error('Foreign Exec settlement receiver')
+    closing++
     try{await closeOriginal();completed=true;clean=true;retireReservation()}
     catch(cause){retainDebt();throw cause}
+    finally{closing--}
   }
   const owner:OriginalExecDeliveryOwner={
     prepareAttempt(original,settleOriginal,retire){if(attempt)throw new Error('Exec attempt already attached');attempt=original;settleFrames=settleOriginal;retireReservation=retire},
@@ -144,6 +147,7 @@ function createOriginalOwner(issuer:OriginalExecSourceIssuer,input:PrivateExecPr
       if(!await settleHandoff())throw Object.assign(new FactRecoveryRequiredError(),{cause:handoffOutcome})
     },
     async close(){await source.close()},
+    hasActiveWork(){return flight!==undefined||handoffFlight!==undefined||closing>0},
     isClean(){return clean&&completed},
   }
   return Object.freeze(owner)

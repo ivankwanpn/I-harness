@@ -548,6 +548,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return attempt
   }
   const deliveryDrains = new Map<string, ReturnType<typeof createDeliveryDrain>>()
+  async function joinRetiredDeliveryDrain(id: string): Promise<void> {
+    const drain = deliveryDrains.get(id)
+    if (!drain) return
+    try { await drain.join() }
+    finally { if (deliveryDrains.get(id) === drain) deliveryDrains.delete(id) }
+  }
   const deliveryStops = new Map<string, { delivery: ReturnType<typeof receivedInputsFor>['delivery']; fenceId: string; settleSources?: () => Promise<void> } & StopSettlement>()
   function requestDeliveryStop(id: string) {
     const recipient=managedRecipients.get(id)
@@ -1181,7 +1187,6 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const retireNewWork = () => {
       if (retired) return
       retired = true
-      privateDrain?.retire()
       unsubscribe?.()
       unsubscribeReadiness?.()
       unsubscribe = undefined
@@ -1191,7 +1196,6 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     row.cleanup = async () => {
       retireNewWork()
       retireManaged(sessionId)
-      await privateDrain?.join()
       await runtime?.close()
       await drainManagedIngress(sessionId)
       for (const cleanup of [...mounted].reverse()) {
@@ -1330,6 +1334,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         if (privateDrain && ['agent/delivery-received','agent/delivery-generation','agent/delivery-source','exec/end','code/end','workflow/end','subagent/end','agent/delivery-handoff','agent/input/promoted','agent/input/cancelled','turn/end'].includes(event.type)) privateDrain.signal()
       })
       assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime);if(shellMount){managedShellOwners.set(sessionId,shellMount);mounted.add(async()=>{managedShellOwners.delete(sessionId)})}published=true;managedPrepubSettlers.delete(sessionId);if(rewindMount)managedRewinds.set(sessionId,{handle:rewindMount,runtime});if(title)managedTitles.set(sessionId,title);if(recipient)managedRecipients.set(sessionId,recipient);if(codeMount)managedCodeMounts.set(sessionId,codeMount);if(taskLifecycle)managedTaskOwners.set(sessionId,taskLifecycle);if(workflowMount){const mounted=workflowMount,executor=mounted.executor,list=executor.listJobs.bind(executor),kill=executor.killJob.bind(executor),journal=mounted.reconcileCapturedHandoffs.bind(mounted);managedWorkflowOwners.set(sessionId,{list,kill,journal})}
+      if (privateDrain) deliveryDrains.set(sessionId, privateDrain)
       publishManaged(sessionId,runtime)
       privateDrain?.signal()
       return runtime
@@ -1739,11 +1744,11 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return pending
   }
   async function closeAll(): Promise<void> {
-    if (closed && ownedAssemblies().size === 0 && creating.size === 0 && privateEntries.size===0 && writableSessions.size === 0 && loadingWriters.size === 0 && notificationStops.size === 0 && firstPartyFlights.size===0 && firstPartyRetained.size===0 && !resultReader.size && !defaultInstructions) return
+    if (closed && ownedAssemblies().size === 0 && creating.size === 0 && privateEntries.size===0 && writableSessions.size === 0 && loadingWriters.size === 0 && notificationStops.size === 0 && firstPartyFlights.size===0 && firstPartyRetained.size===0 && deliveryDrains.size === 0 && !resultReader.size && !defaultInstructions) return
     closed = true
     const stopAttempts = startNotificationStops()
     defaultInstructions?.dispose()
-    for (const id of new Set([...assemblies.keys(), ...mountingAssemblies.keys(), ...privateEntries,...writableSessions.keys(), ...loadingWriters.keys(), ...creating.keys(), ...queues.keys()])) {
+    for (const id of new Set([...assemblies.keys(), ...mountingAssemblies.keys(), ...privateEntries,...writableSessions.keys(), ...loadingWriters.keys(), ...creating.keys(), ...queues.keys(), ...deliveryDrains.keys()])) {
       revokeSession(id); stopNotifications(id, stopAttempts)
     }
     const [readerJoined] = await Promise.allSettled([
@@ -1755,7 +1760,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       ...modelBindings.values(),
       ...closing.values(),
       ...notificationAdmissions.values(),
-      ...[...deliveryDrains.values()].map(drain => drain.join()),
+      ...[...deliveryDrains.keys()].map(joinRetiredDeliveryDrain),
     ])
     executionListeners.clear()
     for (const off of executionSubscriptions.values()) off()
@@ -1823,7 +1828,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       if (writer !== undefined) await writer.catch(() => undefined)
       const binding = modelBindings.get(sessionId)
       if (binding !== undefined) await Promise.allSettled([binding])
-      await Promise.allSettled([...(notificationAdmissions.has(sessionId) ? [notificationAdmissions.get(sessionId)!] : []), deliveryDrains.get(sessionId)?.join()])
+      await Promise.allSettled([...(notificationAdmissions.has(sessionId) ? [notificationAdmissions.get(sessionId)!] : []), joinRetiredDeliveryDrain(sessionId)])
       let stopFailure: unknown
       try { await joinNotificationStops(stopAttempts, sessionId) } catch (error) { stopFailure = error }
       const handle = assemblies.get(sessionId) ?? mountingAssemblies.get(sessionId)
@@ -1992,10 +1997,11 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       let resources = false
       try {
         resources = (managedCodeMounts.get(sessionId)?.liveCells?.().length ?? 0) > 0
-        resources ||= managedShellOwners.get(sessionId)?.listJobViews().some(job => job.status === 'running') ?? false
+        resources ||= managedShellOwners.get(sessionId)?.hasActiveJobs() ?? false
         if (assembly) {
           const live = assembly.liveResources?.()
-          resources ||= !!(live?.codeCells.length || live?.terminals.some(terminal => terminal.status === 'running') || live?.backgroundJobs?.length || assembly.backgroundJobs?.().some(job => job.status === 'running'))
+          resources ||= !!(live?.codeCells.length || live?.terminals.some(terminal => terminal.status === 'running')
+            || live?.backgroundJobs?.length || (assembly.hasActiveBackgroundJobs?.() ?? assembly.backgroundJobs?.().some(job => job.status === 'running')))
           resources ||= foldScheduleEvents(assembly.session.events, assembly.session.header?.seedLength ?? 0).active.length > 0
         }
         if (runtime && opts.managedRuntime?.originalSchedule) {
@@ -2010,7 +2016,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       const pending = (creating.has(sessionId) && !assembly && !runtime)
         || loadingWriters.has(sessionId) || firstPartyFlights.has(sessionId) || chains.has(sessionId) || closing.has(sessionId)
         || failedClose.has(sessionId) || notificationAdmissions.has(sessionId)
-        || managedPrepubSettlers.has(sessionId) || stopPending
+        || managedPrepubSettlers.has(sessionId) || deliveryDrains.get(sessionId)?.hasActiveWork() || stopPending
       return { live: !!assembly || !!runtime, ...state, tasks, active: state.running || state.queued > 0 || tasks > 0 || resources || pending }
     },
     queueState,

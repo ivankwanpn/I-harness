@@ -10,5 +10,6 @@ export interface OriginalExecDeliveryOwner {
   failed(attempt: CaptureAttempt | undefined): void
   promoted(): Promise<void>
   close(): Promise<void>
+  hasActiveWork(): boolean
   isClean(): boolean
 }
