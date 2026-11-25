@@ -769,6 +769,11 @@ class Worker:
                     self.selector.register(self.child.stdin, selectors.EVENT_WRITE, 'input')
                 self.input.extend(data)
         elif kind == 'endInput':
+            require(set(frame) == {'v', 'nonce', 'type'}, 'invalid endInput frame')
+            # The host may write EOF before receiving our queued root and
+            # settlement frames. The original child input was closed at root.
+            if self.root_sent and self.phase in ('active', 'settled'):
+                return
             require(self.phase == 'active' and not self.ended, 'invalid protocol phase')
             self.ended = True
             if not self.input:

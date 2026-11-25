@@ -134,6 +134,19 @@ it("launches the fixed captured worker and preserves binary output and experimen
   await backend.dispose()
 })
 
+it("treats endInput after a fast original root exit as an already closed input", async () => {
+  const backend = createWslExecutionBackend({ distribution: "Ubuntu" })
+  try {
+    const prepared = await backend.prepare(spec(), policy())
+    const handle = await prepared.commit(() => {})
+    expect(await handle.rootExited).toMatchObject({ exitCode: 0 })
+    await expect(handle.io.endInput()).resolves.toBeUndefined()
+    expect(state.commands.some(command => command.type === "endInput")).toBe(false)
+    for await (const _frame of handle.io.output) { /* Drain the original output. */ }
+    expect(await handle.settled).toMatchObject({ kind: "settled", treeEmpty: true })
+  } finally { await backend.dispose() }
+})
+
 it("authority failure shuts down prepared guest and awaits WSL closure without commit", async () => {
   state.mode = "manual-close"
   const backend = createWslExecutionBackend({ distribution: "Ubuntu" })

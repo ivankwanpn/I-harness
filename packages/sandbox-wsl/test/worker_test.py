@@ -501,6 +501,23 @@ finally: captured.close()
         self.session.wait('settled')
         self.assertEqual(self.session.output(), payload)
 
+    def test_late_eof_after_fast_exit_preserves_original_settlement(self):
+        self.hello()
+        self.prepare('pwd', mode='read-only')
+        self.session.wait('prepared')
+        self.session.send('commit')
+        self.session.wait('started')
+        self.assertEqual(self.session.wait('root')['exitCode'], 0)
+        self.session.wait('settled')
+
+        # A local write can be in flight while these worker acknowledgements
+        # are still buffered in the transport.
+        self.session.send('endInput')
+        self.session.close()
+        self.assertEqual(self.session.output('stdout').decode().strip(), str(self.work))
+        self.assertEqual(self.session.process.returncode, 0)
+        self.assertFalse(any(frame['type'] == 'error' for frame in self.session.frames))
+
     def test_interop_environment_is_refused_before_launch(self):
         self.hello()
         self.prepare('touch marker', env={'WSL_INTEROP': '/run/WSL/123_interop'})

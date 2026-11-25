@@ -269,7 +269,11 @@ export class WorkerClient {
   private endInput(): Promise<void> {
     if (this.inputEnded) return this.inputChain
     this.inputEnded = true
-    const next = this.inputChain.then(() => this.send("endInput"))
+    const next = this.inputChain.then(() => {
+      if (this.failure) throw this.failure
+      if (this.protocol.phase === "root" || this.protocol.phase === "settled") return
+      return this.send("endInput")
+    })
     this.inputChain = next.catch(() => {})
     return next
   }
