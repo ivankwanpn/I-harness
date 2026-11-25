@@ -103,7 +103,7 @@ export function renderConversationItems(archive: ConversationEventArchive, histo
       receivedResults: new Set([...item.receivedResults].map(id => { const ref = item.sources.find(candidate => candidate.id === id); return ref ? source(ref).id : id })),
       messages: seedItem ? readPayload(seedItem, 'messages', sources.ref(item.establishmentIndex, item.establishment.part)).map(copyConversationMessage) : item.recipes.map(recipe => render(recipe, item)),
     })
-    return Object.freeze({ ...rendered, extent: item.extent,
+    return Object.freeze({ ...rendered, extent: item.extent === undefined ? undefined : { ...item.extent },
       ...(seedItem?.kind === 'exchange' ? { exchange: Object.freeze({ ...rendered.exchange!, acceptance: 'inherited-observation' as const }) } : {}),
       ...(own?.type === 'compaction/replacement' ? { replacement: Object.freeze({ replacementId: own.replacementId, coverage: own.coverage, insertBefore: own.insertBefore }) } : {}) })
   })

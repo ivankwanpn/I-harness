@@ -28,7 +28,7 @@ import { validateDeliveryFrame } from '../conversation/delivery.ts';
 import { createConversationSourceCoordinates, archiveConversationSources, retainConversationSourceCoordinates } from '../conversation/sources.ts';
 import { createConversationStateIndex, readIndexedConversationState, type ConversationStateRead } from '../conversation/state.ts';
 import { createContextStateIndex } from '../projection/context.ts';
-import { createPruneDependencyIndex, preparePruneSubstitutes, selectPruneDependencies, retainPruneDependencyView } from '../projection/pruning.ts';
+import { createPruneDependencyIndex, preparePruneSubstitutes, selectPruneDependencies, retainPruneDependencyView, type PruneRecord } from '../projection/pruning.ts';
 import { historyVisibility } from '../conversation/history/visibility.ts';
 import {sameManagedArtifactRef} from '../results/seed-refs.ts';
 import { renderConversationItems } from '../conversation/render-items.ts';
@@ -65,10 +65,7 @@ type Preparation = {
     current(): void;
     archive: ConversationEventArchive;
     dataArchive(): ConversationEventArchive | undefined;
-    pruned: Map<number, PreparedPrunedResult>;
-    substitutes: Awaited<ReturnType<typeof preparePruneSubstitutes>>;
-    coordinates: ReturnType<Candidate['sources']['read']>;
-    state: object;
+    payload(): PreparedPayload;
 };
 const preparations = new WeakMap<object, Preparation>();
 /** Full validation is original scan/finish; the candidate keeps no source array. */
@@ -347,11 +344,13 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
             if (!resident || resident.revision !== revision) {
                 let settleStarted = false;
                 try {
-                    const payload = await hydratePreparation(owned, current, undefined, readEvent, readEvents);
+                    const history = owned.index.history(), facts = owned.index.resultFacts();
+                    const coordinates = owned.sources.read();
+                    const bodies = await hydratePreparation({ history, facts, prune: owned.prune.read() }, current, readEvent ?? owned.source.readEvent.bind(owned.source), readEvents);
                     settleStarted = true;
                     await owned.source.settle();
                     current();
-                    resident = { revision, payload };
+                    resident = { revision, payload: { ...bodies, history, coordinates, state: owned.state.read(), visibility: historyVisibility(facts) } };
                 }
                 catch (primary) {
                     if (!settleStarted)
@@ -445,7 +444,14 @@ export function readRestoredConversation(lease: PreparedConversationArchive, opt
     const owned = prepared.candidate;
     if (options.ownerSessionId !== owned.sessionId)
         failure('CONVERSATION_RESTORATION_OWNER_MISMATCH');
-    const result = renderRestoredPair(prepared, prepared.archive, options, owned.source.header);
+    const capturePayload = options.capturePayload;
+    const result = renderRestoredPair(prepared, prepared.archive, {
+        ownerSessionId: options.ownerSessionId,
+        ...(capturePayload ? { capturePayload(value, source) {
+            prepared.current();
+            return capturePayload(value, source);
+        } } : {}),
+    }, owned.source.header);
     prepared.current();
     return result;
 }
@@ -453,9 +459,10 @@ function renderRestoredPair(prepared: Preparation, archive: ConversationEventArc
     ownerSessionId: string; capturePayload?: ConversationPayloadCapture;
 }, header: SessionViewHeader) {
     const owned = prepared.candidate;
-    const projection = renderConversationItems(archive, owned.index.history(), { ...options, header, sourceCoordinates: prepared.coordinates, pruneSubstitutes: prepared.substitutes, prunedResults: prepared.pruned });
-    const sources = archiveConversationSources(archive, options.ownerSessionId, [], { header, coordinates: prepared.coordinates, prunedResults: prepared.pruned });
-    const state = readIndexedConversationState(prepared.state, projection, { sources, visibility: historyVisibility(owned.index.resultFacts()), delivery: readConversationDeliveries(owned.index)!, seedEnd: header?.seedLength ?? 0 });
+    const payload = prepared.payload();
+    const projection = renderConversationItems(archive, payload.history, { ...options, header, sourceCoordinates: payload.coordinates, pruneSubstitutes: payload.substitutes, prunedResults: payload.pruned });
+    const sources = archiveConversationSources(archive, options.ownerSessionId, [], { header, coordinates: payload.coordinates, prunedResults: payload.pruned });
+    const state = readIndexedConversationState(payload.state, projection, { sources, visibility: payload.visibility, delivery: readConversationDeliveries(owned.index)!, seedEnd: header?.seedLength ?? 0 });
     return { projection, state };
 }
 type SessionViewHeader = OriginalConversationRestorationSource['header'];
@@ -498,16 +505,29 @@ export function readRestoredRuntimeContext(lease: PreparedConversationArchive, o
     prepared.current();
     return { semanticDigest };
 }
-type PreparedPayload = {
-    full: Map<number, SessionEventView>;
-    pruned: Map<number, PreparedPrunedResult>;
-    substitutes: Awaited<ReturnType<typeof preparePruneSubstitutes>>;
+type PreparedBodies = {
+    full: ReadonlyMap<number, SessionEventView>;
+    pruned: ReadonlyMap<number, PreparedPrunedResult>;
+    substitutes: ReadonlyMap<string, PruneRecord>;
+};
+type HydrationPlan = {
+    history: ReturnType<Candidate['index']['history']>;
+    facts: ReturnType<Candidate['index']['resultFacts']>;
+    prune: ReturnType<Candidate['prune']['read']>;
+};
+type PreparedPayload = PreparedBodies & {
+    history: HydrationPlan['history'];
     coordinates: ReturnType<Candidate['sources']['read']>;
     state: object;
+    visibility: ReturnType<typeof historyVisibility>;
 };
-async function hydratePreparation(owned: Candidate, current: () => void, prospective?:{history:ReturnType<Candidate['index']['history']>;coordinates:ReturnType<Candidate['sources']['read']>;prune:ReturnType<Candidate['prune']['read']>;read:(index:number)=>Promise<SessionEventView>}, readEvent?: (ordinal:number)=>Promise<SessionEventView>, readEvents?: (ordinals: readonly number[]) => Promise<readonly SessionEventView[]>): Promise<PreparedPayload> {
+async function hydratePreparation(
+    { history, facts, prune: pruneView }: HydrationPlan,
+    current: () => void,
+    readEvent: (ordinal: number) => Promise<SessionEventView>,
+    readEvents?: (ordinals: readonly number[]) => Promise<readonly SessionEventView[]>,
+): Promise<PreparedBodies> {
     current();
-    const history = prospective?.history??owned.index.history(), facts = owned.index.resultFacts(), coordinates = prospective?.coordinates??owned.sources.read(), pruneView = prospective?.prune??owned.prune.read();
     const wanted = new Set<number>(), callIds = new Set<string>();
     if (history.current)
         wanted.add(history.current.index);
@@ -561,7 +581,7 @@ async function hydratePreparation(owned: Candidate, current: () => void, prospec
         const captured = prefetched.get(index);
         if (captured) return captured;
         current();
-        const event = await (prospective?prospective.read(index):readEvent?readEvent(index):owned.source.readEvent(index));
+        const event = await readEvent(index);
         current();
         return event;
     };
@@ -585,18 +605,17 @@ async function hydratePreparation(owned: Candidate, current: () => void, prospec
         }
     }
     current();
-    return { full, pruned, substitutes, coordinates, state: owned.state.read() };
+    return { full, pruned, substitutes };
 }
 function issuePreparation(owned: Candidate, payload: PreparedPayload, current: () => void, leases: Set<PreparedConversationArchive>): PreparedConversationArchive {
-    const full = new Map(payload.full), pruned = new Map(payload.pruned), substitutes = new Map(payload.substitutes);
-    let active = true;
+    let retained: PreparedPayload | undefined = payload;
+    const originalPayload = () => retained ?? failure('CONVERSATION_PREPARATION_EXPIRED');
     const assert = () => {
-        if (!active)
-            failure('CONVERSATION_PREPARATION_EXPIRED');
+        originalPayload();
         current();
     };
     const readDataEvent = (index: number) => {
-        const event = full.get(index);
+        const event = originalPayload().full.get(index);
         if (!event) failure('CONVERSATION_PAYLOAD_NOT_PREPARED');
         return event;
     };
@@ -611,7 +630,7 @@ function issuePreparation(owned: Candidate, payload: PreparedPayload, current: (
             if (this !== lease)
                 failure('CONVERSATION_PREPARATION_INVALID');
             assert();
-            const selected = pruned.get(index);
+            const selected = originalPayload().pruned.get(index);
             if (selected)
                 return selected;
             const event = eventAt(index);
@@ -623,21 +642,18 @@ function issuePreparation(owned: Candidate, payload: PreparedPayload, current: (
         }, async settle() {
             if (this !== lease)
                 failure('CONVERSATION_PREPARATION_INVALID');
-            active = false;
-            full.clear();
-            pruned.clear();
-            substitutes.clear();
+            retained = undefined;
             leases.delete(lease);
         }
     });
-    preparations.set(lease, { candidate: owned, current: assert, archive, pruned, substitutes,
+    preparations.set(lease, { candidate: owned, current: assert, archive, payload: originalPayload,
         dataArchive() {
+            const { full, pruned, substitutes } = originalPayload();
             for (const map of [full, pruned, substitutes]) {
                 for (const value of map.values()) if (!isStrictFactData(value)) return undefined;
             }
             return { length: archive.length, get: readDataEvent };
-        },
-        coordinates: payload.coordinates, state: payload.state });
+        } });
     leases.add(lease);
     return lease;
 }
@@ -674,9 +690,10 @@ export async function previewRestoredConversationCandidate(lease:PreparedConvers
  const count=owned.index.eventCount,suffix=captureRewrites(rewrites,count);current()
  const read=async(index:number)=>{current();const value=index>=count?suffix[index-count]!:await owned.source.readEvent(index);current();return value}
  stage=await prepareConversationAppend(owned.index,suffix,read,current);current()
- const payload=await hydratePreparation(owned,current,{history:stage.history(),coordinates:extendConversationSourceCoordinates(prepared.coordinates,suffix),prune:extendPruneDependencyView(owned.prune.read(),suffix),read});current()
+ const history=stage.history(),coordinates=extendConversationSourceCoordinates(prepared.payload().coordinates,suffix);
+ const payload=await hydratePreparation({history,facts:owned.index.resultFacts(),prune:extendPruneDependencyView(owned.prune.read(),suffix)},current,read);current()
  const archive={length:count+suffix.length,get(index:number){current();const event=index>=count?suffix[index-count]:payload.full.get(index);if(!event)failure('CONVERSATION_PAYLOAD_NOT_PREPARED');return event}}
- const projection=renderConversationItems(archive,stage.history(),{ownerSessionId,capturePayload,header:owned.source.header,candidate:{id,baseCount:count},sourceCoordinates:payload.coordinates,pruneSubstitutes:payload.substitutes,prunedResults:payload.pruned});current()
+ const projection=renderConversationItems(archive,history,{ownerSessionId,capturePayload,header:owned.source.header,candidate:{id,baseCount:count},sourceCoordinates:coordinates,pruneSubstitutes:payload.substitutes,prunedResults:payload.pruned});current()
  result=Object.freeze({kind:'candidate',candidateId:id,sourceEventCount:count,projectedEventCount:archive.length,projection})
  }catch(error){failed=true;primary=error}
  const cleanup:unknown[]=[];try{stage?.discard()}catch(error){cleanup.push(error)}try{await owned.source.settle()}catch(error){cleanup.push(error)}

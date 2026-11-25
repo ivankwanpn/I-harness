@@ -1,7 +1,16 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { append, createSession, createNondurableFactOwner, exportConversationSeed, projectConversation } from '../src/index.ts'
 import { installRestoredManagedConversation, readRestoredConversation, restoreManagedConversation } from '../src/managed/restored-view.ts'
 import type { SessionEventView } from '../src/managed/types.ts'
+
+const plans = vi.hoisted(() => ({ count: 0 }))
+vi.mock('../src/conversation/history/replacements.ts', async load => {
+  const original = await load<typeof import('../src/conversation/history/replacements.ts')>()
+  return { ...original, projectHistory(...args: Parameters<typeof original.projectHistory>) {
+    plans.count++
+    return original.projectHistory(...args)
+  } }
+})
 
 async function prepared(images = false, textFirst = false) {
   const session = createSession(), action = createNondurableFactOwner(session).beginAction()
@@ -63,6 +72,36 @@ it('hydrates selected message, preparation and admission bodies with one held ar
       expect(readRestoredConversation(lease, { ownerSessionId: 'document' }).projection)
         .toEqual(projectConversation(session, { ownerSessionId: 'document' }));
     } finally { await lease.settle(); }
+  } finally { await installed.close(); }
+});
+
+it('reuses the exact hydrated preparation without sharing settled leases or returned turn extents', async () => {
+  const { installed, raw, session } = await restoredPreparation();
+  const options = { ownerSessionId: 'document' };
+  const neverRead = async () => { throw Error('Unexpected archive read at the same revision'); };
+  try {
+    const first = await installed.prepare(undefined, async ordinals => ordinals.map(ordinal => session.events[ordinal]!));
+    const second = await installed.prepare(undefined, neverRead);
+    const expected = projectConversation(session, options);
+    const hydratedPlans = plans.count;
+    const firstRender = readRestoredConversation(first, options).projection;
+    const extent = firstRender.items[0]!.extent;
+    expect(extent).toEqual(expected.items[0]!.extent);
+    if (extent?.kind !== 'framed') throw Error('Original framed turn required');
+    Object.assign(extent, { first: 9999 });
+    expect(readRestoredConversation(second, options).projection).toEqual(expected);
+    expect(first.preparedEvent(raw.seq!)).toBe(second.preparedEvent(raw.seq!));
+    expect(() => readRestoredConversation(first, { ...options, capturePayload(value) {
+      void first.settle();
+      return value;
+    } })).toThrow('CONVERSATION_PREPARATION_EXPIRED');
+    expect(() => first.preparedEvent(raw.seq!)).toThrow('CONVERSATION_PREPARATION_EXPIRED');
+    expect(readRestoredConversation(second, options).projection).toEqual(expected);
+    await second.settle();
+    const reopened = await installed.prepare(undefined, neverRead);
+    expect(readRestoredConversation(reopened, options).projection).toEqual(expected);
+    expect(plans.count).toBe(hydratedPlans);
+    await reopened.settle();
   } finally { await installed.close(); }
 });
 
