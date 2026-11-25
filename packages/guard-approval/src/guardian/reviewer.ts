@@ -72,7 +72,7 @@ export interface GuardianReviewDeps {
 
 // A dedicated role (codex `approvals_reviewer`): no tools — the reviewer is
 // read-only by construction (it may not execute anything while reviewing).
-export function ensureReviewerRole(roles: RoleRegistry): SubagentRole {
+export function ensureReviewerRole(roles: Pick<RoleRegistry, "get" | "register">): SubagentRole {
   const existing = roles.get(GUARDIAN_REVIEWER_ROLE_NAME)
   if (existing) return existing
   const role: SubagentRole = {

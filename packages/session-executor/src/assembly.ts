@@ -1465,8 +1465,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     await pluginCapabilities.update(opts, false)
     // The settings surface advertises the established reviewer capability.
     // Isolated approval reviews do not spawn it themselves, so register its
-    // tool-free definition here as well; model rows never invent capabilities.
-    if (opts.guardian !== undefined || opts.roleSelectionFor?.("reviewer") !== undefined) ensureReviewerRole(subagent.roles)
+    // default after restored and plugin roles, without saving a derived definition.
+    if (opts.guardian !== undefined || opts.roleSelectionFor?.("reviewer") !== undefined) {
+      ensureReviewerRole({ get: name => subagent.roles.get(name), register: subagent.registerCompatibilityDefaultRole })
+    }
     if (opts.guardian) {
       await registerGuardian(ctx, {
         createIsolatedInstructionContext: isolatedInstructionHost.create,

@@ -139,6 +139,8 @@ export interface RegisterSubagentResult {
   retainInitialSetup(setup: import('./child/instruction-context.ts').InitialChildSetup): () => void
   /** Strict barrier over the existing complete job/table state document. */
   retainResults(): Promise<"durable" | "memory">
+  /** Install a reconstructible compatibility host default without a registry save. */
+  registerCompatibilityDefaultRole(role: import('./roles.ts').SubagentRole): void
   roles: RoleRegistry
   jobs: JobRegistry
   table: AgentTable
@@ -185,7 +187,8 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // M24a (G1a/G4): resolved to the real post-restore step below when BOTH a
   // restored state and persistence are present; otherwise a no-op.
   let ready: Promise<void> = Promise.resolve()
-  let roles: RoleRegistry = createRoleRegistry()
+  const originalRoles = createRoleRegistry()
+  let roles: RoleRegistry = originalRoles
   let jobs: JobRegistry = createJobRegistry()
   let table: AgentTable = createAgentTable()
   let factPersistence: ReturnType<typeof wireSubagentPersistence> | undefined
@@ -632,6 +635,11 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   }
   return {
     catalogReady,activateRestoredWork,
+    registerCompatibilityDefaultRole(role) {
+      if (managed || runtimeRetiring) throw new Error('Compatibility default role registration is unavailable')
+      if (ownedTask) assertCatalogWork()
+      if (!originalRoles.get(role.name)) originalRoles.register(role)
+    },
     async retainResults() {
       await ready
       tasks.assertReady()

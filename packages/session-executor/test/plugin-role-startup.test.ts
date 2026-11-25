@@ -4,6 +4,7 @@ import { inspect } from 'node:util'
 import { expect, it, vi } from 'vitest'
 import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
+import type { SubagentStateSnapshot } from '../../subagent/src/index.ts'
 import { createLoopbackProvider } from '../../core-agent/test/helpers/provider-loopback.ts'
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
 import { createSessionService, createDurableSessionLoader } from '../src/index.ts'
@@ -112,5 +113,51 @@ it.each([false, true])('actual plugin role startup joins original registry readi
     }
     await coordinator.close()
     await provider.close()
+  }
+}, 15000)
+
+it.each(['builtin', 'plugin', 'restored'] as const)('preserves the %s reviewer and its startup persistence contract', async kind => {
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'reviewer-startup-'))
+  const coordinator = createJsonlTaskTransitionCoordinator(join(root, 'sessions'), { lock: { enabled: true } }, taskDocumentStorageContract)
+  const provider = await createLoopbackProvider('/v1/chat/completions', [])
+  const pluginReviewer = { name: 'reviewer', description: 'Plugin reviewer', systemPrompt: 'Plugin review policy', tools: [] }
+  const storedReviewer = { ...pluginReviewer, description: 'Restored reviewer', systemPrompt: 'Saved review policy' }
+  const restoredState: SubagentStateSnapshot | undefined = kind === 'restored'
+    ? { formatVersion: 2, jobs: [], agentTable: [], roles: [storedReviewer] } : undefined
+  await coordinator.create({ sessionId: 'parent' })
+  if (restoredState) await coordinator.putDocument('parent', restoredState)
+  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator),
+    model: createOpenAICompatibleClient({ apiKey: 'loopback', model: 'fixture', baseUrl: provider.baseUrl }), modelPolicy: 'test-mock',
+    sandbox: 'danger-full-access', approveAll: true, codeMode: { mode: 'off' }, contextWindow: 100000,
+    agentShell: () => ({ id: 'controlled', label: 'controlled', command: 'controlled', dialect: 'posix' }),
+    guardian: { execution: 'isolated', enabled: () => false },
+    ...(kind === 'builtin' ? {} : { pluginAgents: [pluginReviewer] }),
+    ...(restoredState ? { restoredState } : {}),
+  })
+  try {
+    await service.managedInputFor?.('parent', { completePreparation: true })
+    const assembly = await service.assemblyFor('parent')
+    const mount = originalMount()!
+    const reviewer = mount.roles.get('reviewer')
+    if (kind === 'builtin') expect(reviewer).toMatchObject({ name: 'reviewer', tools: [], description: expect.stringContaining('Approval guardian') })
+    else expect(reviewer).toMatchObject(kind === 'plugin' ? pluginReviewer : storedReviewer)
+    await mount.flushPersistence()
+    const startup = await coordinator.getDocument('parent')
+    if (kind === 'builtin') expect(startup).toBeUndefined()
+    if (kind === 'plugin') expect(startup).toMatchObject({ roles: expect.arrayContaining([pluginReviewer]) })
+    if (restoredState) expect(startup).toEqual(restoredState)
+
+    const custom = { name: 'later-role', description: 'Explicit role', systemPrompt: 'Original policy', tools: [] }
+    mount.roles.register(custom)
+    await mount.flushPersistence()
+    expect(await coordinator.getDocument('parent')).toMatchObject({ roles: expect.arrayContaining([reviewer, custom]) })
+    mount.roles.remove(custom.name)
+    await mount.flushPersistence()
+    expect(await coordinator.getDocument('parent')).toMatchObject({ roles: assembly.subagentState().roles })
+    expect(assembly.subagentState().roles).not.toContainEqual(custom)
+    expect(provider.requests).toHaveLength(0)
+  } finally {
+    try { await service.close() }
+    finally { try { await coordinator.close() } finally { await provider.close() } }
   }
 }, 15000)
