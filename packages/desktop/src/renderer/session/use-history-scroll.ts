@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react"
 import type { HistoryRange } from "@i-harness/sdk"
 import { HISTORY_PAGE_SIZE, MAX_HISTORY_VIEW_EVENTS, historyViewport, pageHistoryViewport, type HistoryViewport, type WireEvent } from "./event-window.ts"
 import { loadEarlierHistory, type HistoryPageRequest } from "./history.ts"
 import type { HistoryRequest } from "./SessionHistoryView.tsx"
 
 type Selection = { workspaceId?: string; sessionId?: string }
+type ReadOwner = { selection: Selection; revision: number }
 
 export interface HistoryScroll {
   viewport?: HistoryViewport
@@ -19,32 +20,37 @@ export interface HistoryScroll {
  * keeps its own cursor, so scrolling never delays or rewinds live admission. */
 export function useHistoryScroll(
   selection: Selection,
+  transportRevision: RefObject<number>,
   tail: readonly WireEvent[],
   liveCursor: number,
   request: (input: HistoryRequest) => Promise<HistoryRange>,
 ): HistoryScroll {
   const [view, setView] = useState<{ owner: Selection; viewport: HistoryViewport }>()
-  const [error, setError] = useState<{ owner: Selection; message: string }>()
-  const [loading, setLoading] = useState<Selection>()
-  const owner = useRef(selection)
-  owner.current = selection
-  const flight = useRef<{ owner: Selection } | undefined>(undefined)
+  const [error, setError] = useState<{ owner: ReadOwner; message: string }>()
+  const [loading, setLoading] = useState<ReadOwner>()
+  const revision = transportRevision.current
+  const readOwner = useMemo(() => ({ selection, revision }), [selection, revision])
+  const owner = useRef(readOwner)
+  owner.current = readOwner
+  const flight = useRef<{ owner: ReadOwner } | undefined>(undefined)
+  const current = () => owner.current === readOwner && transportRevision.current === revision
   const viewport = view?.owner === selection ? view.viewport : undefined
   const oldest = viewport?.startSeq ?? tail[0]?.seq
   const hasBefore = viewport?.hasBefore ?? (oldest !== undefined && oldest > 0)
   const hasAfter = viewport?.hasAfter ?? false
 
   useEffect(() => {
-    // Drop a previous conversation's browsing pages and error on navigation.
+    // A settled view survives standby. Only its request or error belongs to
+    // the retired transport, while navigation also drops published pages.
     setView(current => current?.owner === selection ? current : undefined)
-    setError(current => current?.owner === selection ? current : undefined)
-    setLoading(current => current === selection ? current : undefined)
-    return () => { if (flight.current?.owner === selection) flight.current = undefined }
-  }, [selection])
+    setError(current => current?.owner === readOwner ? current : undefined)
+    setLoading(current => current === readOwner ? current : undefined)
+    return () => { if (flight.current?.owner === readOwner) flight.current = undefined }
+  }, [selection, readOwner])
 
   const latest = () => {
-    if (owner.current !== selection) return
-    if (flight.current?.owner === selection) flight.current = undefined
+    if (!current()) return
+    if (flight.current?.owner === readOwner) flight.current = undefined
     setView(undefined)
     setError(undefined)
     setLoading(undefined)
@@ -52,14 +58,14 @@ export function useHistoryScroll(
 
   async function page(direction: "before" | "after") {
     const { workspaceId, sessionId } = selection
-    if (!workspaceId || !sessionId || owner.current !== selection || flight.current?.owner === selection) return
+    if (!workspaceId || !sessionId || !current() || flight.current?.owner === readOwner) return
     const cursor = direction === "before" ? oldest : viewport?.endSeq
     if (cursor === undefined || !(direction === "before" ? hasBefore : hasAfter)) return
-    const ticket = { owner: selection }
+    const ticket = { owner: readOwner }
     flight.current = ticket
     setError(undefined)
-    setLoading(selection)
-    const valid = () => flight.current === ticket && owner.current === selection
+    setLoading(readOwner)
+    const valid = () => flight.current === ticket && current()
     const read = async (params: HistoryPageRequest) => {
       if (!valid()) throw new Error("History selection changed")
       return request({ kind: "session/history", workspaceId, sessionId, ...params })
@@ -88,7 +94,7 @@ export function useHistoryScroll(
       }
       setView({ owner: selection, viewport: next })
     } catch (reason) {
-      if (valid()) setError({ owner: selection, message: reason instanceof Error ? reason.message : String(reason) })
+      if (valid()) setError({ owner: readOwner, message: reason instanceof Error ? reason.message : String(reason) })
     } finally {
       if (valid()) { flight.current = undefined; setLoading(undefined) }
     }
@@ -96,10 +102,10 @@ export function useHistoryScroll(
 
   return {
     viewport,
-    loading: loading === selection,
-    error: error?.owner === selection ? error.message : undefined,
+    loading: loading === readOwner,
+    error: error?.owner === readOwner ? error.message : undefined,
     ...(hasBefore ? { earlier: () => { void page("before") } } : {}),
     ...(hasAfter ? { later: () => { void page("after") } } : {}),
-    ...(viewport || loading === selection ? { latest } : {}),
+    ...(viewport || loading === readOwner ? { latest } : {}),
   }
 }

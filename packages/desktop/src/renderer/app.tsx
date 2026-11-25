@@ -770,7 +770,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const gate = sendGate({ model, sandbox, connection }, t)
   const currentScope = JSON.stringify([selectedWorkspaceId, selectedSessionId])
   const { events, live } = eventWindow
-  const scrollHistory = useHistoryScroll(selection.current, windowKey === currentScope ? events : [], eventWindow.cursor, historyRequest)
+  const scrollHistory = useHistoryScroll(selection.current, disconnectRevision, windowKey === currentScope ? events : [], eventWindow.cursor, historyRequest)
   const visibleEchoes = useMemo(() => pendingEchoes(optimistic, currentScope, events), [optimistic, currentScope, events])
   useEffect(() => {
     if (visibleEchoes !== optimistic) setOptimistic(current => current === optimistic ? visibleEchoes : current)

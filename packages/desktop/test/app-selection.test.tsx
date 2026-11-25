@@ -762,15 +762,16 @@ it("opens the latest tail when an older gateway returns a full first page withou
   expect(captured.props!.conversation!.history!.viewport?.startSeq).toBe(900)
 })
 
-it.each(["switching conversations", "returning to latest"])("cancels the legacy earlier fallback after %s", async action => {
+it.each(["switching conversations", "returning to latest", "disconnecting", "entering standby"])("cancels the legacy earlier fallback after %s", async action => {
   const backward = defer()
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
   const request = fixture(input => {
     if (input.kind === "desktop/session/open" && input.sessionId === "a") return Promise.resolve({ history: {
       events: [{ type: "user/message", seq: 1000, text: "Latest A" }], startSeq: 1000, nextSeq: 1001, headSeq: 1001,
     } })
     if (input.kind === "session/history" && input.sessionId === "a" && input.beforeSeq === 1000) return backward.promise
     return undefined
-  })
+  }, listener => { emit = listener; return () => {} })
   await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
   act(() => captured.props!.onSelectSession("a"))
   await waitFor(() => expect(captured.props?.conversation?.history?.earlier).toBeTypeOf("function"))
@@ -778,12 +779,48 @@ it.each(["switching conversations", "returning to latest"])("cancels the legacy 
   expect(request).toHaveBeenCalledWith({ kind: "session/history", workspaceId: "w1", sessionId: "a", afterSeq: 0, beforeSeq: 1000, limit: 200 })
   act(() => {
     if (action === "switching conversations") captured.props!.onSelectSession("b")
-    else captured.props!.conversation!.history!.latest!()
+    else if (action === "returning to latest") captured.props!.conversation!.history!.latest!()
+    else if (action === "disconnecting") emit({ kind: "sdk/disconnected", workspaceId: "w1", message: "Retired fixture runtime" })
+    else emit({ kind: "sdk/idle", workspaceId: "w1", method: "sdk/idle", runtimeGeneration: 1 })
   })
   await act(async () => { backward.resolve({ events: [{ type: "user/message", seq: 0, text: "Legacy prefix" }], nextSeq: 1 }); await backward.promise })
   expect(request).not.toHaveBeenCalledWith({ kind: "session/history", workspaceId: "w1", sessionId: "a", afterSeq: 800, limit: 200 })
   expect(captured.props!.conversation!.history?.viewport).toBeUndefined()
   expect(captured.props!.conversation!.history?.error).toBeUndefined()
+  expect(captured.props!.conversation!.history?.loading).not.toBe(true)
+})
+
+it("keeps the settled reading window while rejecting the page from a retired transport", async () => {
+  const pending = defer()
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  let attempts = 0
+  const page = (startSeq: number, nextSeq: number, text: string) => ({
+    startSeq, nextSeq, headSeq: 1001, events: [{ type: "user/message", seq: startSeq, text }],
+  })
+  fixture(input => {
+    if (input.kind === "desktop/session/open" && input.sessionId === "a") return Promise.resolve({ history: page(1000, 1001, "Latest A") })
+    if (input.kind === "session/history" && input.beforeSeq === 1000) return Promise.resolve(page(800, 1000, "Settled page"))
+    if (input.kind === "session/history" && input.beforeSeq === 800) return ++attempts === 1 ? pending.promise : Promise.resolve(page(600, 800, "Fresh page"))
+    return undefined
+  }, listener => { emit = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props?.conversation?.history?.earlier).toBeTypeOf("function"))
+  const history = () => captured.props!.conversation!.history!
+  await act(async () => history().earlier!())
+  const settled = history().viewport
+  expect(settled?.startSeq).toBe(800)
+  act(() => history().earlier!())
+  expect(history().loading).toBe(true)
+
+  act(() => emit({ kind: "sdk/idle", workspaceId: "w1", method: "sdk/idle", runtimeGeneration: 1 }))
+  await act(async () => { pending.resolve(page(600, 800, "Retired page")); await pending.promise })
+  expect(history().viewport).toBe(settled)
+  expect(history().loading).toBe(false)
+
+  act(() => emit({ kind: "sdk/ready", workspaceId: "w1", method: "sdk/ready", runtimeGeneration: 2 }))
+  await act(async () => history().earlier!())
+  expect(history().viewport?.events[0]).toMatchObject({ seq: 600, text: "Fresh page" })
 })
 
 it.each(["reopen", "reconnect"])("pages into missing history after %s when the native tail outgrows the cache", async mode => {
