@@ -9,6 +9,7 @@ import { captureLegacyFact, freezeJsonData } from './capture.ts'
 import type { SessionView } from './types.ts'
 import { prepareSessionEvent } from '../events/intake.ts'
 import { createManagedIntakeIndex } from './intake-index.ts'
+import { canFoldPruneProjection } from '../projection/pruning.ts'
 const originalIndexes = new WeakMap<SessionView, ConversationValidationIndex>()
 const originalSourceSessions = new WeakMap<SessionView, string | undefined>()
 // Only managedSessionState enrolls: its initial copy and every appended row
@@ -226,7 +227,7 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
   let projectionProof = createIndex === createConversationIndex && formatVersion === CURRENT_FORMAT_VERSION
     && ordinaryProjectionHeader(indexHeader) && ordinaryProjectionHeader(captured.value.header)
     && (!captured.value.header || !Object.hasOwn(captured.value.header, 'sessionId'))
-    && originalProjectionEnvironment() && isImmutableProjectionData(captured.value)
+    && originalProjectionEnvironment() && isImmutableProjectionData(captured.value) && events.every(canFoldPruneProjection)
   const index = createIndex(events, position => events[position], formatVersion, indexHeader)
   const intake=createManagedIntakeIndex()
   intake.stage(events,false).commit()
@@ -260,7 +261,8 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
       for (const event of suffix) prepared.push(freezeJsonData(prepareSessionEvent(view, event, event.seq!, prepared)) as SessionEvent)
       const inputs=intake.stage(prepared)
       validateDeliveryFrame(prepared, view.formatVersion)
-      const suffixProof = projectionProof && originalProjectionEnvironment() && prepared.every(isImmutableProjectionData)
+      const suffixProof = projectionProof && originalProjectionEnvironment()
+        && prepared.every(event => isImmutableProjectionData(event) && canFoldPruneProjection(event))
       const staged = index.stage(prepared)
       const verifiedSuffix = suffixProof && originalProjectionEnvironment()
       // Keep the validated installation array private and immutable. Exposing

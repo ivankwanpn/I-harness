@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { append, createSession, createManagedSessionState, createNondurableFactOwner, projectConversation, projectConversationCandidate, projectCurrentContext, renderConversation, toJSONL, fromJSONL, exportConversationSeed, validRuntimeContextRecord } from '../src/index.ts'
+import { append, createSession, createManagedSessionState, createNondurableFactOwner, projectConversation, projectConversationCandidate, projectCurrentContext, renderConversation, toJSONL, fromJSONL, exportConversationSeed, validRuntimeContextRecord, encodeFactBatch, readFactJournal, legacyPrefixDigest, CURRENT_FORMAT_VERSION, type SessionEvent } from '../src/index.ts'
 import { readManagedRuntimeContext } from '../src/restoration-internal.ts'
 import { captureContextSnapshot } from '../../context-engine/src/index.ts'
 
@@ -104,6 +104,43 @@ it('declines unqualified runtime floor sources while the public projection remai
     expect(readManagedRuntimeContext(view, 'document')).toBeUndefined()
     expect(projectCurrentContext(view)?.sections).toEqual(record().sections)
   }
+})
+
+it.each([
+  { shape: 'non-array list', pruned: { callId: 'old shape' } },
+  { shape: 'null entry', pruned: [null] },
+])('defers malformed durable prune data to the public runtime projection ($shape)', ({ pruned }) => {
+  const owner = { sessionId: 'document' }, formatVersion = CURRENT_FORMAT_VERSION
+  const damaged = { type: 'compaction/prune', version: 1, seq: 1, pruned } as unknown as SessionEvent
+  const digest = legacyPrefixDigest(0, new Uint8Array())
+  const batch = encodeFactBatch('runtime-prune-fallback', digest, [{ ...record(), seq: 0 }, damaged])
+  const { events } = readFactJournal(batch.bytes, {
+    version: 1, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: digest, separatorBytes: 0,
+  }, formatVersion, owner)
+  const live = createManagedSessionState({ formatVersion, events: events.slice(0, 1) }, owner)
+  live.bindOwner({})
+  const pending = live.stage(events.slice(1))
+  expect(readManagedRuntimeContext(live.view, owner.sessionId)).toEqual({ current: { semanticDigest: projectCurrentContext(live.view)!.semanticDigest } })
+  pending.install()
+
+  const restored = createManagedSessionState({ formatVersion, events }, owner)
+  restored.bindOwner({})
+  for (const view of [live.view, restored.view]) {
+    expect(readManagedRuntimeContext(view, owner.sessionId)).toBeUndefined()
+    expect(() => projectCurrentContext(view)).toThrow(TypeError)
+  }
+})
+
+it('qualifies ordinary prune arrays and the historical null prune marker', () => {
+  const owner = { sessionId: 'document' }
+  const state = createManagedSessionState(createSession(), owner)
+  state.bindOwner({})
+  state.stage([
+    { ...record(), seq: 0 },
+    { type: 'compaction/prune', version: 1, seq: 1, pruned: [{ callId: 'old-result', head: 'first', tail: 'last', removedBytes: 3 }] },
+    { type: 'compaction/prune', version: 1, seq: 2, pruned: null } as unknown as SessionEvent,
+  ]).install()
+  expect(readManagedRuntimeContext(state.view, owner.sessionId)).toEqual({ current: { semanticDigest: projectCurrentContext(state.view)!.semanticDigest } })
 })
 
 it('retains seeded legacy session observations instead of treating them as the target floor', () => {

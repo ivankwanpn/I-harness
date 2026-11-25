@@ -1,5 +1,5 @@
 import { eventArchive, type ConversationEventArchive } from '../conversation/archive.ts'
-import type { SessionView as Session } from "../managed/types.ts"
+import type { SessionEventView, SessionView as Session } from "../managed/types.ts"
 
 // M33: one pruned tool/result — the stringified output is narrowed on the
 // projection surface to `head` + a placeholder + `tail` (`removedBytes` is the
@@ -37,7 +37,21 @@ export function archivePruneSubstitutes(archive: ConversationEventArchive): Map<
   }
   return map
 }
-import type { SessionEventView } from '../managed/types.ts'
+
+/** Reusing an immutable archive observation can bypass the prune fold. Check
+ * its input shape once per installed row so historical malformed inputs still
+ * go through the same public fold and its original errors. */
+export function canFoldPruneProjection(event: SessionEventView): boolean {
+  if (event.type !== 'compaction/prune') return true
+  const records: unknown = event.pruned
+  if (records === undefined || records === null) return true
+  if (!Array.isArray(records)) return false
+  for (let index = 0; index < records.length; index++) {
+    const record: unknown = Object.getOwnPropertyDescriptor(records, index)?.value
+    if (record === null || typeof record !== 'object') return false
+  }
+  return true
+}
 import type { ConversationPruneDependencyView } from '../conversation/restoration-types.ts'
 
 type PrunePosition = { eventIndex: number; recordIndex: number; seq: unknown }
