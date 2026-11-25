@@ -44,7 +44,7 @@ import { createResidentActivation, type ResidentActivationController } from './l
 // exit-code contract) — this service REJECTS submit with that error so the
 // web-host opener maps the rejection to an `{status:"error"}` frame.
 import { createHash, randomUUID } from "node:crypto"
-import { subscribe, validateImages, contextStateFromBudget, isBoundDeliveryInput, isDeliveryExecutable, isManagedFactOwner, type AdmittedInput, type AsyncInbox, type SessionContextState, type ImageInput, type SessionView as Session, type ManagedAction, type ProducerFactOutcome } from "@i-harness/core-session"
+import { subscribe, validateImages, contextStateFromBudget, isBoundDeliveryInput, isDeliveryExecutable, isManagedFactOwner, type AdmittedInput, type AsyncInbox, type SessionContextState, type SessionEvent, type ImageInput, type SessionView as Session, type ManagedAction, type ProducerFactOutcome } from "@i-harness/core-session"
 import { openExecutorDocument } from './lifecycle/managed-document.ts'
 import { receivedInputsFor } from './lifecycle/received-inputs.ts'
 import { createCodeFinalOutputRetention } from './lifecycle/code-final-output-retention.ts'
@@ -76,6 +76,8 @@ import type { ResultPageQuery, ResultPageResult } from '@i-harness/context-outpu
 // lifecycle. With nothing installed the handle delegates to console.warn
 // verbatim (one argument) — unset mode is the pre-migration bytes.
 const d = diagnosticsFor("session")
+const changesExecutionQueue = (type: SessionEvent["type"]) =>
+  type === "agent/input/admitted" || type === "agent/input/promoted" || type === "agent/input/cancelled"
 import {
   createSessionAssembly,
   ModelUnavailableError,
@@ -1125,9 +1127,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         deliveryDrains.set(sessionId, deliveryDrain)
         executionSubscriptions.get(sessionId)?.()
         executionSubscriptions.set(sessionId, subscribe(assembly.session, event => {
-          if (event.type === "agent/input/admitted" || event.type === "agent/input/promoted" || event.type === "agent/input/cancelled") {
-            notifyExecutionState(sessionId)
-          }
+          if (changesExecutionQueue(event.type)) notifyExecutionState(sessionId)
           if (event.type === 'agent/delivery-received' || event.type === 'agent/delivery-generation' || event.type === 'agent/delivery-source' || event.type === 'subagent/end' || event.type === 'exec/end' || event.type === 'code/end' || event.type === 'agent/delivery-handoff' || event.type === 'agent/input/promoted' || event.type === 'agent/input/cancelled') deliveryDrain.signal()
         }))
         // Hooks fire ONCE per assembly, after registration, inside the shared
@@ -1317,9 +1317,15 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           schedule(inputId,settled){if(retired||managedRuntimes.get(sessionId)!==published)return false;const input=entry.execution.observe().inbox.pending().find(value=>value.inputId===inputId);if(!input)return false;if(queues.get(sessionId)?.byId.get(inputId)?.scheduled||published.lane.currentInput()?.inputId===inputId)return false;void submit(sessionId,input.text,new AbortController().signal,{admittedInputId:inputId}).then(settled,error=>{if(!closed&&!closing.has(sessionId)&&!retired)d.warn('[i-harness] private delivery wake failed: '+String(error));settled()});return true},
           report:error=>d.warn('[i-harness] private delivery reconciliation failed: '+String(error)),
         })
-        const drain=privateDrain;unsubscribe=subscribeManagedExecution(runtime.domain,event=>{if(['agent/delivery-received','agent/delivery-generation','agent/delivery-source','exec/end','code/end','workflow/end','subagent/end','agent/delivery-handoff','agent/input/promoted','agent/input/cancelled','turn/end'].includes(event.type))drain.signal()})
+        const drain=privateDrain
         unsubscribeReadiness=subscribeManagedExecutionReadiness(runtime.domain,()=>drain.signal(),(error,terminal)=>{if(terminal)drain.retire();if(!retired)d.warn('[i-harness] private delivery readiness unavailable: '+String(error))})
       }
+      const originalRuntime = runtime
+      unsubscribe = subscribeManagedExecution(runtime.domain, event => {
+        if (retired || managedRuntimes.get(sessionId) !== originalRuntime) return
+        if (changesExecutionQueue(event.type)) notifyExecutionState(sessionId)
+        if (privateDrain && ['agent/delivery-received','agent/delivery-generation','agent/delivery-source','exec/end','code/end','workflow/end','subagent/end','agent/delivery-handoff','agent/input/promoted','agent/input/cancelled','turn/end'].includes(event.type)) privateDrain.signal()
+      })
       assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime);if(shellMount){managedShellOwners.set(sessionId,shellMount);mounted.add(async()=>{managedShellOwners.delete(sessionId)})}published=true;managedPrepubSettlers.delete(sessionId);if(rewindMount)managedRewinds.set(sessionId,{handle:rewindMount,runtime});if(title)managedTitles.set(sessionId,title);if(recipient)managedRecipients.set(sessionId,recipient);if(codeMount)managedCodeMounts.set(sessionId,codeMount);if(taskLifecycle)managedTaskOwners.set(sessionId,taskLifecycle);if(workflowMount){const mounted=workflowMount,executor=mounted.executor,list=executor.listJobs.bind(executor),kill=executor.killJob.bind(executor),journal=mounted.reconcileCapturedHandoffs.bind(mounted);managedWorkflowOwners.set(sessionId,{list,kill,journal})}
       publishManaged(sessionId,runtime)
       privateDrain?.signal()

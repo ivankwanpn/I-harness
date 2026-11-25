@@ -9,12 +9,13 @@ import { createSdkServer } from '@i-harness/sdk/server'
 import { fromJSONL } from '@i-harness/core-session'
 import type { LLMRequest } from '@i-harness/llm-seam'
 import { controlledModel } from '../../session-executor/test/controlled-model.ts'
+import { originalManagedExecutionFor } from '../../session-executor/src/host-managed-execution.ts'
 import * as projectScope from '../src/project-scope.ts'
 import { createDesktopHost } from '../src/host.ts'
 import { createDesktopRouter, createGatewayWrite } from '../src/router.ts'
 import type { DesktopHandlers } from '../src/types.ts'
 
-async function fixture() {
+async function fixture(beforeReply?: (request: LLMRequest) => Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), 'ih-project-checked-input-'))
   const workspace = join(root, 'workspace'), other = join(root, 'other'), sessionDir = join(root, 'sessions')
   await Promise.all([mkdir(workspace), mkdir(other)])
@@ -33,7 +34,9 @@ async function fixture() {
   })
   const serviceFactory = vi.spyOn(executor, 'createSessionService').mockImplementation(options => service = makeService(options))
   const frames: RpcMessage[] = []
-  const produceReply = vi.fn(async function* (_request: LLMRequest) {
+  const produceReply = vi.fn(async function* (request: LLMRequest) {
+    await beforeReply?.(request)
+    request.signal?.throwIfAborted()
     yield { type: 'text/chunk' as const, text: 'fixture answer' }
     yield { type: 'end' as const }
   })
@@ -75,11 +78,56 @@ async function fixture() {
       expect(terminal).toMatchObject({ params: { status: 'completed' } })
     }
     const idle = () => vi.waitFor(() => expect(host?.hasActiveWork?.()).toBe(false), { timeout: 20_000 })
-    return { workspace, other, coordinator, service, produceReply, call, succeed, saved, finished, idle, close }
+    return { workspace, other, coordinator, service, produceReply, call, succeed, saved, finished, idle, frames, close }
   } catch (error) { await close(); throw error }
 }
 
 const submit = (sessionId: string, clientToken = 'checked-input-token') => ({ sessionId, clientToken, text: 'fixture input', delivery: 'queue' })
+
+it('announces a promoted private turn as running while its provider is held and reports durable Stop', async () => {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), aborted = Promise.withResolvers<void>()
+  const f = await fixture(async request => {
+    if (!request.signal) throw new Error('The controlled provider needs the original abort signal')
+    request.signal.addEventListener('abort', () => aborted.resolve(), { once: true })
+    entered.resolve()
+    await release.promise
+  })
+  let cancelling: Promise<unknown> | undefined
+  try {
+    await f.succeed('initialize')
+    const { sessionId } = await f.succeed('session/create') as { sessionId: string }
+    const read = async () => fromJSONL((await f.saved(sessionId)).toString()).events
+    const state = () => f.frames.flatMap(frame => {
+      if (!('method' in frame) || frame.method !== 'session/execution-state') return []
+      const value = frame.params as { sessionId: string; running: boolean; queued: number; revision: number }
+      return value.sessionId === sessionId ? [value] : []
+    }).at(-1)
+
+    expect(await f.succeed('desktop/session/input/submit', submit(sessionId, 'checked-input-hold-stop'))).toMatchObject({ accepted: true })
+    await entered.promise
+    const execution = originalManagedExecutionFor(f.service, sessionId)
+    expect(execution).toBeDefined()
+    expect(Object.hasOwn(execution!.owner, 'view')).toBe(false)
+    expect((await read()).filter(event => event.type === 'agent/input/promoted')).toHaveLength(1)
+    const active = state()
+    expect(active).toMatchObject({ running: true, queued: 0 })
+
+    cancelling = f.succeed('session/cancel', { sessionId })
+    await aborted.promise
+    release.resolve()
+    expect(await cancelling).toMatchObject({ cancelled: true })
+
+    await vi.waitFor(async () => {
+      const events = await read()
+      expect(events.filter(event => event.type === 'turn/end')).toHaveLength(1)
+      expect(events.filter(event => event.type === 'assistant/message')).toHaveLength(0)
+      expect(state()).toMatchObject({ running: false, queued: 0, revision: expect.any(Number) })
+      expect(state()!.revision).toBeGreaterThan(active!.revision)
+    }, { timeout: 20_000 })
+    expect(f.produceReply).toHaveBeenCalledOnce()
+    expect(Object.hasOwn(execution!.owner, 'view')).toBe(false)
+  } finally { release.resolve(); await cancelling?.catch(() => {}); await f.close() }
+}, 45_000)
 
 it('checks the original project root once before attaching public input and preserves durable retries', async () => {
   const f = await fixture()
