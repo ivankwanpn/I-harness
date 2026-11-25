@@ -60,7 +60,10 @@ export function useHistoryScroll(
     setError(undefined)
     setLoading(selection)
     const valid = () => flight.current === ticket && owner.current === selection
-    const read = (params: HistoryPageRequest) => request({ kind: "session/history", workspaceId, sessionId, ...params })
+    const read = async (params: HistoryPageRequest) => {
+      if (!valid()) throw new Error("History selection changed")
+      return request({ kind: "session/history", workspaceId, sessionId, ...params })
+    }
     try {
       const range = direction === "before"
         ? await loadEarlierHistory(read, cursor, HISTORY_PAGE_SIZE)

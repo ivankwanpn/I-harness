@@ -15,6 +15,11 @@ export interface HistoryLoad {
   startSeq?: number
 }
 
+/** A legacy gateway can return a full prefix after ignoring beforeSeq. */
+export function requiresHistoryTailProbe(page: HistoryRange, limit: number): boolean {
+  return page.events.length >= limit && !Number.isSafeInteger(page.startSeq)
+}
+
 /** Read the page immediately before the current window. Older gateways fall
  * back to a forward read from the preceding window's expected start. */
 export async function loadEarlierHistory(
@@ -31,9 +36,9 @@ export async function loadEarlierHistory(
  * head, instead of probing and then re-snapshotting the full log page by page. */
 export async function loadRecentHistory(
   request: (params: HistoryPageRequest) => Promise<HistoryRange>,
-  options: { limit: number; maxEvents?: number },
+  options: { limit: number; maxEvents?: number; initialPage?: HistoryRange },
 ): Promise<HistoryLoad> {
-  const tail = await request({ afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: options.limit })
+  const tail = options.initialPage ?? await request({ afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: options.limit })
   if (Number.isSafeInteger(tail.nextSeq) && Number.isSafeInteger(tail.headSeq) && Number.isSafeInteger(tail.startSeq)) {
     return { events: historyEvents(tail), cursor: tail.nextSeq, exhausted: tail.nextSeq >= tail.headSeq!, startSeq: tail.startSeq }
   }

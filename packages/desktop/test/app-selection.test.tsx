@@ -1,19 +1,23 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { StrictMode } from "react"
+import { StrictMode, useLayoutEffect } from "react"
 import { afterEach, expect, it, vi } from "vitest"
 import type { WorkbenchProps } from "../src/renderer/shell/Workbench.tsx"
 import type { WireEvent } from "../src/renderer/session/event-window.ts"
 import type { DesktopBridge, DesktopRequest } from "../src/shared/bridge.ts"
-const captured = vi.hoisted(() => ({ props: undefined as WorkbenchProps | undefined }))
-vi.mock("../src/renderer/shell/Workbench.tsx", () => ({ Workbench: (props: WorkbenchProps) => { captured.props = props; return null } }))
+const captured = vi.hoisted(() => ({ props: undefined as WorkbenchProps | undefined, onLayout: undefined as ((props: WorkbenchProps) => void) | undefined }))
+vi.mock("../src/renderer/shell/Workbench.tsx", () => ({ Workbench: (props: WorkbenchProps) => {
+  captured.props = props
+  useLayoutEffect(() => { captured.onLayout?.(props) }, [props.selectedWorkspaceId, props.selectedSessionId])
+  return null
+} }))
 import { App } from "../src/renderer/app.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 import { Composer, captureSessionSubmission, writeDraft, readDraft } from "../src/renderer/session/Composer.tsx"
 import { readImageDrafts, writeImageDrafts } from "../src/renderer/session/image-drafts.ts"
 import { preparedFork, readyFork } from './helpers/fork-contract.ts'
 import type { ForkOperation } from '@i-harness/sdk/fork'
-afterEach(() => { cleanup(); captured.props = undefined; localStorage.removeItem("ih:last-workspace"); useUiStore.setState({ selectedWorkspaceId: undefined, selectedSessionId: undefined, providerRevision: 0, surface: "conversation" }) })
+afterEach(() => { cleanup(); captured.props = undefined; captured.onLayout = undefined; localStorage.removeItem("ih:last-workspace"); useUiStore.setState({ selectedWorkspaceId: undefined, selectedSessionId: undefined, providerRevision: 0, surface: "conversation" }) })
 
 function defer() { let resolve!: (value: unknown) => void; const promise = new Promise<unknown>((done) => { resolve = done }); return { promise, resolve } }
 it('both actual App fork callbacks join one preparation and one held operation before navigation', async () => {
@@ -715,6 +719,7 @@ it("pages back through the whole log with a bounded reading window and leaves li
   await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
   act(() => captured.props!.onSelectSession("a"))
   await waitFor(() => expect(captured.props?.conversation?.history?.earlier).toBeTypeOf("function"))
+  expect(request.mock.calls.some(([input]) => input.kind === "session/history")).toBe(false)
   for (let start = 2500; start > 0; start = Math.max(0, start - 200)) {
     await act(async () => captured.props!.conversation!.history!.earlier!())
     await waitFor(() => expect(captured.props?.conversation?.history?.viewport?.startSeq).toBe(Math.max(0, start - 200)))
@@ -728,6 +733,57 @@ it("pages back through the whole log with a bounded reading window and leaves li
   expect(captured.props!.conversation!.rows.at(-1)).toMatchObject({ text: "Message 2599" })
   act(() => captured.props!.conversation!.history!.latest!())
   expect(captured.props!.conversation!.history!.viewport).toBeUndefined()
+})
+
+it("opens the latest tail when an older gateway returns a full first page without backward metadata", async () => {
+  const head = 1600
+  const legacyPage = (afterSeq: number, limit: number) => {
+    const start = Math.min(head, afterSeq), end = Math.min(head, start + limit)
+    const events: WireEvent[] = Array.from({ length: end - start }, (_, i) => ({ type: "user/message", seq: start + i, text: `Message ${start + i}` }))
+    return { events, nextSeq: end }
+  }
+  const request = fixture(input => {
+    if (input.kind === "desktop/session/open") return Promise.resolve({ history: legacyPage(0, 500), assistantPreview: {
+      type: "assistant/chunk", stepStartSeq: head + 1, offset: 0, text: "Reply in progress",
+    } })
+    if (input.kind === "session/history") return Promise.resolve(legacyPage(input.afterSeq, input.limit))
+    return undefined
+  })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props?.conversation?.rows.at(-1)).toMatchObject({ text: "Message 1599" }))
+  expect(captured.props!.conversation!.rows[0]).toMatchObject({ text: "Message 1100" })
+  expect(captured.props!.conversation!.assistantPreview?.text).toBe("Reply in progress")
+  expect(request.mock.calls.map(([input]) => input).filter(input => input.kind === "session/history")).toEqual([
+    { kind: "session/history", workspaceId: "w1", sessionId: "a", afterSeq: Number.MAX_SAFE_INTEGER, limit: 1 },
+    { kind: "session/history", workspaceId: "w1", sessionId: "a", afterSeq: 1100, limit: 500 },
+  ])
+  await act(async () => captured.props!.conversation!.history!.earlier!())
+  expect(captured.props!.conversation!.history!.viewport?.startSeq).toBe(900)
+})
+
+it.each(["switching conversations", "returning to latest"])("cancels the legacy earlier fallback after %s", async action => {
+  const backward = defer()
+  const request = fixture(input => {
+    if (input.kind === "desktop/session/open" && input.sessionId === "a") return Promise.resolve({ history: {
+      events: [{ type: "user/message", seq: 1000, text: "Latest A" }], startSeq: 1000, nextSeq: 1001, headSeq: 1001,
+    } })
+    if (input.kind === "session/history" && input.sessionId === "a" && input.beforeSeq === 1000) return backward.promise
+    return undefined
+  })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props?.conversation?.history?.earlier).toBeTypeOf("function"))
+  act(() => captured.props!.conversation!.history!.earlier!())
+  expect(request).toHaveBeenCalledWith({ kind: "session/history", workspaceId: "w1", sessionId: "a", afterSeq: 0, beforeSeq: 1000, limit: 200 })
+  act(() => {
+    if (action === "switching conversations") captured.props!.onSelectSession("b")
+    else captured.props!.conversation!.history!.latest!()
+  })
+  await act(async () => { backward.resolve({ events: [{ type: "user/message", seq: 0, text: "Legacy prefix" }], nextSeq: 1 }); await backward.promise })
+  expect(request).not.toHaveBeenCalledWith({ kind: "session/history", workspaceId: "w1", sessionId: "a", afterSeq: 800, limit: 200 })
+  expect(captured.props!.conversation!.history?.viewport).toBeUndefined()
+  expect(captured.props!.conversation!.history?.error).toBeUndefined()
 })
 
 it.each(["reopen", "reconnect"])("pages into missing history after %s when the native tail outgrows the cache", async mode => {
@@ -933,6 +989,76 @@ it("does not carry an outstanding prompt into another session's running state", 
   expect(captured.props!.conversation!.running).toBe(true)
   await act(async () => { old.resolve({}); await prompt })
   expect(captured.props!.conversation!.running).toBe(false)
+})
+
+it("accepts the resumed execution generation and rejects pending queue reads from before standby", async () => {
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  const oldQueue = defer()
+  let queueReads = 0
+  const request = fixture(input => {
+    if (input.kind === "session/queue" && ++queueReads === 2) return oldQueue.promise
+    return undefined
+  }, listener => { emit = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props?.conversation?.queue).toEqual([]))
+  const state = (running: boolean, revision: number) => emit({ kind: "sdk/notification", workspaceId: "w1", method: "session/execution-state",
+    params: { sessionId: "a", running, queued: 0, revision } })
+  act(() => {
+    emit({ kind: "sdk/ready", method: "sdk/ready", workspaceId: "w1", runtimeGeneration: 0 })
+    state(false, 20)
+  })
+  await waitFor(() => expect(queueReads).toBe(2))
+  // Leave coalesced refresh callbacks waiting behind the retiring owner.
+  act(() => state(false, 21))
+  request.mockClear()
+  act(() => emit({ kind: "sdk/idle", method: "sdk/idle", workspaceId: "w1", runtimeGeneration: 0 }))
+  expect(captured.props?.connection).toBe("idle")
+  await act(async () => {
+    oldQueue.resolve([{ id: "retired", state: "running", text: "old owner" }])
+    await new Promise(resolve => setTimeout(resolve, 250))
+  })
+  expect(captured.props?.conversation?.queue).toEqual([])
+  expect(captured.props?.conversation?.running).toBe(false)
+  expect(request).not.toHaveBeenCalled()
+
+  act(() => {
+    emit({ kind: "sdk/ready", method: "sdk/ready", workspaceId: "w1", runtimeGeneration: 1 })
+    state(true, 1)
+  })
+  expect(captured.props?.connection).toBe("online")
+  expect(captured.props?.conversation?.running).toBe(true)
+  act(() => {
+    emit({ kind: "sdk/idle", method: "sdk/idle", workspaceId: "w1", runtimeGeneration: 0 })
+    emit({ kind: "sdk/ready", method: "sdk/ready", workspaceId: "w1", runtimeGeneration: 1 })
+    state(false, 1)
+  })
+  expect(captured.props?.connection).toBe("online")
+  expect(captured.props?.conversation?.running).toBe(true)
+  act(() => state(false, 2))
+  expect(captured.props?.conversation?.running).toBe(false)
+})
+
+it("ignores the old conversation's execution notification during same-workspace selection handoff", async () => {
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  fixture(() => undefined, listener => { emit = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props?.conversation?.queue).toEqual([]))
+  const state = (sessionId: string, running: boolean, revision: number) => emit({ kind: "sdk/notification", workspaceId: "w1",
+    method: "session/execution-state", params: { sessionId, running, queued: 0, revision } })
+  let handoffs = 0
+  captured.onLayout = props => {
+    if (props.selectedSessionId !== "b") return
+    handoffs++
+    state("a", true, 20)
+  }
+  act(() => captured.props!.onSelectSession("b"))
+  await waitFor(() => expect(captured.props?.conversation?.queue).toEqual([]))
+  expect(handoffs).toBe(1)
+  expect(captured.props?.conversation?.running).toBe(false)
+  act(() => state("b", true, 1))
+  expect(captured.props?.conversation?.running).toBe(true)
 })
 
 it("reports real connection bootstrap failure and a successful retry", async () => {

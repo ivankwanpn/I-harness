@@ -34,7 +34,7 @@ import {
   type EventWindow,
   type WireEvent,
 } from "./session/event-window.ts"
-import { loadHistory, loadRecentHistory, type HistoryPageRequest } from "./session/history.ts"
+import { loadHistory, loadRecentHistory, requiresHistoryTailProbe, type HistoryPageRequest } from "./session/history.ts"
 import { useHistoryScroll } from "./session/use-history-scroll.ts"
 import type { InteractionReply } from "./interaction/PendingPanel.tsx"
 import type { ReviewChanges, ReviewText } from "./review/ReviewPane.tsx"
@@ -193,6 +193,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const workspaceSelection = useRef({ workspaceId: selectedWorkspaceId })
   if (workspaceSelection.current.workspaceId !== selectedWorkspaceId) workspaceSelection.current = { workspaceId: selectedWorkspaceId }
   const disconnected = useRef<typeof workspaceSelection.current | undefined>(undefined)
+  // Invalidate reads when the selected transport closes, including standby.
   const disconnectRevision = useRef(0)
 
   useEffect(() => {
@@ -328,6 +329,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     workspaceId: string,
     sessionId: string,
     afterSeq: number,
+    opening?: { history: HistoryRange; assistantPreview?: AssistantPreview },
   ): Promise<void> => {
     const scope = selection.current
     if (scope.workspaceId !== workspaceId || scope.sessionId !== sessionId) return
@@ -341,7 +343,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     }
     try {
       const load = afterSeq === 0
-        ? await loadRecentHistory(request, { limit: RECENT_HISTORY_LIMIT, maxEvents: MAX_RETAINED_EVENTS })
+        ? await loadRecentHistory(request, { limit: RECENT_HISTORY_LIMIT, maxEvents: opening ? RECENT_HISTORY_LIMIT : MAX_RETAINED_EVENTS, initialPage: opening?.history })
         : await loadHistory(request, { afterSeq, limit: RECENT_HISTORY_LIMIT, maxPages: HISTORY_MAX_PAGES })
       if (!stillSelected()) return
       setEventWindow((current) => {
@@ -349,8 +351,10 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         const key = JSON.stringify([workspaceId, sessionId])
         const next = applyHistory(current, { events: load.events, nextSeq: load.cursor, ...(afterSeq === 0 ? { startSeq: load.startSeq } : {}) })
         eventWindowCache.set(key, next)
+        const baseline = opening?.assistantPreview
+        const seeded = baseline && isAssistantPreview(baseline) ? applyNotification(next, baseline) : next
         const preview = assistantPreviews.current.get(key)
-        return preview ? applyNotification(next, preview) : next
+        return preview ? applyNotification(seeded, preview) : seeded
       })
       setHistoryLoading(false)
       setHistoryError(undefined)
@@ -455,15 +459,18 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       chunkFrame = undefined
       chunkBuffer = []
     }
-    const refreshList = createRefreshScheduler(() => refreshDashboard(selectedWorkspaceId))
-    const refreshTurn = selectedSessionId ? createRefreshScheduler(() => refreshTasks(selectedWorkspaceId, selectedSessionId)) : undefined
+    const runtimeAvailable = () => workspaceConnections.get(selectedWorkspaceId)?.phase !== "idle"
+    const refreshList = createRefreshScheduler(async () => { if (runtimeAvailable()) await refreshDashboard(selectedWorkspaceId) })
+    const refreshTurn = selectedSessionId ? createRefreshScheduler(async () => {
+      if (runtimeAvailable()) await refreshTasks(selectedWorkspaceId, selectedSessionId)
+    }) : undefined
     const refresh = () => { refreshList.schedule(); refreshTurn?.schedule() }
     const handle = (event: DesktopEvent) => {
-      if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity" || event.kind === "sdk/idle") return
+      if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity") return
       // Notifications for all workspaces arrive on this bridge. Keep unfinished
-      // prefixes between selections, and retire only the disconnected owner.
+      // prefixes between selections, and discard previews when their owner retires.
       let preview: AssistantPreview | undefined
-      if (event.kind === "sdk/disconnected") {
+      if (event.kind === "sdk/disconnected" || event.kind === "sdk/idle") {
         const prefix = JSON.stringify([event.workspaceId]).slice(0, -1) + ","
         for (const key of assistantPreviews.current.keys()) if (key.startsWith(prefix)) assistantPreviews.current.delete(key)
       } else if (event.kind === "sdk/notification" && event.method === "session/execution-state") {
@@ -496,22 +503,36 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         }
         return
       }
-      if (event.kind === "sdk/disconnected") {
-        disconnected.current = workspace
+      if (event.kind === "sdk/disconnected" || event.kind === "sdk/idle") {
         disconnectRevision.current++
         clearChunks()
+        // The new service starts its own execution revisions. Any pending
+        // queue read was made by the retiring service.
         executionRevision.current = undefined
+        runningRevision.current++
+        tasksRequest.current++
+        setRunning(false)
+        setQueue(rows => rows?.filter(row => row.state !== "running"))
+        if (event.kind === "sdk/idle") {
+          setHistoryLoading(false)
+          return
+        }
+        disconnected.current = workspace
         setCapabilitySnapshot(undefined)
         setSandbox(undefined)
         setEventWindow((current) => markDisconnected(current))
         return
       }
+      // The workspace observer can still be installed for the old session
+      // until passive effects run. Its preview updates above remain global.
+      if (selection.current !== scope && (event.method === "session/execution-state" || event.method === "session/event" || event.method === "session/status")) return
       if (event.method === "session/execution-state") {
         const state = event.params as Partial<Record<keyof SessionExecutionStateNotification, unknown>> | undefined
         if (!state || typeof state.sessionId !== "string" || typeof state.running !== "boolean"
           || typeof state.queued !== "number" || !Number.isSafeInteger(state.queued) || state.queued < 0
           || typeof state.revision !== "number" || !Number.isSafeInteger(state.revision) || state.revision < 1) return
         if (state.sessionId !== selectedSessionId) { refreshList.schedule(); return }
+        if (!runtimeAvailable()) return
         if (executionRevision.current !== undefined && state.revision <= executionRevision.current) return
         executionRevision.current = state.revision
         runningRevision.current++
@@ -551,7 +572,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         if (affectsSessionDashboard(event.method, event.params)) refreshList.schedule()
         return
       }
-      if (selection.current !== scope) return
       if (info.kind === "chunk") {
         if (!record) return
         chunkBuffer.push(record)
@@ -575,6 +595,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         if (affectsSessionDashboard(event.method, event.params)) refreshList.schedule()
         return
       }
+      if (!runtimeAvailable()) return
       runningRevision.current++
       // Legacy transport status describes one request; service state describes
       // every submission, including a following turn already running.
@@ -586,7 +607,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       if (selectedWorkspaceEvents.current === handle) selectedWorkspaceEvents.current = undefined
       refreshList.dispose(); refreshTurn?.dispose(); clearChunks()
     }
-  }, [bridge, interactions.update, refreshDashboard, refreshTasks, refreshWorkState, selectedSessionId, selectedWorkspaceId])
+  }, [bridge, interactions.update, refreshDashboard, refreshTasks, refreshWorkState, selectedSessionId, selectedWorkspaceId, workspaceConnections])
 
   // A background runtime can become ready, disconnect or go idle while it is unselected.
   useEffect(() => bridge.onEvent(event => {
@@ -633,8 +654,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   useEffect(() => {
     if (selectedWorkspaceId === undefined || selectedSessionId === undefined) return
     let active = true
+    const scope = selection.current
     const generation = disconnectRevision.current
-    const stillOpen = () => active && generation === disconnectRevision.current
+    const stillOpen = () => active && selection.current === scope && generation === disconnectRevision.current
     const selectionKey = JSON.stringify([selectedWorkspaceId, selectedSessionId])
     const cached = eventWindowCache.get(selectionKey)
     const window = cached ?? emptyEventWindow()
@@ -653,7 +675,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     setQueueResumable(false)
     // Start every selection read together. Waiting for history before the
     // model/interaction/task reads added their latencies to one another.
-    const fail = (reason: unknown) => { if (active) setTaskError(reason instanceof Error ? reason.message : String(reason)) }
+    const fail = (reason: unknown) => { if (stillOpen()) setTaskError(reason instanceof Error ? reason.message : String(reason)) }
     type OpenResult = {
       history?: HistoryRange
       historyError?: string
@@ -664,8 +686,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         .catch(() => undefined)
       const opened = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? raw as OpenResult : undefined
       if (!stillOpen()) return
-      const history = opened?.history
-      if (history && Array.isArray(history.events)) {
+      const history = Array.isArray(opened?.history?.events) ? opened.history : undefined
+      if (history && !requiresHistoryTailProbe(history, RECENT_HISTORY_LIMIT)) {
         setEventWindow((current) => {
           if (!stillOpen()) return current
           const next = applyHistory(current, history)
@@ -679,7 +701,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         if (opened?.historyError) setHistoryError(opened.historyError)
       } else {
         if (opened?.historyError) setHistoryError(opened.historyError)
-        await pageHistory(selectedWorkspaceId, selectedSessionId, 0)
+        await pageHistory(selectedWorkspaceId, selectedSessionId, 0, history ? { history, assistantPreview: opened?.assistantPreview } : undefined)
       }
       if (!stillOpen()) return
       // Warm the session assembly while the user is reading the restored tail;
@@ -690,7 +712,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     })().catch(fail)
     const version = ++modelRequest.current
     void bridge.request({ kind: "session/model/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
-      .then(value => { if (active && version === modelRequest.current) setModel(value as SessionModelState) }).catch(fail)
+      .then(value => { if (stillOpen() && version === modelRequest.current) setModel(value as SessionModelState) }).catch(fail)
     void interactions.refresh(selectedSessionId).catch(fail)
     return () => { active = false }
   }, [bridge, eventWindowCache, interactions.refresh, pageHistory, retryNonce, selectedSessionId, selectedWorkspaceId])
