@@ -16,8 +16,10 @@ import type { createTaskDocumentTransitions, HistoryProof } from './task-documen
 export type LoadOwnedExecution = ReturnType<typeof createLoads>['loadOwnedExecution']
 type AfterTransition = (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>
 
+const MAX_COLD_HISTORY_SESSIONS = 2
 const MAX_COLD_HISTORY_FACTS = 16_384
 const MAX_COLD_HISTORY_IMAGE_ID_UNITS = 262_144
+type ColdHistory = { evidence: object; facts: readonly SessionHistoryFact[] }
 
 function historyFacts(events: readonly SessionEvent[]): SessionHistoryFact[] | undefined {
   if (events.length > MAX_COLD_HISTORY_FACTS) return undefined
@@ -58,8 +60,14 @@ export function createLoads(
   executionChanges?: ReturnType<typeof createColdExecutionWrites>,
   withMutationRead?: <T>(sessionId: string, work: () => Promise<T>) => Promise<T>,
 ) {
-  let coldHistory: { sessionId: string; evidence: object; facts: SessionHistoryFact[] } | undefined
+  const coldHistory = new Map<string, ColdHistory>()
   let coldHistoryRetired = false
+
+  function rememberColdHistory(sessionId: string, history: ColdHistory) {
+    coldHistory.delete(sessionId)
+    coldHistory.set(sessionId, history)
+    if (coldHistory.size > MAX_COLD_HISTORY_SESSIONS) coldHistory.delete(coldHistory.keys().next().value!)
+  }
 
   async function processMutation<T>(id: string, work: () => Promise<T>): Promise<T> {
     const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' })
@@ -164,6 +172,7 @@ export function createLoads(
     loadOwnedExecution,
     async snapshot(sessionId: string, prepareHistoryPages = false) {
       const cold = prepareHistoryPages && !coldHistoryRetired ? originalColdArchiveHistoryReader(backend) : undefined
+      const previous = cold ? coldHistory.get(sessionId) : undefined
       const original = originalDecodedArchiveRead(backend)
       const { version, events, meta, evidence } = await read(sessionId, cold?.readFull.bind(cold) ?? original)
       const currentDecoded = original !== undefined && version === CURRENT_FORMAT_VERSION
@@ -173,8 +182,8 @@ export function createLoads(
       const unchanged = currentDecoded && visible.length === events.length
       if (cold && !coldHistoryRetired && originalColdArchiveHistoryReader(backend) === cold) {
         const facts = unchanged && evidence ? historyFacts(visible) : undefined
-        if (facts && evidence) coldHistory = { sessionId, evidence, facts }
-        else if (coldHistory?.sessionId === sessionId) coldHistory = undefined
+        if (facts && evidence) rememberColdHistory(sessionId, { evidence, facts })
+        else if (coldHistory.get(sessionId) === previous) coldHistory.delete(sessionId)
       }
       return { session: {
         formatVersion: CURRENT_FORMAT_VERSION,
@@ -184,15 +193,15 @@ export function createLoads(
       } }
     },
     async readColdHistoryPage(sessionId: string, options: SessionHistoryPageOptions) {
-      const history = coldHistory
-      if (history?.sessionId !== sessionId) return undefined
+      const history = coldHistory.get(sessionId)
+      if (!history) return undefined
       const original = originalColdArchiveHistoryReader(backend)
       if (!original) return undefined
       const plan = planSessionHistoryPage(history.facts, options)
       if (!plan) return undefined
       const records = await original.readWindow(sessionId, history.evidence, new Set(plan.ordinals))
       if (!records) {
-        if (coldHistory === history) coldHistory = undefined
+        if (coldHistory.get(sessionId) === history) coldHistory.delete(sessionId)
         return undefined
       }
       if (originalColdArchiveHistoryReader(backend) !== original) return undefined
@@ -202,11 +211,13 @@ export function createLoads(
         if (!event) throw new Error('History page archive ordinal mismatch')
         return event
       })
-      return materializeSessionHistoryPage(plan, ordered)
+      const page = materializeSessionHistoryPage(plan, ordered)
+      if (coldHistory.get(sessionId) === history) rememberColdHistory(sessionId, history)
+      return page
     },
     retireColdHistory() {
       coldHistoryRetired = true
-      coldHistory = undefined
+      coldHistory.clear()
     },
     async load(sessionId: string) {
       // Physical14 recovery is a parent mutation owned by the retained task

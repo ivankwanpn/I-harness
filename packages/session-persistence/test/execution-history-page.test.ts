@@ -2,13 +2,14 @@ import { appendFile, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
-import { encodeFactBatch, readFactJournal, type JournalMetadata } from '@i-harness/core-session'
+import { encodeFactBatch, factPrefixDigest, readFactJournal, type JournalMetadata } from '@i-harness/core-session'
 import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { acquireManagedExecution } from '../src/execution-internal.ts'
 
 const probe = vi.hoisted(() => ({
   beforeClose: undefined as (() => Promise<void>) | undefined,
+  afterColdWindow: undefined as ((found: boolean) => Promise<void>) | undefined,
 }))
 vi.mock('../src/execution-internal.ts', async load => {
   const original = await load<typeof import('../src/execution-internal.ts')>()
@@ -32,10 +33,29 @@ vi.mock('../src/execution-internal.ts', async load => {
     },
   }
 })
+vi.mock('../src/archive-read-internal.ts', async load => {
+  const original = await load<typeof import('../src/archive-read-internal.ts')>()
+  return {
+    ...original,
+    associateColdArchiveHistoryReader(backend: object, reader: import('../src/archive-read-internal.ts').ColdArchiveHistoryReader) {
+      original.associateColdArchiveHistoryReader(backend, {
+        readFull: reader.readFull.bind(reader),
+        async readWindow(...args) {
+          const gate = probe.afterColdWindow
+          probe.afterColdWindow = undefined
+          const records = await reader.readWindow(...args)
+          await gate?.(records !== undefined)
+          return records
+        },
+      })
+    },
+  }
+})
 
 const coordinators: ReturnType<typeof composeJsonlTaskTransitionCoordinator>[] = []
 afterEach(async () => {
   probe.beforeClose = undefined
+  probe.afterColdWindow = undefined
   for (const coordinator of coordinators.splice(0)) await coordinator.close()
 })
 
@@ -94,6 +114,71 @@ it('enrolls only a history snapshot and requalifies after the cold journal grows
 
   await acquireManagedExecution(coordinator, 'owner')
   expect(await coordinator.readHistoryPage!('owner', inside)).toEqual({ ...cold, headSeq: 5 })
+})
+
+it('keeps recent cold sessions and evicts the least recently used proof on the third enrollment', async () => {
+  const { coordinator, root } = await fixture()
+  const path = join(root, 'owner.jsonl')
+  const original = await readFile(path)
+  const newline = original.indexOf(10)
+  const header = JSON.parse(original.subarray(0, newline).toString('utf8')) as { formatVersion: number; journal: JournalMetadata }
+  let { prefixDigest, eventCount } = readFactJournal(original.subarray(newline + 1), header.journal, header.formatVersion).prefix
+  const frames: Uint8Array[] = []
+  const text = 'long reply '.repeat(42)
+  for (let i = 0; i < 100; i++) {
+    const events = Array.from({ length: 94 }, (_, offset) => ({
+      type: 'assistant/message' as const, seq: eventCount + offset, text,
+    }))
+    const frame = encodeFactBatch(`many-events-${i}`, prefixDigest, events)
+    frames.push(frame.bytes)
+    prefixDigest = factPrefixDigest(prefixDigest, frame.key.batchDigest)
+    eventCount += events.length
+  }
+  await appendFile(path, Buffer.concat(frames))
+  for (const sessionId of ['small', 'third']) {
+    await coordinator.create({ sessionId })
+    await coordinator.append(sessionId, [{ type: 'user/message', text: sessionId }])
+  }
+  const tail = { afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: 1 }
+  await coordinator.snapshot!('owner', { prepareHistoryPages: true })
+  await coordinator.snapshot!('small', { prepareHistoryPages: true })
+  expect(await coordinator.readHistoryPage!('small', tail)).toMatchObject({
+    headSeq: 1, events: [{ type: 'user/message', text: 'small' }],
+  })
+  const longPage = await coordinator.readHistoryPage!('owner', tail)
+  expect(longPage).toMatchObject({ headSeq: eventCount, events: [{ seq: eventCount - 1, text }] })
+  await coordinator.snapshot!('third', { prepareHistoryPages: true })
+  expect(await coordinator.readHistoryPage!('small', tail)).toBeUndefined()
+  expect(await coordinator.readHistoryPage!('owner', tail)).toEqual(longPage)
+  expect(await coordinator.readHistoryPage!('third', tail)).toMatchObject({
+    headSeq: 1, events: [{ type: 'user/message', text: 'third' }],
+  })
+  await coordinator.close()
+  await expect(coordinator.readHistoryPage!('owner', tail)).rejects.toThrow()
+  await expect(coordinator.readHistoryPage!('third', tail)).rejects.toThrow()
+})
+
+it('does not let an older failed window discard a newly qualified proof or a different session', async () => {
+  const { coordinator } = await fixture()
+  await coordinator.create({ sessionId: 'sibling' })
+  await coordinator.append('sibling', [{ type: 'user/message', text: 'sibling' }])
+  await coordinator.snapshot!('owner', { prepareHistoryPages: true })
+  await coordinator.snapshot!('sibling', { prepareHistoryPages: true })
+  await coordinator.append('owner', [{ type: 'plan/mode', mode: 'on' }])
+  const entered = Promise.withResolvers<boolean>(), release = Promise.withResolvers<void>()
+  probe.afterColdWindow = async found => { entered.resolve(found); await release.promise }
+  const stale = coordinator.readHistoryPage!('owner', latestPage)
+  try {
+    const observed = await Promise.race([entered.promise, stale.then(() => 'read completed without original window')])
+    expect(observed).toBe(false)
+    await coordinator.snapshot!('owner', { prepareHistoryPages: true })
+  } finally {
+    release.resolve()
+    await stale
+  }
+  expect(await stale).toBeUndefined()
+  expect(await coordinator.readHistoryPage!('owner', latestPage)).toMatchObject({ headSeq: 5 })
+  expect(await coordinator.readHistoryPage!('sibling', latestPage)).toMatchObject({ headSeq: 1 })
 })
 
 it('lets repaired cold history replace a snapshot with an unresolved image address', async () => {
