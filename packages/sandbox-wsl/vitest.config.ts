@@ -2,6 +2,6 @@ import { defineConfig } from "vitest/config"
 import { fileURLToPath } from "node:url"
 
 export default defineConfig({
-  resolve: { alias: { "@i-harness/sandbox": fileURLToPath(new URL("../sandbox/src/index.ts", import.meta.url)) } },
+  resolve: { alias: [{ find: /^@i-harness\/sandbox$/, replacement: fileURLToPath(new URL("../sandbox/src/index.ts", import.meta.url)) }] },
   test: { include: ["test/**/*.test.ts"] },
 })

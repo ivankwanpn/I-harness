@@ -1,6 +1,7 @@
 import { statSync } from "node:fs"
 import { win32 } from "node:path"
 import { snapshotProcessSpec, type ProcessSpec, type CompiledSandboxPolicy } from "@i-harness/sandbox"
+import { markWslPolicyPaths, policyPathSpellings } from "@i-harness/sandbox/internal/policy-paths"
 
 function within(path: string, root: string): boolean {
   const relative = win32.relative(root.toLowerCase(), path.toLowerCase())
@@ -13,8 +14,34 @@ function directory(path: string): void {
   if (!statSync(path).isDirectory()) throw new Error("WSL sandbox root must be a directory")
 }
 
+/** Guest lookups use the compiler's original directory spelling, while the
+ * supervisor continues to compare its normalized policy. */
+function policyForGuest(original: CompiledSandboxPolicy, captured: CompiledSandboxPolicy): CompiledSandboxPolicy {
+  const paths = policyPathSpellings(original)
+  if (!paths) return captured
+  const byKey = new Map<string, string>()
+  const key = (path: string) => win32.normalize(path).toLowerCase()
+  for (const path of [paths.primaryRoot, ...paths.authorityRoots, ...paths.referenceRoots]) {
+    const before = byKey.get(key(path))
+    if (before !== undefined && before !== path) throw new Error("Ambiguous original WSL authority path spelling")
+    byKey.set(key(path), path)
+  }
+  const spelling = (path: string) => {
+    const originalPath = byKey.get(key(path))
+    if (originalPath === undefined) throw new Error("Missing original WSL authority path spelling")
+    return originalPath
+  }
+  return Object.freeze({
+    ...captured,
+    primaryRoot: spelling(captured.primaryRoot),
+    authorityRoots: Object.freeze(captured.authorityRoots.map(spelling)),
+    referenceRoots: Object.freeze(captured.referenceRoots.map(spelling)),
+    writeRoots: Object.freeze(captured.writeRoots.map(spelling)),
+  })
+}
+
 /** This function completes capture and admission synchronously, before inventory or guest startup. */
-export function captureRequest(inputSpec: ProcessSpec, inputPolicy: CompiledSandboxPolicy): { spec: ProcessSpec; policy: CompiledSandboxPolicy } {
+export function captureRequest(inputSpec: ProcessSpec, inputPolicy: CompiledSandboxPolicy) {
   const extra = inputPolicy as CompiledSandboxPolicy & { requireReadIsolation?: boolean; readIsolation?: boolean; denyPaths?: unknown }
   if (extra.requireReadIsolation || extra.readIsolation || extra.denyPaths !== undefined)
     throw new Error("WSL sandbox cannot provide read isolation or deny-path features")
@@ -39,7 +66,8 @@ export function captureRequest(inputSpec: ProcessSpec, inputPolicy: CompiledSand
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || /^WSL/i.test(key) || typeof value !== "string" || value.includes("\0"))
       throw new Error("Invalid or interop WSL sandbox environment")
   }
-  for (const root of [spec.cwd, policy.primaryRoot, ...policy.authorityRoots, ...policy.writeRoots, ...policy.referenceRoots]) directory(root)
+  const guestPolicy = policyForGuest(inputPolicy, policy)
+  for (const root of [spec.cwd, guestPolicy.primaryRoot, ...guestPolicy.authorityRoots, ...guestPolicy.writeRoots, ...guestPolicy.referenceRoots]) directory(root)
   if (!policy.authorityRoots.length || !policy.authorityRoots.some(root => within(spec.cwd, root))
     || !policy.authorityRoots.some(root => within(policy.primaryRoot, root))) throw new Error("WSL sandbox cwd/primary root is outside authority")
   if (policy.mode === "read-only" && policy.writeRoots.length) throw new Error("Read-only WSL sandbox cannot grant writes")
@@ -47,7 +75,8 @@ export function captureRequest(inputSpec: ProcessSpec, inputPolicy: CompiledSand
     if (!policy.authorityRoots.some(root => within(write, root))) throw new Error("WSL write root is outside authority")
     if (policy.referenceRoots.some(root => within(write, root) || within(root, write))) throw new Error("WSL writable root overlaps a reference root")
   }
-  return { spec, policy }
+  if (guestPolicy !== policy) markWslPolicyPaths(inputPolicy)
+  return { spec, policy, guestPolicy }
 }
 
 export function validDistribution(distribution: string): boolean {

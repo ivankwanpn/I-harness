@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest"
 import { resolve } from "node:path"
 import { createExecService } from "@i-harness/exec"
 import { createExecutionLease, type AuthorityState, type TransportExecutionBackend, type RootExit } from "@i-harness/sandbox"
+import { markWslPolicyPaths, policyPathSpellings } from "@i-harness/sandbox/internal/policy-paths"
 const injected = vi.hoisted(() => ({ backend: undefined as unknown as TransportExecutionBackend, releases: 0, options: [] as any[], specs: [] as any[] }))
 vi.mock("@i-harness/sandbox-local", () => ({ createLocalExecutionBackends: (options: any) => { injected.options.push(options); return { select: (_policy: any, _transport: any, spec: any) => { injected.specs.push(spec); return injected.backend }, async dispose() { injected.releases++ } } }, readWindowsQualification: async () => undefined }))
 import { createAssemblyExecutionRuntime } from "../src/execution-runtime.ts"
@@ -19,6 +20,30 @@ it("captures WSL options for the assembly and forwards the trusted target spec",
   runtime.execution.selectBackend(runtime.execution.resolvePolicy({ sessionId: "main" }, undefined), "pipe", spec)
   expect(injected.specs.at(-1)).toBe(spec)
   await runtime.execution.dispose!()
+})
+
+it.runIf(process.platform === "win32")("retains the original WSL grant spelling through preparation and active reconciliation", async () => {
+  const root = resolve("MixedCase")
+  const owner = { sessionId: "main" }
+  let authority: AuthorityState = { kind: "unbound", revision: "1", workspaceRoot: root }
+  const runtime = createAssemblyExecutionRuntime({ owner, windowsSandboxBackend: "wsl", authority: () => authority,
+    standing: () => ({ mode: "workspace-write", generation: "1" }) })
+  try {
+    const grant = runtime.bindPolicy({ mode: "workspace-write", workspaceRoot: root })
+    const policy = runtime.execution.resolvePolicy(owner, grant)
+    expect(policy.primaryRoot).toBe(root.toLowerCase())
+    expect(policyPathSpellings(policy)?.primaryRoot).toBe(root)
+    markWslPolicyPaths(policy)
+    expect(() => runtime.execution.validateAuthority(policy)).not.toThrow()
+
+    authority = { kind: "unbound", revision: "1", workspaceRoot: root.toLowerCase() }
+    expect(() => runtime.execution.validateAuthority(policy)).toThrow("WSL authority path spelling changed")
+    const reconcile = vi.spyOn(runtime.execution.supervisor!, "reconcile").mockImplementation(async (_owner, validate) => {
+      expect(() => validate(policy, { phase: "active" })).toThrow("Execution authority narrowed")
+    })
+    await runtime.reconcile()
+    expect(reconcile).toHaveBeenCalledOnce()
+  } finally { await runtime.execution.dispose!() }
 })
 
 it.each(["pending", "failed"] as const)("keeps filesystem admission fenced when older compatible reconciliation succeeds while newer narrowing is %s", async phase => {

@@ -1,9 +1,10 @@
-import { mkdtempSync, realpathSync, rmdirSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, rmdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, expect, it } from "vitest"
 import type { CompiledSandboxPolicy, ProcessSpec } from "@i-harness/sandbox"
 import { captureRequest, parseWslInventory } from "../src/admission.ts"
+import { assertExecutionAuthority, compileExecutionPolicy } from "../../sandbox-policy/src/execution-policy.ts"
 
 const root = process.platform === "win32"
   ? realpathSync.native(mkdtempSync(join(tmpdir(), "ih-wsl-admission-")))
@@ -26,6 +27,36 @@ it("captures complete detached frozen spec and policy before awaits", () => {
   expect(captured.policy.authorityRoots).toEqual([root])
   expect(captured.policy.owner.sessionId).toBe("owner")
   expect(Object.isFrozen(captured.policy.owner)).toBe(true)
+  expect(captured.guestPolicy).toBe(captured.policy)
+})
+
+it.runIf(process.platform === "win32")("passes original Windows spellings to the guest and rechecks them before commit", () => {
+  const mixed = join(root, "MiXeD")
+  mkdirSync(mixed)
+  try {
+    const compile = (workspaceRoot: string) => compileExecutionPolicy({
+      mode: "workspace-write", owner: spec().owner,
+      authority: { kind: "unbound", revision: "r1", workspaceRoot },
+    })
+    const original = compile(mixed)
+    const otherSpelling = compile(mixed.toLowerCase())
+    expect(original.fingerprint).toBe(otherSpelling.fingerprint)
+    expect(() => assertExecutionAuthority(original, otherSpelling)).not.toThrow()
+    const { policy: comparison, guestPolicy } = captureRequest({ ...spec(), cwd: mixed }, original)
+    expect(comparison.primaryRoot).toBe(mixed.toLowerCase())
+    expect(guestPolicy).toMatchObject({ primaryRoot: mixed, authorityRoots: [mixed], writeRoots: [mixed], fingerprint: original.fingerprint })
+    expect(() => assertExecutionAuthority(original, compile(mixed))).not.toThrow()
+    expect(() => assertExecutionAuthority(original, otherSpelling)).toThrow("WSL authority path spelling changed")
+  } finally { rmdirSync(mixed) }
+})
+
+it.runIf(process.platform === "win32")("refuses ambiguous original spellings rather than selecting a Windows root from its comparison key", () => {
+  const mixed = join(root, "MiXeD")
+  const original = compileExecutionPolicy({
+    mode: "read-only", owner: spec().owner,
+    authority: { kind: "bound", revision: "r1", primaryRoot: mixed, roots: [mixed.toLowerCase()], references: [] },
+  })
+  expect(() => captureRequest({ ...spec(), cwd: mixed }, original)).toThrow("Ambiguous original WSL authority path spelling")
 })
 
 it("refuses unsupported transports, policies, argv, ownership and roots locally", () => {

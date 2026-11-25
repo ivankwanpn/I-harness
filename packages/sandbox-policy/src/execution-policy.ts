@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { isAbsolute, normalize, relative, sep } from "node:path"
 import type { AuthorityState, CompiledSandboxPolicy, ExecutionOwner, SandboxMode } from "@i-harness/sandbox"
+import { associatePolicyPathSpellings, policyPathSpellings, usesWslPolicyPaths } from "@i-harness/sandbox/internal/policy-paths"
 
 function fail(detail: string): never { throw new Error(`Execution authority: ${detail}`) }
 function record(value: unknown): Record<string, unknown> {
@@ -20,11 +21,18 @@ function owner(value: unknown): Readonly<ExecutionOwner> {
   return Object.freeze({ sessionId: identifier(input.sessionId, "session ID"), ...(input.parentSessionId === undefined ? {} : { parentSessionId: identifier(input.parentSessionId, "parent session ID") }) })
 }
 // Lexical compiler spellings only: this does not resolve symlinks, junctions or reparse races.
-function path(value: unknown): string {
+function pathSpelling(value: unknown): string {
   if (typeof value !== "string" || value.includes("\0") || !isAbsolute(value)) fail("invalid absolute path")
   const normalized = normalize(value)
-  const withoutTrailing = normalized.endsWith(sep) && normalize(normalized + "..") !== normalized ? normalized.slice(0, -1) : normalized
-  return process.platform === "win32" ? withoutTrailing.toLowerCase() : withoutTrailing
+  const spelling = normalized.endsWith(sep) && normalize(normalized + "..") !== normalized ? normalized.slice(0, -1) : normalized
+  // A Windows drive letter names the same volume in either case. Preserve
+  // every directory component, which can be case-sensitive.
+  return process.platform === "win32" && /^[A-Za-z]:/.test(spelling)
+    ? spelling[0]!.toUpperCase() + spelling.slice(1) : spelling
+}
+function path(value: unknown): string {
+  const spelling = pathSpelling(value)
+  return process.platform === "win32" ? spelling.toLowerCase() : spelling
 }
 function paths(value: unknown): readonly string[] {
   if (!Array.isArray(value)) fail("invalid path list")
@@ -69,17 +77,23 @@ export function compileExecutionPolicy(input: { mode: SandboxMode; owner: Execut
   let primaryRoot: string
   let roots: readonly string[]
   let references: readonly string[]
+  const originalPaths = (value: unknown) => {
+    if (!Array.isArray(value)) fail("invalid path list")
+    return Array.from(value, pathSpelling)
+  }
   if (authority.kind === "unbound") {
-    primaryRoot = path(authority.workspaceRoot); roots = [primaryRoot]; references = paths(authority.references ?? [])
+    primaryRoot = pathSpelling(authority.workspaceRoot); roots = [primaryRoot]; references = originalPaths(authority.references ?? [])
   } else if (authority.kind === "bound") {
-    primaryRoot = path(authority.primaryRoot); roots = paths(authority.roots); references = paths(authority.references)
+    primaryRoot = pathSpelling(authority.primaryRoot); roots = originalPaths(authority.roots); references = originalPaths(authority.references)
   } else fail("malformed authority state")
   const canonical = content({
     mode: selectedMode, owner: selectedOwner, authorityRevision: revision, authorityKind: authority.kind,
     primaryRoot, readable: "caller", authorityRoots: [primaryRoot, ...roots],
     writeRoots: selectedMode === "workspace-write" ? [primaryRoot, ...roots] : [], referenceRoots: references,
   })
-  return Object.freeze({ ...canonical, fingerprint: fingerprint(canonical) })
+  const policy = Object.freeze({ ...canonical, fingerprint: fingerprint(canonical) })
+  if (process.platform === "win32") associatePolicyPathSpellings(policy, { primaryRoot, authorityRoots: [primaryRoot, ...roots], referenceRoots: references })
+  return policy
 }
 
 export function assertExecutionAuthority(prepared: CompiledSandboxPolicy, current: CompiledSandboxPolicy): void {
@@ -88,4 +102,7 @@ export function assertExecutionAuthority(prepared: CompiledSandboxPolicy, curren
   const beforeDigest = fingerprint(before)
   const afterDigest = fingerprint(after)
   if (prepared.fingerprint !== beforeDigest || current.fingerprint !== afterDigest || beforeDigest !== afterDigest) fail("snapshot changed or fingerprint invalid")
+  if (usesWslPolicyPaths(prepared) && JSON.stringify(policyPathSpellings(prepared)) !== JSON.stringify(policyPathSpellings(current))) {
+    fail("WSL authority path spelling changed")
+  }
 }

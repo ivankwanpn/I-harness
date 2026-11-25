@@ -214,7 +214,7 @@ export function createWslExecutionBackend(options: WslExecutionOptions): WslExec
     void entry.completion.promise.finally(() => signal?.removeEventListener("abort", onAbort)).catch(() => {})
     try {
       const client = await open(entry)
-      const fingerprint = await client.prepare(capturedRequest.spec, capturedRequest.policy, configuration)
+      const fingerprint = await client.prepare(capturedRequest.spec, capturedRequest.guestPolicy, configuration)
       check(entry)
       if (fingerprint !== capturedRequest.policy.fingerprint) throw new Error("WSL prepared policy fingerprint mismatch")
       let committed = false

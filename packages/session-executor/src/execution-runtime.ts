@@ -7,6 +7,7 @@ import { createExecutionSupervisor, currentExecCaller, withExecCallerScope, type
 import { createLocalExecutionBackends, readWindowsQualification, type LocalExecutionBackends, type LocalExecutionOptions } from "@i-harness/sandbox-local"
 import { assertExecutionAuthority, compileExecutionPolicy, checkWrite } from "@i-harness/sandbox-policy"
 import { denialFor, snapshotProcessSpec, type AuthorityState, type CompiledSandboxPolicy, type ExecutionOwner, type SandboxMode, type SandboxExecutionPolicy } from "@i-harness/sandbox"
+import { policyPathSpellings, usesWslPolicyPaths } from "@i-harness/sandbox/internal/policy-paths"
 
 export interface ExecutionRuntimeOptions {
   owner: ExecutionOwner
@@ -30,6 +31,9 @@ function contains(root: string, path: string): boolean {
   const tail = relative(root, path)
   return tail === "" || !isAbsolute(tail) && tail !== ".." && !tail.startsWith(`..${sep}`)
 }
+function containsExactWindowsPath(root: string, path: string): boolean {
+  return path === root || path.startsWith(root.endsWith(sep) ? root : root + sep)
+}
 
 /** Assembly-owned authority and backend composition. No process operation lives here. */
 export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions) {
@@ -51,7 +55,7 @@ export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions)
   const blockedOwners = new Set<string>()
   const reconciliations = new Map<string, { generation: number; pending: number; successfulGeneration?: number }>()
   const captures = new WeakMap<CompiledSandboxPolicy, { generation: string; mode: SandboxMode; validate(): boolean }>()
-  const grants = new WeakMap<object, { policy: CompiledSandboxPolicy; generation: string; mode: SandboxMode; validate(): boolean }>()
+  const grants = new WeakMap<object, { policy: CompiledSandboxPolicy; authority: AuthorityState; generation: string; mode: SandboxMode; validate(): boolean }>()
   const writes = new Set<{ policy: CompiledSandboxPolicy; abort(): void; done: Promise<void> }>()
   let disposed = false
 
@@ -64,10 +68,14 @@ export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions)
       if (captured.generation !== standing.generation || captured.mode !== standing.mode) throw new Error("Execution base grant generation changed")
       assertExecutionAuthority(policy, current)
     } else {
+      const wslPaths = usesWslPolicyPaths(policy)
+      const original = wslPaths ? policyPathSpellings(policy)! : policy
+      const live = wslPaths ? policyPathSpellings(current)! : current
+      const containsPath = wslPaths ? containsExactWindowsPath : contains
       if (rank[standing.mode] < rank[captured.mode]
         || policy.authorityKind !== current.authorityKind
-        || policy.authorityRoots.some(root => !current.authorityRoots.some(next => contains(next, root)))
-        || current.referenceRoots.some(root => !policy.referenceRoots.some(before => contains(before, root)))) {
+        || original.authorityRoots.some(root => !live.authorityRoots.some(next => containsPath(next, root)))
+        || live.referenceRoots.some(root => !original.referenceRoots.some(before => containsPath(before, root)))) {
         throw new Error("Execution authority narrowed")
       }
     }
@@ -84,9 +92,7 @@ export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions)
       if (requested?.authoritySnapshot && !grant) throw new Error("Unknown execution base authority token")
       if (grant && (grant.policy.owner.sessionId !== owner.sessionId || grant.policy.owner.parentSessionId !== owner.parentSessionId)) throw new Error("Execution grant belongs to another caller")
       const standing = grant ?? { ...options.standing(), validate: caller?.validate ?? (() => true) }
-      const authority: AuthorityState = !grant ? options.authority() : grant.policy.authorityKind === "bound"
-        ? { kind: "bound", revision: grant.policy.authorityRevision, primaryRoot: grant.policy.primaryRoot, roots: grant.policy.authorityRoots, references: grant.policy.referenceRoots }
-        : { kind: "unbound", revision: grant.policy.authorityRevision, workspaceRoot: grant.policy.primaryRoot, references: grant.policy.referenceRoots }
+      const authority = grant?.authority ?? options.authority()
       const policy = compileExecutionPolicy({ mode: requested?.mode ?? standing.mode, owner, authority })
       captures.set(policy, standing)
       owners.add(owner.sessionId)
@@ -133,7 +139,11 @@ export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions)
       const owner = currentExecCaller() ?? options.owner
       const standing = options.standing()
       const compiled = compileExecutionPolicy({ mode: standing.mode, owner, authority: options.authority() })
-      grants.set(token, { policy: compiled, ...standing, validate: callers.getStore()?.validate ?? (() => true) })
+      const paths = policyPathSpellings(compiled) ?? compiled
+      const authority: AuthorityState = compiled.authorityKind === "bound"
+        ? Object.freeze({ kind: "bound", revision: compiled.authorityRevision, primaryRoot: paths.primaryRoot, roots: paths.authorityRoots, references: paths.referenceRoots })
+        : Object.freeze({ kind: "unbound", revision: compiled.authorityRevision, workspaceRoot: paths.primaryRoot, references: paths.referenceRoots })
+      grants.set(token, { policy: compiled, authority, ...standing, validate: callers.getStore()?.validate ?? (() => true) })
       return { ...policy, authoritySnapshot: token }
     },
     withCaller<T>(owner: ExecutionOwner, validate: () => boolean, call: () => T): T {
