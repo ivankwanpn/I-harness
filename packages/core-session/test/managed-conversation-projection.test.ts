@@ -97,3 +97,54 @@ it('declines changed serializer behavior and keeps staged proof conservative aft
   expect(projectManagedConversation(state.view, { ownerSessionId })).toBeUndefined()
   expect(projectConversation(state.view, { ownerSessionId }).items.at(-1)).toMatchObject({ kind: 'input' })
 })
+
+it('keeps public acceptance size validation when the original UTF-8 encoder changes', () => {
+  const state = createManagedSessionState({ formatVersion: CURRENT_FORMAT_VERSION, events: [
+    { type: 'conversation/semantics', version: 1, mode: 'accepted-exchange-v1', seq: 0 },
+    { type: 'step/start', actionId: 'action', attemptId: 'attempt', seq: 1 },
+    { type: 'assistant/message', text: 'ordinary complete reply', seq: 2 },
+    { type: 'model/exchange-accepted', version: 1, exchangeId: 'exchange', actionId: 'action', attemptId: 'attempt',
+      stepStartSeq: 1, assistantSeq: 2, callSeqs: [], seq: 3 },
+    { type: 'step/end', seq: 4 },
+  ] }, { sessionId: ownerSessionId })
+  state.bindOwner({})
+  const options = { ownerSessionId }
+  const original = projectConversation(state.view, options)
+  expect(projectManagedConversation(state.view, options)).toEqual(original)
+  const encode = TextEncoder.prototype.encode
+  try {
+    TextEncoder.prototype.encode = function(input?: string) {
+      if (input?.includes('model/exchange-accepted')) return new Uint8Array(4097)
+      return encode.call(this, input)
+    }
+    expect(projectManagedConversation(state.view, options)).toBeUndefined()
+    expect(() => projectConversation(state.view, options)).toThrow('invalid acceptance payload')
+  } finally { TextEncoder.prototype.encode = encode }
+  expect(projectManagedConversation(state.view, options)).toEqual(original)
+})
+
+it('keeps public runtime context validation when Buffer byte accounting or its global binding changes', () => {
+  const state = createManagedSessionState({ formatVersion: CURRENT_FORMAT_VERSION, events: [
+    { type: 'runtime/context', version: 1, sections: [{ name: 'project policy', text: 'project-specific instruction' }], seq: 0 },
+  ] }, { sessionId: ownerSessionId })
+  state.bindOwner({})
+  const options = { ownerSessionId }
+  const original = projectConversation(state.view, options)
+  expect(projectManagedConversation(state.view, options)).toEqual(original)
+  const byteLength = Buffer.byteLength
+  try {
+    Buffer.byteLength = new Proxy<typeof byteLength>(byteLength, { apply(target, receiver, args) {
+      return args[0] === 'project policy' ? 129 : Reflect.apply(target, receiver, args)
+    } })
+    expect(projectManagedConversation(state.view, options)).toBeUndefined()
+    expect(() => projectConversation(state.view, options)).toThrow('Invalid runtime/context record or format')
+  } finally { Buffer.byteLength = byteLength }
+  const originalBuffer = globalThis.Buffer
+  let substituted
+  try {
+    globalThis.Buffer = new Proxy(originalBuffer, {})
+    substituted = projectManagedConversation(state.view, options)
+  } finally { globalThis.Buffer = originalBuffer }
+  expect(substituted).toBeUndefined()
+  expect(projectManagedConversation(state.view, options)).toEqual(original)
+})
