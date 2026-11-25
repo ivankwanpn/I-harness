@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { decodeFactBatch, type JournalMetadata, type JournalPrefix, type SessionEvent } from '@i-harness/core-session'
-import { createJournalStreamDecoder, type JournalFrameExtent } from '@i-harness/core-session/internal/archive'
+import { createArchiveJournalHistoryDecoder, createJournalStreamDecoder, type JournalFrameExtent } from '@i-harness/core-session/internal/archive'
 
 /** Evidence from an already verified read by this owner. It retains no event bodies. */
 export interface VerifiedArchiveBody {
@@ -15,25 +15,20 @@ export class ArchiveEvidenceMismatch extends Error {
   constructor() { super('Owned dependency prefix mismatch') }
 }
 
-/** Collect coordinates in the original full decode, without retaining events. */
-export function createColdArchiveFramingRecorder(metadata: JournalMetadata, formatVersion: number, accept: (events: SessionEvent[]) => void) {
+/** Collect coordinates around the full decoder's private semantic proof. */
+export function createColdArchiveFramingRecorder(metadata: JournalMetadata, formatVersion: number) {
   const hash = createHash('sha256')
-  let frames: JournalFrameExtent[] | undefined = []
-  const decoder = createJournalStreamDecoder(metadata, formatVersion, accept, { onFrame(frame) {
-    if (!frames) return
-    if (frames.length === 16384) { frames = undefined; return }
-    frames.push(Object.freeze(frame))
-  } })
+  const decoder = createArchiveJournalHistoryDecoder(metadata, formatVersion)
   return {
-    push(bytes: Buffer) { if (frames) hash.update(bytes); decoder.push(bytes) },
+    push(bytes: Buffer) { if (decoder.push(bytes)) hash.update(bytes) },
     finish() {
-      const result = decoder.finish()
+      const { frames, ...result } = decoder.finish()
       const verified: VerifiedArchiveBody | undefined = frames?.length && !result.torn ? Object.freeze({
         formatVersion,
         legacyPrefixDigest: metadata.legacyPrefixDigest,
         prefix: Object.freeze({ ...result.prefix }),
         digest: hash.digest('hex'),
-        frames: Object.freeze(frames),
+        frames,
       }) : undefined
       return { ...result, verified }
     },

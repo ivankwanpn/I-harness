@@ -2,10 +2,10 @@ import { validateDeliveryFrame } from '../conversation/delivery.ts'
 import { isDeliveryEventType } from '../events/delivery.ts'
 import { createHash } from 'node:crypto'
 import { types } from 'node:util'
-import type { SessionEvent } from '../events/types.ts'
+import { CURRENT_FORMAT_VERSION, type SessionEvent } from '../events/types.ts'
 import type { BatchKey, EncodedFactBatch, JournalMetadata, JournalPrefix } from '../managed/types.ts'
 import { stringifyJsonData } from './json-data.ts'
-import { validateConversationHistory, createBootstrapConversationIndex } from '../conversation/validation.ts'
+import { validateConversationHistory, validateDecoderOwnedConversationHistory, createBootstrapConversationIndex } from '../conversation/validation.ts'
 
 const digestPattern = /^[a-f0-9]{64}$/
 const fail = (): never => { throw new TypeError('Invalid fact journal frame or digest') }
@@ -56,13 +56,17 @@ function canEncodeParsedFrame(row: unknown): boolean {
   return true
 }
 
-function utf8Parsed(value: unknown) {
-  if (!hasNativeSerializer()) return utf8(value)
+function utf8Parsed(value: unknown, observeGeneric?: () => void) {
+  if (!hasNativeSerializer()) {
+    observeGeneric?.()
+    return utf8(value)
+  }
   let encoded: string | undefined
   try { encoded = nativeStringify(value) } catch (cause) {
     // The iterative encoder also accepts canonical frames whose depth exceeds
     // the native serializer's stack limit.
     if (!(cause instanceof RangeError)) throw cause
+    observeGeneric?.()
     return utf8(value)
   }
   return Buffer.from(encoded ?? fail(), 'utf8')
@@ -92,19 +96,22 @@ export function validJournalPrefix(value: JournalPrefix): boolean {
   return count(value.eventCount) && count(value.bodyBytes) && digest(value.prefixDigest)
 }
 
-function factBatchParts(batchId: string, previousPrefixDigest: string, events: readonly import('../managed/types.ts').SessionEventView[], encode = utf8) {
+function factBatchParts(batchId: string, previousPrefixDigest: string, events: readonly import('../managed/types.ts').SessionEventView[], encode: typeof utf8Parsed = utf8, observeGeneric?: () => void) {
   const firstSeq = events[0]?.seq, eventCount = events.length
   if (typeof batchId !== 'string' || !/^[\x21-\x7e]{1,256}$/.test(batchId) || !digest(previousPrefixDigest)
     || !count(firstSeq) || !eventCount || !count(firstSeq + eventCount)) return fail()
-  if (encode === utf8Parsed && !hasNativeSequenceCheck()) encode = utf8
+  if (encode === utf8Parsed && !hasNativeSequenceCheck()) {
+    observeGeneric?.()
+    encode = utf8
+  }
   if (events.some((event, position) => event.seq !== firstSeq + position)) fail()
-  const coreHeader = encode({ batchId, firstSeq, count: eventCount, previousPrefixDigest }).subarray(0, -1)
-  const encodedEvents = encode(events)
+  const coreHeader = encode({ batchId, firstSeq, count: eventCount, previousPrefixDigest }, observeGeneric).subarray(0, -1)
+  const encodedEvents = encode(events, observeGeneric)
   // The digest covers the original v1 core object byte for byte. Reuse its
   // event representation in the outer frame instead of walking it again.
   const batchDigest = hash('ih.fact-batch.v1\0', coreHeader, eventKey, encodedEvents, closeCore)
   const prefixDigest = factPrefixDigest(previousPrefixDigest, batchDigest)
-  const trailer = encode({ batchDigest, prefixDigest }).subarray(1)
+  const trailer = encode({ batchDigest, prefixDigest }, observeGeneric).subarray(1)
   return {
     key: Object.freeze({ batchId, firstSeq, count: eventCount, previousPrefixDigest, batchDigest }),
     prefixDigest,
@@ -121,7 +128,7 @@ export function decodeFactBatch(bytes: Uint8Array): { key: BatchKey; events: Ses
   return decodeBatchBuffer(Buffer.from(bytes))
 }
 
-function decodeBatchBuffer(buffer: Buffer): ReturnType<typeof decodeFactBatch> {
+function decodeBatchBuffer(buffer: Buffer, observeGeneric?: () => void): ReturnType<typeof decodeFactBatch> {
   if (buffer.at(-1) !== 0x0a) fail()
   let row: Record<string, unknown>
   let parse: typeof nativeParse
@@ -131,8 +138,9 @@ function decodeBatchBuffer(buffer: Buffer): ReturnType<typeof decodeFactBatch> {
     row = parse === nativeParse ? nativeParse(text) : Reflect.apply(parse, JSON, [text])
   } catch { return fail() }
   const encode = parse === nativeParse && canEncodeParsedFrame(row) ? utf8Parsed : utf8
+  if (encode === utf8) observeGeneric?.()
   if (!row! || row!.recordKind !== 'session/fact-batch' || row!.version !== 1 || !Array.isArray(row!.events)) fail()
-  const { key, prefixDigest, parts } = factBatchParts(row!.batchId as string, row!.previousPrefixDigest as string, row!.events as SessionEvent[], encode)
+  const { key, prefixDigest, parts } = factBatchParts(row!.batchId as string, row!.previousPrefixDigest as string, row!.events as SessionEvent[], encode, observeGeneric)
   if (row!.firstSeq !== key.firstSeq || row!.count !== key.count) fail()
   let offset = 0
   // Compare the canonical envelope directly. Validation needs all its bytes,
@@ -196,6 +204,8 @@ export interface JournalFrameExtent {
   readonly offset: number
   readonly length: number
 }
+type JournalStreamOptions = { from?: Readonly<JournalPrefix>; onFrame?: (extent: JournalFrameExtent) => void }
+const MAX_ARCHIVE_FRAMES = 16384
 
 /** Incremental physical decoding. A resumed prefix must already have been
  * verified by the original archive reader. Publish only after finish. */
@@ -203,7 +213,54 @@ export function createJournalStreamDecoder(
   metadata: JournalMetadata,
   formatVersion: number,
   consume: (events: SessionEvent[]) => void,
-  { from, onFrame }: { from?: Readonly<JournalPrefix>; onFrame?: (extent: JournalFrameExtent) => void } = {},
+  options?: JournalStreamOptions,
+) {
+  return journalStreamDecoder(metadata, formatVersion, consume, options)
+}
+
+/** The full archive reader owns both the decoded payloads and their frame
+ * coordinates until physical decoding has finished. */
+export function createArchiveJournalHistoryDecoder(
+  metadata: JournalMetadata,
+  formatVersion: number,
+) {
+  let native = false
+  let events: SessionEvent[] | undefined = []
+  let frames: JournalFrameExtent[] | undefined = []
+  const decoder = journalStreamDecoder(metadata, formatVersion, unit => {
+    for (const event of unit) events!.push(event)
+  }, { onFrame(frame) {
+    if (!frames) return
+    if (frames.length === MAX_ARCHIVE_FRAMES) frames = undefined
+    else frames.push(Object.freeze(frame))
+  } }, () => { native = false })
+  native = formatVersion === CURRENT_FORMAT_VERSION && !metadata.legacyBodyBytes && !metadata.legacyEventCount && !metadata.separatorBytes
+  return {
+    push(bytes: Uint8Array) {
+      decoder.push(bytes)
+      return frames !== undefined
+    },
+    finish() {
+      const decoded = decoder.finish()
+      return { ...decoded, frames: frames && Object.freeze(frames), validatedEvents(header: import('../conversation/generation.ts').GenerationHistoryScope) {
+        if (!events) throw new TypeError('Archive history already consumed')
+        const history = events
+        events = undefined
+        if (native && !decoded.torn && !header.semanticSeed && hasNativeSerializer())
+          validateDecoderOwnedConversationHistory(history, formatVersion, header)
+        else validateConversationHistory(history, formatVersion, header)
+        return history
+      } }
+    },
+  }
+}
+
+function journalStreamDecoder(
+  metadata: JournalMetadata,
+  formatVersion: number,
+  consume: (events: SessionEvent[]) => void,
+  { from, onFrame }: JournalStreamOptions = {},
+  observeGeneric?: () => void,
 ) {
   if (!validJournalMetadata(metadata)) fail()
   const size = Buffer.alloc(8); size.writeBigUInt64BE(BigInt(metadata.legacyEventCount))
@@ -253,7 +310,7 @@ export function createJournalStreamDecoder(
       }
       if (legacy) legacyLine(record.subarray(0, -1))
       else {
-        const frame = decodeBatchBuffer(record); validateDeliveryFrame(frame.events, formatVersion)
+        const frame = decodeBatchBuffer(record, observeGeneric); validateDeliveryFrame(frame.events, formatVersion)
         const nextBytes = bodyBytes + record.length
         if (frame.key.firstSeq !== eventCount || frame.key.previousPrefixDigest !== prefixDigest || !count(nextBytes)) fail()
         onFrame?.({ firstSeq: frame.key.firstSeq, count: frame.key.count, offset: bodyBytes, length: record.length })

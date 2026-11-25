@@ -45,7 +45,7 @@ export function createHistoryIndex(formatVersion: number, validateShape = valida
     iterateSelectedResultRefs,
     semanticSeedResultRefs: () => [...iterateSelectedResultRefs()],
     dependencies: () => new Map([...dependencies].map(([seq, required]) => [seq, new Set(required)])),
-    stage(read?: (index: number) => SessionEventView | undefined) {
+    stage(read?: (index: number) => SessionEventView | undefined, initialShapeValidated = false) {
       const nextFacts = new Map<number, HistoryFact>(), nextCounts = new Map<number, number>()
       const nextDependencies = new Map<number, ReadonlySet<number>>(), nextAddresses = new Set<number>()
       const nextConsumed = new Set<string>(), nextAdmissions = new Map<string, number | undefined>()
@@ -58,7 +58,7 @@ export function createHistoryIndex(formatVersion: number, validateShape = valida
         const required=validateHistoricalReplacement({length:position,get:index=>nextFacts.get(index)??facts.get(index)!},fact)
         return [...facts.values()].filter(prior=>prior.seq!==undefined&&required.has(prior.seq)).map(prior=>prior.index)
       },advance(event: SessionEventView) {
-        validateShape(event, formatVersion)
+        if (!initialShapeValidated) validateShape(event, formatVersion)
         const position = baseCount + stagedLength++, fact = freezeJsonData(historyFact(event, position, inheritedBoundary)) as HistoryFact
         if (event.type === 'agent/input/admitted') nextAdmissions.set(event.inputId, event.seq)
         if (event.type === 'user/message') for (const id of [event.input?.inputId, event.imageInputId]) {

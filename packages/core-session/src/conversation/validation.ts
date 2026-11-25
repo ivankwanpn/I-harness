@@ -54,6 +54,7 @@ export interface ConversationValidationIndex {
 }
 const deliveryObservations = new WeakMap<ConversationValidationIndex, DeliveryReadIndex>();
 const generationObservations = new WeakMap<ConversationValidationIndex, () => readonly GenerationActionState[]>();
+const archiveShapePreflight = Symbol('archive shape preflight');
 const callObservations=new WeakMap<ConversationValidationIndex,(id:string)=>boolean>();
 export function hasConversationToolCall(index:ConversationValidationIndex,id:string):boolean{const read=callObservations.get(index);if(!read)throw TypeError('Original conversation call index required');return read(id)}
 type PreparedConversationAppend=ReturnType<ConversationValidationIndex['stage']>&{discard():void};
@@ -91,7 +92,7 @@ export function createBootstrapConversationIndex(events: readonly SessionEvent[]
 export function createSemanticSourceConversationIndex(events: readonly SessionEvent[], formatVersion: number, header: GenerationHistoryScope = {}): ConversationValidationIndex {
     return conversationIndex(events, undefined, formatVersion, header, semanticSourceStructure);
 }
-function conversationIndex(events: readonly SessionEvent[], read: ((index: number) => SessionEvent | undefined) | undefined, formatVersion: number, header: GenerationHistoryScope, capability?: typeof bootstrapStaging | typeof semanticSourceStructure, scan?: (begin: ConversationScanBegin) => void): ConversationValidationIndex {
+function conversationIndex(events: readonly SessionEvent[], read: ((index: number) => SessionEvent | undefined) | undefined, formatVersion: number, header: GenerationHistoryScope, capability?: typeof bootstrapStaging | typeof semanticSourceStructure, scan?: (begin: ConversationScanBegin) => void, initialShapeProof?: typeof archiveShapePreflight): ConversationValidationIndex {
     const restoredSource = scan !== undefined;
     const validateShape = capability === semanticSourceStructure ? validateSemanticSourceEventShape : validateConversationEventShape;
     const acceptances = new Map<number, AcceptanceFact>();
@@ -122,8 +123,9 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
             || actual.type === "tool/call" && actual.callId !== target.callId)
             fail("referenced structure was mutated");
     };
-    function beginStage(readCurrent?: (index: number) => SessionEvent | undefined, readStaged = readCurrent ?? (() => undefined)): ConversationScanStage {
-        const stagedHistory = history.stage(readCurrent);
+    function beginStage(readCurrent?: (index: number) => SessionEvent | undefined, readStaged = readCurrent ?? (() => undefined), shapeProof?: typeof archiveShapePreflight): ConversationScanStage {
+        const shapeValidated = shapeProof === archiveShapePreflight;
+        const stagedHistory = history.stage(readCurrent, shapeValidated);
         const stagedDelivery = delivery.stage();
         deliveryOrigins = stagedDelivery;
         const stagedGeneration = generation.stage();
@@ -155,7 +157,7 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
             if (capability === semanticSourceStructure)
                 validateSemanticSourceEventShape(event, formatVersion);
             const offset = stagedLength++;
-            validateShape(event, formatVersion);
+            if (!shapeValidated) validateShape(event, formatVersion);
             stagedDelivery.advance(event);
             stagedGeneration.advance(event);
             stagedSoft.advance(event);
@@ -357,6 +359,23 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
             }
         };
     }
+    function stage(suffix: readonly SessionEvent[], options?: StageOptions, shapeProof?: typeof archiveShapePreflight) {
+        // Own the staged sequence for bootstrap checks and dependency lookup.
+        const proposed = Array.from(suffix);
+        for (const event of proposed)
+            validateRuntimeContextDiscriminant(event, formatVersion);
+        if (capability === semanticSourceStructure)
+            for (const event of proposed)
+                validateSemanticSourceEventShape(event, formatVersion);
+        const readCurrent = options?.readCurrentEvent ?? read;
+        const prefixLength = scope.semanticSeed ? Math.min(count, scope.semanticSeed.seedLength + 1 + (scope.semanticSeed.initialInputId === undefined ? 0 : 1)) : 0;
+        if (restoredSource) validateCommittedBootstrapSuffix(proposed,formatVersion,scope,count);
+        else validateBootstrapReadiness([...Array.from({ length: prefixLength }, (_, index) => readCurrent?.(index) ?? events[index]!), ...proposed], formatVersion, scope, capability);
+        const staged = beginStage(readCurrent, position => proposed[position - count], shapeProof);
+        for (const event of proposed)
+            staged.advance(event);
+        return staged.finish();
+    }
     const index: ConversationValidationIndex = {
         generationScope: conversationScopeKey(scope),
         get formatVersion() {
@@ -379,25 +398,7 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
         resultFacts: history.resultFacts,
         replacementDependencies: history.dependencies,
         softReduction: soft.read,
-        stage(suffix, options) {
-            // Walk the proposed suffix exactly once: every later phase, including
-            // staged reads and bootstrap readiness, operates on this owned copy so a
-            // caller-supplied sequence is never re-enumerated per element.
-            const proposed = Array.from(suffix);
-            for (const event of proposed)
-                validateRuntimeContextDiscriminant(event, formatVersion);
-            if (capability === semanticSourceStructure)
-                for (const event of proposed)
-                    validateSemanticSourceEventShape(event, formatVersion);
-            const readCurrent = options?.readCurrentEvent ?? read;
-            const prefixLength = scope.semanticSeed ? Math.min(count, scope.semanticSeed.seedLength + 1 + (scope.semanticSeed.initialInputId === undefined ? 0 : 1)) : 0;
-            if (restoredSource) validateCommittedBootstrapSuffix(proposed,formatVersion,scope,count);
-            else validateBootstrapReadiness([...Array.from({ length: prefixLength }, (_, index) => readCurrent?.(index) ?? events[index]!), ...proposed], formatVersion, scope, capability);
-            const staged = beginStage(readCurrent, position => proposed[position - count]);
-            for (const event of proposed)
-                staged.advance(event);
-            return staged.finish();
-        },
+        stage(suffix, options) { return stage(suffix, options); },
     };
     callObservations.set(index,id=>callsById.has(id));
     appendPreparations.set(index,async(suffix,readEvent,assertCurrent,readEvents)=>{
@@ -442,17 +443,27 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
         register(beginStage);
     }
     else
-        index.stage(events).commit();
+        stage(events, undefined, initialShapeProof).commit();
     if (capability !== semanticSourceStructure)
         deliveryObservations.set(index, delivery.readIndex());
     if (capability !== semanticSourceStructure)
         generationObservations.set(index, generation.read);
     return index;
 }
-export function validateConversationHistory(events: readonly SessionEvent[], formatVersion: number, header?: GenerationHistoryScope): void {
+function validateHistoryShapes(events: readonly SessionEvent[], formatVersion: number): void {
     for (const event of events)
         validateConversationEventShape(event, formatVersion);
+}
+export function validateConversationHistory(events: readonly SessionEvent[], formatVersion: number, header?: GenerationHistoryScope): void {
+    validateHistoryShapes(events, formatVersion);
     createConversationValidationIndex(events, { formatVersion, header });
+}
+/** Package-private: complete decoded frames are still private to the journal
+ * reader. Preserve the original whole-history shape error precedence before
+ * advancing relational validators over those same events. */
+export function validateDecoderOwnedConversationHistory(events: readonly SessionEvent[], formatVersion: number, header: GenerationHistoryScope): void {
+    validateHistoryShapes(events, formatVersion);
+    conversationIndex(events, undefined, formatVersion, header, undefined, undefined, archiveShapePreflight);
 }
 /** Only nominal completed validation candidates cross into original managed
  * construction. Read consumers never receive the mutable validation index. */

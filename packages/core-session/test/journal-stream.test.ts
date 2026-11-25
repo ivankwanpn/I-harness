@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest'
-import { createJournalStreamDecoder, decodeFactBatch, encodeFactBatch, legacyPrefixDigest, readFactJournal } from '../src/serialization/fact-journal.ts'
+import { createArchiveJournalHistoryDecoder, createJournalStreamDecoder, decodeFactBatch, encodeFactBatch, legacyPrefixDigest, readFactJournal } from '../src/serialization/fact-journal.ts'
+import { CURRENT_FORMAT_VERSION } from '../src/events/types.ts'
 import type { JournalFrameExtent } from '../src/serialization/archive-internal.ts'
 
 it('matches the original decoder across every byte boundary and ignores a torn suffix', () => {
@@ -67,6 +68,30 @@ function nativePrefix() {
   ])
   return { metadata, first, from, suffix }
 }
+
+it('validates the full shape before relational errors and never exposes an unvalidated archive', () => {
+  const { metadata } = nativePrefix()
+  const duplicate = [
+    { type: 'conversation/semantics', version: 1, mode: 'accepted-exchange-v1', seq: 0 },
+    { type: 'conversation/semantics', version: 1, mode: 'accepted-exchange-v1', seq: 1 },
+  ] as const
+  const malformed = { ...duplicate[1], mode: 'invalid' as typeof duplicate[1]['mode'], seq: 2 }
+  const load = (events: Parameters<typeof encodeFactBatch>[2]) => {
+    const decoder = createArchiveJournalHistoryDecoder(metadata, CURRENT_FORMAT_VERSION)
+    const frame = encodeFactBatch('archive', metadata.legacyPrefixDigest, events)
+    const header = { sessionId: 'archive' }
+    decoder.push(frame.bytes)
+    const finished = decoder.finish()
+    expect(finished.frames).toEqual([{ firstSeq: 0, count: events.length, offset: 0, length: frame.bytes.length }])
+    expect(finished).not.toHaveProperty('events')
+    return () => finished.validatedEvents(header)
+  }
+  expect(load([...duplicate, malformed])).toThrow(/invalid semantics fence/)
+  expect(load(duplicate)).toThrow(/duplicate semantics fence/)
+  const valid = load(duplicate.slice(0, 1))
+  expect(valid()).toEqual(duplicate.slice(0, 1))
+  expect(valid).toThrow(/already consumed/)
+})
 
 it('resumes a verified native prefix and reports complete frames at absolute body offsets', () => {
   const { metadata, first, from, suffix } = nativePrefix()

@@ -8,12 +8,15 @@ import { ArchiveEvidenceMismatch, createColdArchiveFramingRecorder, createVerifi
 const managed = (v: number) => [6, 7, 8, 9, 10, 11, 12, 13, 14].includes(v);
 type ArchivePrefix = { header: SessionMeta; birth: Buffer };
 type DependencySelection = { ordinals: ReadonlySet<number>; prefix: Readonly<JournalPrefix>; assertCurrent(): void; verified?: VerifiedArchiveBody; coldHeaderDigest?: string };
-type ArchiveBodyDecoder = { push(bytes: Buffer): void; finish(): { prefix: JournalPrefix; torn: boolean; verified?: VerifiedArchiveBody } };
+type ArchiveBodyDecoder = { push(bytes: Buffer): void; finish(): {
+    prefix: JournalPrefix; torn: boolean; verified?: VerifiedArchiveBody; validatedEvents?(header: SessionMeta): SessionEvent[];
+} };
 const incompleteBirth = () => Object.assign(new Error('bootstrap-incomplete'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' });
 /** IO chunks are bounded; complete decoded events and the largest record remain materialized. */
 export async function readSessionArchive(handle: FileHandle, extent: number, prefixOnly = false, qualifyPrefix?: (prefix: ArchivePrefix) => Promise<void>, dependency?: DependencySelection, captureColdFraming = false) {
     let header: SessionMeta | undefined, parts: Buffer[] = [], partBytes = 0, legacyStopped = false;
-    const events: SessionEvent[] = [], birth: Buffer[] = [];
+    let events: SessionEvent[] = [];
+    const birth: Buffer[] = [];
     let needed = 0, ordinal = 0, decoder: ArchiveBodyDecoder | undefined;
     function add(bytes: Buffer) { if (bytes.length) { parts.push(Buffer.from(bytes)); partBytes += bytes.length; } }
     function take() { const b = Buffer.concat(parts, partBytes); parts = []; partBytes = 0; return b; }
@@ -46,7 +49,7 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
                     && !journal.legacyEventCount && !journal.legacyBodyBytes && !journal.separatorBytes;
                 decoder = (dependency && createVerifiedArchiveBodyDecoder(journal, header.formatVersion,
                     dependency.prefix, dependency.ordinals, event => events.push(event), dependency.verified, coldHeader !== undefined))
-                    ?? (collect ? createColdArchiveFramingRecorder(journal, header.formatVersion, accept)
+                    ?? (collect ? createColdArchiveFramingRecorder(journal, header.formatVersion)
                         : createJournalStreamDecoder(journal, header.formatVersion, accept));
             }
             if (!needed && !prefixOnly) await qualifyPrefix?.({ header, birth: Buffer.concat(birth) });
@@ -105,7 +108,7 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
         if (!dependency && header.semanticSeed) {
             const reservation = header.semanticSeed;
             const initial = 'initialInputId' in reservation && reservation.initialInputId !== undefined ? 1 : 0;
-            if (events.length < reservation.seedLength + 1 + initial) throw incompleteBirth();
+            if ((decoded?.validatedEvents ? decoded.prefix.eventCount : events.length) < reservation.seedLength + 1 + initial) throw incompleteBirth();
         }
         if(dependency){
             const expected=dependency.prefix,actual=decoded?.prefix;
@@ -113,7 +116,8 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
             dependency.assertCurrent();
             verified = decoded.verified;
         }else if (managed(header.formatVersion) || events.some(e => e.type === 'compaction/replacement')) {
-            validateConversationHistory(events, header.formatVersion, header);
+            if (decoded?.validatedEvents) events = decoded.validatedEvents(header);
+            else validateConversationHistory(events, header.formatVersion, header);
             if (decoded?.verified && birth.length === 1 && decoded.prefix.bodyBytes === extent - birth[0]!.length) verified = decoded.verified;
         }
     }
