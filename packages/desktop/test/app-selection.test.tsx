@@ -1186,6 +1186,32 @@ it("ignores a delayed historical target validation after a newer conversation se
   expect(captured.props!.historicalView).toBeUndefined()
 })
 
+it.each(["leaving search", "reopening search", "entering standby"] as const)("retires a history target lookup after %s", async action => {
+  const target = defer()
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  const request = fixture(input => input.kind === "desktop/notifications/target" ? target.promise : undefined,
+    listener => { emit = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props?.selectedSessionId).toBe("a"))
+  act(() => {
+    useUiStore.getState().setSurface("search")
+    captured.props!.onSelectHistory!({ workspaceId: "w1", sessionId: "a", seq: 300 })
+  })
+  expect(request).toHaveBeenCalledWith({ kind: "desktop/notifications/target", workspaceId: "w1", sessionId: "a" })
+  act(() => {
+    if (action === "entering standby") emit({ kind: "sdk/idle", method: "sdk/idle", workspaceId: "w1", runtimeGeneration: 1 })
+    else {
+      useUiStore.getState().setSurface("conversation")
+      if (action === "reopening search") useUiStore.getState().setSurface("search")
+    }
+  })
+  await act(async () => { target.resolve({ workspaceId: "w1", sessionId: "a" }); await target.promise })
+  expect(captured.props!.selectedSessionId).toBe("a")
+  expect(captured.props!.historicalView).toBeUndefined()
+  expect(useUiStore.getState().surface).toBe(action === "leaving search" ? "conversation" : "search")
+})
+
 it("moves the selected conversation grouping while retaining its execution workspace", async () => {
   const projects = [{ id: "original", name: "Original", workspaceIds: ["w1"], createdAt: "now", updatedAt: "now" }, { id: "destination", name: "Destination", workspaceIds: ["w2"], createdAt: "now", updatedAt: "now" }]
   let owner = "original"

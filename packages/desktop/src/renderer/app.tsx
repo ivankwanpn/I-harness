@@ -184,6 +184,13 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   }
   const reviewRequest = useRef(0)
   const navigationVersion = useRef(0)
+  const historySurfaceRevision = useRef(0)
+  useEffect(() => {
+    const unsubscribe = useUiStore.subscribe((current, previous) => {
+      if (current.surface !== previous.surface) historySurfaceRevision.current++
+    })
+    return () => { historySurfaceRevision.current++; unsubscribe() }
+  }, [])
   const modelRequest = useRef(0)
   const dashboardRequest = useRef(0)
   const dashboardApplied = useRef(0)
@@ -1000,15 +1007,19 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       onSelectHistory={(target) => {
         const scope = selection.current
         const version = ++navigationVersion.current
+        const surface = historySurfaceRevision.current
+        const current = () => historyReadScope.isCurrent() && navigationVersion.current === version
+          && historySurfaceRevision.current === surface
+        if (!current()) return
         if (!Number.isSafeInteger(target.seq) || target.seq < 0) { setError("Invalid history position"); return }
         void bridge.request({ kind: "desktop/notifications/target", workspaceId: target.workspaceId, sessionId: target.sessionId }).then(value => {
-          if (selection.current !== scope || navigationVersion.current !== version) return
+          if (!current()) return
           const validated = value as { workspaceId: string; sessionId: string; projectId?: string }
           if (validated.workspaceId !== target.workspaceId || validated.sessionId !== target.sessionId) throw new Error("Invalid history target")
           if (target.workspaceId !== scope.workspaceId) setDashboard(undefined)
           setSelectedProjectId(validated.projectId); setHistoryTarget({ ...target }); setSelectedWorkspaceId(target.workspaceId); setSelectedSessionId(target.sessionId)
           useUiStore.getState().setSurface("conversation")
-        }).catch(reason => { if (selection.current === scope && navigationVersion.current === version) setError(String(reason)) })
+        }).catch(reason => { if (current()) setError(String(reason)) })
       }}
       onOpenProjectFile={(ref) => setProjectOpenFile({ ...ref })}
       onOpenExternalFile={(target) => setExternalOpenFile({ ...target, reference: { ...target.reference } })}
