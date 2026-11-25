@@ -14,6 +14,7 @@ import { createOriginalPassiveExecution, inheritOriginalPassivePrepared } from '
 
 type OwnedExecutionConfirmation = Readonly<Pick<ExecutionConfirmation, 'version' | 'sendId' | 'semanticId' | 'payloadId' | 'payloadKind'>>
 const ownedConfirmations = new WeakMap<ExecutionConfirmation, { source: PreparedModelRequest; facts: OwnedExecutionConfirmation }>()
+const originalJsonParse = JSON.parse
 /** Package-private cooperation reader. Terminal completion is not Agent source
  * acceptance or a native reuse permit. No payload or transport capability escapes. */
 export function readOwnedExecutionConfirmation(confirmation: ExecutionConfirmation, expectedPrepared: PreparedModelRequest): OwnedExecutionConfirmation | undefined {
@@ -46,10 +47,19 @@ function preparePayload<T>(options: PreparedPayloadOptions<T>, owned: boolean): 
   // same JSON semantics even when callers supplied Date/toJSON/accessors.
   const sdk = options.kind === "sdk-command-estimate"
   const originalSerialized = sdk ? undefined : stringifyJsonData(options.body)!
-  const original: T = sdk ? snapshotModelData(options.body) : JSON.parse(originalSerialized!)
-  function derive(body: T, request = options.request): PreparedModelRequest {
-    const serialized = sdk ? encodeSdkCommandData(body) : body === original ? originalSerialized! : stringifyJsonData(body)!
-    const actualBody: T = sdk ? body : JSON.parse(serialized)
+  let original: { value: T } | undefined
+  if (sdk) original = { value: snapshotModelData(options.body) }
+  else {
+    // A replacement parser can expose mutable values or observable effects.
+    // Preserve its original eager, independent capture.
+    const parse = JSON.parse
+    if (parse !== originalJsonParse) original = { value: Reflect.apply(parse, JSON, [originalSerialized]) }
+  }
+  function originalBody(): T {
+    if (!original) original = { value: Reflect.apply(originalJsonParse, JSON, [originalSerialized]) }
+    return original.value
+  }
+  function derive(serialized: string, actualBody: T, request = options.request): PreparedModelRequest {
     const bytes = Buffer.byteLength(serialized)
     const result = options.validate?.(actualBody, sdk ? { kind: 'sdk-command-estimate', sdkCommandBytesEstimate: bytes } : { kind: 'http-json-body', bodyBytes: bytes })
     const validated = result && sanitizePreparedValidation(result.report)
@@ -79,7 +89,12 @@ function preparePayload<T>(options: PreparedPayloadOptions<T>, owned: boolean): 
         if (options.validate && cap !== undefined && (!Number.isSafeInteger(cap) || cap < output.minimumCap))
           throw finalValidationError('output-limit', createPreparedValidation({ ...validation, status: 'invalid', issues: [{ rule: 'output-range', site: 'generation' }], omittedIssueCount: 0 }))
         validateOutputCap(cap, output.minimumCap)
-        const derived=derive(options.cap(snapshotModelData(original), cap), { ...options.request, maxOutputTokens: cap });inheritOriginalPassivePrepared(prepared,derived);return derived
+        const baseline = originalBody()
+        const body = options.cap(snapshotModelData(baseline), cap)
+        const encoded = sdk ? encodeSdkCommandData(body) : body === baseline ? originalSerialized! : stringifyJsonData(body)!
+        const derived = derive(encoded, sdk ? body : JSON.parse(encoded), { ...options.request, maxOutputTokens: cap })
+        inheritOriginalPassivePrepared(prepared, derived)
+        return derived
       },
       async *stream(control?: PreparedStreamControl) {
         const actual = preparedControls(options.request, control)
@@ -126,5 +141,7 @@ function preparePayload<T>(options: PreparedPayloadOptions<T>, owned: boolean): 
     })
     return prepared
   }
-  return derive(original)
+  if (!sdk) return derive(originalSerialized!, JSON.parse(originalSerialized!))
+  const body = originalBody()
+  return derive(encodeSdkCommandData(body), body)
 }

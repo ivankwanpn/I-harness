@@ -52,6 +52,62 @@ it("lowers toJSON once before description and execution", async () => {
   expect(calls).toBe(1)
   expect(events[0]).toEqual({ type: "text/chunk", text: '{"x":"value1"}' })
 })
+
+it('keeps HTTP cap derivatives independent of callback mutations and preserves the measured wire bytes', async () => {
+  const body = { cap: 512, argument: { text: 'original', requestScope: { id: 'scope' } } }
+  const requests: { bytes: string; actual: string }[] = []
+  const capScopes: object[] = []
+  const prepared = createPreparedPayload({ body, request,
+    describe(actual) {
+      const counter = new ProjectionCounter()
+      counter.structured('otherInput', actual)
+      const input = counter.finish({ protocol: 'fixture', modelId: 'm' }, actual, actual)
+      actual.argument.text = 'description scratch'
+      return { input, packet: { sizeKind: 'http-json-body', inlineBinaryBytes: 0, cacheMetadataBytes: 0, signatureBytes: 0 } }
+    },
+    output(actual) { return { capSupport: 'supported', minimumCap: 1, effectiveCap: actual.cap, source: 'request' } },
+    cap(actual, cap) {
+      expect(actual.argument.text).toBe('original')
+      capScopes.push(actual.argument.requestScope)
+      actual.cap = cap!
+      return actual
+    },
+    async *execute(actual, serialized) {
+      requests.push({ bytes: serialized, actual: actual.argument.text })
+      actual.argument.text = 'execution scratch'
+      yield { type: 'end' }
+    },
+  })
+  body.argument.text = 'caller scratch'
+  const reduced = prepared.withOutputCap(128)
+  const smaller = reduced.withOutputCap(64)
+  const repeated = smaller.withOutputCap(128)
+  expect(capScopes).toHaveLength(3)
+  expect(capScopes.every(scope => scope === capScopes[0])).toBe(true)
+  expect(capScopes[0]).not.toBe(body.argument.requestScope)
+  expect(repeated.measurement).toEqual(reduced.measurement)
+
+  for (const selected of [prepared, reduced, smaller, repeated, prepared]) {
+    for await (const event of selected.stream()) expect(event.type).toBe('end')
+    const sent = requests.at(-1)!
+    const cap = selected.measurement.output.effectiveCap
+    expect(sent).toEqual({ bytes: `{"cap":${cap},"argument":{"text":"original","requestScope":{"id":"scope"}}}`, actual: 'description scratch' })
+    expect(selected.measurement.packet.bodyBytes).toBe(Buffer.byteLength(sent.bytes))
+    expect(selected.measurement.payloadIdentity?.id).toBe(createHash('sha256').update('i-harness:projection:v2:http-json-body\0').update(sent.bytes).digest('hex'))
+  }
+})
+
+it('keeps eager HTTP copies when the parser has been replaced', () => {
+  const native = JSON.parse, receivers: unknown[] = []
+  JSON.parse = function (this: typeof JSON, source, reviver) {
+    if (source === '{"x":"parser fixture"}') receivers.push(this)
+    return Reflect.apply(native, this, [source, reviver])
+  }
+  try { prepare({ x: 'parser fixture' }) }
+  finally { JSON.parse = native }
+  expect(receivers).toEqual([JSON, JSON])
+})
+
 it('gives validation the once-lowered actual body and the same measured packet discriminant/bytes', () => {
   let calls = 0
   const seen: { body: unknown; packet: FinalValidationPacket }[] = []
