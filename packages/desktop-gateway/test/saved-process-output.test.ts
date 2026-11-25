@@ -33,7 +33,7 @@ function fixture(chunks: Chunk[], completeness: ManagedArtifactRef['completeness
     index: buildSavedProcessIndex([], 'fixture'),
     session: { formatVersion: 14, events: [] },
     document: undefined,
-    select: unused, selectTerminal: unused, assertCurrent: unused, checkpoint: unused,
+    selectJobs: unused, selectTerminal: unused, assertCurrent: unused, checkpoint: unused,
     page: query => page(query),
   }
   return { ref, page, context }

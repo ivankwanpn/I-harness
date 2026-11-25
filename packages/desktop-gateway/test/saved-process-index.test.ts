@@ -1,7 +1,7 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { decodeSavedCalls } from '../src/saved-process-index.ts'
-import { buildSavedProcessIndex, createFixedSavedSelection, buildObservedSavedProcessIndex } from '../src/saved-process-index.ts'
+import { buildSavedProcessIndex, createFixedSavedSelection, createFixedSavedSelections, buildObservedSavedProcessIndex } from '../src/saved-process-index.ts'
 
 const nativeFor = (instanceId = 'a') => ({ version: 1, jobId: 'j', instanceId, ownerSessionId: 'owner', sourceId: 's' })
 function snapshotFields(value: any) {
@@ -35,6 +35,57 @@ const settledNative = () => {
   return { identity, ref, start: [call!, dispatch!, source, launch], source, terminal }
 }
 const modernInitial = (events: unknown[]) => ({ session: { formatVersion: 14, events }, highWater: events.length }) as never
+
+function addSettledJob(events: unknown[], i: number, id = `job-${i}`) {
+  const seq = events.length, instanceId = `instance-${i}`, sourceId = `process:${i}`
+  const nativeJob = { ...nativeFor(instanceId), jobId: id, sourceId }
+  const [call, dispatch, result] = originalPair(`launch-${i}`, 'pwsh', { background: true }, { job_id: id, native_job: nativeJob }, seq)
+  const { source, terminal } = settledNative()
+  const started = { ...source, callSeq: seq, seq: seq + 2, sourceId: instanceId }
+  const ended = { ...terminal, sourceSeq: seq + 2, seq: seq + 4, instanceId, frameSourceId: sourceId,
+    dependency: { ...terminal.dependency, sourceId, retention: { kind: 'artifact', ref: frameRef((i % 16).toString(16)) } } }
+  events.push(call, dispatch, started, { ...result, seq: seq + 3,
+    envelope: { ...result!.envelope, execution: { dispatch: 'dispatched', outcome: 'unknown' } } }, ended)
+  return { selector: { id, instanceId }, ended, nativeJob }
+}
+
+it('seeds a full Process list through one fixed replay of the original prefix', () => {
+  const events: unknown[] = Array.from({ length: 9400 }, (_, seq) => ({ type: 'user/message', seq, text: 'observed archive' }))
+  const selectors = Array.from({ length: 200 }, (_, i) => addSettledJob(events, i).selector)
+  const initial = modernInitial(events), index = buildObservedSavedProcessIndex(initial, 'owner')
+  const entries = vi.spyOn(events, 'entries')
+  try {
+    const group = createFixedSavedSelections(initial, 'owner', selectors, index)
+    group.assertCurrent()
+    expect(entries).toHaveBeenCalledTimes(1)
+    expect(selectors.map((selector, i) => ({ expected: selector.id, actual: group.current(i).id })))
+      .toEqual(selectors.map(({ id }) => ({ expected: id, actual: id })))
+  } finally { entries.mockRestore() }
+})
+
+it('advances a shared prefix through its delivered suffix while isolating exact-instance conflicts and rewinds', () => {
+  const events: unknown[] = []
+  const a = addSettledJob(events, 1, 'shared'), b = addSettledJob(events, 2, 'shared'), c = addSettledJob(events, 3)
+  const highWater = events.length, initial = modernInitial(events)
+  const group = createFixedSavedSelections(initial, 'owner', [a.selector, b.selector, c.selector])
+  group.append(highWater, [{ type: 'tool/call', callId: 'later', name: 'shell', seq: highWater, args: {} }])
+  expect(() => group.assertCurrent()).toThrow(/unknown/)
+  expect(() => group.current(2)).toThrow(/unknown/)
+  group.append(highWater + 1, [{ type: 'tool/dispatch', callId: 'later', eventSeq: highWater, seq: highWater + 1 },
+    { type: 'tool/result', callId: 'later', name: 'shell', seq: highWater + 2,
+      envelope: savedEnvelope({ job_id: 'unrelated', native_job: { ...nativeFor('unrelated'), jobId: 'unrelated' } }) }])
+  group.assertCurrent()
+  group.append(highWater + 3, originalPair('obs-b', 'job_output', { job_id: 'shared', job_instance_id: b.selector.instanceId }, {
+    job_id: 'shared', native_job: b.nativeJob, full_result: { args: { ref: frameRef('e') } },
+  }, highWater + 3))
+  expect(() => group.current(1)).toThrow(/conflict/)
+  expect(group.current(0).nativeJob).toEqual(a.nativeJob)
+  expect(group.current(2).nativeJob).toEqual(c.nativeJob)
+  group.append(highWater + 6, [{ type: 'rewind/point', anchorSeq: c.ended.seq, seq: highWater + 6 }])
+  expect(() => group.assertCurrent()).toThrow(/conflict/)
+  expect(() => group.current(2)).toThrow(/conflict/)
+  expect(group.current(0).nativeJob).toEqual(a.nativeJob)
+})
 
 it('binds a genuine unknown background launch to its exact physical terminal without a saved job_output', () => {
   const { start, terminal, ref, identity } = settledNative()

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import type { SessionView } from '@i-harness/core-session'
 import type { SessionCoordinator, SessionMeta, ProcessReadInitial, ProcessReadUpdate } from '@i-harness/session-persistence'
 import type { SessionService, ResultPageQuery, ResultPageResult, ResultReadScopeResolver } from '@i-harness/session-executor'
-import { buildObservedSavedProcessIndex, createFixedSavedSelection, type FixedSavedSelection } from './saved-process-index.ts'
+import { buildObservedSavedProcessIndex, createFixedSavedSelections, type SavedProcessSelector } from './saved-process-index.ts'
 import type { SessionManagementFence } from './session-management-fence.ts'
 import { originalManagedExecutionFor, originalManagedRuntimeFor, type OriginalManagedRuntime } from '../../session-executor/src/host-managed-execution.ts'
 
@@ -12,7 +12,7 @@ export interface AgentProcessReadContext {
   session: SessionView
   document: unknown
   managedProcesses?(): { background: ReturnType<OriginalManagedRuntime['processes']>; tasks(): ReturnType<SessionService['tasks']> } | undefined
-  select(id: string, instanceId?: string): void
+  selectJobs(selectors: readonly SavedProcessSelector[]): void
   selectTerminal(id: string, evidence: readonly SavedFactEvidence[]): void
   checkpoint(): Promise<void>
   assertCurrent(): void
@@ -68,7 +68,8 @@ export function createAgentProcessReadRunner(options: {
     async function readOnce(): Promise<T> {
       await policy()
       const delivered: Extract<ProcessReadUpdate, { kind: 'suffix' }>[] = []
-      const facts: ReturnType<typeof createFixedFactSelection>[] = [], checks: FixedSavedSelection[] = []
+      const facts: ReturnType<typeof createFixedFactSelection>[] = []
+      const checks: ReturnType<typeof createFixedSavedSelections>[] = []
       let context!: AgentProcessReadContext, opened = false
       const apply = (update: ProcessReadUpdate) => { if (update.kind === 'suffix') { delivered.push(update); for (const selected of checks) selected.append(update.from, update.events); for (const selected of facts) selected.append(update.from, update.events) } }
       try {
@@ -79,7 +80,7 @@ export function createAgentProcessReadRunner(options: {
           const assert = () => {
             synchronous()
             try { observation.assertCurrent() } catch (error) { readRefusal(error); throw error }
-            for (const selected of checks) selected.current()
+            for (const selected of checks) selected.assertCurrent()
             for (const selected of facts) selected.assertCurrent()
           }
           const checkpoint = async () => {
@@ -97,7 +98,13 @@ export function createAgentProcessReadRunner(options: {
               assert()
               return { background, tasks() { assert(); const tasks = service.tasks(id); assert(); return tasks } }
             },
-            select(jobId, instanceId) { const selected = createFixedSavedSelection(initial, id, jobId, instanceId, index); for (const update of delivered) selected.append(update.from, update.events); checks.push(selected); assert() },
+            selectJobs(selectors) {
+              if (!selectors.length) return
+              const selected = createFixedSavedSelections(initial, id, selectors, index)
+              for (const update of delivered) selected.append(update.from, update.events)
+              checks.push(selected)
+              assert()
+            },
             selectTerminal(terminalId, evidence) { const selected = createFixedFactSelection(initial.session, evidence, id, terminalId); for (const update of delivered) selected.append(update.from, update.events); facts.push(selected); assert() },
             assertCurrent: assert, checkpoint,
             async page(query) { await checkpoint(); if (!options.readResultPage) throw new Error('Process result reader unavailable'); const page = await options.readResultPage(id, query); await checkpoint(); return page },

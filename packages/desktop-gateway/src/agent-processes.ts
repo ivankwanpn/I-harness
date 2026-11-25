@@ -1,7 +1,6 @@
 import { savedTerminals } from './saved-terminals.ts'
 import { createFixedFactSelection, savedCallEvidence } from './saved-fact-selection.ts'
-import { createFixedSavedSelection } from './saved-process-index.ts'
-import { buildSavedProcessIndex, type SavedCall, type NativeIdentity } from './saved-process-index.ts'
+import { buildSavedProcessIndex, createFixedSavedSelections, type SavedCall, type NativeIdentity, type SavedProcessSelector } from './saved-process-index.ts'
 import { hydrateSavedCandidate, hydrateSavedInlineCatalog } from './saved-result-json.ts'
 import { readSavedProcessFrame, readSavedProcessPreview } from './saved-process-output.ts'
 import type { AgentProcessReadRunner, AgentProcessReadContext } from './agent-process-read.ts'
@@ -52,7 +51,7 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: S
     if (meta.archived) throw new Error('Conversation unavailable')
     const assembly = service.liveAssembly(id), session = assembly?.session ?? await readDesktopSnapshot(coordinator, id)
     const index = buildSavedProcessIndex(session.events, id, session.formatVersion)
-    const checks: { id: string; instanceId?: string; cursor: number; selected: ReturnType<typeof createFixedSavedSelection>; facts: ReturnType<typeof createFixedFactSelection> }[] = []
+    const checks: { selectors: readonly SavedProcessSelector[]; cursor: number; selected: ReturnType<typeof createFixedSavedSelections>; facts: ReturnType<typeof createFixedFactSelection> }[] = []
     const terminals: ReturnType<typeof createFixedFactSelection>[] = []
     const document = await coordinator.getDocument(id)
     const original = () => { if (service.liveAssembly(id) !== assembly) throw new Error('Process owner changed') }
@@ -62,25 +61,29 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: S
       for (const check of checks) {
         check.facts.revalidate(fresh)
         if (fresh.events.length > check.cursor) { check.selected.append(check.cursor, fresh.events.slice(check.cursor)); check.cursor = fresh.events.length }
-        if (current!.select(check.id, check.instanceId).kind !== 'selected') throw new Error('Saved job selection changed')
-        check.selected.current()
+        if (check.selectors.some(selector => current!.select(selector.id, selector.instanceId).kind !== 'selected')) throw new Error('Saved job selection changed')
+        check.selected.assertCurrent()
       }
       for (const terminal of terminals) terminal.revalidate(fresh)
     }
     const context: AgentProcessReadContext = { index, session, document,
-      select(jobId, instanceId) {
-        const selected = createFixedSavedSelection({ session, highWater: session.events.length }, id, jobId, instanceId, index), fixed = selected.current()
-        const evidence = savedCallEvidence(session, [fixed.declaration, fixed.observation, fixed.sourceObservation])
-        if (fixed.terminal) for (const sequence of [fixed.terminal.sourceSeq, fixed.terminal.terminalSeq]) {
-          const index = session.events.findIndex(event => event.seq === sequence)
-          const event = session.events[index]
-          if (!event) throw new Error('Saved process terminal unavailable')
-          evidence.push({ index, event })
+      selectJobs(selectors) {
+        if (!selectors.length) return
+        const addresses = selectors.map(selector => ({ ...selector }))
+        const selected = createFixedSavedSelections({ session, highWater: session.events.length }, id, addresses, index)
+        const fixed = addresses.map((_selector, ordinal) => selected.current(ordinal))
+        const evidence = savedCallEvidence(session, fixed.flatMap(job => [job.declaration, job.observation, job.sourceObservation]))
+        const terminalSequences = new Set(fixed.flatMap(job => job.terminal ? [job.terminal.sourceSeq, job.terminal.terminalSeq] : []))
+        if (terminalSequences.size) {
+          for (const [index, event] of session.events.entries()) {
+            if (event.seq !== undefined && terminalSequences.delete(event.seq)) evidence.push({ index, event })
+          }
+          if (terminalSequences.size) throw new Error('Saved process terminal unavailable')
         }
-        checks.push({ id: jobId, instanceId, cursor: session.events.length, selected, facts: createFixedFactSelection(session, evidence, id) })
+        checks.push({ selectors: addresses, cursor: session.events.length, selected, facts: createFixedFactSelection(session, evidence, id) })
       },
       selectTerminal(terminalId, evidence) { terminals.push(createFixedFactSelection(session, evidence, id, terminalId)) },
-      assertCurrent() { original(); for (const check of checks) { check.selected.current(); check.facts.assertCurrent() }; for (const terminal of terminals) terminal.assertCurrent() },
+      assertCurrent() { original(); for (const check of checks) { check.selected.assertCurrent(); check.facts.assertCurrent() }; for (const terminal of terminals) terminal.assertCurrent() },
       async checkpoint() { await revalidate(); if ((await coordinator.profile(id)).meta.archived) throw new Error('Conversation unavailable'); original(); await revalidate(); context.assertCurrent() },
       async page() { throw new Error('Host process reader unavailable') } }
     const result = await work(context); await context.checkpoint(); return result
@@ -112,7 +115,7 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: S
           if (query.sourceId !== undefined && candidate.nativeJob?.sourceId !== query.sourceId) return unavailable('stale-source')
           if (!query.instanceId && candidate.nativeJob
             && background.some(row => row.kind === 'shell' && row.nativeJob && row.nativeJob.instanceId !== candidate.nativeJob?.instanceId)) return unavailable('ambiguous-selector')
-          context.select(id, query.instanceId)
+          context.selectJobs([{ id, instanceId: query.instanceId }])
           const active = background.find(row => row.kind === 'shell' && (!candidate.nativeJob || row.nativeJob?.instanceId === candidate.nativeJob.instanceId))
           if (active && candidate.nativeJob && active.nativeJob?.sourceId !== candidate.nativeJob.sourceId) return unavailable('stale-source')
           if (active && !frames) return { text: active.output.slice(0, 131072), truncated: active.outputTruncated || active.output.length > 131072, ownerSessionId: sessionId, live: true }
@@ -176,7 +179,8 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: S
       return runRead(sessionId, async context => {
       const assembly = service.liveAssembly(sessionId), session = context.session
       const saved = savedShellJobs(context.index)
-      for (const row of saved.slice(-200)) if (!row.conflict && context.index.select(row.jobId, row.nativeJob?.instanceId).kind === "selected") context.select(row.jobId, row.nativeJob?.instanceId)
+      const selectedJobs = saved.slice(-200).filter(row => !row.conflict && context.index.select(row.jobId, row.nativeJob?.instanceId).kind === "selected")
+      context.selectJobs(selectedJobs.map(row => ({ id: row.jobId, instanceId: row.nativeJob?.instanceId })))
       const jobs = new Map<string, JobView & { nativeJob?: NativeIdentity; outputDisposition?: AgentProcessesView["jobs"][number]["outputDisposition"] }>([...projectJobsDoc(context.document), ...foldJobs(session.events)].map(job => [job.kind + ":" + job.jobId, job]))
       const managed = context.managedProcesses?.()
       const tasks = assembly?.tasks() ?? managed?.tasks() ?? []

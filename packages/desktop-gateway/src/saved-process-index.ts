@@ -261,46 +261,97 @@ export interface FixedSavedSelection {
   append(from: number, events: readonly unknown[]): void
   current(): SavedCandidate
 }
-/** Request-local fixed evidence. Only new suffix records are consumed after creation.
- * The caller still owns visibility, project epoch and original read-store authority. */
-export function createFixedSavedSelection(initial: SavedProcessInitial, owner: string, id: string, instanceId?: string, prepared?: ReturnType<typeof buildSavedProcessIndex>): FixedSavedSelection {
-  const selected = (prepared ?? buildObservedSavedProcessIndex(initial, owner)).select(id, instanceId)
-  if (selected.kind !== 'selected') throw new Error('Process selection unavailable: ' + selected.kind)
-  const fixed = structuredClone(selected.candidate), evidence: Fact = fixed.terminal?.ref ? { ref: fixed.terminal.ref } : {}
+export interface SavedProcessSelector { readonly id: string; readonly instanceId?: string }
+export interface FixedSavedSelections {
+  append(from: number, events: readonly unknown[]): void
+  assertCurrent(): void
+  current(selectionIndex: number): SavedCandidate
+}
+
+/** One request-local prefix/suffix replay for a group of fixed selections.
+ * Selected evidence stays independent. Visibility, project scope and
+ * original result-store authority remain the caller's responsibility. */
+export function createFixedSavedSelections(initial: SavedProcessInitial, owner: string, selectors: readonly SavedProcessSelector[], prepared?: ReturnType<typeof buildSavedProcessIndex>): FixedSavedSelections {
+  type Watch = {
+    selector: SavedProcessSelector; fixed: SavedCandidate; calls: SavedCall[]; evidence: Fact; failed: boolean
+  }
+  const index = prepared ?? buildObservedSavedProcessIndex(initial, owner)
+  const watches: Watch[] = selectors.map(({ id, instanceId }) => {
+    const selected = index.select(id, instanceId)
+    if (selected.kind !== 'selected') throw new Error('Process selection unavailable: ' + selected.kind)
+    const fixed = structuredClone(selected.candidate)
+    const calls = [fixed.declaration, fixed.observation, fixed.sourceObservation].filter((call): call is SavedCall => call !== undefined)
+    return { selector: { id, instanceId }, fixed, calls, evidence: fixed.terminal?.ref ? { ref: fixed.terminal.ref } : {}, failed: false }
+  })
+  const byCall = new Map<string, Set<Watch>>(), byCell = new Map<string, Set<Watch>>()
+  const byInstance = new Map<string, Set<Watch>>(), implicitByJob = new Map<string, Set<Watch>>()
+  const terminalInstances = new Map<string, Set<Watch>>(), terminalSources = new Map<number, Set<Watch>>(), terminalEnds = new Map<number, Set<Watch>>()
+  const originalKey = (call: SavedCall) => JSON.stringify([call.surface, call.cellId ?? null, call.callId])
+  function watchKey<K>(map: Map<K, Set<Watch>>, key: K, watch: Watch) {
+    const bucket = map.get(key)
+    if (bucket) bucket.add(watch)
+    else map.set(key, new Set([watch]))
+  }
+  function invalidate(bucket: ReadonlySet<Watch> | undefined) {
+    if (bucket) for (const watch of bucket) watch.failed = true
+  }
+  for (const watch of watches) {
+    const { selector, fixed, calls } = watch
+    for (const call of calls) {
+      watchKey(byCall, originalKey(call), watch)
+      if (call.cellId !== undefined) watchKey(byCell, call.cellId, watch)
+    }
+    if (selector.instanceId === undefined) watchKey(implicitByJob, selector.id, watch)
+    if (!fixed.nativeJob) continue
+    watchKey(byInstance, fixed.nativeJob.instanceId, watch)
+    if (fixed.terminal) {
+      watchKey(terminalInstances, fixed.nativeJob.instanceId, watch)
+      watchKey(terminalSources, fixed.terminal.sourceSeq, watch)
+      watchKey(terminalEnds, fixed.terminal.terminalSeq, watch)
+    }
+  }
   let cuts = effectiveCuts(initial.session.events)
   type Slot = { call: Fact; index: number; dispatch?: Fact; invalid: boolean }
-  const pending = new Map<string, Slot>(), completed = new Map<string, Slot>(), cells = new Map<string, Fact[]>()
+  type Cell = { declarations: Fact[]; parentCallId: unknown; conflicting: boolean }
+  const pending = new Map<string, Slot>(), completed = new Map<string, boolean>(), cells = new Map<string, Cell>()
   const unresolvedShells = new Set<string>()
   let cursor = 0, failed = false
   const keyFor = (e: Fact) => JSON.stringify([e.type.startsWith('code/') ? 'code' : 'tool', e.type.startsWith('code/') ? e.cellId : null, e.callId])
-  const originalKey = (call: SavedCall) => JSON.stringify([call.surface, call.cellId ?? null, call.callId])
-  const isFixed = (key: string) => [fixed.declaration, fixed.observation, fixed.sourceObservation].some(call => call !== undefined && key === originalKey(call))
   function cellValid(call: Fact, index: number): boolean {
     if (!call.type.startsWith('code/')) return true
-    const declarations = cells.get(call.cellId) ?? []
-    return declarations.some(c => c.index < index) && declarations.every(c => (c.sessionId === undefined || c.sessionId === owner) && (c.parentCallId === undefined && call.parentCallId === undefined || c.parentCallId === call.parentCallId))
+    const cell = cells.get(call.cellId)
+    return !!cell && !cell.conflicting && cell.parentCallId === call.parentCallId && cell.declarations[0]!.index < index
   }
-  function checkFixedCells() {
-    for (const c of [fixed.declaration, fixed.observation, fixed.sourceObservation]) if (c?.surface === 'code') {
-      const declarations = cells.get(c.cellId!) ?? []
-      if (declarations.some(d => d.sessionId !== undefined && d.sessionId !== owner || (d.parentCallId !== undefined || (c as Fact).parentCallId !== undefined) && d.parentCallId !== (c as Fact).parentCallId)) failed = true
+  function checkFixedCells(watch: Watch) {
+    for (const call of watch.calls) if (call.surface === 'code') {
+      const cell = cells.get(call.cellId!)
+      if (cell && (cell.conflicting || cell.parentCallId !== call.parentCallId)) watch.failed = true
     }
   }
   function accept(call: SavedCall, initialPass: boolean) {
     const value = object(call.value), args = object(call.args)
-    if (!args) return
-    if (call.name === 'job_output' && value && !('error' in value) && fixed.nativeJob && args.job_id === id) {
-      const n = identity(value.native_job, owner, id)
-      if (n?.instanceId === fixed.nativeJob.instanceId && (args.job_instance_id === undefined || args.job_instance_id === n.instanceId) && (args.source_id === undefined || args.source_id === n.sourceId)) {
-        if (nativeRelation(fixed.nativeJob, n) === 'conflict' || remember(evidence, value)) failed = true
+    if (!args || !value || 'error' in value) return
+    if (call.name === 'job_output' && typeof args.job_id === 'string') {
+      const n = identity(value.native_job, owner, args.job_id)
+      if (!n || args.job_instance_id !== undefined && args.job_instance_id !== n.instanceId || args.source_id !== undefined && args.source_id !== n.sourceId) return
+      const targets = byInstance.get(n.instanceId)
+      if (targets) for (const watch of targets) {
+        if (watch.selector.id === args.job_id && (nativeRelation(watch.fixed.nativeJob!, n) === 'conflict' || remember(watch.evidence, value))) watch.failed = true
       }
+      return
     }
-    if (!initialPass && shellTool(call.name) && value && typeof value.job_id === 'string' && !('error' in value)) {
+    if (!initialPass && shellTool(call.name) && typeof value.job_id === 'string') {
       const n = call.provenance === 'inline' ? identity(value.native_job, owner, value.job_id) : undefined
       if (call.provenance === 'inline' && !n) return
-      const relation = n && fixed.nativeJob ? nativeRelation(fixed.nativeJob, n) : 'other'
-      if (relation === 'conflict' || fixed.terminal && relation === 'same' && call.resultSeq !== fixed.declaration.resultSeq
-        || value.job_id === id && instanceId === undefined && relation !== 'same') failed = true
+      const corresponding = n && byInstance.get(n.instanceId)
+      if (n && corresponding) for (const watch of corresponding) {
+        const relation = nativeRelation(watch.fixed.nativeJob!, n)
+        if (relation === 'conflict' || watch.fixed.terminal && relation === 'same' && call.resultSeq !== watch.fixed.declaration.resultSeq) watch.failed = true
+      }
+      const implicit = implicitByJob.get(value.job_id)
+      if (implicit) for (const watch of implicit) {
+        if (!n || !watch.fixed.nativeJob || nativeRelation(watch.fixed.nativeJob, n) !== 'same') watch.failed = true
+      }
     }
   }
   function consume(raw: unknown, index: number, initialPass: boolean) {
@@ -308,55 +359,78 @@ export function createFixedSavedSelection(initial: SavedProcessInitial, owner: s
     if (!e) return
     if (!initialPass && e.type === 'rewind/point' && Number.isSafeInteger(e.seq) && Number.isSafeInteger(e.anchorSeq) && e.anchorSeq < e.seq) {
       const cut = { cutFrom: e.anchorSeq, markerSeq: e.seq }
-      for (const c of [fixed.declaration, fixed.observation, fixed.sourceObservation]) if (c && [c.callSeq, c.dispatchSeq, c.resultSeq].some(seq => hidden(seq, [cut]))) failed = true
-      if (fixed.terminal && [fixed.terminal.sourceSeq, fixed.terminal.terminalSeq].some(seq => hidden(seq, [cut]))) failed = true
-      for (const c of [fixed.declaration, fixed.observation, fixed.sourceObservation]) if (c?.cellId && (cells.get(c.cellId) ?? []).some(d => hidden(d.seq, [cut]))) failed = true
+      const range = [cut]
+      for (const watch of watches) {
+        const { calls, fixed } = watch
+        if (calls.some(c => [c.callSeq, c.dispatchSeq, c.resultSeq].some(seq => hidden(seq, range)))
+          || fixed.terminal && [fixed.terminal.sourceSeq, fixed.terminal.terminalSeq].some(seq => hidden(seq, range))) watch.failed = true
+      }
+      for (const [id, targets] of byCell) if (id && cells.get(id)?.declarations.some(d => hidden(d.seq, range))) invalidate(targets)
       // Only outstanding records can contribute future authority; retired history is never replayed.
       for (const [key, slot] of pending) if (hidden(slot.call.seq, [cut]) || slot.dispatch && hidden(slot.dispatch.seq, [cut])) { pending.delete(key); unresolvedShells.delete(key) }
       cuts = [...cuts, cut].sort((a, b) => a.cutFrom - b.cutFrom).reduce<Cut[]>((result, next) => { const last = result.at(-1); if (last && next.cutFrom < last.markerSeq) last.markerSeq = Math.max(last.markerSeq, next.markerSeq); else result.push({ ...next }); return result }, [])
       return
     }
     if (hidden(e.seq, cuts)) return
-    if (!initialPass && fixed.terminal && fixed.nativeJob && (
-      e.type === 'agent/delivery-source' && e.kind === 'exec' && (e.sourceId === fixed.nativeJob.instanceId || e.seq === fixed.terminal.sourceSeq)
-      || e.type === 'exec/end' && (e.sourceSeq === fixed.terminal.sourceSeq || e.instanceId === fixed.nativeJob.instanceId || e.seq === fixed.terminal.terminalSeq)
-    )) { failed = true; return }
+    if (!initialPass && e.type === 'agent/delivery-source' && e.kind === 'exec') {
+      invalidate(terminalInstances.get(e.sourceId)); invalidate(terminalSources.get(e.seq)); return
+    }
+    if (!initialPass && e.type === 'exec/end') {
+      invalidate(terminalSources.get(e.sourceSeq)); invalidate(terminalInstances.get(e.instanceId)); invalidate(terminalEnds.get(e.seq)); return
+    }
     if (e.type === 'code/cell' && typeof e.cellId === 'string') {
-      cells.set(e.cellId, [...cells.get(e.cellId) ?? [], { ...structuredClone(e), index }]); if (!initialPass) checkFixedCells(); return
+      const original: Fact = { ...structuredClone(e), index }
+      const cell: Cell = cells.get(e.cellId) ?? { declarations: [], parentCallId: original.parentCallId, conflicting: false }
+      if (original.sessionId !== undefined && original.sessionId !== owner || original.parentCallId !== cell.parentCallId) cell.conflicting = true
+      cell.declarations.push(original)
+      cells.set(e.cellId, cell)
+      const targets = !initialPass && byCell.get(e.cellId)
+      if (targets) for (const watch of targets) checkFixedCells(watch)
+      return
     }
     if (typeof e.type !== 'string' || typeof e.callId !== 'string' || !/^(tool|code)\/(call|dispatch|result)$/.test(e.type) || e.type.startsWith('code/') && typeof e.cellId !== 'string') return
     const key = keyFor(e), kind = e.type.split('/')[1]
     if (kind === 'call') {
-      const old = pending.get(key), done = completed.get(key)
-      if (old || done?.invalid) {
-        if (isFixed(key)) failed = true
-      }
+      const old = pending.get(key)
+      if (old || completed.get(key)) invalidate(byCall.get(key))
       pending.set(key, { call: structuredClone(e), index, invalid: !!old }); if (shellTool(e.name)) unresolvedShells.add(key); return
     }
     const slot = pending.get(key)
-    if (!slot) { if (!initialPass && isFixed(key)) failed = true; return }
+    if (!slot) { if (!initialPass) invalidate(byCall.get(key)); return }
     if (kind === 'dispatch') { if (slot.dispatch || e.eventSeq !== undefined && e.eventSeq !== slot.call.seq) slot.invalid = true; slot.dispatch = structuredClone(e); return }
     pending.delete(key); unresolvedShells.delete(key)
-    const prior = completed.get(key)
-    completed.set(key, slot)
-    if (slot.invalid || prior?.invalid || !cellValid(slot.call, slot.index)) { if (isFixed(key)) failed = true; return }
-    const cellRecords = slot.call.type.startsWith('code/') ? (cells.get(slot.call.cellId) ?? []).map(({ index: _index, ...c }) => c) : []
+    const invalidPrior = completed.get(key)
+    completed.set(key, slot.invalid)
+    if (slot.invalid || invalidPrior || !cellValid(slot.call, slot.index)) { invalidate(byCall.get(key)); return }
+    const cellRecords = slot.call.type.startsWith('code/') ? (cells.get(slot.call.cellId)?.declarations ?? []).map(({ index: _index, ...c }) => c) : []
     const decoded = decodeProcessCalls([...cellRecords, slot.call, ...(slot.dispatch ? [slot.dispatch] : []), e], owner, [], initial.session.formatVersion === 14)
     if (decoded[0]) accept(decoded[0], initialPass)
   }
   // Seed the same pending/cell state from the original owner snapshot once.
   for (const [index, raw] of initial.session.events.entries()) consume(raw, index, true)
-  checkFixedCells()
+  for (const watch of watches) checkFixedCells(watch)
   cursor = initial.highWater
   return {
     append(from, events) {
-      if (failed || from !== cursor || !Array.isArray(events)) { failed = true; throw new Error('Process selection conflict') }
+      if (failed || from !== cursor || !Array.isArray(events) || watches.length > 0 && watches.every(watch => watch.failed)) {
+        failed = true; throw new Error('Process selection conflict')
+      }
       for (const raw of events) consume(raw, cursor++, false)
     },
-    current() {
-      if (failed) throw new Error('Process selection conflict')
+    assertCurrent() {
+      if (failed || watches.some(watch => watch.failed)) throw new Error('Process selection conflict')
+      if (watches.length && unresolvedShells.size) throw new Error('Process selection unknown')
+    },
+    current(selectionIndex) {
+      const watch = watches[selectionIndex]
+      if (failed || !watch || watch.failed) throw new Error('Process selection conflict')
       if (unresolvedShells.size) throw new Error('Process selection unknown')
-      return structuredClone(fixed)
+      return structuredClone(watch.fixed)
     },
   }
+}
+
+export function createFixedSavedSelection(initial: SavedProcessInitial, owner: string, id: string, instanceId?: string, prepared?: ReturnType<typeof buildSavedProcessIndex>): FixedSavedSelection {
+  const scope = createFixedSavedSelections(initial, owner, [{ id, instanceId }], prepared)
+  return { append: scope.append, current: () => scope.current(0) }
 }

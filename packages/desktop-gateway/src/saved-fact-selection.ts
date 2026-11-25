@@ -72,11 +72,15 @@ export function createFixedFactSelection(initial: SessionView, input: readonly S
   assert(); return proof
 }
 export function savedCallEvidence(session: SessionView, calls: readonly (SavedCall | undefined)[]): SavedFactEvidence[] {
-  const selected = calls.filter((call): call is SavedCall => !!call), indices = new Set<number>(), cuts = effectiveCuts(session.events)
+  const selected = calls.filter((call): call is SavedCall => !!call), indices = new Set<number>()
+  const selectedCells = new Set(selected.filter(call => call.surface === 'code').map(call => call.cellId))
   for (const call of selected) {
     indices.add(call.callIndex); indices.add(call.resultIndex)
     for (let i = call.callIndex + 1; i < call.resultIndex; i++) { const e = session.events[i] as Fact; if (e.type === call.surface + '/dispatch' && e.callId === call.callId && (e.cellId ?? undefined) === call.cellId) indices.add(i) }
   }
-  for (const [index, e] of session.events.entries()) if (e.type === 'code/cell' && !hidden(e.seq, cuts) && selected.some(call => call.surface === 'code' && call.cellId === e.cellId)) indices.add(index)
+  if (selectedCells.size) {
+    const cuts = effectiveCuts(session.events)
+    for (const [index, e] of session.events.entries()) if (e.type === 'code/cell' && selectedCells.has(e.cellId) && !hidden(e.seq, cuts)) indices.add(index)
+  }
   return [...indices].map(index => ({ index, event: session.events[index] as Fact }))
 }
