@@ -1,6 +1,7 @@
 import { CURRENT_FORMAT_VERSION, stringifyJsonData, validateSubagentHeader, type Session, type SessionEvent, type SessionEventView } from "@i-harness/core-session"
 import { repairTurnTail } from "../repair.ts"
-import { preflightSessionFormat, preflightBatchShape, migrate, guardIgnorable, buildSession } from "../format/validation.ts"
+import { preflightSessionFormat, preflightBatchShape, preflightDecodedFactHistory, migrate, guardIgnorable, buildSession } from "../format/validation.ts"
+import { originalDecodedArchiveRead } from '../archive-read-internal.ts'
 import { assertUpgradeCapability, ensureWritableFormatUnlocked } from "./writable-format.ts"
 import type { PersistenceBackend, SessionMeta } from "./types.ts"
 import type { Ownership } from "./ownership.ts"
@@ -51,8 +52,8 @@ export function createLoads(
       throw error
     } finally { token?.end(outcome) }
   }
-  const read = async (sessionId: string) => {
-    try { return await backend.read(sessionId) }
+  const read = async (sessionId: string, original?: PersistenceBackend['read']) => {
+    try { return await (original ? Reflect.apply(original, backend, [sessionId]) : backend.read(sessionId)) }
     catch (cause) {
       if (['SESSION_CONTEXT_REPLACEMENT_FORMAT', 'SESSION_CONVERSATION_FORMAT'].includes((cause as { code?: string })?.code ?? '')) throw new SessionFormatUnsupportedError('unsupported conversation history', { cause })
       throw cause
@@ -137,11 +138,16 @@ export function createLoads(
     transitionLoad,
     loadOwnedExecution,
     async snapshot(sessionId: string) {
-      const { version, events, meta } = await read(sessionId)
-      preflightSessionFormat(version, events, meta)
+      const original = originalDecodedArchiveRead(backend)
+      const { version, events, meta } = await read(sessionId, original)
+      const currentDecoded = original !== undefined && version === CURRENT_FORMAT_VERSION
+      if (currentDecoded) preflightDecodedFactHistory(version, events)
+      else preflightSessionFormat(version, events, meta)
+      const visible = guardIgnorable(events)
       return { session: {
         formatVersion: CURRENT_FORMAT_VERSION,
-        events: await migrate(version, guardIgnorable(events), meta),
+        // Dropping ignorable records can change the effective conversation.
+        events: currentDecoded && visible.length === events.length ? visible : await migrate(version, visible, meta),
         ...(meta === undefined ? {} : { header: meta }),
       } }
     },

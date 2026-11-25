@@ -698,6 +698,7 @@ export function createJsonlBackend(root: string, options?: {
       return composeJsonlTaskTransitionCoordinator(backend, coordinatorOptions, taskDocumentStorageContract)
     },
   })
+  const originalArchiveRead = backend.read
   const wrap = options?.wrap
   wrap?.call(options, backend)
   const artifactOwner = pathResolution.bindBackend(backend, {
@@ -710,7 +711,7 @@ export function createJsonlBackend(root: string, options?: {
   })
   const assertOriginal = artifactOwner.assertOriginal
 
-  associateArchiveReadResources(backend,archiveReads.association)
+  associateArchiveReadResources(backend, archiveReads.association, originalArchiveRead)
   nativePrewrite.associate(backend, assertOriginal, captureIO.retainCleanup)
   associateOwnedExecutionReader(backend,{assertOriginal,filePath,assertNotDeleted,archive:archiveReads,
     register(id,held){trackHeaderOwner(id,held);if(hasTrackedHeaderDebt(id,held))throw Error('Owned dependency birth cleanup unresolved')},

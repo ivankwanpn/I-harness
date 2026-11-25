@@ -1,3 +1,6 @@
+import type { JournalPrefix } from '@i-harness/core-session'
+import type { PersistenceBackend } from './coordinator/types.ts'
+
 /** Constructor-private resource participation, never storage/read authority. */
 export interface ArchiveReadResources {
     attach(): {
@@ -7,14 +10,22 @@ export interface ArchiveReadResources {
         withMutationRead<T>(sessionId: string, work: () => Promise<T>): Promise<T>;
     };
 }
-const owners = new WeakMap<object, ArchiveReadResources>();
-export function associateArchiveReadResources(backend: object, owner: ArchiveReadResources) {
+const owners = new WeakMap<object, { owner: ArchiveReadResources; decodedRead: PersistenceBackend['read'] }>();
+
+/** Original JSONL construction binds its read identity together with archive resources. */
+export function associateArchiveReadResources(backend: object, owner: ArchiveReadResources, decodedRead: PersistenceBackend['read']) {
     if (owners.has(backend))
         throw TypeError('Archive resources already associated');
-    owners.set(backend, owner);
+    owners.set(backend, { owner, decodedRead });
 }
-export function attachArchiveReadResources(backend: object) { return owners.get(backend)?.attach(); }
-import type { JournalPrefix } from '@i-harness/core-session'
+export function attachArchiveReadResources(backend: object) { return owners.get(backend)?.owner.attach(); }
+
+/** Only the exact constructor-installed callable qualifies. Wrappers keep the ordinary checks. */
+export function originalDecodedArchiveRead(backend: object): PersistenceBackend['read'] | undefined {
+  const read = owners.get(backend)?.decodedRead
+  if (read && Object.getOwnPropertyDescriptor(backend, 'read')?.value === read) return read
+}
+
 export type ArchiveHistoryPrefixRead = {readonly kind:'available';readonly prefix:Readonly<JournalPrefix>} | {readonly kind:'unavailable'}
 const historyPrefixReaders = new WeakMap<object,(proof:object)=>Readonly<JournalPrefix>|undefined>()
 /** Installed once by the same genuine JSONL constructor as archive resources.

@@ -1,7 +1,8 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { CURRENT_FORMAT_VERSION, decodeFactBatch, encodeFactBatch, projectConversation, toJSONL } from '@i-harness/core-session'
+import { CURRENT_FORMAT_VERSION, decodeFactBatch, encodeFactBatch, projectConversation, toJSONL, type SessionEvent } from '@i-harness/core-session'
+import * as core from '@i-harness/core-session'
 import { createReadOnlySessionCoordinator, createSessionCoordinator, type SessionMeta } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '../src/index.ts'
 import { literalReady } from '../../core-session/test/fixtures/format11-seed.ts'
@@ -77,4 +78,48 @@ it.each([6, 7, 8, 9, 10, 11, 12, 13, 14])('preserves actual format%s structural 
   const reader = createReadOnlySessionCoordinator(createJsonlBackend(root))
   try { expect((await reader.snapshot(id)).session.events).toEqual(events); expect(await readFile(path, 'utf8')).toBe(bytes) }
   finally { await reader.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it.each([
+  { mode: 'original', validations: 1 },
+  { mode: 'wrapped reader', validations: 3 },
+  { mode: 'ignorable record', validations: 2 },
+  { mode: 'older format', validations: 3 },
+])('cold coordinator snapshot preserves the $mode path with $validations whole validations', async ({ mode, validations }) => {
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'snapshot-cold-preflight-'))
+  const id = 'history', path = join(root, id + '.jsonl')
+  const version = mode === 'older format' ? 13 : CURRENT_FORMAT_VERSION
+  const message: SessionEvent = { type: 'user/message', seq: 0, text: 'original history' }
+  const events: SessionEvent[] = [message]
+  if (mode === 'ignorable record') events.push({ type: 'future/fixture', seq: 1, ignorable: true } as unknown as SessionEvent)
+  const header: SessionMeta = { formatVersion: version, sessionId: id, createdAt: '2026-10-22T00:00:00.000Z' }
+  const original = toJSONL({ formatVersion: version, events, header })
+  await writeFile(path, original)
+  const backend = createJsonlBackend(root, mode === 'wrapped reader' ? { wrap(store) {
+    const read = store.read.bind(store)
+    store.read = id => read(id)
+  } } : undefined)
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const validate = vi.spyOn(core, 'validateConversationHistory')
+  try {
+    const snapshot = await coordinator.snapshot!(id)
+    expect(snapshot.session).toMatchObject({ formatVersion: CURRENT_FORMAT_VERSION, header, events: [message] })
+    expect(validate).toHaveBeenCalledTimes(validations)
+    expect(await readFile(path, 'utf8')).toBe(original)
+    expect(coordinator.ownerOf(id)).toBe(false)
+  } finally { validate.mockRestore(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it('keeps unrecognized required records refused on a modern native cold snapshot', async () => {
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'snapshot-unknown-required-'))
+  const id = 'history', path = join(root, id + '.jsonl')
+  const header: SessionMeta = { formatVersion: CURRENT_FORMAT_VERSION, sessionId: id, createdAt: '2026-10-22T00:00:00.000Z' }
+  const original = toJSONL({ formatVersion: CURRENT_FORMAT_VERSION, header,
+    events: [{ type: 'future/fixture', seq: 0 } as unknown as SessionEvent] })
+  await writeFile(path, original)
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  try {
+    await expect(coordinator.snapshot!(id)).rejects.toThrow(/unknown event type/)
+    expect(await readFile(path, 'utf8')).toBe(original)
+  } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
