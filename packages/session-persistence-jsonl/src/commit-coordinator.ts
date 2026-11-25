@@ -7,7 +7,7 @@ import { createCommitCoordinator, createOwnedLegacySessionStore, type CommitCoor
  * generation on their first write; the legacy file is never modified.
  */
 export function createJsonlCommitCoordinator(root: string, options: Omit<CommitCoordinatorOptions, 'root' | 'legacy'> = {}): CommitCoordinator {
-  const backend = createJsonlBackend(root)
+  const backend = createJsonlBackend(root, { fixedCapabilities: true })
   return createCommitCoordinator({
     ...options,
     root,

@@ -58,14 +58,7 @@ export function createStepInput(deps: Pick<AgentDeps,'sessionId'|'telemetry'> & 
   let prevFingerprints: string[] | undefined
 
 
-  return function prepareRequest(abort: AbortSignal | undefined, requestScope: LLMRequest["requestScope"], getSteps: () => number, evidence: RequestEvidence) {
-    const request = buildContextRequest(evidence.snapshot, { sessionId: deps.sessionId, signal: abort, requestScope })
-    const messages = request.messages
-    const requestRevision = evidence.projectionRevision
-
-    // M25: provider/call before the model stream opens.
-    // Model retry lifecycle arrives through the stream as durable model/retry
-    // events. Tool retry remains a separate guard-owned boundary.
+  function observePrefix(messages: LLMRequest['messages']) {
     // M5/D3: whether THIS request's prefix was rewritten by a marker that
     // arrived since the last one. Derived from the log rather than reported by
     // whoever rewrote it, so a rewrite path that forgets to announce itself
@@ -88,26 +81,35 @@ export function createStepInput(deps: Pick<AgentDeps,'sessionId'|'telemetry'> & 
     }
     const previous = prevFingerprints
     prevFingerprints = fingerprints
-    deps.telemetry?.emit({
+    return {
+      ...(prefixRewritten
+        ? { prefixRewritten: true, ...(rewrite.lastCause !== undefined ? { prefixCause: rewrite.lastCause } : {}) }
+        : {}),
+      // A resumed session has no predecessor. Zero would claim a comparison.
+      ...(previous === undefined ? {} : { prefixKept: shared, prefixBroke: shared < previous.length }),
+    }
+  }
+
+  return function prepareRequest(abort: AbortSignal | undefined, requestScope: LLMRequest["requestScope"], getSteps: () => number, evidence: RequestEvidence) {
+    const request = buildContextRequest(evidence.snapshot, { sessionId: deps.sessionId, signal: abort, requestScope })
+    const requestRevision = evidence.projectionRevision
+    const telemetry = deps.telemetry
+    let prefix: ReturnType<typeof observePrefix> = {}
+    if (telemetry && telemetry.wantsProviderPrefixContinuity !== false) {
+      prefix = observePrefix(request.messages)
+    } else {
+      rewriteMarkers = undefined
+      prevFingerprints = undefined
+    }
+    telemetry?.emit({
       type: "provider/call",
       ts: Date.now(),
       data: {
         sessionId: deps.sessionId,
         step: getSteps(),
-        messages: messages.length,
+        messages: request.messages.length,
         tools: request.tools.length,
-        ...(prefixRewritten
-          ? { prefixRewritten: true, ...(rewrite.lastCause !== undefined ? { prefixCause: rewrite.lastCause } : {}) }
-          : {}),
-        // M5 T2 (second half), the honesty rule: present ONLY when there was a
-        // previous request to compare against. A resumed session's first
-        // request reports NEITHER field — absent, never `shared: 0`, which is
-        // a measurement it did not make and would read as a regression.
-        // `prefixKept` is that measurement when it exists: how many of the
-        // previous request's messages are still the identical head of this
-        // one. `prefixBroke` says the rest is gone — a compaction's summary
-        // takes the head, so this is 0/true on the request that follows one.
-        ...(previous === undefined ? {} : { prefixKept: shared, prefixBroke: shared < previous.length }),
+        ...prefix,
       },
     })
 

@@ -1,5 +1,6 @@
 import {registerExecWithReservation,type ExecExecutionHost} from '@i-harness/exec'
 import {createShellTools,type ShellToolDeps} from '@i-harness/shell'
+import {resolveWslWorkingDirectory} from '@i-harness/sandbox'
 import {createContextOutputTools,type ContextOutputService,type ContextCapture,type LegacyReadObservationRunner} from '@i-harness/context-output'
 import {createExecutionApprovalPolicy} from '@i-harness/guard-approval'
 import type {ManagedRegistryConstruction} from './managed-assembly.ts'
@@ -21,6 +22,7 @@ export interface OwnedShellOutput {
  readonly withLegacyReadObservation?:LegacyReadObservationRunner
 }
 export interface OwnedShellMount {readonly service:import('@i-harness/exec').ExecService;readonly workflowSteps:import('@i-harness/exec/direct-reservation').WorkflowStepFactory}
+
 export function mountOwnedShell(original:ManagedRegistryConstruction,workspace:string,options:OwnedShellOptions,output:OwnedShellOutput,approvalInstalled:boolean,acquiredExecution?:ExecExecutionHost):OwnedShellMount{
  original.assertCurrent()
  const execution=acquiredExecution??options.executionFor?.(original.domain.sessionId)
@@ -30,7 +32,9 @@ export function mountOwnedShell(original:ManagedRegistryConstruction,workspace:s
  const pair=registerExecWithReservation(original.ctx,{workspaceRoot:workspace,execution,resultRetention:createExecResultRetention(output.service)})
  original.retain(()=>pair.service.dispose())
  const recipient=receivedExecutionInputsFor(original.execution).execDelivery(original.domain)
- const scoped=createScopedPrivateExecWithReservation(pair,workspace,()=>undefined,original.execution,original.domain,original.ctx,recipient)
+ const instructions=original.instructions
+ const wslDirectory=instructions?()=>resolveWslWorkingDirectory(workspace,instructions.authority()):undefined
+ const scoped=createScopedPrivateExecWithReservation(pair,workspace,()=>undefined,original.execution,original.domain,original.ctx,recipient,wslDirectory)
  for(const tool of createShellTools({exec:scoped.service,directEntry:scoped.direct,agentShell:()=>options.agentShellFor?options.agentShellFor(original.domain.sessionId):options.agentShell()}))original.tools.register(tool)
  for(const tool of createContextOutputTools(output.service, {
   exposure: 'direct', withLegacyReadObservation: output.withLegacyReadObservation,

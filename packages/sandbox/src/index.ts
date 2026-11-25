@@ -118,7 +118,7 @@ export function assertSandboxCapable(policy: SandboxExecutionPolicy, provider: S
 }
 
 export { classifyRunnerFailure, matchesSignature, type ShellLikeResult } from "./runner-failures.ts"
-export { canonicalPath, workspaceRoots, writableRoots } from "./roots.ts"
+export { canonicalPath, resolveWslWorkingDirectory, workspaceRoots, writableRoots } from "./roots.ts"
 export {
   WIDER_MODES,
   ESCALATION_TARGETS,

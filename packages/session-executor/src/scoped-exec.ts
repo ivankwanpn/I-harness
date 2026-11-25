@@ -13,9 +13,9 @@ import type { SandboxExecutionPolicy } from "@i-harness/sandbox"
  * resolved approval carries its own snapshot, which this adapter preserves. */
 export function createScopedExec(base: ExecService, cwd: string, policy: () => SandboxExecutionPolicy | undefined): ExecService {
   const commandFor = (command: ExecCommand): ExecCommand => ({ ...command, cwd: command.cwd ?? cwd, sandbox: command.sandbox ?? policy() })
-  return scopedService(base,cwd,policy,commandFor)
+  return scopedService(base,()=>cwd,policy,commandFor)
 }
-function scopedService(base:ExecService,cwd:string,policy:()=>SandboxExecutionPolicy|undefined,commandFor:(command:ExecCommand)=>ExecCommand):ExecService {
+function scopedService(base:ExecService,defaultDirectory:(target:ExecCommand['executionTarget'])=>string,policy:()=>SandboxExecutionPolicy|undefined,commandFor:(command:ExecCommand)=>ExecCommand):ExecService {
   function run(command: ExecCommand): Promise<ExecResult>
   function run(command: ExecCommand, options: ExecStreamRunOptions): Promise<ExecResult>
   function run(command: ExecCommand, options: Parameters<ExecService["run"]>[1]): Promise<ExecResult | PromotedRun>
@@ -28,7 +28,7 @@ function scopedService(base:ExecService,cwd:string,policy:()=>SandboxExecutionPo
     ...base,
     run,
     runBackground: (command) => base.runBackground(commandFor(command)),
-    launchTransport: request => base.launchTransport({ ...request, cwd: request.cwd ?? cwd, sandbox: request.sandbox ?? policy() }),
+    launchTransport: request => base.launchTransport({ ...request, cwd: request.cwd ?? defaultDirectory(request.executionTarget), sandbox: request.sandbox ?? policy() }),
   }
 }
 
@@ -42,15 +42,16 @@ export function createScopedExecWithReservation(pair: ReturnType<typeof import('
 }
 export function createScopedPrivateExecWithReservation(pair:ReturnType<typeof import('@i-harness/exec/direct-reservation').createExecServiceWithReservation>,cwd:string,
   policy:()=>SandboxExecutionPolicy|undefined,execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment,
-  domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain,context:import('@i-harness/core-plugin').PluginContext,recipient:import('./lifecycle/execution-inputs.ts').PrivateExecRecipient){
+  domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain,context:import('@i-harness/core-plugin').PluginContext,recipient:import('./lifecycle/execution-inputs.ts').PrivateExecRecipient,wslDirectory?:()=>string){
   if(domain.context!==context||!isOriginalPrivateExecRecipient(recipient,execution,domain))throw TypeError('Original private Exec context and recipient required')
-  return createScopedReservation(pair,cwd,policy,{kind:'private',execution,domain,recipient},context)
+  return createScopedReservation(pair,cwd,policy,{kind:'private',execution,domain,recipient},context,wslDirectory)
 }
 function createScopedReservation(pair:ReturnType<typeof import('@i-harness/exec/direct-reservation').createExecServiceWithReservation>,cwd:string,
-  policy:()=>SandboxExecutionPolicy|undefined,config:{kind:'public';prepare:import('./lifecycle/exec-delivery-owner.ts').PrepareExecDelivery}|{kind:'private';execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment;domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain;recipient:import('./lifecycle/execution-inputs.ts').PrivateExecRecipient},context?:import('@i-harness/core-plugin').PluginContext){
+  policy:()=>SandboxExecutionPolicy|undefined,config:{kind:'public';prepare:import('./lifecycle/exec-delivery-owner.ts').PrepareExecDelivery}|{kind:'private';execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment;domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain;recipient:import('./lifecycle/execution-inputs.ts').PrivateExecRecipient},context?:import('@i-harness/core-plugin').PluginContext,wslDirectory?:()=>string){
   assertOriginalExecPair(pair)
-  const commandFor=(command:ExecCommand):ExecCommand=>({...command,cwd:command.cwd??cwd,sandbox:command.sandbox??policy()})
-  const service=scopedService(pair.service,cwd,policy,commandFor)
+  const defaultDirectory=(target:ExecCommand['executionTarget'])=>target==='wsl'&&wslDirectory?wslDirectory():cwd
+  const commandFor=(command:ExecCommand):ExecCommand=>({...command,cwd:command.cwd??defaultDirectory(command.executionTarget),sandbox:command.sandbox??policy()})
+  const service=scopedService(pair.service,defaultDirectory,policy,commandFor)
   const claimRun=(claim:import('@i-harness/core-tools').PreparedShellBodyClaim)=>{
     let used=false
     async function start(command:ExecCommand,mode:'foreground'|'background',options?:import('@i-harness/exec').ExecRunOptions){

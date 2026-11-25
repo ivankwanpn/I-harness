@@ -88,6 +88,7 @@ import { createCodeTextRetention } from '../../session-executor/src/lifecycle/co
 import { renderNativeContextRecovery } from '../../session-executor/src/context-output.ts'
 import { registerCodeMode } from '../../code-mode/src/index.ts'
 import { resolveWslAgentShell,agentShellPrompt } from '@i-harness/shell'
+import { resolveWslWorkingDirectory } from '@i-harness/sandbox'
 import { createOwnedIndexJobBindings } from "./owned-index-jobs.ts"
 import { onOriginalHostAssembly } from "../../session-executor/src/host-assembly-observer.ts"
 import { originalManagedExecutionFor, originalManagedRuntimeFor, prepareOriginalManagedRuntime, retainManagedExecutionCleanup } from '../../session-executor/src/host-managed-execution.ts'
@@ -219,7 +220,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
         lock: { enabled: true, lockRoot: options.sessionDir },
         originalExecutionFoldFactory: createOwnedMetadataFold,
       }))
-    : createSessionCoordinator(createJsonlBackend(options.sessionDir), {
+    : createSessionCoordinator(createJsonlBackend(options.sessionDir, { fixedCapabilities: true }), {
         lock: { enabled: true, lockRoot: options.sessionDir },
         originalExecutionFoldFactory: createOwnedMetadataFold,
       })
@@ -385,7 +386,21 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
     return authority
   }
   const wslExecutionFor=()=>{const captured={...wslExecution};if(windowsSandboxBackend!=='wsl'||!captured.workspaceDependencies)return captured;return managedRuntime().then(async runtime=>{const resolved=await runtime.resolve(captured,{installIfMissing:true});if(resolved.status==='missing'||resolved.status==='unavailable')throw Error(resolved.detail);return {...captured,...resolved.runtimePath?{runtimePath:[...resolved.runtimePath]}:{}}})}
-  const ownedNative=createOwnedGatewayNative({authorityFor:ownedAuthorityFor,mode:()=>mode,executionOptions:async()=>({windowsSandboxBackend,wslExecution:await wslExecutionFor()}),async resolveShell(_id,config){if(config.windowsSandboxBackend!=='wsl')return agentShell.resolve;const wsl=config.wslExecution;if(!wsl)throw Error('Original WSL execution configuration unavailable');const inspected=await (await import('@i-harness/sandbox-wsl')).inspectWslRuntime(wsl.distribution,[options.workspace]);const shell=resolveWslAgentShell(wsl,inspected.paths.find(path=>path.windows===options.workspace)?.linux);return ()=>shell},resultOptions:id=>({workspace:options.workspace,coordinator,sessionId:id,contextOutput:nativeContext.contextOutput,contextOutputSourceFor:nativeContext.sourceFor,contextOutputLegacyReadObservation:nativeContext.withLegacyReadObservation,projectContext:()=>projectContexts.get(id)?.()})})
+  const ownedNative=createOwnedGatewayNative({
+    authorityFor:ownedAuthorityFor,mode:()=>mode,executionOptions:async()=>({windowsSandboxBackend,wslExecution:await wslExecutionFor()}),
+    async resolveShell(_id,config,authority){
+      if(config.windowsSandboxBackend!=='wsl')return agentShell.resolve
+      const wsl=config.wslExecution
+      if(!wsl)throw Error('Original WSL execution configuration unavailable')
+      const currentDirectory=()=>resolveWslWorkingDirectory(options.workspace,authority())
+      const directory=currentDirectory()
+      const inspected=await (await import('@i-harness/sandbox-wsl')).inspectWslRuntime(wsl.distribution,[directory])
+      const unmapped=resolveWslAgentShell(wsl)
+      const mapped=resolveWslAgentShell(wsl,inspected.paths.find(path=>path.windows===directory)?.linux)
+      return ()=>currentDirectory()===directory?mapped:unmapped
+    },
+    resultOptions:id=>({workspace:options.workspace,coordinator,sessionId:id,contextOutput:nativeContext.contextOutput,contextOutputSourceFor:nativeContext.sourceFor,contextOutputLegacyReadObservation:nativeContext.withLegacyReadObservation,projectContext:()=>projectContexts.get(id)?.()}),
+  })
   const ownedInstructions=createOwnedGatewayInstructions({workspace:options.workspace,environment:instructionEnvironment,authorityFor:ownedAuthorityFor})
   const ownedSelection=createOwnedGatewaySelectionOwner({plugins,mcp,workspace:options.workspace,configDir:dirname(settingsPath)})
   const ownedBindings=new Map<string,()=>import('../../session-executor/src/managed-assembly.ts').ManagedExecutionModelBinding>(),ownedHookContexts=new Map<string,()=>string>(),ownedTaskInputs=new Map<string,Awaited<ReturnType<NonNullable<NonNullable<SessionServiceOptions['managedRuntime']>['ownedTask']>['options']>>>()
@@ -422,7 +437,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
     passiveGeneration:usageObservations?.observer,
     prepareTaskChild:nativeContext.prepareTaskChild,
     instructionEnvironment,
-    telemetry: { wantsTurnTokenEstimate: false, close() {}, emit(event) {
+    telemetry: { wantsTurnTokenEstimate: false, wantsProviderPrefixContinuity: false, close() {}, emit(event) {
       if (timing && typeof event.data.sessionId === "string") {
         if (event.type === "turn/start") timing.mark("turn-start", event.data.sessionId)
         if (event.type === "provider/call") timing.mark("request-projected", event.data.sessionId)

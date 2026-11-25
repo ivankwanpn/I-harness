@@ -1,10 +1,12 @@
 import {expect,it,vi} from 'vitest'
 const receiptProbe=vi.hoisted(()=>({enabled:false,allow:false,key:'',keys:[] as string[],notify:()=>{}}))
 vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async load=>{const original=await load<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>();return {...original,createFactJournalBackend(...args:Parameters<typeof original.createFactJournalBackend>){const backend=original.createFactJournalBackend(...args),append=backend.appendOwnedBatch,reconcile=backend.reconcileOwnedBatch;return {...backend,async appendOwnedBatch(...input:Parameters<typeof append>){const result=await append(...input),bytes=Buffer.from(input[3].bytes).toString('utf8');if(receiptProbe.enabled&&bytes.includes('\"type\":\"agent/delivery-received\"')&&bytes.includes('\"kind\":\"exec\"')){receiptProbe.key=input[3].key.batchId;receiptProbe.keys.push(receiptProbe.key);receiptProbe.notify();return {kind:'unknown' as const,key:input[3].key}}return result},async reconcileOwnedBatch(...input:Parameters<typeof reconcile>){if(input[3].key.batchId===receiptProbe.key){receiptProbe.keys.push(input[3].key.batchId);if(!receiptProbe.allow)return {kind:'unknown' as const,key:input[3].key}}return reconcile(...input)}}}}})
-import {mkdtemp} from 'node:fs/promises'
+import {mkdir,mkdtemp} from 'node:fs/promises'
 import {join} from 'node:path'
-import {createExecutionLease,type TransportExecutionBackend} from '@i-harness/sandbox'
+import {createExecutionLease,type AuthorityState,type ProcessSpec,type TransportExecutionBackend} from '@i-harness/sandbox'
+import type {ExecService} from '@i-harness/exec'
 import {compileExecutionPolicy} from '@i-harness/sandbox-policy'
+import {captureRequest} from '../../sandbox-wsl/src/admission.ts'
 import {createContextOutputService} from '@i-harness/context-output'
 import {registerApprovalAnswerer} from '@i-harness/interaction'
 import {subscribeManagedExecution,subscribeManagedExecutionReadiness} from '@i-harness/core-session/internal/execution'
@@ -17,6 +19,68 @@ import {createOwnedMetadataFold} from '../src/lifecycle/owned-metadata-fold.ts'
 import {createSessionService} from '../src/service.ts'
 import {originalManagedRuntimeFor} from '../src/host-managed-execution.ts'
 import {acquireAssemblyResultStore} from '../src/lifecycle/result-store.ts'
+import {createProjectInstructionEnvironment} from '../src/context/instructions/host.ts'
+
+it('uses the current project for the owned WSL shell default after its workspace is removed', async () => {
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-wsl-project-'))
+ const source=join(root,'source'),workspace=join(source,'nested'),destination=join(root,'destination'),explicitDirectory=join(root,'other-member')
+ await Promise.all([mkdir(workspace,{recursive:true}),mkdir(destination),mkdir(explicitDirectory)])
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root,'sessions')),{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const output=createContextOutputService({root:join(root,'results'),workspaceId:'fixture',config:{enabled:false}})
+ const environment=createProjectInstructionEnvironment()
+ let authority:AuthorityState={kind:'bound',revision:'source',primaryRoot:source,roots:[source],references:[]}
+ const prepared:ProcessSpec[]=[]
+ const native:TransportExecutionBackend={
+  async probe(){return {id:'fixture',availability:'available',assurance:'experimental',features:{writeIsolation:true,readIsolation:false,denyPaths:false,pipes:true,pty:false,retainedTree:false}}},
+  async prepare(spec,policy){
+   if(spec.executionTarget==='wsl'&&process.platform==='win32')captureRequest(spec,policy)
+   prepared.push(spec)
+   return {policy,async rollback(){},async commit(check){
+    check()
+    const lease=createExecutionLease({receipt:{executionId:'native-'+prepared.length,backendId:'fixture',policyFingerprint:policy.fingerprint,owner:spec.owner,assurance:'experimental'},rootExited:Promise.resolve({exitCode:0}),async waitTreeEmpty(){},async settleIo(){},async releaseResources(){},async terminate(){}})
+    return {...lease,get settled(){return lease.settled},pid:1,io:{async write(){},async endInput(){},output:(async function*(){yield {channel:'stdout' as const,data:Buffer.from(spec.cwd)}})()}}
+   }}
+  },
+ }
+ const wire=(id?:string)=>`data: ${JSON.stringify({choices:[{delta:id?{tool_calls:[{index:0,id,function:{name:'shell',arguments:JSON.stringify({command:'pwd'})}}]}:{content:'done'},finish_reason:id?'tool_calls':'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
+ const server=await createLoopbackProvider('/v1/chat/completions',['inside',undefined,'moved',undefined].map(id=>async response=>{response.end(wire(id))}))
+ let shell:ExecService|undefined
+ const service=createSessionService({workspace,coordinator,contextWindow:4096,maxOutputTokens:128,
+  model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),
+  managedRuntime:{systemPrompt:'system',tools:[],async acquireInstructions(){return {environment,cwd:workspace,authority:()=>authority,available:()=>true}},
+   async mountDefaultSurface(_original,live){shell=live.shell;return {systemPrompt:()=> 'system',modelToolSchemas:live.modelToolSchemas,modelOverheadTokens:()=>0,prepareInput:async input=>input,async reconcileAuthority(){}}},
+   ownedShell:{executionFor(sessionId){return {defaultOwner:{sessionId},selectBackend:()=>native,resolvePolicy:owner=>compileExecutionPolicy({mode:'workspace-write',owner,authority}),validateAuthority(){}}},
+    async acquireOutput(_id,retain){retain(()=>output.close());return {service:output}},
+    agentShell:()=>({id:'wsl-fixture',label:'Fixture Bash',command:'/bin/bash',dialect:'posix',executionTarget:'wsl'}),
+   },
+  },
+ })
+ try {
+  await service.submit('main','run inside the source project',new AbortController().signal)
+  expect(prepared).toMatchObject([{executionTarget:'wsl',cwd:workspace}])
+
+  authority={kind:'bound',revision:'destination',primaryRoot:destination,roots:[destination,explicitDirectory],references:[]}
+  await service.submit('main','run in the destination project',new AbortController().signal)
+  expect(prepared).toMatchObject([{cwd:workspace},{executionTarget:'wsl',cwd:destination}])
+  expect(server.requests).toHaveLength(4)
+
+  const command={argv:['/bin/bash','-c','pwd'],executionTarget:'wsl' as const}
+  await shell!.run({...command,cwd:explicitDirectory})
+  expect(prepared.at(-1)?.cwd).toBe(explicitDirectory)
+  if(process.platform==='win32')await expect(shell!.run({...command,cwd:workspace})).rejects.toThrow(/cwd\/primary root is outside authority/)
+  await shell!.run({argv:[process.execPath,'--version'],executionTarget:'host'})
+  expect(prepared.at(-1)).toMatchObject({executionTarget:'host',cwd:workspace})
+
+  authority={kind:'bound',revision:'invalid-primary',primaryRoot:workspace,roots:[destination],references:[workspace]}
+  await expect(async()=>shell!.run(command)).rejects.toThrow(/project working directory unavailable/)
+  authority={kind:'revoked',revision:'withdrawn',reason:'Project removed'}
+  await expect(async()=>shell!.run(command)).rejects.toThrow(/revoked/)
+  expect(prepared).toHaveLength(4)
+ } finally {
+  await service.close();await environment.close();await coordinator.close();await server.close()
+ }
+},60000)
 
 it.each(['session','service'] as const)('retires private delivery at clean %s close and settles the original native Shell',async closeScope=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-service-shell-'))

@@ -1,8 +1,12 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { append, createSession, renderConversation, selectConversationMessages } from '@i-harness/core-session'
+import * as coreSession from '@i-harness/core-session'
 import { captureContextSnapshot } from '@i-harness/context-engine'
+import { prepareModelRequest, type LLMRequest, type ModelClient } from '@i-harness/llm-seam'
 import { projectionFingerprint } from '@i-harness/token-meter'
+import type { TelemetryEvent } from '@i-harness/telemetry'
 import { buildContextRequest } from '../src/agent/request-input.ts'
+import { createStepInput } from '../src/agent/step-input.ts'
 
 function capture() {
   const session = createSession()
@@ -55,6 +59,46 @@ it('preserves the neutral fingerprint when selecting immutable messages', () => 
   const { snapshot } = capture()
   expect(projectionFingerprint(selectConversationMessages(snapshot.conversation)))
     .toBe(projectionFingerprint(renderConversation(snapshot.conversation)))
+})
+
+it('skips unobserved prefix work while preserving provider call timing and request data', async () => {
+  const { session, snapshot } = capture()
+  const received: LLMRequest[] = []
+  const model: ModelClient = { async *stream(request) { received.push(request); yield { type: 'end' } } }
+  const evidence = { model, snapshot, projectionRevision: 1, neutralFingerprint: projectionFingerprint(selectConversationMessages(snapshot.conversation)) }
+  const rewriteObservation = vi.fn(() => coreSession.deriveProjectionRewrite(session))
+  const emit = vi.fn<(event: TelemetryEvent) => void>()
+  const base = { sessionId: 'owner', rewriteObservation }
+  const telemetry = { emit, close() {} }
+  const full = createStepInput({ ...base, telemetry })
+  const timingOnly = createStepInput({ ...base, telemetry: { ...telemetry, wantsProviderPrefixContinuity: false } })
+  const silent = createStepInput(base)
+  const prepare = (input: typeof full) => input(undefined, undefined, () => 1, evidence).request
+  const serializedMessages = vi.spyOn(coreSession, 'canonicalJsonData')
+  const requests: LLMRequest[] = []
+  try {
+    requests.push(prepare(full))
+    expect(serializedMessages).toHaveBeenCalledTimes(requests[0]!.messages.length)
+    expect(rewriteObservation).toHaveBeenCalledOnce()
+    serializedMessages.mockClear()
+    rewriteObservation.mockClear()
+    emit.mockClear()
+
+    requests.push(prepare(timingOnly), prepare(timingOnly), prepare(silent))
+    expect(serializedMessages).not.toHaveBeenCalled()
+    expect(rewriteObservation).not.toHaveBeenCalled()
+    expect(emit.mock.calls.map(([event]) => event)).toEqual(Array.from({ length: 2 }, () => ({
+      type: 'provider/call', ts: expect.any(Number), data: { sessionId: 'owner', step: 1, messages: 3, tools: 1 },
+    })))
+  } finally {
+    serializedMessages.mockRestore()
+  }
+  for (const request of requests) {
+    const prepared = await prepareModelRequest(model, request)
+    for await (const event of prepared.stream()) expect(event.type).toBe('end')
+  }
+  expect(received).toHaveLength(4)
+  expect(received.slice(1)).toEqual(Array.from({ length: 3 }, () => received[0]))
 })
 
 it('still verifies unowned projections against the seam', () => {

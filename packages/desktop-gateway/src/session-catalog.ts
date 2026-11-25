@@ -32,7 +32,7 @@ export function createCommittedSessionCatalog() {
       const store = settings.get().sessionStore ?? (process.env.IH_SESSION_STORE === 'commit-log' ? 'commit-log' : 'jsonl')
       const coordinator = store === 'commit-log'
         ? createJsonlCommitCoordinator(root)
-        : createReadOnlySessionCoordinator(createJsonlBackend(root))
+        : createReadOnlySessionCoordinator(createJsonlBackend(root, { fixedCapabilities: true }))
       owners.add(coordinator)
       try { return await work(coordinator, store) } finally { await coordinator.close(); owners.delete(coordinator) }
     })()

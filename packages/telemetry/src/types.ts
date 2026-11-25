@@ -71,6 +71,8 @@ export interface TelemetrySink {
 export interface Telemetry {
   /** Defaults to true. A sink that ignores token/usage can skip its estimate. */
   readonly wantsTurnTokenEstimate?: boolean
+  /** Defaults to true. A sink interested only in provider/call timing can skip the prefix comparison. */
+  readonly wantsProviderPrefixContinuity?: boolean
   /** 多播到所有 sinks；sink 錯誤 → console.warn（fail-visible，不中斷其他 sinks） */
   emit(ev: TelemetryEvent): void
   /** v0 為 no-op flush：需要 flush/close 的 sink 自行處理（如 stream.end()） */

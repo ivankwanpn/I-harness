@@ -22,8 +22,17 @@ export function createOriginalJsonlPathResolution(root:string){
    const rootPreparation=Object.getOwnPropertyDescriptor(preparations,'prepareRoot'),documentPreparation=Object.getOwnPropertyDescriptor(preparations,'prepareDocumentParents')
    if(!rootPreparation||!documentPreparation||!('value'in rootPreparation)||!('value'in documentPreparation)||typeof rootPreparation.value!=='function'||typeof documentPreparation.value!=='function')throw TypeError('Original path preparation required')
    const descriptors=Object.getOwnPropertyDescriptors(backend)
+   const keys=Object.keys(descriptors)
+   // A private backend with only fixed data properties cannot replace an
+   // operation. Native path and storage checks still run for each operation.
+   const fixed=Object.isFrozen(backend)&&keys.every(key=>'value'in descriptors[key]!)
    // No caller check callback can claim this query computation is pure.
-   const assertOriginal=createArtifactCurrentGuard(()=>{for(const key of Object.keys(descriptors)){const current=Object.getOwnPropertyDescriptor(backend,key),original=descriptors[key]!;if(!current||!('value'in current)||current.value!==original.value)throw Error('PROCESS_READ_UNAVAILABLE')}})
+   const assertOriginal=createArtifactCurrentGuard(fixed?()=>{}:()=>{
+    for(const key of keys){
+     const current=Object.getOwnPropertyDescriptor(backend,key),original=descriptors[key]!
+     if(!current||!('value'in current)||current.value!==original.value)throw Error('PROCESS_READ_UNAVAILABLE')
+    }
+   })
    const prepare=(key:'prepareRoot'|'prepareDocumentParents',field:PropertyDescriptor,args:unknown[])=>{
     const now=Object.getOwnPropertyDescriptor(preparations,key);if(!now||!('value'in now)||now.value!==field.value)throw TypeError('Changed original path preparation')
     return Reflect.apply(field.value,preparations,args) as Promise<void>

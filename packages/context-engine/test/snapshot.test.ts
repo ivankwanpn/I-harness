@@ -1,7 +1,30 @@
 import { expect, it } from "vitest"
-import { append, createSession, renderConversation, type Session } from "@i-harness/core-session"
-import { captureContextSnapshot } from "../src/index.ts"
+import { append, createSession, renderConversation, type ConversationProjection, type Session } from "@i-harness/core-session"
+import { captureContextPayload, captureContextSnapshot } from "../src/index.ts"
+import { contextRevision, semanticContextRevision } from "../src/snapshot/revision.ts"
 import type { ModelBudgetBinding } from "@i-harness/llm-seam"
+
+it('keeps the semantic v1 digest for sealed projections with Unicode and omitted optional fields', () => {
+  const owner = 'owner-香港-\uD800'
+  const call = { id: 'call-🐟', eventIndex: 1, seq: 1, part: 'call', addressable: true }
+  const dispatch = { id: 'audit-dispatch', eventIndex: 2, seq: 2, part: 'dispatch', addressable: true }
+  const provenance = { kind: 'model', authority: 'observation', scope: 'turn', evidence: [call] } as const
+  const messages = [{ role: 'assistant', content: '字\n🧭\uDC00' }] as const
+  const conversation = {
+    version: 1, archiveEventCount: 3, items: [{ id: 'exchange-1', kind: 'exchange', sources: [call, dispatch], provenance, messages,
+      exchange: { id: 'exchange-1', state: 'unresolved', acceptance: 'explicit', calls: [{ name: '讀取', callId: 'c', outcome: 'pending', call, dispatch }] } }],
+    diagnostics: [],
+  } satisfies ConversationProjection
+  const expected = contextRevision('semantic', [owner, [{
+    id: 'exchange-1', kind: 'exchange', messages, provenance, sources: [call],
+    exchange: { id: 'exchange-1', acceptance: 'explicit', calls: [{ name: '讀取', callId: 'c', call }] },
+  }]])
+
+  expect(semanticContextRevision(owner, conversation)).toBe(expected)
+  expect(semanticContextRevision(owner, captureContextPayload(conversation))).toBe(expected)
+  call.seq = -0
+  expect(() => semanticContextRevision(owner, conversation)).toThrow('CONTEXT_SNAPSHOT_UNSUPPORTED')
+})
 
 it('owns physical unit DTOs without exposing private membership or changing source events', () => {
   const session = createSession()

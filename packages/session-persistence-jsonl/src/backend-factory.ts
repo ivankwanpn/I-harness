@@ -183,6 +183,8 @@ export function createJsonlTaskTransitionCoordinator(root: string, options: Coor
 const BLANK_PROBE_MAX_BYTES = 1024
 
 export function createJsonlBackend(root: string, options?: {
+  /** Private coordinator compositions can finalize the backend after wrapping it. */
+  fixedCapabilities?: true
   /** Test/instrumentation seam: wrap the owned-batch writer BEFORE the
    * canonical-path guard captures its descriptor. Patching the backend after
    * this call is rejected as PROCESS_READ_UNAVAILABLE by design. */
@@ -701,6 +703,7 @@ export function createJsonlBackend(root: string, options?: {
   const originalArchiveRead = backend.read
   const wrap = options?.wrap
   wrap?.call(options, backend)
+  if (options?.fixedCapabilities) Object.freeze(backend)
   const artifactOwner = pathResolution.bindBackend(backend, {
     async prepareRoot() { assertOriginal(); await mkdir(rootPath, {recursive:true}); assertOriginal() },
     async prepareDocumentParents(key: string) {

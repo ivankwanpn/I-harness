@@ -12,7 +12,7 @@ export function createOwnedGatewayNative(options:{
  authorityFor(id:string):Promise<()=>AuthorityState>
  mode():SandboxMode
  executionOptions():Pick<ExecutionRuntimeOptions,'windowsSandboxBackend'|'wslExecution'|'legacyPrivateTempRoot'>|Promise<Pick<ExecutionRuntimeOptions,'windowsSandboxBackend'|'wslExecution'|'legacyPrivateTempRoot'>>
- resolveShell(id:string,execution:Pick<ExecutionRuntimeOptions,'windowsSandboxBackend'|'wslExecution'|'legacyPrivateTempRoot'>):Promise<()=>ResolvedAgentShell>
+ resolveShell(id:string,execution:Pick<ExecutionRuntimeOptions,'windowsSandboxBackend'|'wslExecution'|'legacyPrivateTempRoot'>,authority:()=>AuthorityState):Promise<()=>ResolvedAgentShell>
  resultOptions(id:string):ResultStoreOptions
 }) {
  const shells=new Map<string,()=>ResolvedAgentShell>(),runtimes=new Map<string,ReturnType<typeof createAssemblyExecutionRuntime>>()
@@ -25,7 +25,7 @@ export function createOwnedGatewayNative(options:{
    const before=execution.observe();before.assertCurrent()
    const authority=await options.authorityFor(sessionId);before.assertCurrent()
    const executionOptions=await options.executionOptions();before.assertCurrent()
-   const shell=await options.resolveShell(sessionId,executionOptions);before.assertCurrent()
+   const shell=await options.resolveShell(sessionId,executionOptions,authority);before.assertCurrent()
    if(shells.has(sessionId))throw Error('Original session shell already acquired')
    let disposed=false
    const runtime=createAssemblyExecutionRuntime({owner:{sessionId},managedExecution:execution,authority,ownerAvailable:()=>!disposed,
