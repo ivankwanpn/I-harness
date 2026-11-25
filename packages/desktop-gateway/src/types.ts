@@ -17,7 +17,7 @@ import type { createDesktopMcp } from "./mcp-settings.ts"
 import type { createDesktopResources } from "./resources.ts"
 import type { createDesktopWorkflow } from "./workflow.ts"
 import type { createAgentShellSettings } from "./agent-shell.ts"
-import type { createDesktopInput } from "./input.ts"
+import type { createDesktopInput, DesktopInputProjectCheck } from "./input.ts"
 import type { createProjectScopeBroker } from "./project-scope.ts"
 import type { createDesktopSubagents } from "./session-subagents.ts"
 
@@ -52,7 +52,7 @@ export interface DesktopHandlers {
   draftSession?: (clientToken: string) => Promise<{ sessionId: string }>
   contextPicker?: ReturnType<typeof import("./context-picker.ts").createContextPicker>
   projects?: ReturnType<typeof createProjectScopeBroker>
-  input?: ReturnType<typeof createDesktopInput>
+  input?: ReturnType<typeof createDesktopInput> & { checkProjectScope?: DesktopInputProjectCheck }
   workflow?: ReturnType<typeof createDesktopWorkflow>
   agentShell?: ReturnType<typeof createAgentShellSettings>
   resources?: ReturnType<typeof createDesktopResources>

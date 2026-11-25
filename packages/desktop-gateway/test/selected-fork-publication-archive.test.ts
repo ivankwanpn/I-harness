@@ -1,4 +1,5 @@
 import { expect, it, vi } from 'vitest'
+import * as executor from '@i-harness/session-executor'
 import { createSelectedResultsHostFixture, executeSelected, prepareSelected, storedSession } from './helpers/selected-results-host.ts'
 
 const review = vi.hoisted(() => ({ previous: false, failGrant: false, grantFailures: 0 }))
@@ -64,9 +65,15 @@ async function prepare(client: Host, fixture: Awaited<ReturnType<typeof createSe
 
 it('keeps a failed pending fork out of the archive and ordinary restore', async () => {
   const fixture = await createSelectedResultsHostFixture()
-  const client = await fixture.open()
+  let sessionService: executor.SessionService | undefined
+  const makeService = executor.createSessionService
+  const serviceFactory = vi.spyOn(executor, 'createSessionService').mockImplementation(options => sessionService = makeService(options))
+  let client: Host | undefined
   const id = 'review-pending-target'
   try {
+    client = await fixture.open()
+    if (!sessionService) throw new Error('Missing original desktop session service')
+    serviceFactory.mockRestore()
     const operation = await prepare(client, fixture, id)
     review.grantFailures = 0
     review.failGrant = true
@@ -80,6 +87,17 @@ it('keeps a failed pending fork out of the archive and ordinary restore', async 
     const header = (await storedSession(fixture.sessionDir, id)).header
     console.info(JSON.stringify({ case: 'pending visibility', listedAsArchived, restored, visibleAfterRestore, header, grantFailures: review.grantFailures }))
     expect({ listedAsArchived, restored, visibleAfterRestore }).toEqual({ listedAsArchived: false, restored: false, visibleAfterRestore: false })
+    const before = await storedSession(fixture.sessionDir, id)
+    const modelCalls = client.stats.modelCalls
+    const attach = vi.spyOn(sessionService, 'managedInputFor')
+    try {
+      await expect(client.call('desktop/session/input/submit', {
+        sessionId: id, text: 'fixture input', delivery: 'queue', clientToken: 'pending-checked-input',
+      })).rejects.toThrow('Session is unavailable')
+      expect(attach).not.toHaveBeenCalled()
+      expect(client.stats.modelCalls).toBe(modelCalls)
+      expect(await storedSession(fixture.sessionDir, id)).toEqual(before)
+    } finally { attach.mockRestore() }
     // The same original operation can still finish and publish the target.
     const retried = await executeSelected(client, operation, 'retry')
     expect(retried).toMatchObject({ kind: 'ready', sessionId: id })
@@ -88,7 +106,8 @@ it('keeps a failed pending fork out of the archive and ordinary restore', async 
     expect(published).toMatchObject({ archived: false, forkPublication: 'published' })
   } finally {
     review.failGrant = false
-    try { await client.close() } finally { await fixture.dispose() }
+    serviceFactory.mockRestore()
+    try { await client?.close() } finally { await fixture.dispose() }
   }
 }, 120000)
 

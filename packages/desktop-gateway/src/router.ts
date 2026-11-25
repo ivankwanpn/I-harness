@@ -21,6 +21,7 @@ import { ModelUnavailableError } from "@i-harness/session-executor"
 import { boundSearchHits } from "./search-bounds.ts"
 import { providerCommand } from "./provider-wire.ts"
 import { createProviderProbes } from "./provider-probes.ts"
+import { DESKTOP_INPUT_PROJECT_CHECKED } from "./input.ts"
 import { dispatchGatewayProjectFiles } from "./project-files.ts"
 import { dispatchGatewayContentSearch } from "./project-content-search.ts"
 import { usageRequest } from "./usage-wire.ts"
@@ -54,7 +55,8 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.approvalRules) capabilities["desktop-approval-rules"] = ["1"]
     if (handlers.draftSession) capabilities["desktop-draft-create"] = ["1"]
     if (handlers.projects) capabilities["desktop-project-scope"] = ["1"]
-    if (handlers.input) capabilities["desktop-input"] = ["1"]
+    if (handlers.input) capabilities["desktop-input"] = typeof handlers.input.checkProjectScope === "function"
+      ? ["1", DESKTOP_INPUT_PROJECT_CHECKED] : ["1"]
     if (handlers.workflow) capabilities["desktop-workflow"] = ["1"]
     if (handlers.agentShell) capabilities["desktop-agent-shell"] = ["1"]
     if (handlers.wslSettings) capabilities["desktop-wsl-settings"] = ["1"]
@@ -336,7 +338,11 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
           let result: unknown
           if (operation === "submit") {
             if (typeof params?.text !== "string" || !["queue", "steer"].includes(String(params.delivery))) throw new Error("Invalid input")
-            result = await handlers.input.admit(sessionId, { text: params.text, delivery: params.delivery as "queue" | "steer", ...(params.context !== undefined ? { context: params.context as string } : {}), ...(params.images !== undefined ? { images: params.images as never } : {}), ...(params.clientToken !== undefined ? { clientToken: params.clientToken as string } : {}) })
+            const input = { text: params.text, delivery: params.delivery as "queue" | "steer", ...(params.context !== undefined ? { context: params.context as string } : {}), ...(params.images !== undefined ? { images: params.images as never } : {}), ...(params.clientToken !== undefined ? { clientToken: params.clientToken as string } : {}) }
+            const checkProjectScope = handlers.input.checkProjectScope
+            result = typeof checkProjectScope === "function"
+              ? await handlers.input.admit(sessionId, input, checkProjectScope)
+              : await handlers.input.admit(sessionId, input)
           } else if (operation === "state") result = await handlers.input.state(sessionId)
           else if (operation === "resume") result = await handlers.input.resume(sessionId)
           else if (operation === "cancel" && typeof params?.inputId === "string") result = await handlers.input.cancel(sessionId, params.inputId)

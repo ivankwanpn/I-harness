@@ -106,7 +106,7 @@ import { makeNotification, SelectedResultsForkOperationError, type RpcMessage } 
 import { createDesktopRouter, createGatewayWrite } from "./router.ts"
 import { createInteractionBridge } from "./interaction.ts"
 import { createProjectScopeBroker } from "./project-scope.ts"
-import { createDesktopInput } from "./input.ts"
+import { createDesktopInput, type DesktopInputProjectCheck } from "./input.ts"
 import { createNativeContextRuntime } from "./context-runtime.ts"
 import { managedResultRefs } from '@i-harness/core-session'
 import { createContextSubsystemSettings } from "./context-subsystems.ts"
@@ -543,25 +543,32 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
       ...(error ? { error } : {}), ...(modelFailure ? { modelFailure } : {}), ...(errorCode ? { errorCode } : {}),
     })),
   })
-  const input = { ...rawInput, admit: (id: string, raw: Parameters<typeof rawInput.admit>[1]) => {
-    if (!timing || !raw.clientToken) return fence.run(id, () => rawInput.admit(id, raw))
+  const admitInput = (id: string, raw: Parameters<typeof rawInput.admit>[1], checkProjectScope?: DesktopInputProjectCheck) => {
+    const admit = () => fence.run(id, () => rawInput.admit(id, raw, checkProjectScope))
+    if (!timing || !raw.clientToken) return admit()
     timing.mark("gateway-received", id, raw.clientToken)
-    return fence.run(id, () => rawInput.admit(id, raw)).then(result => {
+    return admit().then(result => {
       timing.mark("gateway-admitted", id, raw.clientToken)
       return result
     }, error => {
       timing.mark("gateway-rejected", id, raw.clientToken)
       throw error
     })
-  },
-    resume: (id: string) => fence.run(id, () => rawInput.resume(id)), cancel: (id: string, inputId: string) => fence.run(id, () => rawInput.cancel(id, inputId)) }
+  }
+  const input = {
+    ...rawInput,
+    admit: admitInput,
+    checkProjectScope: (id: string) => projects.state(id),
+    resume: (id: string) => fence.run(id, () => rawInput.resume(id)),
+    cancel: (id: string, inputId: string) => fence.run(id, () => rawInput.cancel(id, inputId)),
+  }
   const interaction = createInteractionBridge(options.onWrite, {
     approvalRules,
     approvalMode: () => approvalMode,
     persistence: await openInteractionPersistence(options.sessionDir, options.workspace),
     recover: async ({ request, inputId, text, signal }) => {
       signal.throwIfAborted()
-      const admission = await input.admit(request.sessionId, { inputId, text, delivery: "queue", start: false })
+      const admission = await admitInput(request.sessionId, { inputId, text, delivery: "queue", start: false })
       if (signal.aborted) await input.cancel(request.sessionId, admission.inputId)
       signal.throwIfAborted()
     },

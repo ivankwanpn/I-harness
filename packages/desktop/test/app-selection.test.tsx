@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { StrictMode } from "react"
 import { afterEach, expect, it, vi } from "vitest"
 import type { WorkbenchProps } from "../src/renderer/shell/Workbench.tsx"
@@ -9,7 +9,8 @@ const captured = vi.hoisted(() => ({ props: undefined as WorkbenchProps | undefi
 vi.mock("../src/renderer/shell/Workbench.tsx", () => ({ Workbench: (props: WorkbenchProps) => { captured.props = props; return null } }))
 import { App } from "../src/renderer/app.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
-import { writeDraft, readDraft } from "../src/renderer/session/Composer.tsx"
+import { Composer, captureSessionSubmission, writeDraft, readDraft } from "../src/renderer/session/Composer.tsx"
+import { readImageDrafts, writeImageDrafts } from "../src/renderer/session/image-drafts.ts"
 import { preparedFork, readyFork } from './helpers/fork-contract.ts'
 import type { ForkOperation } from '@i-harness/sdk/fork'
 afterEach(() => { cleanup(); captured.props = undefined; localStorage.removeItem("ih:last-workspace"); useUiStore.setState({ selectedWorkspaceId: undefined, selectedSessionId: undefined, providerRevision: 0, surface: "conversation" }) })
@@ -482,6 +483,70 @@ function fixture(override: (request: DesktopRequest) => Promise<unknown> | undef
   render(strict ? <StrictMode><App bridge={bridge} /></StrictMode> : <App bridge={bridge} />)
   return request
 }
+
+it.each([
+  { input: ["1"], submission: "desktop/session/input/submit" },
+  { input: ["project-checked"], submission: "session/prompt" },
+])("keeps the project preflight for a client using $submission without checked durable admission", async ({ input, submission }) => {
+  const request = fixture(message => {
+    if (message.kind === "desktop/capabilities")
+      return Promise.resolve({ "desktop-project-scope": ["1"], "desktop-input": input })
+    if (message.kind === "desktop/session/project/state") return Promise.resolve({ sessionId: message.sessionId })
+    if (message.kind === submission) return Promise.resolve({ accepted: true, inputId: "fixture-input" })
+  })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession(`preflight-${submission}`))
+  await waitFor(() => expect(captured.props?.projectContext?.status).toBe("ready"))
+  request.mockClear()
+  await act(async () => { await captured.props!.conversation!.onPrompt("continue") })
+  const operations = request.mock.calls.map(([message]) => message.kind)
+  expect(operations.filter(kind => kind === "desktop/session/project/state" || kind === submission))
+    .toEqual(["desktop/session/project/state", submission])
+})
+
+it("retries a checked Gateway admission with the same Composer draft, attachment and token", async () => {
+  const workspaceId = "w1", sessionId = "checked-project", prompt = "keep this draft"
+  const image = { id: 41, mediaType: "image/png" as const, dataBase64: "AQID", name: "draft.png" }
+  const submissions: Extract<DesktopRequest, { kind: "desktop/session/input/submit" }>[] = []
+  const request = fixture(message => {
+    if (message.kind === "desktop/capabilities")
+      return Promise.resolve({ "desktop-project-scope": ["1"], "desktop-input": ["1", "project-checked"] })
+    if (message.kind === "desktop/session/project/state") return Promise.resolve({ sessionId: message.sessionId })
+    if (message.kind === "desktop/session/input/submit") {
+      submissions.push(message)
+      if (submissions.length === 1) return Promise.reject(new Error("Session is unavailable"))
+      return Promise.resolve({ accepted: true, inputId: "fixture-input" })
+    }
+  })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe(workspaceId))
+  act(() => captured.props!.onSelectSession(sessionId))
+  await waitFor(() => expect(captured.props?.projectContext?.status).toBe("ready"))
+  expect(request.mock.calls.filter(([message]) => message.kind === "desktop/session/project/state")).toHaveLength(1)
+  writeDraft(workspaceId, sessionId, prompt)
+  writeImageDrafts(workspaceId, sessionId, [image])
+  const onPrompt = captured.props!.conversation!.onPrompt
+  render(<Composer workspaceId={workspaceId} sessionId={sessionId} canSend running={false} imageAttachmentsEnabled
+    captureSubmission={(text, _images, delivery) => captureSessionSubmission(workspaceId, sessionId, text, delivery)}
+    onPrompt={onPrompt} onCancel={() => {}} />)
+  fireEvent.click(screen.getByRole("button", { name: "送出" }))
+  await waitFor(() => {
+    expect(submissions).toHaveLength(1)
+    expect((screen.getByRole("textbox", { name: "提示" }) as HTMLTextAreaElement).value).toBe(prompt)
+  })
+  expect(readDraft(workspaceId, sessionId)).toBe(prompt)
+  expect(readImageDrafts(workspaceId, sessionId)).toEqual([image])
+
+  fireEvent.click(screen.getByRole("button", { name: "送出" }))
+  await waitFor(() => {
+    expect(submissions).toHaveLength(2)
+    expect(readDraft(workspaceId, sessionId)).toBe("")
+    expect(readImageDrafts(workspaceId, sessionId)).toEqual([])
+  })
+  expect(submissions[0]).toMatchObject({ text: prompt, images: [{ mediaType: image.mediaType, dataBase64: image.dataBase64 }] })
+  expect(submissions[0]?.clientToken).toBeTruthy()
+  expect(submissions[1]).toEqual(submissions[0])
+  expect(request.mock.calls.filter(([message]) => message.kind === "desktop/session/project/state")).toHaveLength(1)
+})
 
 it("retries an unacknowledged input with its original token and rotates it after acceptance", async () => {
   const accepted = new Set<string>(), attempts: string[] = []

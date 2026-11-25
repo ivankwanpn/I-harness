@@ -8,6 +8,8 @@ import { modelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 
 /** Exact producer-owned document identity for permanent session cleanup. */
 export const desktopInputReceiptDocumentKey = (sessionId: string) => `desktop-input-tokens-${createHash("sha256").update(sessionId).digest("hex")}`
+export const DESKTOP_INPUT_PROJECT_CHECKED = "project-checked"
+export type DesktopInputProjectCheck = (sessionId: string) => Promise<unknown>
 type ManagedInputOwner=NonNullable<Awaited<ReturnType<NonNullable<SessionService['managedInputFor']>>>>
 type ManagedInputObservation=ReturnType<ManagedInputOwner['observe']>
 
@@ -113,15 +115,21 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
   }
   return {
     hasActiveWork: () => gates.size > 0 || scheduled.size > 0 || jobs.size > 0,
-    admit(id: string, raw: { text: string; delivery: "queue" | "steer"; context?: string; images?: ImageInput[]; clientToken?: string; inputId?: string; start?: boolean }) {
+    admit(id: string, raw: { text: string; delivery: "queue" | "steer"; context?: string; images?: ImageInput[]; clientToken?: string; inputId?: string; start?: boolean }, checkProjectScope?: DesktopInputProjectCheck) {
       return serial(id, async () => {
         if (closed) throw new Error("Input service closed")
         if (!raw || typeof raw.text !== "string" || !raw.text.trim() || raw.text.length > 131072 || !["queue", "steer"].includes(raw.delivery)) throw new Error("Invalid input")
         if (raw.context !== undefined && (typeof raw.context !== "string" || raw.context.length > 131072)) throw new Error("Invalid prompt context")
         if (raw.clientToken !== undefined && (typeof raw.clientToken !== "string" || raw.clientToken.length < 8 || raw.clientToken.length > 128)) throw new Error("Invalid prompt client token")
         if (raw.images) validateImages(raw.images, "desktop input")
+        if (checkProjectScope) {
+          // The broker validates visibility and reads the original root profile.
+          // Do so before acquiring an execution or acknowledging a receipt.
+          await checkProjectScope(id)
+          if (closed) throw new Error("Input service closed")
+        }
         const managed=await service.managedInputFor?.(id,{completePreparation:options.prepare!==undefined&&!options.managedPreparation,supplementalContext:raw.context!==undefined})
-        await coordinator.profile(id)
+        if (!checkProjectScope) await coordinator.profile(id)
         managed?.observe().assertCurrent()
         // The durable admission event is the idempotency record. A client
         // token deterministically selects its input id, so no second receipt

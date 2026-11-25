@@ -125,8 +125,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [capabilitySnapshot, setCapabilitySnapshot] = useState<{ workspaceId: string; value: Record<string, string[]> }>()
   const capabilitiesReady = selectedWorkspaceId !== undefined && capabilitySnapshot?.workspaceId === selectedWorkspaceId
   const capabilities = capabilitiesReady ? capabilitySnapshot.value : {}
+  const inputCapabilities = capabilities["desktop-input"]
+  const usesDurableInput = inputCapabilities?.includes("1") === true
+  const checksProjectOnAdmission = usesDurableInput && inputCapabilities.includes("project-checked")
   const durableInputSupported = useRef(false)
-  durableInputSupported.current = capabilities["desktop-input"]?.includes("1") === true
+  durableInputSupported.current = usesDurableInput
   const [queueResumable, setQueueResumable] = useState(false)
   workStateSupported.current = capabilities["desktop-work-state"]?.includes("1") === true
   const [sandbox, setSandbox] = useState<SandboxState>()
@@ -745,7 +748,10 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       if (showEcho) setOptimistic(current => [...current.filter(row => !ownsEcho(row)), { scope: currentScope, token, text }])
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
-        if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }).catch(() => { throw new ComposerPreparationError(t("無法確認會話專案；草稿仍保留。")) })
+        if (projectScopeSupported && !checksProjectOnAdmission) {
+          await bridge.request({ kind: "desktop/session/project/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
+            .catch(() => { throw new ComposerPreparationError(t("無法確認會話專案；草稿仍保留。")) })
+        }
         if (selection.current === owner) scrollHistory.latest?.()
         timer = setTimeout(() => { if (selection.current === owner) void refreshTasks(selectedWorkspaceId, selectedSessionId) }, 500)
         const accepted = (inputId?: string) => {
@@ -755,7 +761,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           else consume()
         }
         await operations.run(selectedWorkspaceId, selectedSessionId, { kind: "prompt", token, text, context, images, delivery: submission.delivery, onAdmitted: accepted })
-        if (!capabilities["desktop-input"]?.includes("1")) removeEcho()
+        if (!usesDurableInput) removeEcho()
       } catch (error) { removeEcho(); throw error }
       finally { clearTimeout(timer) }
       if (selection.current !== owner) return
