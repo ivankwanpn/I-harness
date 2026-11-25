@@ -40,6 +40,7 @@ export interface DesktopHandlers {
   executionObservation?: ReturnType<typeof import("./execution-host-observation.ts").createExecutionHostObservation>
   execution?: ReturnType<typeof import("./execution.ts").createDesktopExecution>
   agentProcesses?: ReturnType<typeof import("./agent-processes.ts").createAgentProcesses>
+  beforeSessionWarm?(sessionId: string): Promise<boolean> | undefined
   diagnostics?: ReturnType<typeof import("./environment-diagnostics.ts").createDesktopDiagnostics>
   /** D-01 host diagnostic: inspect (or explicitly reconcile) the task document
    * against durable child sessions. Never exposed to a model tool. */

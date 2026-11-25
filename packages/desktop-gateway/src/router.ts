@@ -222,6 +222,16 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
           }
           return
         }
+        if (message.method === "session/warm" && initialized && typeof scopedSessionId === "string" && scopedSessionId !== "") {
+          // Speculative warmup yields to one original cold Processes list.
+          // The SDK must not begin compatibility preparation before this wait.
+          const ready = handlers.beforeSessionWarm?.(scopedSessionId)
+          if (ready) {
+            const open = await ready
+            if (closed) return
+            if (!open) { send(makeSuccess(message.id, { ready: false, error: "Desktop host is closing" })); return }
+          }
+        }
         await dispatchSdk(message, line)
         if (message.method === "session/cancel") {
           const sessionId = asRecord(message.params)?.sessionId

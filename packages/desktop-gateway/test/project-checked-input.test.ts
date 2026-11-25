@@ -15,6 +15,27 @@ import { createDesktopHost } from '../src/host.ts'
 import { createDesktopRouter, createGatewayWrite } from '../src/router.ts'
 import type { DesktopHandlers } from '../src/types.ts'
 
+const processCaptures = vi.hoisted(() => new Map<string, { entered(): void; release: Promise<void> }[]>())
+vi.mock('../../session-persistence-jsonl/src/backend/process-read.ts', async original => {
+  const real = await original<typeof import('../../session-persistence-jsonl/src/backend/process-read.ts')>()
+  return { ...real, createJsonlProcessReadCapability(...args: Parameters<typeof real.createJsonlProcessReadCapability>) {
+    const capability = real.createJsonlProcessReadCapability(...args)
+    return { ...capability, async capture(id: string, keys: readonly string[]) {
+      const original = await capability.capture(id, keys), hold = processCaptures.get(id)?.shift()
+      if (hold) { hold.entered(); await hold.release }
+      return original
+    } }
+  } }
+})
+
+function holdProcessCapture(id: string) {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const readers = processCaptures.get(id) ?? []
+  readers.push({ entered: entered.resolve, release: release.promise })
+  processCaptures.set(id, readers)
+  return { entered: entered.promise, release: release.resolve }
+}
+
 async function fixture(beforeReply?: (request: LLMRequest) => Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), 'ih-project-checked-input-'))
   const workspace = join(root, 'workspace'), other = join(root, 'other'), sessionDir = join(root, 'sessions')
@@ -160,6 +181,68 @@ it('reads Processes during and after a private turn without opening a compatibil
     expect(Object.hasOwn(execution!.owner, 'view')).toBe(false)
     expect(originalManagedExecutionFor(f.service, sessionId)).toBe(execution)
   } finally { release.resolve(); await f.close() }
+}, 45_000)
+
+it('speculative warm joins one admitted cold Processes list without delaying other sessions or joining a later poll', async () => {
+  const f = await fixture(), id = 'cold-list', other = 'independent'
+  const first = holdProcessCapture(id), later = holdProcessCapture(id)
+  const assembly = vi.spyOn(f.service, 'assemblyFor')
+  const flights: Promise<unknown>[] = []
+  try {
+    await f.succeed('initialize')
+    await f.coordinator.create({ sessionId: id })
+    await f.coordinator.create({ sessionId: other })
+    const reading = f.succeed('desktop/session/processes/read', { sessionId: id })
+    flights.push(reading); void reading.catch(() => {})
+    await first.entered
+    const warming = f.succeed('session/warm', { sessionId: id })
+    flights.push(warming); void warming.catch(() => {})
+    const polling = f.call('desktop/session/processes/read', { sessionId: id })
+    flights.push(polling); void polling.catch(() => {})
+    await later.entered
+
+    expect(await f.succeed('session/warm', { sessionId: other })).toEqual({ ready: true })
+    expect(assembly.mock.calls).toEqual([[other]])
+    expect(f.service.pendingAssemblyMount(id)).toBeUndefined()
+    first.release()
+    expect(await reading).toEqual({ sessionId: id, live: false, jobs: [], terminals: [] })
+    expect(await warming).toEqual({ ready: true })
+    expect(assembly.mock.calls).toEqual([[other], [id]])
+    later.release()
+    expect(isRpcSuccess(await polling)).toBe(true)
+    expect(f.produceReply).not.toHaveBeenCalled()
+  } finally {
+    first.release(); later.release()
+    await Promise.allSettled(flights)
+    assembly.mockRestore(); processCaptures.delete(id); await f.close()
+  }
+}, 45_000)
+
+it('same-session user input proceeds during the cold list, and a refused read releases speculative warm', async () => {
+  const f = await fixture(), id = 'prompt-during-cold-list'
+  const held = holdProcessCapture(id), flights: Promise<unknown>[] = []
+  try {
+    await f.succeed('initialize')
+    await f.coordinator.create({ sessionId: id })
+    const reading = f.call('desktop/session/processes/read', { sessionId: id })
+    flights.push(reading); void reading.catch(() => {})
+    await held.entered
+    const warming = f.succeed('session/warm', { sessionId: id })
+    flights.push(warming); void warming.catch(() => {})
+    expect(await f.succeed('desktop/session/input/submit', submit(id))).toMatchObject({ accepted: true })
+    await f.finished(id)
+    expect(originalManagedExecutionFor(f.service, id)).toBeDefined()
+    expect(f.service.liveAssembly(id)).toBeUndefined()
+
+    held.release()
+    expect(isRpcSuccess(await reading)).toBe(false)
+    expect(await warming).toMatchObject({ ready: false, error: expect.stringContaining('Private entry') })
+    expect(f.produceReply).toHaveBeenCalledOnce()
+  } finally {
+    held.release()
+    await Promise.allSettled(flights)
+    processCaptures.delete(id); await f.close()
+  }
 }, 45_000)
 
 it('checks the original project root once before attaching public input and preserves durable retries', async () => {

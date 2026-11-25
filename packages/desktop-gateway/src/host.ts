@@ -669,6 +669,23 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   const executionObservation = createExecutionHostObservation(coordinator, projects, service, execution)
   const conversationRead = createConversationResultReader(coordinator, service, isConversation, fence)
   const agentProcesses = createAgentProcesses(coordinator, service, { runRead: createAgentProcessReadRunner({ coordinator, service, isConversation, fence, resultReadScopeFor: projects.resultReadScopeFor, readResultPage: conversationRead }) })
+  const coldProcessLists = new Map<string, Set<Promise<void>>>()
+  function readProcessList(id: string) {
+    const cold = !service.liveAssembly(id) && !service.pendingAssemblyMount(id) && !originalManagedExecutionFor(service, id)
+    const read = agentProcesses.read(id)
+    if (cold) {
+      let lists = coldProcessLists.get(id)
+      if (!lists) { lists = new Set(); coldProcessLists.set(id, lists) }
+      const active = lists
+      const done = () => {
+        active.delete(settled)
+        if (active.size === 0 && coldProcessLists.get(id) === active) coldProcessLists.delete(id)
+      }
+      const settled = read.then(done, done)
+      active.add(settled)
+    }
+    return read
+  }
   const resources = createDesktopResources(options.workspace, () => plugins.inputs(), { configDir: dirname(settingsPath), refresh: () => service.refreshExtensions() })
   const handlers: DesktopHandlers = {
     hasActiveWork: (): boolean => base.hasActiveWork() || interaction.hasPending() || input.hasActiveWork()
@@ -680,7 +697,8 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
     assertSession: async id => { const { meta } = await coordinator.profile(id); if (!await isConversation(id, meta)) throw new Error("Conversation unavailable") },
     executionObservation,
     execution: { ...execution, stop: (id, cellId) => fence.run(id, () => execution.stop(id, cellId)) },
-    agentProcesses: { ...agentProcesses, control: (id, command) => fence.run(id, () => agentProcesses.control(id, command)) },
+    agentProcesses: { ...agentProcesses, read: readProcessList, control: (id, command) => fence.run(id, () => agentProcesses.control(id, command)) },
+    beforeSessionWarm: id => coldProcessLists.get(id)?.values().next().value?.then(() => !shutdownRequested),
     diagnostics: createDesktopDiagnostics(service, { shell: agentShell, sessionStore: commitLogStore ? 'commit-log' : 'jsonl', workspace: options.workspace }),
     taskProjection: async (id, options) => {
       if (!service.taskProjectionIntegrity) throw new Error("Task projection unavailable")
