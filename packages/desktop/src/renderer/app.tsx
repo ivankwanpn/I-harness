@@ -770,7 +770,12 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const gate = sendGate({ model, sandbox, connection }, t)
   const currentScope = JSON.stringify([selectedWorkspaceId, selectedSessionId])
   const { events, live } = eventWindow
-  const scrollHistory = useHistoryScroll(selection.current, disconnectRevision, windowKey === currentScope ? events : [], eventWindow.cursor, historyRequest)
+  const historySelection = selection.current
+  const historyRevision = disconnectRevision.current
+  const historyReadScope = useMemo(() => ({
+    isCurrent: () => selection.current === historySelection && disconnectRevision.current === historyRevision,
+  }), [historySelection, historyRevision])
+  const scrollHistory = useHistoryScroll(historySelection, historyReadScope, windowKey === currentScope ? events : [], eventWindow.cursor, historyRequest)
   const visibleEchoes = useMemo(() => pendingEchoes(optimistic, currentScope, events), [optimistic, currentScope, events])
   useEffect(() => {
     if (visibleEchoes !== optimistic) setOptimistic(current => current === optimistic ? visibleEchoes : current)
@@ -1026,7 +1031,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         return result
       }}
       historicalView={historyTarget && historyTarget.workspaceId === selectedWorkspaceId && historyTarget.sessionId === selectedSessionId ? {
-        selection: historyTarget, request: historyRequest, onLatest: () => { navigationVersion.current++; scrollHistory.latest?.(); setHistoryTarget(undefined) },
+        selection: historyTarget, request: historyRequest, readScope: historyReadScope,
+        onLatest: () => { navigationVersion.current++; scrollHistory.latest?.(); setHistoryTarget(undefined) },
         onForkAt: capabilities["session-fork-bootstrap"]?.includes("1") ? async target => {
           const scope = selection.current
           if (scope.workspaceId !== target.workspaceId || scope.sessionId !== target.sessionId) return

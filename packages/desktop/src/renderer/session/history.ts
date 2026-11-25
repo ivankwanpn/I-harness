@@ -7,6 +7,11 @@ export interface HistoryPageRequest {
   limit: number
 }
 
+/** A history read belongs to the selected session and its observed transport. */
+export interface HistoryReadScope {
+  isCurrent(): boolean
+}
+
 export interface HistoryLoad {
   events: HistoryRange["events"]
   cursor: number

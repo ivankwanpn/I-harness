@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { HistoryRange } from "@i-harness/sdk"
 import { HISTORY_PAGE_SIZE, MAX_HISTORY_VIEW_EVENTS, historyViewport, pageHistoryViewport, type HistoryViewport, type WireEvent } from "./event-window.ts"
-import { loadEarlierHistory, type HistoryPageRequest } from "./history.ts"
+import { loadEarlierHistory, type HistoryPageRequest, type HistoryReadScope } from "./history.ts"
 import type { HistoryRequest } from "./SessionHistoryView.tsx"
 
 type Selection = { workspaceId?: string; sessionId?: string }
-type ReadOwner = { selection: Selection; revision: number }
 
 export interface HistoryScroll {
   viewport?: HistoryViewport
@@ -20,20 +19,18 @@ export interface HistoryScroll {
  * keeps its own cursor, so scrolling never delays or rewinds live admission. */
 export function useHistoryScroll(
   selection: Selection,
-  transportRevision: RefObject<number>,
+  readOwner: HistoryReadScope,
   tail: readonly WireEvent[],
   liveCursor: number,
   request: (input: HistoryRequest) => Promise<HistoryRange>,
 ): HistoryScroll {
   const [view, setView] = useState<{ owner: Selection; viewport: HistoryViewport }>()
-  const [error, setError] = useState<{ owner: ReadOwner; message: string }>()
-  const [loading, setLoading] = useState<ReadOwner>()
-  const revision = transportRevision.current
-  const readOwner = useMemo(() => ({ selection, revision }), [selection, revision])
+  const [error, setError] = useState<{ owner: HistoryReadScope; message: string }>()
+  const [loading, setLoading] = useState<HistoryReadScope>()
   const owner = useRef(readOwner)
   owner.current = readOwner
-  const flight = useRef<{ owner: ReadOwner } | undefined>(undefined)
-  const current = () => owner.current === readOwner && transportRevision.current === revision
+  const flight = useRef<{ owner: HistoryReadScope } | undefined>(undefined)
+  const current = () => owner.current === readOwner && readOwner.isCurrent()
   const viewport = view?.owner === selection ? view.viewport : undefined
   const oldest = viewport?.startSeq ?? tail[0]?.seq
   const hasBefore = viewport?.hasBefore ?? (oldest !== undefined && oldest > 0)

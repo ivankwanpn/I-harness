@@ -56,3 +56,54 @@ it("discards delayed old workspace history and keeps before paging distinct from
   fireEvent.click(screen.getByRole("button", { name: "載入較早內容" }))
   await waitFor(() => expect(request).toHaveBeenLastCalledWith({ kind: "session/history", workspaceId: "b", sessionId: "new", afterSeq: 0, limit: 200 }))
 })
+
+it("does not open a stale search hit after transport retirement and waits for an explicit retry", async () => {
+  const pending = Promise.withResolvers<HistoryRange>()
+  const request = vi.fn<() => Promise<HistoryRange>>()
+    .mockReturnValueOnce(pending.promise)
+    .mockResolvedValueOnce({ events: [{ type: "assistant/message", seq: 3, text: "current search hit" }], nextSeq: 4 })
+  let live = true
+  const oldScope = { isCurrent: () => live }
+  const newScope = { isCurrent: () => true }
+  const selection = { workspaceId: "w", sessionId: "s", seq: 3 }
+  const view = render(<SessionHistoryView selection={selection} request={request} readScope={oldScope} onLatest={() => {}} />)
+  expect(screen.getByRole("status")).toBeTruthy()
+
+  live = false
+  view.rerender(<SessionHistoryView selection={selection} request={request} readScope={newScope} onLatest={() => {}} />)
+  expect(screen.queryByRole("status")).toBeNull()
+  await act(async () => { pending.resolve({ events: [{ type: "assistant/message", seq: 3, text: "retired search hit" }], nextSeq: 4 }) })
+  expect(screen.queryByText("retired search hit")).toBeNull()
+  expect(request).toHaveBeenCalledOnce()
+
+  fireEvent.click(screen.getByRole("button", { name: "重試" }))
+  expect(await screen.findByText("current search hit")).toBeTruthy()
+})
+
+it("holds a settled search window and discards an earlier page on transport retirement", async () => {
+  const pending = Promise.withResolvers<HistoryRange>()
+  const request = vi.fn<() => Promise<HistoryRange>>()
+    .mockResolvedValueOnce({ events: [{ type: "assistant/message", seq: 300, text: "settled search hit" }], nextSeq: 400 })
+    .mockReturnValueOnce(pending.promise)
+    .mockResolvedValueOnce({ events: [{ type: "assistant/message", seq: 99, text: "fresh earlier page" }], nextSeq: 100 })
+  let live = true
+  const oldScope = { isCurrent: () => live }
+  const newScope = { isCurrent: () => true }
+  const selection = { workspaceId: "w", sessionId: "s", seq: 300 }
+  const view = render(<SessionHistoryView selection={selection} request={request} readScope={oldScope} onLatest={() => {}} />)
+  await screen.findByText("settled search hit")
+  const earlier = () => screen.getByRole("button", { name: "載入較早內容" }) as HTMLButtonElement
+  fireEvent.click(earlier())
+  expect(earlier().disabled).toBe(true)
+
+  live = false
+  view.rerender(<SessionHistoryView selection={selection} request={request} readScope={newScope} onLatest={() => {}} />)
+  expect(earlier().disabled).toBe(false)
+  await act(async () => { pending.resolve({ events: [{ type: "assistant/message", seq: 99, text: "retired earlier page" }], nextSeq: 100 }) })
+  expect(screen.getByText("settled search hit")).toBeTruthy()
+  expect(earlier().disabled).toBe(false)
+  expect(request).toHaveBeenCalledTimes(2)
+
+  await act(async () => { fireEvent.click(earlier()) })
+  expect(request).toHaveBeenLastCalledWith({ kind: "session/history", workspaceId: "w", sessionId: "s", afterSeq: 0, limit: 200 })
+})
