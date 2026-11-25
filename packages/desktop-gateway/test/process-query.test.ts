@@ -49,7 +49,7 @@ it('reads a live native job by exact instance and source before its terminal is 
     managedProcesses: () => ({ background: [
       { id: 'bash-1', kind: 'shell', status: 'running', output: 'current output', outputTruncated: false, ownerSessionId: 's', nativeJob },
     ], tasks: () => [] }),
-    selectJobs() {}, selectTerminal() {}, assertCurrent() {}, async checkpoint() {},
+    selectJobs() {}, selectTerminals() {}, assertCurrent() {}, async checkpoint() {},
     async page() { throw new Error('An unsettled job has no retained page') },
   }) })
   try {
