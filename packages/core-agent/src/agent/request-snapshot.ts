@@ -27,7 +27,7 @@ export function captureRequestCandidate(session: Session, ownerSessionId: string
   return { snapshot, ...selected, projectionRevision, neutralFingerprint: projectionFingerprint(selectConversationMessages(snapshot.conversation)), metadata: snapshot.surface.binding }
 }
 
-export function sameRequestCandidate(before: RequestCandidateIdentity, current: RequestCandidateIdentity): boolean {
+export function sameRequestCandidate(before: RequestCandidateIdentity, current: RequestEvidence): boolean {
   const a = before.snapshot.coordinates, b = current.snapshot.coordinates
   return before.model === current.model && before.bindingIdentity === current.bindingIdentity
     && a.semanticRevision === b.semanticRevision && a.protectionRevision === b.protectionRevision
