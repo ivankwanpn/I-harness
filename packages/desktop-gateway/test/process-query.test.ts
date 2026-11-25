@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -6,10 +6,37 @@ import { createJsonlTaskTransitionCoordinator } from '@i-harness/session-persist
 import { taskDocumentStorageContract } from '@i-harness/subagent/internal/task-storage-contract'
 import { createDurableSessionLoader, createSessionService } from '@i-harness/session-executor'
 import { createAgentProcesses } from '../src/agent-processes.ts'
-import { createAgentProcessReadRunner } from '../src/agent-process-read.ts'
+import { createAgentProcessReadRunner, type AgentProcessReadContext } from '../src/agent-process-read.ts'
 import { createSessionManagementFence } from '../src/session-management-fence.ts'
 import { contextRequestParams } from '../../desktop/src/main/context-requests.ts'
 import { buildSavedProcessIndex } from '../src/saved-process-index.ts'
+
+const captureProbe = vi.hoisted(() => ({ current: undefined as {
+  id: string; cold: number; managed: number; hold: 'capture' | 'work' | 'finish'; captured(): void; release: Promise<void>
+} | undefined }))
+vi.mock('../../session-persistence-jsonl/src/backend/process-read.ts', async original => {
+  const real = await original<typeof import('../../session-persistence-jsonl/src/backend/process-read.ts')>()
+  return { ...real, createJsonlProcessReadCapability(...args: Parameters<typeof real.createJsonlProcessReadCapability>) {
+    const capability = real.createJsonlProcessReadCapability(...args)
+    return { ...capability,
+      async capture(id: string, keys: readonly string[]) {
+        const captured = await capability.capture(id, keys), probe = captureProbe.current
+        if (probe?.id !== id) return captured
+        probe.cold++
+        if (probe.hold === 'capture') { probe.captured(); await probe.release }
+        if (probe.hold === 'finish') return { ...captured, async finish() {
+          probe.captured(); await probe.release; await captured.finish()
+        } }
+        return captured
+      },
+      captureManagedAuxiliary(id: string, keys: readonly string[]) {
+        const probe = captureProbe.current
+        if (probe?.id === id) probe.managed++
+        return capability.captureManagedAuxiliary(id, keys)
+      },
+    }
+  } }
+})
 
 it('reads a live native job by exact instance and source before its terminal is committed', async () => {
   const root = await mkdtemp(join(tmpdir(), 'process-live-instance-'))
@@ -97,3 +124,72 @@ it('joins only the existing compatibility mount for the selected process read', 
     finally { try { await coordinator.close() } finally { await rm(root, { recursive: true, force: true }) } }
   }
 })
+
+it.each(['pending', 'published', 'scope changed', 'finish', 'work error'] as const)('handoff of an invalidated cold witness to a later warm owner (%s)', async mode => {
+  const root = await mkdtemp(join(tmpdir(), 'process-cold-warm-handoff-')), id = 'handoff'
+  const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const original = Promise.withResolvers<void>(), releaseCold = Promise.withResolvers<void>()
+  const mounting = Promise.withResolvers<void>(), releaseWarm = Promise.withResolvers<void>()
+  const hold = mode === 'finish' ? 'finish' : mode === 'work error' ? 'work' : 'capture'
+  const probe = { id, cold: 0, managed: 0, hold, captured: original.resolve, release: releaseCold.promise } as const
+  captureProbe.current = probe
+  const fence = createSessionManagementFence()
+  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator),
+    modelPolicy: 'test-mock', sandbox: 'read-only', sessionOperation: fence,
+    async extensionsFor() { return { options: {}, async mount() { mounting.resolve(); await releaseWarm.promise } } },
+  })
+  const joined = Promise.withResolvers<void>(), pendingAssemblyMount = service.pendingAssemblyMount.bind(service)
+  const pending = vi.spyOn(service, 'pendingAssemblyMount').mockImplementation(target => {
+    const opening = pendingAssemblyMount(target)
+    if (target === id && opening) joined.resolve()
+    return opening
+  })
+  let revision = 'original'
+  const runRead = createAgentProcessReadRunner({ coordinator, service, fence, isConversation: async () => true,
+    resultReadScopeFor: async () => () => ({ revision }),
+  })
+  let warm: Promise<unknown> | undefined, reading: Promise<unknown> | undefined
+  try {
+    await coordinator.create({ sessionId: id })
+    const workError = new Error('PROCESS_READ_UNAVAILABLE')
+    const working = vi.fn(async (context: AgentProcessReadContext) => {
+      if (mode === 'work error') { original.resolve(); await releaseCold.promise; throw workError }
+      return context.session.events.map(event => event.type)
+    })
+    reading = runRead(id, working)
+    void reading.catch(() => {})
+    await original.promise
+    expect(pendingAssemblyMount(id)).toBeUndefined()
+    warm = service.assemblyFor(id)
+    void warm.catch(() => {})
+    await mounting.promise
+    expect(pendingAssemblyMount(id)).toBeDefined()
+    expect(service.liveAssembly(id)).toBeUndefined()
+    if (mode === 'published') { releaseWarm.resolve(); await warm }
+    if (mode === 'scope changed') revision = 'rebound'
+    releaseCold.resolve()
+    if (mode === 'scope changed') {
+      await expect(reading).rejects.toThrow('Process project scope changed')
+      expect(working).not.toHaveBeenCalled()
+      expect(probe.managed).toBe(0)
+    } else if (mode === 'work error') {
+      await expect(reading).rejects.toBe(workError)
+      expect(working).toHaveBeenCalledOnce()
+      expect(probe.managed).toBe(0)
+    } else {
+      if (mode === 'pending' || mode === 'finish') await joined.promise
+      releaseWarm.resolve()
+      expect(await reading).toContain('sandbox/mode')
+      expect(working).toHaveBeenCalledTimes(mode === 'finish' ? 2 : 1)
+      expect(probe.managed).toBe(1)
+    }
+    expect(probe.cold).toBe(1)
+  } finally {
+    releaseCold.resolve(); releaseWarm.resolve()
+    await Promise.allSettled([warm, reading])
+    pending.mockRestore()
+    captureProbe.current = undefined
+    try { await service.close() }
+    finally { try { await coordinator.close() } finally { await rm(root, { recursive: true, force: true }) } }
+  }
+}, 20000)
