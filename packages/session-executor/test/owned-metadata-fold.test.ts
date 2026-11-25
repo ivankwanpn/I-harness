@@ -71,6 +71,57 @@ it('retains the validated Todo snapshot independently of the input object',()=>{
  expect(fold.views.todo.snapshot(prefix)).toEqual({kind:'present',items:[{content:'original',status:'pending'}]})
 })
 
+it('shares only immutable named snapshots from the same projection revision',()=>{
+ const fold=createOwnedMetadataFold({sessionId:'s',seedLength:0,formatVersion:14})
+ const first={eventCount:3,bodyBytes:30,prefixDigest:'first'}
+ fold.appendValidated([
+  {type:'user/message',text:'first'},
+  {type:'todo/write',version:1,items:[{content:'original',status:'pending'}]},
+  {type:'goal/change',version:1,operation:'create',goal:{id:'g',revision:1,objective:'work',phase:'active'}},
+ ],0)
+ fold.finishRestore(first)
+ const title=fold.views.title.snapshot(first),todo=fold.views.todo.snapshot(first),goal=fold.views.goal.snapshot(first)
+ if(!title.candidate||todo.kind!=='present'||goal.kind!=='present')throw Error('Expected named snapshots')
+ expect([title,title.candidate,title.candidate.messageSeqs,todo,todo.items,todo.items[0],goal,goal.value].every(Object.isFrozen)).toBe(true)
+ expect(Reflect.set(title.candidate.messageSeqs,0,99)).toBe(false)
+ expect(Reflect.set(todo.items[0]!,'content','changed')).toBe(false)
+ expect(Reflect.set(goal.value,'objective','changed')).toBe(false)
+ expect(fold.views.title.validateSnapshot(title)).toBe(true)
+ expect(fold.views.todo.validateSnapshot(todo)).toBe(true)
+ expect(fold.views.goal.validateSnapshot(goal)).toBe(true)
+
+ const unrelated={eventCount:4,bodyBytes:40,prefixDigest:'internal'}
+ fold.appendValidated([{type:'user/message',text:'hidden',internal:true}],3)
+ expect(()=>fold.views.title.snapshot(first)).toThrow(/prefix mismatch/)
+ fold.finishRestore(unrelated)
+ expect(()=>fold.views.todo.snapshot({...unrelated,prefixDigest:'other'})).toThrow(/prefix mismatch/)
+ expect(fold.views.title.snapshot(unrelated)).toBe(title)
+ expect(fold.views.todo.snapshot(unrelated)).toBe(todo)
+ expect(fold.views.goal.snapshot(unrelated)).toBe(goal)
+
+ const nextTitle={eventCount:5,bodyBytes:50,prefixDigest:'title'}
+ fold.appendValidated([{type:'user/message',text:'second'}],4)
+ fold.finishRestore(nextTitle)
+ const updatedTitle=fold.views.title.snapshot(nextTitle)
+ expect(updatedTitle).not.toBe(title)
+ expect(updatedTitle.candidate?.messageSeqs).toEqual([0,4])
+ expect(title.candidate.messageSeqs).toEqual([0])
+ expect(fold.views.todo.snapshot(nextTitle)).toBe(todo)
+ expect(fold.views.goal.snapshot(nextTitle)).toBe(goal)
+
+ const nextWork={eventCount:7,bodyBytes:70,prefixDigest:'work'}
+ fold.appendValidated([
+  {type:'todo/write',version:1,items:[]},
+  {type:'goal/change',version:1,operation:'clear',cleared:{id:'g',revision:1}},
+ ],5)
+ fold.finishRestore(nextWork)
+ expect(fold.views.title.snapshot(nextWork)).toBe(updatedTitle)
+ expect(fold.views.todo.snapshot(nextWork)).toEqual({kind:'present',items:[]})
+ expect(fold.views.goal.snapshot(nextWork)).toEqual({kind:'absent'})
+ expect(todo.items[0]!.content).toBe('original')
+ expect(goal.value.objective).toBe('work')
+})
+
 it('captures only physical eligible title inputs and latest title',()=>{
  const fold=createOwnedMetadataFold({sessionId:'s',seedLength:0,formatVersion:14})
  fold.appendValidated([{type:'user/message',text:'first'}, {type:'user/message',text:'hidden',internal:true}, {type:'user/message',text:'second'}, {type:'session/title',title:'',messageSeqs:[],source:'user'}] as any,0)

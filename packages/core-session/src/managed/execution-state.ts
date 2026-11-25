@@ -14,7 +14,7 @@ import type { OriginalConversationRestorationSource } from '../conversation/rest
 import type { CapturedFactGroup } from './groups.ts'
 import type { EncodedFactBatch,FactReceipt,FactOutcome,BatchKey,JournalPrefix,SessionEventView } from './types.ts'
 import type { ManagedExecutionIdentity,ManagedExecutionOwner,ManagedExecutionDomain,OriginalExecutionWriterBinding,OriginalWriterDependencyScope,OriginalExecutionCaptureHooks,ExecutionObservation,PreparedExecutionRequest } from './execution-types.ts'
-import {freezeJsonData,isStrictFactData} from './capture.ts'
+import {freezeJsonData,isCapturedExecutionFoldSnapshot,isStrictFactData} from './capture.ts'
 import {captureOriginalRestorationSource} from './restoration-source.ts'
 import {originalDeliveryObservation} from './delivery-control.ts'
 import {subscribers} from '../events/state.ts'
@@ -417,7 +417,16 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     current();const folded=original.hasFold?method<unknown>('foldSnapshot',expected):undefined;current()
     if(original.hasFold && (!folded || !isStrictFactData(folded)))throw TypeError('Synchronous original fold data required')
     const schedules:ExecutionObservation['schedules']=original.hasFold?Object.freeze({kind:'available' as const,revision:original.context.scheduleRevision(),snapshot:copy(folded)}):Object.freeze({kind:'unavailable' as const,reason:'original-schedule-adapter-not-connected' as const,revision:original.context.scheduleRevision()})
-    const metadata=Object.freeze(Object.fromEntries((['todo','goal','title'] as const).map(name=>{current();if(!method<boolean>('hasFoldView',name))return [name,Object.freeze({kind:'unavailable' as const,reason:'original-adapter-not-connected' as const,revision:expected.eventCount})];const value=method<unknown>('foldView',name,expected);current();return [name,Object.freeze({kind:'available' as const,revision:expected.eventCount,snapshot:copy(value)})]}))) as ExecutionObservation['metadata']
+    const metadata = Object.freeze(Object.fromEntries((['todo','goal','title'] as const).map(name => {
+      current()
+      if (!method<boolean>('hasFoldView', name)) {
+        return [name, Object.freeze({ kind: 'unavailable' as const, reason: 'original-adapter-not-connected' as const, revision: expected.eventCount })]
+      }
+      const value = method<unknown>('foldView', name, expected)
+      current()
+      const snapshot = isCapturedExecutionFoldSnapshot(value) ? value : copy(value)
+      return [name, Object.freeze({ kind: 'available' as const, revision: expected.eventCount, snapshot })]
+    }))) as ExecutionObservation['metadata']
     let uiScalars:ReturnType<typeof original.uiScalars>|undefined
     const ui=()=>{current();return uiScalars??=original.uiScalars()}
     const observation:ExecutionObservation=Object.freeze({identity,eventCount:expected.eventCount,formatVersion:member<number>('formatVersion'),...header?{header}:{},prefix:Object.freeze({...expected}),get hasConversationMessages(){return ui().hasConversationMessages},get turnCount(){return ui().turnCount},get todosRevision(){return ui().todosRevision},codeState(){if(this!==observation)throw TypeError('Original observation receiver required');current();const value=freezeJsonData(structuredClone(original.codeState()) as unknown) as ReturnType<ExecutionObservation['codeState']>;current();return value},projectionRevision:original.context.projectionRevision(),contextRevision:original.context.contextRevision(),scheduleRevision:original.context.scheduleRevision(),schedules,metadata,inbox,delivery:deliveryView,

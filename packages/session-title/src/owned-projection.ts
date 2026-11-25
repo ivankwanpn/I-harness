@@ -27,6 +27,7 @@ export function createOwnedTitleProjection(){
    else promptText=(promptText+'\n\n').slice(0,4000)
    promptText=(promptText+event.text).slice(0,4000);messageSeqs.push(n)
   },
+  revision(){return revision},
   snapshot():OwnedTitleSnapshot{return {revision,title:title===null?null:structuredClone(title),candidate:firstSeq===undefined?null:{firstSeq,messageSeqs:[...messageSeqs],promptText,fallback}}}
  }
 }

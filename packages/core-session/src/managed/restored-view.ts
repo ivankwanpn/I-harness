@@ -22,7 +22,7 @@ import type { OriginalConversationRestorationSource } from '../conversation/rest
 import { createConversationValidationScan, takeConversationValidationScan, readConversationDeliveries, readConversationGenerations,prepareConversationAppend,hasConversationToolCall } from '../conversation/validation.ts';
 import { createManagedIntakeIndex } from './intake-index.ts';
 import { prepareSessionEventWithDependencies } from '../events/intake.ts';
-import { freezeJsonData, isStrictFactData } from './capture.ts';
+import { freezeJsonData, isCapturedExecutionFoldSnapshot, isStrictFactData } from './capture.ts';
 import { resolveFactGroupWithDependencies,type CapturedFactGroup } from './groups.ts';
 import { validateDeliveryFrame } from '../conversation/delivery.ts';
 import { createConversationSourceCoordinates, archiveConversationSources, retainConversationSourceCoordinates } from '../conversation/sources.ts';
@@ -121,7 +121,24 @@ export async function restoreManagedConversation(input: OriginalConversationRest
       viewMethodChecks.push(()=>{if(Object.getOwnPropertyDescriptor(view,'snapshot')?.value!==snapshot.value||Object.getOwnPropertyDescriptor(view,'validateSnapshot')?.value!==validate.value)refuse('Original fold view changed')});
       const checkView=()=>checkViews();
       const read=originalFactory?bindOriginalCurrentnessMethod(view,'snapshot'):undefined,validation=originalFactory?bindOriginalCurrentnessMethod(view,'validateSnapshot'):undefined;
-      named[name]=(prefix)=>{if(foldFailure)throw foldFailure;try{checkView();const result=read?read(prefix):runOpaqueCurrentnessRead(source.assertCurrent,()=>Reflect.apply(snapshot.value,view,[prefix]));if(!isStrictFactData(result))refuse(result);checkView();const valid=validation?validation(result):runOpaqueCurrentnessRead(source.assertCurrent,()=>Reflect.apply(validate.value,view,[result]));if(valid!==true)refuse(valid);checkView();if(!isStrictFactData(result))refuse(result);return result}catch(cause){foldFailure??=new TypeError('Original fold view failed',{cause});throw foldFailure}};
+      named[name] = prefix => {
+        if (foldFailure) throw foldFailure;
+        try {
+          checkView();
+          const result = read ? read(prefix) : runOpaqueCurrentnessRead(source.assertCurrent, () => Reflect.apply(snapshot.value, view, [prefix]));
+          const immutable = read && validation && isCapturedExecutionFoldSnapshot(result);
+          if (!immutable && !isStrictFactData(result)) refuse(result);
+          checkView();
+          const valid = validation ? validation(result) : runOpaqueCurrentnessRead(source.assertCurrent, () => Reflect.apply(validate.value, view, [result]));
+          if (valid !== true) refuse(valid);
+          checkView();
+          if (!immutable && !isStrictFactData(result)) refuse(result);
+          return result;
+        } catch (cause) {
+          foldFailure ??= new TypeError('Original fold view failed', { cause });
+          throw foldFailure;
+        }
+      };
       if(read&&validation)propagateOriginalCurrentnessReader(view,'snapshot',named,name,[],[[view,'validateSnapshot']]);
     }
     const fold = supplied && Object.freeze({

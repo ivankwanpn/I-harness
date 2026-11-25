@@ -1,6 +1,25 @@
 import { stringifyJsonData } from '../serialization/json-data.ts'
 import { types } from 'node:util'
 import type { DeepReadonly } from './types.ts'
+import { originalCurrentnessClone } from './currentness-guards.ts'
+
+const capturedFoldSnapshots = new WeakSet<object>()
+
+/** Named folds can keep one owned snapshot while their own projection is unchanged.
+ * This proves only data immutability. The fold still checks its prefix and validator. */
+export function captureExecutionFoldSnapshot<T>(value: T): T {
+  const clone = originalCurrentnessClone()
+  if (!clone) return value
+  if (!isStrictFactData(value)) throw new TypeError('Original fold snapshot data required')
+  const snapshot = freezeJsonData(clone(value)) as T
+  if (snapshot !== null && typeof snapshot === 'object') capturedFoldSnapshots.add(snapshot)
+  return snapshot
+}
+
+export function isCapturedExecutionFoldSnapshot(value: unknown): boolean {
+  return value !== null && typeof value === 'object'
+    && capturedFoldSnapshots.has(value) && originalCurrentnessClone() !== undefined
+}
 
 /** Strict new DTOs never execute legacy accessors/toJSON while being admitted. */
 export function isStrictFactData(value: unknown): boolean {

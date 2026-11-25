@@ -10,6 +10,7 @@ export { readOwnedGenerationActions, readOwnedDeliveryState } from './managed/vi
 export { eligibleExecTerminal } from './events/exec-delivery.ts'
 export { eligibleCodeTerminal, codeTerminalRef } from './events/code-delivery.ts'
 export { assertDeliveryIssue } from './managed/delivery-control.ts'
+export { captureExecutionFoldSnapshot, isCapturedExecutionFoldSnapshot } from './managed/capture.ts'
 
 // Constructor-owned synchronous currentness composition; unknown callbacks stay opaque.
 export { bindOriginalCurrentnessDescriptors, bindOriginalCurrentnessMethod, originalCurrentnessFactoryMatches, callOriginalCurrentnessMethod, runOriginalCurrentnessRead, runOpaqueCurrentnessRead, wrapOriginalSourceCurrentness } from './managed/currentness-guards.ts'

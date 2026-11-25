@@ -4,6 +4,7 @@ import {createOwnerDeliveryControl} from '../src/managed/delivery-control.ts'
 import type {SessionEventView} from '../src/managed/types.ts'
 import {createNondurableFactOwner} from '../src/managed/nondurable.ts'
 import {createSession} from '../src/events/append.ts'
+import {captureExecutionFoldSnapshot} from '../src/managed/capture.ts'
 
 async function fixture(controls:{read?():Promise<void>;close?():Promise<void>;fold?:import('../src/managed/execution-types.ts').OriginalExecutionFoldFactory;events?:SessionEventView[]}={}){
  const events:SessionEventView[]=controls.events??[
@@ -64,6 +65,60 @@ it('publishes named original fold views without changing the schedule snapshot',
  expect(observation.metadata.todo).toMatchObject({kind:'available',revision:3,snapshot:{kind:'present',items:[]}})
  expect(observation.metadata.goal).toMatchObject({kind:'unavailable',revision:3})
  await f.state.close()
+})
+
+it('reuses a detached immutable fold value while validating the callback and exact owner on each observation', async () => {
+ const child = { negativeZero: -0, missing: undefined, sparse: Array<string>(2) }
+ child.sparse[1] = 'second'
+ const snapshot = captureExecutionFoldSnapshot({ child })
+ const validateSnapshot = vi.fn(() => true)
+ const f = await fixture({ fold: () => ({
+   appendValidated() {}, finishRestore() {}, snapshot() { return {} }, validateSnapshot() { return true },
+   views: { todo: { snapshot() { return snapshot }, validateSnapshot } },
+ }) })
+ try {
+   const first = f.state.observe()
+   child.sparse[0] = 'changed on producer'
+   const second = f.state.observe()
+   expect(first.metadata.todo).toMatchObject({ kind: 'available', snapshot })
+   expect(second.metadata.todo).toMatchObject({ kind: 'available', snapshot })
+   expect(first.metadata.todo.kind === 'available' && first.metadata.todo.snapshot).toBe(snapshot)
+   expect(second.metadata.todo.kind === 'available' && second.metadata.todo.snapshot).toBe(snapshot)
+   expect(validateSnapshot).toHaveBeenCalledTimes(2)
+   expect(Object.isFrozen(snapshot.child.sparse)).toBe(true)
+   expect(Object.is(snapshot.child.negativeZero, -0)).toBe(true)
+   expect(Object.hasOwn(snapshot.child, 'missing')).toBe(true)
+   expect(Object.hasOwn(snapshot.child.sparse, '0')).toBe(false)
+   f.lose()
+   expect(() => second.assertCurrent()).toThrow()
+   expect(() => f.state.observe()).toThrow()
+ } finally { await f.state.close() }
+})
+
+it('keeps a shallow frozen custom fold on the normal validation and detached copy path', async () => {
+ const child = { status: 'original' }
+ const supplied = Object.freeze({ child })
+ const readAccessor = vi.fn(() => 'changed')
+ let change = false
+ const f = await fixture({ fold: () => ({
+   appendValidated() {}, finishRestore() {}, snapshot() { return {} }, validateSnapshot() { return true },
+   views: { todo: {
+     snapshot() { return supplied },
+     validateSnapshot() {
+       if (change) Object.defineProperty(child, 'status', { enumerable: true, get: readAccessor })
+       return true
+     },
+   } },
+ }) })
+ try {
+   const first = f.state.observe()
+   child.status = 'changed by an unowned producer'
+   expect(first.metadata.todo).toMatchObject({ kind: 'available', snapshot: { child: { status: 'original' } } })
+   change = true
+   expect(() => f.state.observe()).toThrow('Synchronous original fold callback required')
+   expect(() => first.assertCurrent()).toThrow()
+   expect(readAccessor).not.toHaveBeenCalled()
+ } finally { await f.state.close() }
 })
 
 for(const mode of ['changed','async','throw','falsey'] as const)it(`poisons the shared original fold when a named view is ${mode}`,async()=>{
