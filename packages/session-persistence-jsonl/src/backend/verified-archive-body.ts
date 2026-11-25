@@ -11,6 +11,35 @@ export interface VerifiedArchiveBody {
   readonly frames: readonly JournalFrameExtent[]
 }
 
+export class ArchiveEvidenceMismatch extends Error {
+  constructor() { super('Owned dependency prefix mismatch') }
+}
+
+/** Collect coordinates in the original full decode, without retaining events. */
+export function createColdArchiveFramingRecorder(metadata: JournalMetadata, formatVersion: number, accept: (events: SessionEvent[]) => void) {
+  const hash = createHash('sha256')
+  let frames: JournalFrameExtent[] | undefined = []
+  const decoder = createJournalStreamDecoder(metadata, formatVersion, accept, { onFrame(frame) {
+    if (!frames) return
+    if (frames.length === 16384) { frames = undefined; return }
+    frames.push(Object.freeze(frame))
+  } })
+  return {
+    push(bytes: Buffer) { if (frames) hash.update(bytes); decoder.push(bytes) },
+    finish() {
+      const result = decoder.finish()
+      const verified: VerifiedArchiveBody | undefined = frames?.length && !result.torn ? Object.freeze({
+        formatVersion,
+        legacyPrefixDigest: metadata.legacyPrefixDigest,
+        prefix: Object.freeze({ ...result.prefix }),
+        digest: hash.digest('hex'),
+        frames: Object.freeze(frames),
+      }) : undefined
+      return { ...result, verified }
+    },
+  }
+}
+
 function findFrame(frames: readonly JournalFrameExtent[], ordinal: number): JournalFrameExtent {
   let start = 0
   let end = frames.length
@@ -33,6 +62,7 @@ export function createVerifiedArchiveBodyDecoder(
   ordinals: ReadonlySet<number>,
   accept: (event: SessionEvent) => void,
   prior?: VerifiedArchiveBody,
+  cold = false,
 ) {
   if (metadata.legacyEventCount || metadata.legacyBodyBytes || metadata.separatorBytes) return undefined
   const previous = prior && prior.formatVersion === formatVersion &&
@@ -52,6 +82,7 @@ export function createVerifiedArchiveBodyDecoder(
   let position = 0
   let frameIndex = 0
   let fragments: Buffer[] = []
+  let selectionFailure: { cause: unknown } | undefined
 
   function captureSelectedFrames(bytes: Buffer) {
     const end = position + bytes.length
@@ -60,13 +91,22 @@ export function createVerifiedArchiveBodyDecoder(
       if (frame.offset >= end) break
       const frameEnd = frame.offset + frame.length
       const part = bytes.subarray(Math.max(0, frame.offset - position), Math.min(bytes.length, frameEnd - position))
-      fragments.push(part)
+      if (!selectionFailure) fragments.push(part)
       if (frameEnd > end) break
-      const raw = fragments.length === 1 ? fragments[0]! : Buffer.concat(fragments)
-      const decoded = decodeFactBatch(raw)
-      if (decoded.key.firstSeq !== frame.firstSeq || decoded.key.count !== frame.count)
-        throw new Error('Owned dependency ordinal mismatch')
-      consume(decoded.events)
+      if (!selectionFailure) {
+        try {
+          const raw = fragments.length === 1 ? fragments[0]! : Buffer.concat(fragments)
+          const decoded = decodeFactBatch(raw)
+          if (decoded.key.firstSeq !== frame.firstSeq || decoded.key.count !== frame.count)
+            throw new Error('Owned dependency ordinal mismatch')
+          consume(decoded.events)
+        } catch (cause) {
+          if (!cold) throw cause
+          // A changed frame may fail to decode. Classify a stale cold witness
+          // from the full byte digest before falling back to ordinary history.
+          selectionFailure = { cause }
+        }
+      }
       fragments = []
       frameIndex++
     }
@@ -82,8 +122,9 @@ export function createVerifiedArchiveBodyDecoder(
         captureSelectedFrames(prefixBytes)
         position += offset
         if (position === previous.prefix.bodyBytes) {
-          if (hash.copy().digest('hex') !== previous.digest || frameIndex !== selectedFrames.length)
-            throw new Error('Owned dependency prefix mismatch')
+          if (hash.copy().digest('hex') !== previous.digest) throw new ArchiveEvidenceMismatch()
+          if (frameIndex !== selectedFrames.length) throw new Error('Owned dependency prefix mismatch')
+          if (selectionFailure) throw selectionFailure.cause
           decoder = createJournalStreamDecoder(metadata, formatVersion, consume, { from: previous.prefix, onFrame })
         }
       }

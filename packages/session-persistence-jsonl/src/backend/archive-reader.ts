@@ -1,16 +1,17 @@
 import { createJournalStreamDecoder } from '@i-harness/core-session/internal/archive';
 import type { FileHandle } from 'node:fs/promises';
-import { validateConversationHistory, type SessionEvent, type JournalPrefix } from '@i-harness/core-session';
+import { CURRENT_FORMAT_VERSION, validateConversationHistory, type SessionEvent, type JournalPrefix } from '@i-harness/core-session';
+import { createHash } from 'node:crypto';
 import type { SessionMeta } from '@i-harness/session-persistence';
 import { parseHeader } from '../format.ts';
-import { createVerifiedArchiveBodyDecoder, type VerifiedArchiveBody } from './verified-archive-body.ts';
+import { ArchiveEvidenceMismatch, createColdArchiveFramingRecorder, createVerifiedArchiveBodyDecoder, type VerifiedArchiveBody } from './verified-archive-body.ts';
 const managed = (v: number) => [6, 7, 8, 9, 10, 11, 12, 13, 14].includes(v);
 type ArchivePrefix = { header: SessionMeta; birth: Buffer };
-type DependencySelection = { ordinals: ReadonlySet<number>; prefix: Readonly<JournalPrefix>; assertCurrent(): void; verified?: VerifiedArchiveBody };
+type DependencySelection = { ordinals: ReadonlySet<number>; prefix: Readonly<JournalPrefix>; assertCurrent(): void; verified?: VerifiedArchiveBody; coldHeaderDigest?: string };
 type ArchiveBodyDecoder = { push(bytes: Buffer): void; finish(): { prefix: JournalPrefix; torn: boolean; verified?: VerifiedArchiveBody } };
 const incompleteBirth = () => Object.assign(new Error('bootstrap-incomplete'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' });
 /** IO chunks are bounded; complete decoded events and the largest record remain materialized. */
-export async function readSessionArchive(handle: FileHandle, extent: number, prefixOnly = false, qualifyPrefix?: (prefix: ArchivePrefix) => Promise<void>, dependency?: DependencySelection) {
+export async function readSessionArchive(handle: FileHandle, extent: number, prefixOnly = false, qualifyPrefix?: (prefix: ArchivePrefix) => Promise<void>, dependency?: DependencySelection, captureColdFraming = false) {
     let header: SessionMeta | undefined, parts: Buffer[] = [], partBytes = 0, legacyStopped = false;
     const events: SessionEvent[] = [], birth: Buffer[] = [];
     let needed = 0, ordinal = 0, decoder: ArchiveBodyDecoder | undefined;
@@ -25,6 +26,8 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
     }
     async function line(record: Buffer, lf: boolean) {
         if (!header) {
+            const coldHeader = dependency?.coldHeaderDigest;
+            if (coldHeader && createHash('sha256').update(record).digest('hex') !== coldHeader) throw new ArchiveEvidenceMismatch();
             header = parseHeader(record.subarray(0, lf ? record.length - 1 : record.length).toString('utf8'));
             // Ordinary headers still belong to the prefix: the bootstrap owner
             // needs their original bytes to classify a stray namespace.
@@ -32,14 +35,19 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
             if(dependency&&!managed(header.formatVersion))throw Error('Owned dependency format unsupported');
             if (header.semanticSeed) needed = header.semanticSeed.seedLength ? 2 : 1;
             if (managed(header.formatVersion) && !prefixOnly) {
-                decoder = (dependency && createVerifiedArchiveBodyDecoder(header.journal!, header.formatVersion,
-                    dependency.prefix, dependency.ordinals, event => events.push(event), dependency.verified))
-                    ?? createJournalStreamDecoder(header.journal!, header.formatVersion, unit => {
-                        for (const event of unit) {
-                            if (!dependency || dependency.ordinals.has(ordinal)) events.push(event);
-                            ordinal++;
-                        }
-                    });
+                const journal = header.journal!;
+                const accept = (unit: SessionEvent[]) => {
+                    for (const event of unit) {
+                        if (!dependency || dependency.ordinals.has(ordinal)) events.push(event);
+                        ordinal++;
+                    }
+                };
+                const collect = captureColdFraming && !dependency && lf && header.formatVersion === CURRENT_FORMAT_VERSION && !header.semanticSeed
+                    && !journal.legacyEventCount && !journal.legacyBodyBytes && !journal.separatorBytes;
+                decoder = (dependency && createVerifiedArchiveBodyDecoder(journal, header.formatVersion,
+                    dependency.prefix, dependency.ordinals, event => events.push(event), dependency.verified, coldHeader !== undefined))
+                    ?? (collect ? createColdArchiveFramingRecorder(journal, header.formatVersion, accept)
+                        : createJournalStreamDecoder(journal, header.formatVersion, accept));
             }
             if (!needed && !prefixOnly) await qualifyPrefix?.({ header, birth: Buffer.concat(birth) });
             return;
@@ -104,7 +112,10 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
             if(!actual||decoded?.torn||actual.eventCount!==expected.eventCount||actual.bodyBytes!==expected.bodyBytes||actual.prefixDigest!==expected.prefixDigest||events.length!==dependency.ordinals.size)throw Error('Owned dependency prefix mismatch');
             dependency.assertCurrent();
             verified = decoded.verified;
-        }else if (managed(header.formatVersion) || events.some(e => e.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion, header);
+        }else if (managed(header.formatVersion) || events.some(e => e.type === 'compaction/replacement')) {
+            validateConversationHistory(events, header.formatVersion, header);
+            if (decoded?.verified && birth.length === 1 && decoded.prefix.bodyBytes === extent - birth[0]!.length) verified = decoded.verified;
+        }
     }
     return { header, birth: Buffer.concat(birth), events, verified };
 }

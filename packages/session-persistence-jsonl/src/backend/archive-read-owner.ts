@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { open, stat, type FileHandle } from 'node:fs/promises';
+import type { BigIntStats } from 'node:fs';
 import type { ArchiveReadResources } from '@i-harness/session-persistence/internal/archive-read';
 type Resource = {
     handle?: FileHandle;
@@ -11,12 +12,17 @@ type Resource = {
     flight?: Promise<void>;
 };
 type FileResource = Resource & { handle: FileHandle };
+type ArchiveReadWork<T> = (handle: FileHandle, extent: number, identity: Readonly<Pick<BigIntStats, 'dev' | 'ino'>>) => Promise<T>;
+class ArchiveReadSealChanged extends Error {
+    constructor() { super('Original cold archive changed before final seal'); }
+}
 /** Original per-backend ledger. Failed descriptors remain reachable after caller rejection. */
 export function createArchiveReadOwner() {
     const resources = new Set<Resource>(), pending = new Set<Promise<unknown>>(), participants = new Set<{
         closed: boolean;
     }>();
     let retired = false;
+    let publicGeneration = {};
     // Only the original coordinator's transition closure installs this finite,
     // exact-session scope. It does not reopen public or managed read admission.
     const mutationReads = new AsyncLocalStorage<{ sessionId: string; active: boolean }>();
@@ -55,9 +61,9 @@ export function createArchiveReadOwner() {
             retired = false; return { async withMutationRead<T>(sessionId: string, work: () => Promise<T>) {
                 const scope = { sessionId, active: true };
                 return mutationReads.run(scope, async () => { try { return await work(); } finally { scope.active = false; } });
-            }, assertPublicReadAdmission() { if (p.closed) throw Error('ARCHIVE_READ_UNAVAILABLE'); admission(); }, fence() { p.closed = true; retired = true; }, async settle() { await settle(); participants.delete(p); if (participants.size > 0 && [...participants].every(p => !p.closed) && ![...resources].some(r => r.failed))
+            }, assertPublicReadAdmission() { if (p.closed) throw Error('ARCHIVE_READ_UNAVAILABLE'); admission(); }, fence() { if (!p.closed) publicGeneration = {}; p.closed = true; retired = true; }, async settle() { await settle(); participants.delete(p); if (participants.size > 0 && [...participants].every(p => !p.closed) && ![...resources].some(r => r.failed))
                 retired = false; } }; } };
-    function run<T>(path: string, work: (handle: FileHandle, extent: number) => Promise<T>, subordinate = false, sessionId?: string, structural = false): Promise<T> {
+    function run<T>(path: string, work: ArchiveReadWork<T>, subordinate = false, sessionId?: string, structural = false, exactSeal = false): Promise<T> {
         const scope = mutationReads.getStore();
         const internal = sessionId !== undefined && scope?.active === true && scope.sessionId === sessionId;
         const check = () => {
@@ -84,11 +90,15 @@ export function createArchiveReadOwner() {
                 const extent = Number(initial.size);
                 if (!Number.isSafeInteger(extent))
                     throw Error('Archive extent unsupported');
-                result = await work(handle, extent);
+                result = await work(handle, extent, initial);
                 check();
                 const final = await handle.stat({ bigint: true }), current = await stat(path, { bigint: true });
-                if (final.dev !== initial.dev || final.ino !== initial.ino || current.dev !== initial.dev || current.ino !== initial.ino || final.size < initial.size || current.size < initial.size)
-                    throw Error('Archive observation changed');
+                const sameInode = final.dev === initial.dev && final.ino === initial.ino && current.dev === initial.dev && current.ino === initial.ino;
+                if (exactSeal) {
+                    if (!sameInode || final.size !== initial.size || current.size !== initial.size
+                        || final.mtimeNs !== initial.mtimeNs || current.mtimeNs !== initial.mtimeNs
+                        || final.ctimeNs !== initial.ctimeNs || current.ctimeNs !== initial.ctimeNs) throw new ArchiveReadSealChanged();
+                } else if (!sameInode || final.size < initial.size || current.size < initial.size) throw Error('Archive observation changed');
             }
             catch (e) {
                 failed = true;
@@ -111,6 +121,14 @@ export function createArchiveReadOwner() {
         pending.add(flight);
         void flight.finally(() => pending.delete(flight)).catch(() => { });
         return flight;
+    }
+    async function runSealed<T>(path: string, work: ArchiveReadWork<T>, sessionId: string): Promise<T | undefined> {
+        try { return await run(path, work, false, sessionId, false, true); }
+        catch (error) {
+            // A failed descriptor close wraps the seal error and is not a miss.
+            if (error instanceof ArchiveReadSealChanged) return undefined;
+            throw error;
+        }
     }
     /** Same original ledger, but lifetime belongs to an already-held writer.
      * Registration precedes open; retirement never supplies writer authority. */
@@ -142,5 +160,5 @@ export function createArchiveReadOwner() {
         if ([...resources].some(resource => resource.original === original)) return;
         resources.add({ original, close: original.close.bind(original), failed: true, error, consumed: false });
     }
-    return { run, association, openHeld, retainCleanup };
+    return { run, runSealed, association, openHeld, retainCleanup, publicReadGeneration() { admission(); return publicGeneration; } };
 }

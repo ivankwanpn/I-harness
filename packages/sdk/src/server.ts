@@ -405,7 +405,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
     const live = service.liveSession(sessionId)
     if (live !== undefined) return live
     if (opts.coordinator?.snapshot !== undefined) {
-      try { return (await opts.coordinator.snapshot(sessionId)).session }
+      try { return (await opts.coordinator.snapshot(sessionId, { prepareHistoryPages: true })).session }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined
         throw error

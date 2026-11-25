@@ -1,7 +1,8 @@
-import { CURRENT_FORMAT_VERSION, stringifyJsonData, validateSubagentHeader, type Session, type SessionEvent, type SessionEventView } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, stringifyJsonData, validateSubagentHeader, type Session, type SessionEvent, type SessionEventView, type SessionHistoryPageOptions } from "@i-harness/core-session"
+import { materializeSessionHistoryPage, planSessionHistoryPage, sessionHistoryFact, type SessionHistoryFact } from '@i-harness/core-session/internal/archive'
 import { repairTurnTail } from "../repair.ts"
 import { preflightSessionFormat, preflightBatchShape, preflightDecodedFactHistory, migrate, guardIgnorable, buildSession } from "../format/validation.ts"
-import { originalDecodedArchiveRead } from '../archive-read-internal.ts'
+import { originalColdArchiveHistoryReader, originalDecodedArchiveRead, type ColdArchiveHistoryReader } from '../archive-read-internal.ts'
 import { assertUpgradeCapability, ensureWritableFormatUnlocked } from "./writable-format.ts"
 import type { PersistenceBackend, SessionMeta } from "./types.ts"
 import type { Ownership } from "./ownership.ts"
@@ -14,6 +15,27 @@ import type { createTaskDocumentTransitions, HistoryProof } from './task-documen
 
 export type LoadOwnedExecution = ReturnType<typeof createLoads>['loadOwnedExecution']
 type AfterTransition = (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>
+
+const MAX_COLD_HISTORY_FACTS = 16_384
+const MAX_COLD_HISTORY_IMAGE_ID_UNITS = 262_144
+
+function historyFacts(events: readonly SessionEvent[]): SessionHistoryFact[] | undefined {
+  if (events.length > MAX_COLD_HISTORY_FACTS) return undefined
+  const facts: SessionHistoryFact[] = []
+  const admissions = new Set<string>()
+  let imageIdUnits = 0
+  for (const event of events) {
+    const fact = sessionHistoryFact(event)
+    imageIdUnits += (fact.inputId?.length ?? 0) + (fact.imageInputId?.length ?? 0)
+    if (fact.seq !== facts.length || imageIdUnits > MAX_COLD_HISTORY_IMAGE_ID_UNITS) return undefined
+    // An unresolved address must be checked by the ordinary snapshot path,
+    // where its error cannot prevent a changed file from being read afresh.
+    if (fact.imageInputId !== undefined && !admissions.has(fact.imageInputId)) return undefined
+    if (fact.inputId !== undefined) admissions.add(fact.inputId)
+    facts.push(fact)
+  }
+  return facts
+}
 
 async function materializeHistory(proof: HistoryProof): Promise<{session: Session}> {
   const meta = proof.initial.header as SessionMeta | undefined
@@ -36,6 +58,9 @@ export function createLoads(
   executionChanges?: ReturnType<typeof createColdExecutionWrites>,
   withMutationRead?: <T>(sessionId: string, work: () => Promise<T>) => Promise<T>,
 ) {
+  let coldHistory: { sessionId: string; evidence: object; facts: SessionHistoryFact[] } | undefined
+  let coldHistoryRetired = false
+
   async function processMutation<T>(id: string, work: () => Promise<T>): Promise<T> {
     const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' })
     let outcome: 'settled' | 'unknown' = 'unknown'
@@ -52,7 +77,7 @@ export function createLoads(
       throw error
     } finally { token?.end(outcome) }
   }
-  const read = async (sessionId: string, original?: PersistenceBackend['read']) => {
+  const read = async (sessionId: string, original?: ColdArchiveHistoryReader['readFull']): ReturnType<ColdArchiveHistoryReader['readFull']> => {
     try { return await (original ? Reflect.apply(original, backend, [sessionId]) : backend.read(sessionId)) }
     catch (cause) {
       if (['SESSION_CONTEXT_REPLACEMENT_FORMAT', 'SESSION_CONVERSATION_FORMAT'].includes((cause as { code?: string })?.code ?? '')) throw new SessionFormatUnsupportedError('unsupported conversation history', { cause })
@@ -137,19 +162,51 @@ export function createLoads(
   return {
     transitionLoad,
     loadOwnedExecution,
-    async snapshot(sessionId: string) {
+    async snapshot(sessionId: string, prepareHistoryPages = false) {
+      const cold = prepareHistoryPages && !coldHistoryRetired ? originalColdArchiveHistoryReader(backend) : undefined
       const original = originalDecodedArchiveRead(backend)
-      const { version, events, meta } = await read(sessionId, original)
+      const { version, events, meta, evidence } = await read(sessionId, cold?.readFull.bind(cold) ?? original)
       const currentDecoded = original !== undefined && version === CURRENT_FORMAT_VERSION
       if (currentDecoded) preflightDecodedFactHistory(version, events)
       else preflightSessionFormat(version, events, meta)
       const visible = guardIgnorable(events)
+      const unchanged = currentDecoded && visible.length === events.length
+      if (cold && !coldHistoryRetired && originalColdArchiveHistoryReader(backend) === cold) {
+        const facts = unchanged && evidence ? historyFacts(visible) : undefined
+        if (facts && evidence) coldHistory = { sessionId, evidence, facts }
+        else if (coldHistory?.sessionId === sessionId) coldHistory = undefined
+      }
       return { session: {
         formatVersion: CURRENT_FORMAT_VERSION,
         // Dropping ignorable records can change the effective conversation.
-        events: currentDecoded && visible.length === events.length ? visible : await migrate(version, visible, meta),
+        events: unchanged ? visible : await migrate(version, visible, meta),
         ...(meta === undefined ? {} : { header: meta }),
       } }
+    },
+    async readColdHistoryPage(sessionId: string, options: SessionHistoryPageOptions) {
+      const history = coldHistory
+      if (history?.sessionId !== sessionId) return undefined
+      const original = originalColdArchiveHistoryReader(backend)
+      if (!original) return undefined
+      const plan = planSessionHistoryPage(history.facts, options)
+      if (!plan) return undefined
+      const records = await original.readWindow(sessionId, history.evidence, new Set(plan.ordinals))
+      if (!records) {
+        if (coldHistory === history) coldHistory = undefined
+        return undefined
+      }
+      if (originalColdArchiveHistoryReader(backend) !== original) return undefined
+      const byOrdinal = new Map(records.map(event => [event.seq, event]))
+      const ordered = plan.ordinals.map(ordinal => {
+        const event = byOrdinal.get(ordinal)
+        if (!event) throw new Error('History page archive ordinal mismatch')
+        return event
+      })
+      return materializeSessionHistoryPage(plan, ordered)
+    },
+    retireColdHistory() {
+      coldHistoryRetired = true
+      coldHistory = undefined
     },
     async load(sessionId: string) {
       // Physical14 recovery is a parent mutation owned by the retained task

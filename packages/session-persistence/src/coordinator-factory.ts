@@ -163,11 +163,21 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     },
     async readHistoryPage(sessionId, options) {
       archiveReads?.assertPublicReadAdmission()
-      const page = await managed.readHistoryPage(sessionId, options)
+      let page = await managed.readHistoryPage(sessionId, options)
+      if (page === undefined && !managed.has(sessionId)) {
+        const cold = await loads.readColdHistoryPage(sessionId, options)
+        page = managed.has(sessionId) ? await managed.readHistoryPage(sessionId, options) : cold
+      }
       archiveReads?.assertPublicReadAdmission()
       return page
     },
-    async snapshot(sessionId) { archiveReads?.assertPublicReadAdmission(); const session = await managed.snapshot(sessionId); const candidate = session ? { session } : await loads.snapshot(sessionId); archiveReads?.assertPublicReadAdmission(); return candidate },
+    async snapshot(sessionId, options) {
+      archiveReads?.assertPublicReadAdmission()
+      const session = await managed.snapshot(sessionId)
+      const candidate = session ? { session } : await loads.snapshot(sessionId, options?.prepareHistoryPages === true && !managed.has(sessionId))
+      archiveReads?.assertPublicReadAdmission()
+      return candidate
+    },
     async load(sessionId) { archiveReads?.assertPublicReadAdmission(); assertDurableTransition(); observations.assertOutsideObservedSession(sessionId); const session = await managed.snapshot(sessionId); const candidate = session ? { session } : await loads.load(sessionId); archiveReads?.assertPublicReadAdmission(); return candidate },
     async loadOwned(sessionId) { assertDurableTransition(); observations.assertOutsideObservedSession(sessionId); observations.assertManagedSessionAdmission(sessionId); const session = await managed.snapshot(sessionId); return session ? { session } : loads.loadOwned(sessionId) },
     async list(onUnreadable) { return backend.list(onUnreadable) },
@@ -221,6 +231,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
   async function closeWithRetained(operation: RetainedCleanupOperation) {
       preflightClose()
       archiveReads?.fence()
+      loads.retireColdHistory()
       const join = observations.closeAdmission(operation)
       processLatches?.closeAdmission()
       const joinCapture = managed.closeCaptureAdmission()

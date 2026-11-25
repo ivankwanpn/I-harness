@@ -1,4 +1,4 @@
-import type { JournalPrefix } from '@i-harness/core-session'
+import type { JournalPrefix, SessionEvent } from '@i-harness/core-session'
 import type { PersistenceBackend } from './coordinator/types.ts'
 
 /** Constructor-private resource participation, never storage/read authority. */
@@ -24,6 +24,24 @@ export function attachArchiveReadResources(backend: object) { return owners.get(
 export function originalDecodedArchiveRead(backend: object): PersistenceBackend['read'] | undefined {
   const read = owners.get(backend)?.decodedRead
   if (read && Object.getOwnPropertyDescriptor(backend, 'read')?.value === read) return read
+}
+
+/** The original archive owner lends only frame evidence and verified records. */
+export interface ColdArchiveHistoryReader {
+  readFull(sessionId: string): Promise<Awaited<ReturnType<PersistenceBackend['read']>> & { evidence?: object }>
+  /** Records are returned in increasing archive ordinal. */
+  readWindow(sessionId: string, evidence: object, ordinals: ReadonlySet<number>): Promise<readonly SessionEvent[] | undefined>
+}
+
+const coldHistoryReaders = new WeakMap<object, ColdArchiveHistoryReader>()
+
+export function associateColdArchiveHistoryReader(backend: object, reader: ColdArchiveHistoryReader): void {
+  if (!originalDecodedArchiveRead(backend) || coldHistoryReaders.has(backend)) throw new TypeError('Original archive reader required')
+  coldHistoryReaders.set(backend, reader)
+}
+
+export function originalColdArchiveHistoryReader(backend: object): ColdArchiveHistoryReader | undefined {
+  return originalDecodedArchiveRead(backend) && coldHistoryReaders.get(backend)
 }
 
 export type ArchiveHistoryPrefixRead = {readonly kind:'available';readonly prefix:Readonly<JournalPrefix>} | {readonly kind:'unavailable'}

@@ -960,6 +960,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
       expect(snapshot).not.toHaveBeenCalled()
       expect(await request("fallback")).toMatchObject({ result: { events: live.events, nextSeq: 1 } })
       expect(snapshot).toHaveBeenCalledOnce()
+      expect(snapshot).toHaveBeenCalledWith("fallback", { prepareHistoryPages: true })
       readHistoryPage.mockRejectedValueOnce(new Error("Archive changed"))
       expect(await request("faulty")).toMatchObject({ error: { code: INTERNAL_ERROR, message: "session/history: failed to prepare session: Archive changed" } })
       expect(snapshot).toHaveBeenCalledOnce()

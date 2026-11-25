@@ -64,8 +64,162 @@ it('retains failed close through generic coordinator close and retries exact ori
     expect(closes).toBe(2);
 });
 import { createSessionCoordinator as createComposedCoordinator } from './helpers/composed.ts';
-import { encodeFactBatch, legacyPrefixDigest, readFactJournal, type SessionEvent } from '@i-harness/core-session';
+import { encodeFactBatch, factPrefixDigest, legacyPrefixDigest, readFactJournal, type SessionEvent } from '@i-harness/core-session';
+import { originalColdArchiveHistoryReader } from '@i-harness/session-persistence/internal/archive-read';
 async function managed(version = 14) { const f = await fixture(), previous = legacyPrefixDigest(0, Buffer.alloc(0)), journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: previous, separatorBytes: 0 as const }; const frame = Buffer.from(encodeFactBatch('one', previous, [{ type: 'plan/mode', mode: 'on', seq: 0 }]).bytes); await fs.writeFile(f.path, JSON.stringify({ formatVersion: version, sessionId: 'a', journal }) + '\n'); await fs.appendFile(f.path, frame); return { ...f, journal, frame }; }
+
+async function coldHistoryFixture() {
+    const f = await managed();
+    const bytes = (options: { title?: string; text?: string } = {}) => {
+        const header = Buffer.from(JSON.stringify({ formatVersion: 14, sessionId: 'a', title: options.title ?? 'before', journal: f.journal }) + '\n');
+        let prefix = f.journal.legacyPrefixDigest;
+        const frames = [0, 1, 2].map(seq => {
+            const batch = encodeFactBatch(`cold-${seq}`, prefix, [{ type: 'user/message', seq, text: seq === 1 ? options.text ?? 'before' : `message-${seq}` }]);
+            prefix = factPrefixDigest(prefix, batch.key.batchDigest);
+            return Buffer.from(batch.bytes);
+        });
+        return Buffer.concat([header, ...frames]);
+    };
+    await fs.writeFile(f.path, bytes());
+    return { ...f, bytes, reader: originalColdArchiveHistoryReader(f.backend)! };
+}
+
+it('reads the original cold frames in ascending order using copied coordinates and opaque evidence', async () => {
+    const f = await coldHistoryFixture();
+    const decoded = await f.reader.readFull('a');
+    expect(decoded.events.map(event => event.seq)).toEqual([0, 1, 2]);
+    expect(decoded.evidence).toBeDefined();
+    expect(await f.reader.readWindow('other', decoded.evidence!, new Set([2]))).toBeUndefined();
+    expect(await f.reader.readWindow('a', {}, new Set([2]))).toBeUndefined();
+    const coordinates = new Set([2, 0]);
+    const reading = f.reader.readWindow('a', decoded.evidence!, coordinates);
+    coordinates.clear();
+    expect(await reading).toEqual([decoded.events[0], decoded.events[2]]);
+    expect(await f.reader.readWindow('a', decoded.evidence!, new Set())).toEqual([]);
+    await expect(f.reader.readWindow('a', decoded.evidence!, new Set([3]))).rejects.toThrow('Invalid cold history window coordinates');
+});
+
+it.each(['header', 'unselected-frame', 'selected-corruption'] as const)('invalidates cold framing after a same-size %s change', async change => {
+    const f = await coldHistoryFixture();
+    const original = await f.reader.readFull('a');
+    const before = f.bytes();
+    const next = change === 'header' ? f.bytes({ title: 'after!' })
+        : change === 'unselected-frame' ? f.bytes({ text: 'after!' })
+            : Buffer.from(before.toString().replace('"text":"before"', '"text":"broken"'));
+    expect(next).not.toEqual(before);
+    expect(next.length).toBe(before.length);
+    await fs.writeFile(f.path, next);
+    const ordinals = new Set([change === 'selected-corruption' ? 1 : 0]);
+    await expect(f.reader.readWindow('a', original.evidence!, ordinals)).resolves.toBeUndefined();
+    if (change === 'selected-corruption') await expect(f.reader.readFull('a')).rejects.toThrow();
+    else {
+        const requalified = await f.reader.readFull('a');
+        expect(requalified.evidence).toBeDefined();
+        if (change === 'header') expect(requalified.meta?.title).toBe('after!');
+        else expect(requalified.events[1]).toMatchObject({ text: 'after!' });
+    }
+});
+
+it('will not reuse cold evidence for a same-byte replacement inode', async () => {
+    const f = await coldHistoryFixture();
+    const original = await f.reader.readFull('a');
+    await fs.rename(f.path, join(f.root, 'retired.jsonl'));
+    await fs.writeFile(f.path, f.bytes());
+    expect(await f.reader.readWindow('a', original.evidence!, new Set([0]))).toBeUndefined();
+    expect((await f.reader.readFull('a')).events).toEqual(original.events);
+});
+
+it.each(['same-size', 'growth'] as const)('discards a verified cold window changed after reading but before its final seal (%s)', async change => {
+    const f = await coldHistoryFixture();
+    const original = await f.reader.readFull('a');
+    let stats = 0;
+    vi.mocked(fs.open).mockImplementation(async (...args) => {
+        const handle = await actualOpen(...args);
+        if (args[0] === f.path) {
+            const stat = handle.stat.bind(handle);
+            handle.stat = (async (...callArgs: any[]) => {
+                if (++stats === 2) {
+                    if (change === 'growth') await fs.appendFile(f.path, '{"tail"');
+                    else {
+                        const next = f.bytes({ text: 'after!' });
+                        expect(next.length).toBe(f.bytes().length);
+                        await fs.writeFile(f.path, next);
+                        const time = new Date('2020-01-01T00:00:00Z');
+                        await fs.utimes(f.path, time, time);
+                    }
+                }
+                return (stat as any)(...callArgs);
+            }) as typeof handle.stat;
+        }
+        return handle;
+    });
+    expect(await f.reader.readWindow('a', original.evidence!, new Set([0]))).toBeUndefined();
+    expect(stats).toBe(2);
+});
+
+it('returns no coordinates for an incomplete tail or original predecessor framing', async () => {
+    const old = await managed(13);
+    expect((await originalColdArchiveHistoryReader(old.backend)!.readFull('a')).evidence).toBeUndefined();
+    const torn = await coldHistoryFixture();
+    await fs.appendFile(torn.path, '{"tail"');
+    const result = await torn.reader.readFull('a');
+    expect(result.events).toHaveLength(3);
+    expect(result.evidence).toBeUndefined();
+});
+
+it('keeps a caller-wrapped backend on its original full read path', async () => {
+    const f = await coldHistoryFixture();
+    let reads = 0;
+    const wrapped = createJsonlBackend(f.root, {
+        wrap(backend) {
+            const read = backend.read.bind(backend);
+            backend.read = id => { reads++; return read(id); };
+        },
+    });
+    expect(originalColdArchiveHistoryReader(wrapped)).toBeUndefined();
+    expect((await wrapped.read('a')).events).toHaveLength(3);
+    expect(reads).toBe(1);
+});
+
+it('will not use previous cold framing across original owner shutdown and reattachment', async () => {
+    const f = await coldHistoryFixture();
+    const first = createSessionCoordinator(f.backend);
+    const old = await f.reader.readFull('a');
+    await first.close();
+    await expect(f.reader.readWindow('a', old.evidence!, new Set([0]))).rejects.toThrow('ARCHIVE_READ_UNAVAILABLE');
+    const second = createSessionCoordinator(f.backend);
+    try {
+        expect(await f.reader.readWindow('a', old.evidence!, new Set([0]))).toBeUndefined();
+        const resumed = await f.reader.readFull('a');
+        expect(await f.reader.readWindow('a', resumed.evidence!, new Set([2]))).toEqual([resumed.events[2]]);
+    } finally { await second.close(); }
+});
+
+it('retains the exact close failure instead of classifying it as a stale cold proof', async () => {
+    const f = await coldHistoryFixture(), coordinator = createSessionCoordinator(f.backend);
+    const initial = await f.reader.readFull('a');
+    const closeError = Error('original cold descriptor close failure');
+    let closes = 0;
+    vi.mocked(fs.open).mockImplementation(async (...args) => {
+        const handle = await actualOpen(...args);
+        if (args[0] === f.path) {
+            const close = handle.close.bind(handle);
+            handle.close = async () => {
+                closes++;
+                if (closes === 1) throw closeError;
+                await close();
+            };
+        }
+        return handle;
+    });
+    try {
+        const outcome = await f.reader.readWindow('a', initial.evidence!, new Set([0])).catch(error => error);
+        expect(outcome).toBeInstanceOf(AggregateError);
+        expect(outcome.errors).toEqual([closeError]);
+    } finally { await coordinator.close(); }
+    expect(closes).toBe(2);
+});
+
 it.each([6, 7, 8, 9, 10, 11, 12, 13, 14])('actual managed format%s matches original validated events and ignores torn suffix', async (version) => { const f = await managed(version); await fs.appendFile(f.path, '{"unfinished":"雪'); expect((await f.backend.read('a')).events).toEqual(readFactJournal(Buffer.concat([f.frame, Buffer.from('{"unfinished":"雪')]), f.journal, version).events); });
 it('rejects complete corruption without mutating the source', async () => { const f = await managed(); await fs.appendFile(f.path, '{}\n'); const before = await fs.readFile(f.path); await expect(f.backend.read('a')).rejects.toThrow(); expect(await fs.readFile(f.path)).toEqual(before); });
 it('retains semantic validation after physical frame checks', async () => { const f = await managed(); const bad = encodeFactBatch('bad', f.journal.legacyPrefixDigest, [{ type: 'user/message', text: 'wrong', inputPreparation: { preparationId: 'missing', resultSeq: 0 }, seq: 0 } as unknown as SessionEvent]); await fs.writeFile(f.path, JSON.stringify({ formatVersion: 14, sessionId: 'a', journal: f.journal }) + '\n'); await fs.appendFile(f.path, bad.bytes); await expect(f.backend.read('a')).rejects.toThrow(); });

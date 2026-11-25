@@ -1,6 +1,6 @@
 import {canonicalJsonData} from '../serialization/json-data.ts'
 import {legacyResultMetadata} from '../conversation/history/result-metadata.ts'
-import { SESSION_HISTORY_LIMIT, type SessionHistoryPageOptions } from '../conversation/history/session-history.ts'
+import { materializeSessionHistoryPage, type SessionHistoryPageOptions } from '../conversation/history/session-history.ts'
 import {validManagedArtifactRef} from '../results/validate.ts'
 import { types } from 'node:util'
 import { AsyncLocalStorage } from 'node:async_hooks'
@@ -434,29 +434,11 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       async readHistoryPage(options: SessionHistoryPageOptions) {
         if (this !== observation) throw TypeError('Original observation receiver required')
         current()
-        const { afterSeq, beforeSeq, limit, includeTurns } = options
-        if (!Number.isInteger(afterSeq) || afterSeq < 0 || !Number.isInteger(limit) || limit <= 0 ||
-            (beforeSeq !== undefined && (!Number.isSafeInteger(beforeSeq) || beforeSeq < 0)))
-          throw new RangeError('Invalid session history range')
-        const plan = original.historyPagePlan({ afterSeq, beforeSeq, limit: Math.min(limit, SESSION_HISTORY_LIMIT), includeTurns })
+        const plan = original.historyPagePlan(options)
         if (!plan) return undefined
-        const { range, ordinals, admissions, turns } = plan
-        const records = await readRecords(ordinals, true)
+        const records = await readRecords(plan.ordinals, true)
         current()
-        if (!records) return undefined
-        const events = records.slice(0, range.nextSeq - range.startSeq)
-        const images = new Map<number, NonNullable<Extract<SessionEventView, { type: 'agent/input/admitted' }>['images']>>()
-        if (admissions.size) {
-          const byOrdinal = new Map(records.map((record, index) => [ordinals[index]!, record]))
-          for (const [ordinal, admission] of admissions) {
-            const event = events[ordinal - range.startSeq], proof = byOrdinal.get(admission)
-            if (event?.type !== 'user/message' || proof?.type !== 'agent/input/admitted' ||
-                event.imageInputId !== proof.inputId || !proof.images?.length)
-              throw new Error(`image admission not found for user/message: ${event?.type === 'user/message' ? event.imageInputId : ordinal}`)
-            images.set(ordinal, proof.images)
-          }
-        }
-        return { ...range, events, images, ...(turns === undefined ? {} : { turns }) }
+        return records ? materializeSessionHistoryPage(plan, records) : undefined
       },
       assertRequestInputCurrent() {
         if (this !== observation) throw TypeError('Original observation receiver required')

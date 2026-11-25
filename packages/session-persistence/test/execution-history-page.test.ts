@@ -1,7 +1,8 @@
-import { mkdtemp } from 'node:fs/promises'
+import { appendFile, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
+import { encodeFactBatch, readFactJournal, type JournalMetadata } from '@i-harness/core-session'
 import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { acquireManagedExecution } from '../src/execution-internal.ts'
@@ -52,7 +53,7 @@ async function fixture(options?: Parameters<typeof createJsonlBackend>[1]) {
     { type: 'assistant/message', text: 'original reply' },
     { type: 'turn/end' },
   ])
-  return { coordinator }
+  return { coordinator, root }
 }
 
 it('reads a bounded page from an attached execution without installing a complete view', async () => {
@@ -70,11 +71,55 @@ it('reads a bounded page from an attached execution without installing a complet
   expect(Object.hasOwn(execution.owner, 'view')).toBe(false)
 })
 
+it('enrolls only a history snapshot and requalifies after the cold journal grows', async () => {
+  const { coordinator } = await fixture()
+  const inside = { afterSeq: 0, beforeSeq: 3, limit: 1, includeTurns: true }
+  await coordinator.snapshot!('owner')
+  expect(await coordinator.readHistoryPage!('owner', inside)).toBeUndefined()
+
+  await coordinator.snapshot!('owner', { prepareHistoryPages: true })
+  const cold = await coordinator.readHistoryPage!('owner', inside)
+  expect(cold).toMatchObject({ startSeq: 2, nextSeq: 3, headSeq: 4,
+    events: [{ type: 'assistant/message', seq: 2, text: 'original reply' }],
+    turns: [{ startSeq: 0, endSeq: 3 }],
+  })
+  expect(await coordinator.hasManagedDocument!('owner')).toBe(false)
+
+  await coordinator.append('owner', [{ type: 'plan/mode', mode: 'on' }])
+  expect(await coordinator.readHistoryPage!('owner', latestPage)).toBeUndefined()
+  await coordinator.snapshot!('owner', { prepareHistoryPages: true })
+  expect(await coordinator.readHistoryPage!('owner', latestPage)).toMatchObject({ headSeq: 5,
+    events: expect.arrayContaining([{ type: 'plan/mode', seq: 4, mode: 'on' }]),
+  })
+
+  await acquireManagedExecution(coordinator, 'owner')
+  expect(await coordinator.readHistoryPage!('owner', inside)).toEqual({ ...cold, headSeq: 5 })
+})
+
+it('lets repaired cold history replace a snapshot with an unresolved image address', async () => {
+  const { coordinator, root } = await fixture()
+  const path = join(root, 'owner.jsonl')
+  const original = await readFile(path)
+  const newline = original.indexOf(10)
+  const header = JSON.parse(original.subarray(0, newline).toString('utf8')) as { formatVersion: number; journal: JournalMetadata }
+  const { prefix } = readFactJournal(original.subarray(newline + 1), header.journal, header.formatVersion)
+  const frame = encodeFactBatch('unresolved-image-fixture', prefix.prefixDigest,
+    [{ type: 'user/message', seq: prefix.eventCount, text: 'old image reference', imageInputId: 'missing' }])
+  await appendFile(path, frame.bytes)
+  expect((await coordinator.snapshot!('owner', { prepareHistoryPages: true })).session.events).toHaveLength(5)
+
+  await writeFile(path, original)
+  const page = { afterSeq: 4, limit: 1 }
+  expect(await coordinator.readHistoryPage!('owner', page)).toBeUndefined()
+  expect((await coordinator.snapshot!('owner', { prepareHistoryPages: true })).session.events).toHaveLength(4)
+})
+
 it('loads image proof from the original admission that precedes the page', async () => {
   const { coordinator } = await fixture()
   const execution = await acquireManagedExecution(coordinator, 'owner')
   const action = execution.owner.beginAction()
   const image = { mediaType: 'image/png' as const, dataBase64: 'AQID' }
+  let messageSeq: number
   try {
     const admitted = await action.facts.inputs.admit({
       type: 'agent/input/admitted', version: 1, inputId: 'photo', text: 'inspect it',
@@ -86,7 +131,7 @@ it('loads image proof from the original admission that precedes the page', async
     )
     expect(admitted.kind).toBe('committed')
     if (started.kind !== 'committed') throw Error('Original input promotion did not commit')
-    const messageSeq = started.seqs.at(-1)!
+    messageSeq = started.seqs.at(-1)!
     const page = await coordinator.readHistoryPage!('owner', { afterSeq: messageSeq, limit: 1 })
     expect(page?.events).toMatchObject([{ type: 'user/message', seq: messageSeq, imageInputId: 'photo' }])
     expect([...page!.images]).toEqual([[messageSeq, [image]]])
@@ -94,6 +139,12 @@ it('loads image proof from the original admission that precedes the page', async
   } finally {
     action.finish()
   }
+  await coordinator.releaseOwnership('owner')
+  expect(await coordinator.hasManagedDocument!('owner')).toBe(false)
+  await coordinator.snapshot!('owner', { prepareHistoryPages: true })
+  const cold = await coordinator.readHistoryPage!('owner', { afterSeq: messageSeq, limit: 1 })
+  expect(cold?.events).toMatchObject([{ type: 'user/message', seq: messageSeq, imageInputId: 'photo' }])
+  expect([...cold!.images]).toEqual([[messageSeq, [image]]])
 })
 
 it('keeps a page on the committed prefix while the writer prepares its next ACK', async () => {

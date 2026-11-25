@@ -162,8 +162,8 @@ export interface SessionCoordinator {
   enqueue(sessionId: string, events: SessionEvent[]): void
   load(sessionId: string): Promise<{ session: Session }>
   /** Read the durable prefix without ownership, disk repair or runtime creation. */
-  snapshot?(sessionId: string): Promise<{ session: Session }>
-  /** Read a bounded page from an existing private execution when supported. */
+  snapshot?(sessionId: string, options?: { prepareHistoryPages?: boolean }): Promise<{ session: Session }>
+  /** Read a bounded page from an existing private execution or verified cold archive. */
   readHistoryPage?(sessionId: string, options: SessionHistoryPageOptions): Promise<OwnedSessionHistoryPage | undefined>
   /** Acquire long-term ownership before reading, durably canonicalize crash
    * recovery, and return a writable snapshot whose length equals its next seq. */

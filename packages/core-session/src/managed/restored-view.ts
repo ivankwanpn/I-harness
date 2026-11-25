@@ -3,7 +3,7 @@ import type { OriginalExecutionFoldFactory, OriginalExecutionFoldSink } from './
 import { types } from 'node:util';
 import {propagateOriginalCurrentnessReader,bindOriginalCurrentnessMethod,runOpaqueCurrentnessRead,originalCurrentnessFactoryMatches} from './currentness-guards.ts';
 import { historyTurns } from '../conversation/history/turns.ts';
-import { sessionHistoryRange, sessionHistoryTurns, type SessionHistoryPageOptions } from '../conversation/history/session-history.ts';
+import { planSessionHistoryPage, type SessionHistoryPageOptions } from '../conversation/history/session-history.ts';
 import { selectSeedHistoryFromStructure } from '../conversation/seed-selection.ts';
 import { captureRewrites,type ConversationRewriteDraft,type ConversationCandidate } from '../conversation/candidate.ts';
 import {extendConversationSourceCoordinates} from '../conversation/sources.ts';
@@ -242,38 +242,10 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
         historyPagePlan(options: SessionHistoryPageOptions) {
             check();
             const facts = owned.index.resultFacts();
-            const range = sessionHistoryRange(owned.index.eventCount, options);
-            const { startSeq, nextSeq, headSeq } = range;
-            if (facts.length !== headSeq) failure('CONVERSATION_RESTORATION_DEPENDENCY_MISMATCH');
-            if (!headSeq) return undefined;
-
-            const ordinals = Array.from({ length: nextSeq - startSeq }, (_, index) => startSeq + index);
-            const imageIds = new Set<string>();
-            for (const ordinal of ordinals) {
-                const inputId = facts[ordinal]!.imageInputId;
-                if (inputId !== undefined) imageIds.add(inputId);
-            }
-            const admissions = new Map<number, number>();
-            if (imageIds.size) {
-                const earlier = new Map<string, number>();
-                for (let ordinal = 0; ordinal < nextSeq; ordinal++) {
-                    const fact = facts[ordinal]!;
-                    if (fact.type === 'agent/input/admitted' && fact.inputId !== undefined && imageIds.has(fact.inputId))
-                        earlier.set(fact.inputId, ordinal);
-                    if (ordinal < startSeq || fact.imageInputId === undefined) continue;
-                    const admission = earlier.get(fact.imageInputId);
-                    if (admission === undefined) throw new Error(`image admission not found for user/message: ${fact.imageInputId}`);
-                    admissions.set(ordinal, admission);
-                }
-                for (const admission of new Set(admissions.values())) if (admission < startSeq) ordinals.push(admission);
-            }
-            // An empty range of a nonempty log still requires its physical proof.
-            if (!ordinals.length) ordinals.push(headSeq - 1);
-            // Legacy positional events may lack an explicit address. The old
-            // snapshot path can still represent them without an ordinal read.
-            if (ordinals.some(ordinal => facts[ordinal]!.seq !== ordinal)) return undefined;
-            return { range, ordinals, admissions,
-                ...(options.includeTurns ? { turns: sessionHistoryTurns(facts, startSeq, nextSeq) } : {}) };
+            if (facts.length !== owned.index.eventCount) failure('CONVERSATION_RESTORATION_DEPENDENCY_MISMATCH');
+            const plan = planSessionHistoryPage(facts, options);
+            // The held writer's dependency lane needs a physical record.
+            return facts.length ? plan : undefined;
         },
         workflowJobOrdinals(documentIds:readonly string[]){check();const jobs=new Map<string,number|undefined>();for(const id of documentIds)jobs.set(id,undefined);for(const fact of owned.index.resultFacts())if(fact.type==='job/status'&&fact.jobId)jobs.set(fact.jobId,fact.index);return [...jobs].slice(-200).flatMap(([id,ordinal])=>ordinal===undefined?[]:[{id,ordinal}])},
         workflowLastStepOrdinal(fromSeq:number){check();const facts=owned.index.resultFacts();for(let i=facts.length-1;i>=fromSeq;i--)if(facts[i]!.type==='step/end')return facts[i]!.index;return undefined},

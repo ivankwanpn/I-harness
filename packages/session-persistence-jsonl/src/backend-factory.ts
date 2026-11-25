@@ -1,8 +1,9 @@
 import { isCommittedDocumentClaimed } from '@i-harness/session-persistence/internal/commit'
 import { capturePublishedBootstrap } from './backend/bootstrap-published.ts'
-import { associateArchiveReadResources, associateArchiveHistoryPrefixReader } from '@i-harness/session-persistence/internal/archive-read'
+import { associateArchiveReadResources, associateArchiveHistoryPrefixReader, associateColdArchiveHistoryReader } from '@i-harness/session-persistence/internal/archive-read'
 import { createArchiveReadOwner } from './backend/archive-read-owner.ts'
 import { readSessionArchive } from './backend/archive-reader.ts'
+import { createColdArchiveHistoryReader } from './backend/cold-archive-history.ts'
 import { associateArtifactPaths, createOriginalJsonlPathResolution } from '@i-harness/session-persistence/internal/artifact-path'
 import { createOriginalNativePrewriteOwner } from '@i-harness/session-persistence/internal/native-fact-writer'
 import { createOriginalTaskNativeStage } from '@i-harness/session-persistence/internal/task-document-operations'
@@ -715,6 +716,18 @@ export function createJsonlBackend(root: string, options?: {
   const assertOriginal = artifactOwner.assertOriginal
 
   associateArchiveReadResources(backend, archiveReads.association, originalArchiveRead)
+  const hasOriginalArchiveRead = () => Object.getOwnPropertyDescriptor(backend, 'read')?.value === originalArchiveRead
+  if (hasOriginalArchiveRead()) {
+    associateColdArchiveHistoryReader(backend, createColdArchiveHistoryReader({
+      archive: archiveReads, file: filePath,
+      assertOriginal() {
+        assertOriginal()
+        if (!hasOriginalArchiveRead()) throw Error('Original cold archive reader unavailable')
+      },
+      checkDeleted: id => assertNotDeleted('session', id),
+      qualify: assertReadableBootstrapNamespace,
+    }))
+  }
   nativePrewrite.associate(backend, assertOriginal, captureIO.retainCleanup)
   associateOwnedExecutionReader(backend,{assertOriginal,filePath,assertNotDeleted,archive:archiveReads,
     register(id,held){trackHeaderOwner(id,held);if(hasTrackedHeaderDebt(id,held))throw Error('Owned dependency birth cleanup unresolved')},
