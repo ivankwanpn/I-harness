@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
+import type { DesktopBridge, DesktopEvent } from "../src/shared/bridge.ts"
 import { useExecutionSurface } from "../src/renderer/session/execution-surface.ts"
+import { WindowVisibilityProvider } from "../src/renderer/window-visibility.tsx"
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers() })
 it("does not let a read started before a mutation replace its authoritative result", async () => {
   let finishRead!: (value: unknown) => void, finishSave!: (value: unknown) => void
@@ -99,4 +101,37 @@ it("suspends polling while the desktop document is hidden and resumes on visibil
     vi.advanceTimersByTime(1500)
   })
   expect(read).toHaveBeenCalledTimes(4)
+})
+
+it("stops polling on native minimize even while Chromium reports the document visible", async () => {
+  vi.useFakeTimers()
+  vi.spyOn(document, "hidden", "get").mockReturnValue(false)
+  const snapshot = Promise.withResolvers<{ maximized: boolean; visible: boolean }>()
+  const read = vi.fn(async () => "ready")
+  let emit!: (event: DesktopEvent) => void
+  const unsubscribe = vi.fn()
+  const bridge: DesktopBridge = {
+    request: vi.fn(() => snapshot.promise),
+    onEvent: listener => { emit = listener; return unsubscribe },
+  }
+  function Fixture() {
+    useExecutionSurface<string>(read, "workspace", true)
+    return null
+  }
+  const view = render(<WindowVisibilityProvider bridge={bridge}><Fixture /></WindowVisibilityProvider>)
+  await act(async () => {})
+  await act(async () => { vi.advanceTimersByTime(1500) })
+  expect(bridge.request).toHaveBeenCalledWith({ kind: "window/state" })
+  expect(read).toHaveBeenCalledTimes(2)
+
+  act(() => emit({ kind: "window/state", maximized: false, visible: false }))
+  await act(async () => { snapshot.resolve({ maximized: false, visible: true }) })
+  await act(async () => { vi.advanceTimersByTime(4500) })
+  expect(read).toHaveBeenCalledTimes(2)
+
+  act(() => emit({ kind: "window/state", maximized: false, visible: true }))
+  await act(async () => { vi.advanceTimersByTime(1500) })
+  expect(read).toHaveBeenCalledTimes(3)
+  view.unmount()
+  expect(unsubscribe).toHaveBeenCalledOnce()
 })

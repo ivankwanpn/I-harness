@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { useWindowVisibility } from "../window-visibility.tsx"
 
 /** Every request belongs to a mount/scope generation, including mutations. */
 export function useExecutionSurface<T>(read: () => Promise<unknown>, scope: string, poll = false, active = true) {
+  const windowVisible = useWindowVisibility()
   const [state, setState] = useState<T>()
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState(false)
@@ -26,7 +28,7 @@ export function useExecutionSurface<T>(read: () => Promise<unknown>, scope: stri
     return () => { generation.current++; ticket.current++ }
   }, [scope, refresh])
   useEffect(() => {
-    if (!poll || !active) return
+    if (!poll || !active || !windowVisible) return
     let timer: ReturnType<typeof setInterval> | undefined
     const stop = () => { clearInterval(timer); timer = undefined }
     const updateVisibility = () => {
@@ -40,7 +42,7 @@ export function useExecutionSurface<T>(read: () => Promise<unknown>, scope: stri
     updateVisibility()
     document.addEventListener('visibilitychange', updateVisibility)
     return () => { document.removeEventListener('visibilitychange', updateVisibility); stop() }
-  }, [scope, poll, active, refresh])
+  }, [scope, poll, active, windowVisible, refresh])
   async function act(run: () => Promise<unknown>, after?: (value: unknown) => void, refreshAfter = true) {
     if (pending.current) return false
     pending.current = true; setBusy(true); setError(undefined)

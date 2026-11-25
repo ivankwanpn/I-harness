@@ -936,7 +936,7 @@ export function registerDesktopIpc(
   })
   const offWindowState = dependencies.native?.onWindowStateChanged((state) => {
     if (removed || window.isDestroyed()) return
-    window.webContents.send(DESKTOP_EVENT_CHANNEL, { kind: "window/state", maximized: state.maximized } satisfies DesktopEvent)
+    window.webContents.send(DESKTOP_EVENT_CHANNEL, { kind: "window/state", ...state } satisfies DesktopEvent)
   })
   const offDiagnostics = dependencies.diagnostics?.onEntry(entry => {
     if (removed || window.isDestroyed()) return

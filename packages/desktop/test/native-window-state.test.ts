@@ -30,7 +30,7 @@ function fixture(initialMaximized = false) {
     isMaximized: () => maximized, isDestroyed: () => destroyed,
     isVisible: () => visible, isMinimized: () => minimized,
     getNormalBounds: () => ({ ...bounds }),
-    minimize: () => { controls.push("minimize") },
+    minimize: () => { controls.push("minimize"); minimized = true; events.emit("minimize") },
     maximize: () => { controls.push("maximize"); maximized = true; events.emit("maximize") },
     unmaximize: () => { controls.push("unmaximize"); maximized = false; events.emit("unmaximize") },
     close: () => { controls.push("close"); events.emit("close") },
@@ -55,6 +55,7 @@ function fixture(initialMaximized = false) {
     request: (request: unknown) => handler({ sender: window.webContents }, request),
     foreignRequest: (request: unknown) => handler({ sender: {} }, request),
     externalState(value: boolean) { maximized = value; events.emit(value ? "maximize" : "unmaximize") },
+    externalVisibility(value: boolean) { visible = value; events.emit(value ? "show" : "hide") },
     dismiss() { minimized = true; visible = false; maximized = false },
     reopen() { minimized = false; visible = true; events.emit("restore") },
     move(x: number) { bounds.x = x },
@@ -97,9 +98,9 @@ it("reads the owned BrowserWindow state independently from saved preferences and
   const f = fixture(false)
   try {
     expect(f.preferences.maximized).toBe(true)
-    expect(await f.request({ kind: "window/state", workspaceId: "foreign", maximized: true })).toEqual({ maximized: false })
+    expect(await f.request({ kind: "window/state", workspaceId: "foreign", maximized: true, visible: false })).toEqual({ maximized: false, visible: true })
     f.externalState(true)
-    expect(await f.request({ kind: "window/state" })).toEqual({ maximized: true })
+    expect(await f.request({ kind: "window/state" })).toEqual({ maximized: true, visible: true })
     expect(f.catalogGet).not.toHaveBeenCalled()
     expect(f.runtimeGet).not.toHaveBeenCalled()
     await expect(f.foreignRequest({ kind: "window/state" })).rejects.toThrow("untrusted IPC sender")
@@ -108,36 +109,50 @@ it("reads the owned BrowserWindow state independently from saved preferences and
   } finally { f.unregister() }
 })
 
-it("delivers actual external maximize and restore events only while the window IPC owner is active", () => {
+it("publishes actual maximize and visibility before retirement and removes its own listeners", async () => {
   const f = fixture()
-  f.externalState(true)
-  f.externalState(false)
-  expect(f.deliveries).toEqual([
-    { channel: DESKTOP_EVENT_CHANNEL, event: { kind: "window/state", maximized: true } },
-    { channel: DESKTOP_EVENT_CHANNEL, event: { kind: "window/state", maximized: false } },
-  ])
-  f.destroy()
-  f.externalState(true)
-  expect(f.deliveries).toHaveLength(2)
-  f.unregister(); f.unregister()
-  expect(f.events.listenerCount("maximize")).toBe(0)
-  expect(f.events.listenerCount("unmaximize")).toBe(0)
+  try {
+    f.externalState(true)
+    f.externalState(false)
+    await f.request({ kind: "window/control", action: "minimize" })
+    f.reopen()
+    f.externalVisibility(false)
+    f.externalVisibility(true)
+    expect(f.deliveries).toEqual([
+      { channel: DESKTOP_EVENT_CHANNEL, event: { kind: "window/state", maximized: true, visible: true } },
+      { channel: DESKTOP_EVENT_CHANNEL, event: { kind: "window/state", maximized: false, visible: true } },
+      { channel: DESKTOP_EVENT_CHANNEL, event: { kind: "window/state", maximized: false, visible: false } },
+      { channel: DESKTOP_EVENT_CHANNEL, event: { kind: "window/state", maximized: false, visible: true } },
+      { channel: DESKTOP_EVENT_CHANNEL, event: { kind: "window/state", maximized: false, visible: false } },
+      { channel: DESKTOP_EVENT_CHANNEL, event: { kind: "window/state", maximized: false, visible: true } },
+    ])
+    f.destroy()
+    f.externalVisibility(false)
+    expect(f.deliveries).toHaveLength(6)
+  } finally { await f.unregister(); await f.unregister() }
+  for (const event of ["maximize", "unmaximize", "minimize", "hide"]) expect(f.events.listenerCount(event)).toBe(0)
+  // The native geometry owner still consumes restore/show for its own lifetime.
+  for (const event of ["restore", "show"]) expect(f.events.listenerCount(event)).toBe(1)
   expect(f.sdkEvents.listenerCount("event")).toBe(0)
-  f.externalState(false)
-  expect(f.deliveries).toHaveLength(2)
+  f.reopen()
+  expect(f.deliveries).toHaveLength(6)
 })
 
 it("returns and publishes actual control results while retaining minimize, close and bounds reset behavior", async () => {
   vi.useFakeTimers()
   const f = fixture()
   try {
-    expect(await f.request({ kind: "window/control", action: "toggle-maximize" })).toEqual({ maximized: true })
-    expect(await f.request({ kind: "window/control", action: "minimize" })).toEqual({ maximized: true })
+    expect(await f.request({ kind: "window/control", action: "toggle-maximize" })).toEqual({ maximized: true, visible: true })
+    expect(await f.request({ kind: "window/control", action: "minimize" })).toEqual({ maximized: true, visible: false })
     expect(await f.request({ kind: "window/reset-bounds" })).toEqual({ reset: true })
-    expect(await f.request({ kind: "window/state" })).toEqual({ maximized: false })
-    expect(f.deliveries.map(({ event }) => event)).toEqual([{ kind: "window/state", maximized: true }, { kind: "window/state", maximized: false }])
+    expect(await f.request({ kind: "window/state" })).toEqual({ maximized: false, visible: false })
+    expect(f.deliveries.map(({ event }) => event)).toEqual([
+      { kind: "window/state", maximized: true, visible: true },
+      { kind: "window/state", maximized: true, visible: false },
+      { kind: "window/state", maximized: false, visible: false },
+    ])
     expect(f.controls).toEqual(["maximize", "minimize", "unmaximize", "setBounds"])
-    expect(await f.request({ kind: "window/control", action: "close" })).toEqual({ maximized: false })
+    expect(await f.request({ kind: "window/control", action: "close" })).toEqual({ maximized: false, visible: false })
     expect(f.controls).not.toContain("close")
     vi.runAllTimers()
     expect(f.controls.at(-1)).toBe("close")

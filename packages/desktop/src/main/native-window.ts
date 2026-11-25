@@ -5,7 +5,7 @@ import type { TerminalShellChoice } from "../shared/bridge.ts"
 import type { createNotificationHistory } from "./notification-history.ts"
 
 export function attachNativeWindow(window: BrowserWindow, preferences: ReturnType<typeof createLocalPreferences>, options: { notifications?: ReturnType<typeof createNotificationHistory> } = {}) {
-  function windowState() { return { maximized: window.isMaximized() } }
+  function windowState() { return { maximized: window.isMaximized(), visible: window.isVisible() && !window.isMinimized() } }
   let savedOnClose = false
   const reopened = () => { savedOnClose = false }
   window.on("restore", reopened)
@@ -28,16 +28,24 @@ export function attachNativeWindow(window: BrowserWindow, preferences: ReturnTyp
   const seen = new Set<string>()
   return {
     windowState,
-    onWindowStateChanged(listener: (state: { maximized: boolean }) => void) {
+    onWindowStateChanged(listener: (state: ReturnType<typeof windowState>) => void) {
       let active = true
       const publish = () => { if (active && !window.isDestroyed()) listener(windowState()) }
       window.on("maximize", publish)
       window.on("unmaximize", publish)
+      window.on("minimize", publish)
+      window.on("restore", publish)
+      window.on("show", publish)
+      window.on("hide", publish)
       return () => {
         if (!active) return
         active = false
         window.removeListener("maximize", publish)
         window.removeListener("unmaximize", publish)
+        window.removeListener("minimize", publish)
+        window.removeListener("restore", publish)
+        window.removeListener("show", publish)
+        window.removeListener("hide", publish)
       }
     },
     state() { const value = preferences.get(); return { notifications: value.notifications, notificationsSupported: Notification.isSupported(), locale: value.locale, terminalShell: value.terminalShell, terminalFontFamily: value.terminalFontFamily, followupDelivery: value.followupDelivery } },
