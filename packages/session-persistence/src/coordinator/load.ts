@@ -290,7 +290,9 @@ export function createLoads(
       }))
     },
     async loadOwned(sessionId: string) {
-      if (transitions) return transitionLoad(sessionId)
+      // A clean original history proof can also populate the compatibility
+      // writer. Keep the same materialization and historical recovery fallback.
+      if (transitions) return loadThroughTransition(sessionId, materializeHistory, undefined, false, true)
       assertWritable(sessionId)
       return processMutation(sessionId, async () => {
       const pendingWrites = pendingWriteBehind(sessionId)

@@ -38,7 +38,36 @@ import {acquireManagedExecution} from '../src/execution-internal.ts'
 import {readRestoredConversation} from '@i-harness/core-session/internal/restoration'
 const coordinators:ReturnType<typeof composeJsonlTaskTransitionCoordinator>[]=[]
 afterEach(async()=>{probe.gate=undefined;probe.settleHistory=undefined;for(const c of coordinators.splice(0))await c.close();probe.views=0;probe.ordinals=[];probe.batches=[];probe.historyObservations=0;probe.cleanAttempts=0;probe.legacyReads=0})
-async function fixture(){const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'inbox-records-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract);coordinators.push(coordinator);await coordinator.create({sessionId:'inbox'});return {root,backend,coordinator}}
+async function fixture(options?: Parameters<typeof createJsonlBackend>[1]){const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'inbox-records-')),backend=createJsonlBackend(root,options),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract);coordinators.push(coordinator);await coordinator.create({sessionId:'inbox'});return {root,backend,coordinator}}
+
+it.each(['pristine', 'interrupted', 'wrapped', 'public load'] as const)('compatibility cold history retains its original materialization and admission (%s)', async mode => {
+ let repairs=0
+ const {root,coordinator}=await fixture(mode==='wrapped'?{wrap(original){
+  const repair=original.repair.bind(original)
+  original.repair=id=>{repairs++;return repair(id)}
+ }}:undefined)
+ const interrupted=mode==='interrupted'
+ await coordinator.append('inbox', [
+  ...(interrupted ? [{type:'turn/start' as const}, {type:'step/start' as const}] : []),
+  {type:'user/message',text:'compatibility input'},
+ ])
+ const file=join(root,'inbox.jsonl'),before=await readFile(file)
+ repairs=0;probe.cleanAttempts=0;probe.historyObservations=0;probe.legacyReads=0
+ const {session}=await (mode==='public load'?coordinator.load('inbox'):coordinator.loadOwned('inbox'))
+ expect(session.formatVersion).toBe(CURRENT_FORMAT_VERSION)
+ expect(session.events.map(event=>event.type)).toEqual(interrupted?['turn/start','step/start','user/message','step/end','turn/end']:['user/message'])
+ expect(session.events.find(event=>event.type==='user/message')).toMatchObject({text:'compatibility input'})
+ expect(Object.isFrozen(session.events)).toBe(false)
+ expect(Object.isFrozen(session.events[0])).toBe(false)
+ expect(probe.cleanAttempts).toBe(mode==='pristine'||interrupted?1:0)
+ expect(probe.historyObservations).toBe(1)
+ if(mode==='pristine')expect(probe.legacyReads).toBe(0)
+ else expect(probe.legacyReads).toBeGreaterThan(0)
+ if(mode==='wrapped')expect(repairs).toBe(1)
+ const after=await readFile(file)
+ if(interrupted){expect(after.length).toBeGreaterThan(before.length);expect(after.subarray(0,before.length)).toEqual(before)}
+ else expect(after).toEqual(before)
+})
 
 async function persistedExchanges() {
  const {root,coordinator}=await fixture()
