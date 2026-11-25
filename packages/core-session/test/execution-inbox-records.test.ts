@@ -91,6 +91,37 @@ it('reports the original fold poison as terminal readiness failure',async()=>{
  off();await f.state.close()
 })
 
+it('validates one synchronous ready transition and rechecks the fold before delivery', async () => {
+  let reads = 0, fail = false
+  const f = await fixture({ fold: () => ({
+    appendValidated() {}, finishRestore() {}, validateSnapshot() { return true },
+    snapshot() { reads++; if (fail) throw false; return {} },
+  }) })
+  const domain = createManagedExecutionDomain(f.state.identity, f.owner, {})
+  const initial = Promise.withResolvers<void>(), unavailable = Promise.withResolvers<unknown>()
+  const ready = vi.fn(() => initial.resolve())
+  const off = subscribeManagedExecutionReadiness(domain, ready, (error, terminal) => {
+    if (terminal) unavailable.resolve(error)
+  })
+  try {
+    await initial.promise
+    ready.mockClear()
+    f.state.readinessChanged(true)
+    const before = reads
+    f.state.readinessChanged(false)
+    expect(reads - before).toBe(1)
+
+    fail = true
+    const failure = await unavailable.promise
+    expect(failure).toMatchObject({ message: 'Original fold callback failed', cause: false })
+    expect(ready).not.toHaveBeenCalled()
+    expect(reads - before).toBe(2)
+  } finally {
+    off()
+    await f.state.close()
+  }
+})
+
 it('hydrates the original own human admission through the revision-bound delivery observer',async()=>{
  const f=await fixture(),observation=f.state.observe()
  expect(await observation.delivery.ownHuman()).toEqual(f.events[0])

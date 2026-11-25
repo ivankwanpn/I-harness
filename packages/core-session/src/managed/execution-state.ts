@@ -273,7 +273,19 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
   const markBusy=()=>{readinessWasReady=false;readinessEpoch++}
   const readinessState=():{kind:'busy'}|{kind:'ready'}|{kind:'failed';error:unknown}=>{
     if(stopped||closed)return {kind:'busy'}
-    try{const owner=owners.get(identity);if(!owner?.newWork)throw TypeError('Original readiness unavailable');owner.current();if(pendingWrite||debt.size||ownerRecoveryBlocked)return {kind:'busy'};owner.newWork();observe();return {kind:'ready'}}catch(error){return {kind:'failed',error}}
+    try {
+      const owner = owners.get(identity), newWork = owner?.newWork
+      if (!owner || !newWork) throw TypeError('Original readiness unavailable')
+      // This guard batches only when the constructor enrolled the complete
+      // new-work check. Observation still validates the original fold.
+      return runOriginalCurrentnessRead(newWork, () => {
+        owner.current()
+        if (pendingWrite || debt.size || ownerRecoveryBlocked) return { kind: 'busy' as const }
+        newWork()
+        observe()
+        return { kind: 'ready' as const }
+      })
+    } catch (error) { return { kind: 'failed', error } }
   }
   const sameHeldOwner=()=>{try{const owner=owners.get(identity);if(!owner)return false;owner.current();return true}catch{return false}}
   const signalUnavailable=(error:unknown,terminal=false)=>{readinessFailure={error,terminal};markBusy();const items=[...readinessListeners];queueMicrotask(()=>{for(const item of items){if(!readinessListeners.has(item))continue;try{item.onUnavailable?.(error,terminal)}catch{/* Original settlement is independent of listeners. */}if(terminal)readinessListeners.delete(item)}})}
@@ -295,7 +307,16 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     if(delivered){const after=readinessState();if(after.kind==='busy')markBusy();else if(after.kind==='failed')signalUnavailable(after.error,true)}
     if(readinessWasReady&&epoch!==readinessEpoch)queueReadiness()
   })}
-  const signalReady=()=>{if(!readinessListeners.size||readinessWasReady)return;const state=readinessState();if(state.kind==='failed'){signalUnavailable(state.error,true);return}if(state.kind==='busy')return;readinessFailure=undefined;readinessWasReady=true;readinessEpoch++;queueReadiness()}
+  const signalReady = (checked?: { kind: 'ready' }) => {
+    if (!readinessListeners.size || readinessWasReady) return
+    const state = checked ?? readinessState()
+    if (state.kind === 'failed') { signalUnavailable(state.error, true); return }
+    if (state.kind === 'busy') return
+    readinessFailure = undefined
+    readinessWasReady = true
+    readinessEpoch++
+    queueReadiness()
+  }
   readinessOwners.set(identity,{admission(){
     assertHeld()
     if(stopped||closed)throw Object.assign(Error('FACT_CLOSED'),{code:'FACT_CLOSED'})
@@ -581,7 +602,24 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       ownerBound=true;owners.set(identity,{owner,sessionId:token.sessionId,current,reserveTaskHistory,settleDependencies,generations(){current();if(pendingWrite?.phase==='issued')throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.generations()},codeState(){current();if(pendingWrite?.phase==='issued')throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.codeState()},execSource(id){current();if(pendingWrite?.phase==='issued')throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().source('exec',id)},codeSource(id){current();if(pendingWrite?.phase==='issued')throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().source('code',id)},workflowSource(id){current();if(pendingWrite?.phase==='issued')throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().source('workflow',id)},codeEvidence(first,last){current();if(pendingWrite?.phase==='issued')throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().codeEvidence(first,last)},readTaskResult,reserveReviewerContext,taskSource(namespace,id){current();if(pendingWrite?.phase==='issued')throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().source(namespace,id)},taskCandidate(namespace,id){current();if(pendingWrite?.phase==='issued')throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().taskCandidate(namespace,id)},taskEvidence(first,last){current();if(pendingWrite?.phase==='issued')throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().taskEvidence(first,last)},assertExecIssue(event){current();assertCapturedIssue();const index=original.delivery();if(index.activeGeneration()?.generationId!==event.generationId)throw Object.assign(Error('Delivery precondition is stale'),{code:'FACT_PRECONDITION_STALE'});originalDeliveryObservation(original.delivery).assertIssue([event])},assertCodeIssue(event){current();assertCapturedIssue();const index=original.delivery();if(index.activeGeneration()?.generationId!==event.generationId)throw Object.assign(Error('Delivery precondition is stale'),{code:'FACT_PRECONDITION_STALE'});originalDeliveryObservation(original.delivery).assertIssue([event])},assertWorkflowIssue(event){current();assertCapturedIssue();const index=original.delivery();if(index.activeGeneration()?.generationId!==event.generationId)throw Object.assign(Error('Delivery precondition is stale'),{code:'FACT_PRECONDITION_STALE'});originalDeliveryObservation(original.delivery).assertIssue([event])},...ready?{newWork}:{}})
     },
     assertNewWork,
-    readinessChanged(recoverableBlocked=false){ownerRecoveryBlocked=recoverableBlocked;if(recoverableBlocked){pendingWriteActive=false;signalUnavailable(Object.assign(Error('Original owner requires explicit recovery'),{code:'FACT_RECOVERY_REQUIRED'}));return}if(!readinessListeners.size&&!readinessFailure)return;const state=readinessState();if(state.kind==='failed')signalUnavailable(state.error,true);else if(state.kind==='busy')markBusy();else{readinessFailure=undefined;signalReady()}},
+    readinessChanged(recoverableBlocked = false) {
+      ownerRecoveryBlocked = recoverableBlocked
+      if (recoverableBlocked) {
+        pendingWriteActive = false
+        signalUnavailable(Object.assign(Error('Original owner requires explicit recovery'), { code: 'FACT_RECOVERY_REQUIRED' }))
+        return
+      }
+      if (!readinessListeners.size && !readinessFailure) return
+      const state = readinessState()
+      if (state.kind === 'failed') signalUnavailable(state.error, true)
+      else if (state.kind === 'busy') markBusy()
+      else {
+        readinessFailure = undefined
+        // Only this synchronous transition uses the just-verified result.
+        // Queued delivery and listener reentry take fresh observations.
+        signalReady(state)
+      }
+    },
     readinessUnavailable(error:unknown,terminal=false){pendingWriteActive=false;signalUnavailable(error,terminal)},
     settleDependencies,
     stopNewWork(){if(!stopped){stopped=true;signalUnavailable(Object.assign(new Error('FACT_CLOSED'),{code:'FACT_CLOSED'}),true)}},
