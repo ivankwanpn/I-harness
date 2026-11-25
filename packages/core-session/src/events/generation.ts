@@ -33,20 +33,23 @@ const positive = (value: unknown): value is number => integer(value) && value > 
 const id = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 256
 const digest = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
 const one = (value: unknown) => value === 1
-const limits = (value: unknown) => fields(value, { total: positive, main: integer, recovery: integer, summary: integer })
+const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
+const limits = (value: unknown) => record(value) && fields(value, { total: positive, main: integer, recovery: integer, summary: integer })
 const oneOf = (...allowed: unknown[]) => (value: unknown) => allowed.includes(value)
 type Check = (value: unknown) => boolean
-function fields(value: unknown, required: Record<string, Check>, optional: Record<string, Check> = {}): boolean {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || !isStrictFactData(value)) return false
-  const data = value as Record<string, unknown>
+/** The caller already checked the descriptor tree. These local predicates only read its own data. */
+function fields(data: Record<string, unknown>, required: Record<string, Check>, optional: Record<string, Check> = {}): boolean {
   return Object.keys(data).every(key => Object.hasOwn(required, key) || Object.hasOwn(optional, key))
     && Object.entries(required).every(([key, check]) => Object.hasOwn(data, key) && check(data[key]))
     && Object.entries(optional).every(([key, check]) => !Object.hasOwn(data, key) || check(data[key]))
 }
+function retryFields(data: Record<string, unknown>): boolean {
+  return fields(data, { mode: oneOf('off', 'normal', 'always'), maxRetries: integer })
+    && (data.mode !== 'off' || data.maxRetries === 0)
+    && Number.isSafeInteger(2 * ((data.maxRetries as number) + 1) + 8)
+}
 export function validGenerationRetry(value: unknown): value is GenerationRetry {
-  return fields(value, { mode: oneOf('off', 'normal', 'always'), maxRetries: integer })
-    && ((value as GenerationRetry).mode !== 'off' || (value as GenerationRetry).maxRetries === 0)
-    && Number.isSafeInteger(2 * ((value as GenerationRetry).maxRetries + 1) + 8)
+  return record(value) && isStrictFactData(value) && retryFields(value)
 }
 export function generationLimits(purpose: GenerationPurpose, retry: GenerationRetry, cap?: number): GenerationLimits {
   if (!validGenerationRetry(retry) || cap !== undefined && !positive(cap)) throw new TypeError('Invalid generation policy')
@@ -55,7 +58,7 @@ export function generationLimits(purpose: GenerationPurpose, retry: GenerationRe
   return Object.freeze({ total: cap === undefined ? total : Math.min(cap, total), main, recovery: main, summary })
 }
 function origin(value: unknown): boolean {
-  if (!value || typeof value !== 'object') return false
+  if (!record(value)) return false
   const kind = Object.getOwnPropertyDescriptor(value, 'kind')?.value
   return fields(value, { kind: oneOf('input', 'predecessor', 'command'), seq: integer })
     || (kind === 'tool' || kind === 'code') && fields(value, { kind: oneOf('tool', 'code'), seq: integer, parentActionId: id })
@@ -65,23 +68,26 @@ function origin(value: unknown): boolean {
 }
 export function isGenerationEventType(type: unknown): boolean { return type === 'context/action' || type === 'context/attempt' }
 export function validGenerationEvent(value: unknown): value is GenerationEvent {
-  if (!value || typeof value !== 'object' || !isStrictFactData(value)) return false
+  if (!value || typeof value !== 'object' || !isStrictFactData(value) || Array.isArray(value)) return false
   const data = value as Record<string, unknown>
-  const envelope = { type: oneOf(data.type), version: one, op: oneOf(data.op), ownerSessionId: id, actionId: id, trustedAt: integer }
+  if (!Object.hasOwn(data, 'type') || !Object.hasOwn(data, 'op')) return false
+  const { type, op } = data
+  const envelope = { type: oneOf(type), version: one, op: oneOf(op), ownerSessionId: id, actionId: id, trustedAt: integer }
   const optional = { seq: integer }, attempt = { ...envelope, attemptId: id }
   const candidate = { semanticId: digest, payloadId: digest, payloadKind: oneOf('http-json-body', 'sdk-command-estimate', 'audio-json-body') }
-  if (data.type === 'context/action') switch (data.op) {
+  if (type === 'context/action') switch (op) {
     case 'open': return fields(data, { ...envelope, purpose: oneOf('main', 'manual', 'approval', 'title', 'media'), origin, startedAt: integer, expiresAt: positive }, optional)
-    case 'bind': return fields(data, { ...envelope, executionDomain: oneOf('physical', 'local-test'), retry: validGenerationRetry, limits }, optional)
+    case 'bind': return fields(data, { ...envelope, executionDomain: oneOf('physical', 'local-test'), retry: value => record(value) && retryFields(value), limits }, optional)
     case 'constrain': return fields(data, { ...envelope, expiresAt: positive }, { ...optional, limits })
     case 'phase': return fields(data, { ...envelope, recoverySeq: integer }, optional)
     case 'close': return fields(data, { ...envelope, disposition: oneOf('accepted', 'completed', 'failed', 'stopped', 'expired', 'exhausted') }, optional)
-    case 'accepted': return data.executionDomain === 'physical' ? fields(data, { ...envelope, executionDomain: oneOf('physical'), attemptId: id, acceptedSeq: integer, sendId: id }, optional)
-      : fields(data, { ...envelope, executionDomain: oneOf('local-test'), localInvocationId: id, acceptedSeq: integer }, optional)
+    case 'accepted': return Object.hasOwn(data, 'executionDomain') && (data.executionDomain === 'physical'
+      ? fields(data, { ...envelope, executionDomain: oneOf('physical'), attemptId: id, acceptedSeq: integer, sendId: id }, optional)
+      : fields(data, { ...envelope, executionDomain: oneOf('local-test'), localInvocationId: id, acceptedSeq: integer }, optional))
     case 'local-invocation': return fields(data, { ...envelope, localInvocationId: id, ordinal: positive, lane: oneOf('main', 'recovery', 'summary', 'auxiliary'), incarnation: id }, optional)
     case 'local-settle': return fields(data, { ...envelope, localInvocationId: id, disposition: oneOf('unsent', 'completed', 'failed') }, optional)
   }
-  if (data.type === 'context/attempt') switch (data.op) {
+  if (type === 'context/attempt') switch (op) {
     case 'reserve': return fields(data, { ...attempt, ...candidate, ordinal: positive, lane: oneOf('main', 'recovery', 'summary', 'auxiliary'), cause: oneOf('initial', 'retry', 'piece', 'changed-input', 'auxiliary'), incarnation: id }, optional)
     case 'rebind': return fields(data, { ...attempt, ...candidate, rebind: v => positive(v) && v <= 3, incarnation: id }, optional)
     case 'settle': return fields(data, { ...attempt, disposition: oneOf('unsent', 'issued', 'unknown', 'completed', 'failed') }, { ...optional, sendId: id })
