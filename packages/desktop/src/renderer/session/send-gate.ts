@@ -1,5 +1,6 @@
 import type { SessionModelState } from "@i-harness/sdk"
 import type { SandboxState } from "../../main/sdk-runtime.ts"
+import type { WorkspaceConnection } from "../../shared/bridge.ts"
 import type { Message } from "../design/i18n.ts"
 
 /**
@@ -9,7 +10,7 @@ import type { Message } from "../design/i18n.ts"
 export function sendGate(input: {
   model: SessionModelState | undefined
   sandbox: SandboxState | undefined
-  connection: "online" | "offline" | "connecting" | "reconnecting"
+  connection: WorkspaceConnection
 }, t: (message: Message) => string = (message) => message): { canSend: boolean; reason?: string } {
   if (input.connection === "connecting" || input.connection === "reconnecting") return { canSend: false, reason: t("正在連線，送出暫時停用") }
   if (input.connection === "offline") {

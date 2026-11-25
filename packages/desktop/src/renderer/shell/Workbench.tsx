@@ -25,7 +25,7 @@ import type { ProjectEntry } from "../../main/projects.ts"
 import { ProjectSidebar } from "./ProjectSidebar.tsx"
 import { ProjectManager } from "../projects/ProjectManager.tsx"
 import { SettingsDialog } from "../settings/SettingsDialog.tsx"
-import type { DesktopBridge } from "../../shared/bridge.ts"
+import type { DesktopBridge, WorkspaceConnection } from "../../shared/bridge.ts"
 import { Composer, NewTaskComposer, captureSessionSubmission, readDraft, writeDraft, boundedDraft, useComposerSending, type ComposerProps } from "../session/Composer.tsx"
 import { WorktreeIndicator } from "../session/WorktreePicker.tsx"
 import { ComposerProjectContext, type ComposerProjectState } from "../session/ComposerProjectContext.tsx"
@@ -131,7 +131,7 @@ export interface WorkbenchProps {
   onManageSessionInWorkspace?(workspaceId: string, sessionId: string, action: Parameters<ManageSession>[1], title?: string): Promise<void>
   dashboard?: SessionDashboardResult
   attentionBySession?: Record<string, number>
-  connection?: "online" | "offline" | "connecting" | "reconnecting"
+  connection?: WorkspaceConnection
   capabilities: Record<string, string[]>
   capabilitiesReady?: boolean
   sandbox?: SandboxState
@@ -486,7 +486,7 @@ export function Workbench({
           {selectedSessionId && dashboard?.sessions.some(row => row.forkParentId === selectedSessionId || (row.id === selectedSessionId && row.forkParentId)) ?
             <button type="button" className="icon-button header-action" onClick={() => setBranchesOpen(true)}
               aria-label={english ? "Conversation branches" : "會話分支"} title={english ? "Conversation branches" : "會話分支"}><GitBranch size={16} /></button> : null}
-          {connection ? <span className={`connection-state connection-${connection}`} role="status">{t(connection === "online" ? "已連線" : connection === "offline" ? "連線已中斷" : connection === "reconnecting" ? "重新連線中…" : "正在開啟工作區…")}</span> : null}
+          {connection ? <span className={`connection-state connection-${connection}`} role="status">{t(connection === "online" ? "已連線" : connection === "idle" ? "待命" : connection === "offline" ? "連線已中斷" : connection === "reconnecting" ? "重新連線中…" : "正在開啟工作區…")}</span> : null}
           {selectedWorkspaceId ? <WorkbenchTools key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} groups={toolGroups} /> : null}
           <button type="button" className="icon-button header-action" aria-label={english ? "Command center" : "命令中心"}
             title={english ? "Command center (Ctrl+K)" : "命令中心 (Ctrl+K)"} aria-keyshortcuts="Control+K"

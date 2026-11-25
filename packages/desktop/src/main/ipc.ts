@@ -87,7 +87,8 @@ export async function dispatchDesktopRequest(
   if (value.kind === "desktop/runtime/status") {
     const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
     if (!dependencies.catalog.get(workspaceId)) throw new Error(`unknown workspace id: ${workspaceId}`)
-    return { ready: dependencies.runtimes.peek?.(workspaceId) !== undefined }
+    const runtime = dependencies.runtimes.peek?.(workspaceId)
+    return { ready: runtime !== undefined, ...(runtime?.generation === undefined ? {} : { generation: runtime.generation }) }
   }
   if (value.kind === 'desktop/runtime/recover') {
     if (Object.keys(value).some(key => !['kind', 'workspaceId'].includes(key))) throw Error('Invalid runtime recovery request')

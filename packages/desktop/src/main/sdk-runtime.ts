@@ -19,6 +19,7 @@ export interface SandboxState {
 }
 
 export interface WorkspaceRuntime {
+  generation?: number
   assistantPreview?: ReturnType<typeof createAssistantPreviews>["get"]
   hostPid?: number
   client: HarnessClient
@@ -69,7 +70,7 @@ export interface WorkspaceRuntimeManager {
   onEvent(listener: (event: DesktopEvent) => void): () => void
   /** Close-time SDK query. Unknown state retains the process. */
   hasActiveWork(): Promise<boolean>
-  /** Silently retire workspace gateways idle longer than ttlMs. */
+  /** Retire idle routes and leave the shared host available to active workspaces. */
   evictIdle?(ttlMs: number): Promise<number>
   close(): Promise<void>
 }
@@ -185,11 +186,11 @@ export function createWorkspaceRuntimeManager(options: {
   }
 
   function emit(event: DesktopEvent): void {
-    if ('workspaceId' in event && typeof event.workspaceId === 'string') touch(event.workspaceId)
+    if (event.kind !== "sdk/idle" && 'workspaceId' in event && typeof event.workspaceId === 'string') touch(event.workspaceId)
     activityVersion++
     const failures:unknown[]=[]
     for (const listener of [...listeners]) {
-      if(event.kind!=='sdk/ready'&&event.kind!=='sdk/disconnected'&&(event.kind!=='sdk/notification'||event.method!=='desktop/surface/changed')){listener(event);continue}
+      if(event.kind!=='sdk/ready'&&event.kind!=='sdk/disconnected'&&event.kind!=='sdk/idle'&&(event.kind!=='sdk/notification'||event.method!=='desktop/surface/changed')){listener(event);continue}
       try{listener(event)}catch(error){failures.push(error)}
     }
     if(failures.length)throw new AggregateError(failures,'Surface forwarding failed')
@@ -249,7 +250,7 @@ export function createWorkspaceRuntimeManager(options: {
           ? { ...frame.params, runtimeGeneration: generation } : frame.params
         emit({ kind: "sdk/notification", workspaceId: workspace.id, method: frame.method, params })
       },()=>{void manager.invalidate!(workspace.id).catch(()=>{})})
-      return { client: launched.client, info, sandbox, assistantPreview: previews.get, hostPid: launched.hostPid, whenClosed: () => {
+      return { client: launched.client, info, sandbox, generation, assistantPreview: previews.get, hostPid: launched.hostPid, whenClosed: () => {
         const closing=closingClients.get(launched.client)
         return closing ? closing.then(()=>launched.exited,()=>launched.exited) : children.get(workspace.id)!==launched ? launched.exited : undefined
       } }
@@ -497,12 +498,15 @@ export function createWorkspaceRuntimeManager(options: {
           const idle = batch ? (await batch)?.idle.has(id) : await runtimeIsIdle(runtime)
           if (!idle) return false
           if (closed || scopeEpoch !== epoch || runtimes.get(id) !== runtime || lastUsed.get(id) !== observed || retiredClients.has(runtime.client)) return false
-          generations.set(id, (generations.get(id) ?? 0) + 1)
+          const generation = generations.get(id) ?? 0
+          generations.set(id, generation + 1)
           runtimes.delete(id)
           children.delete(id)
           lastUsed.delete(id)
           const health = healthTimers.get(id)
           if (health !== undefined) { clearInterval(health); healthTimers.delete(id) }
+          try { emit({ kind: "sdk/idle", method: "sdk/idle", workspaceId: id, runtimeGeneration: generation }) }
+          catch { /* State forwarding cannot prevent retirement of the original route. */ }
           const child = workspaceOwners.get(id)
           if (child) await stopWorkspace(child)
           return true

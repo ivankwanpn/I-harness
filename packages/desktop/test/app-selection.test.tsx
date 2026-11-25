@@ -585,6 +585,38 @@ it("recognizes a warm workspace while refreshing its project data", async () => 
   expect(captured.props?.capabilitiesReady).toBe(true)
 })
 
+it("keeps a warm workspace online during navigation and observes a background idle retirement", async () => {
+  const aCapabilities = defer(), bCapabilities = defer()
+  let aReads = 0
+  const listeners = new Set<Parameters<DesktopBridge["onEvent"]>[0]>()
+  const emit = (event: Parameters<Parameters<DesktopBridge["onEvent"]>[0]>[0]) =>
+    act(() => { for (const listener of listeners) listener(event) })
+  fixture(input => {
+    if (input.kind === "workspace/list") return Promise.resolve([{ id: "w1", path: "D:/a", label: "A" }, { id: "w2", path: "D:/b", label: "B" }])
+    if (input.kind === "projects/list") return Promise.resolve([{ id: "p1", name: "First", workspaceIds: ["w1"] }, { id: "p2", name: "Other", workspaceIds: ["w2"] }])
+    if (input.kind === "desktop/capabilities" && input.workspaceId === "w2") return bCapabilities.promise
+    if (input.kind === "desktop/capabilities" && ++aReads > 1) return aCapabilities.promise
+    return undefined
+  }, listener => { listeners.add(listener); return () => { listeners.delete(listener) } })
+  await waitFor(() => expect(captured.props).toMatchObject({ selectedWorkspaceId: "w1", connection: "online" }))
+  emit({ kind: "sdk/ready", method: "sdk/ready", workspaceId: "w1", runtimeGeneration: 0 })
+  emit({ kind: "sdk/ready", method: "sdk/ready", workspaceId: "w2", runtimeGeneration: 0 })
+  act(() => captured.props!.onSelectProject!("p2"))
+  expect(captured.props).toMatchObject({ selectedWorkspaceId: "w2", connection: "online", capabilitiesReady: false })
+  await act(async () => bCapabilities.resolve({}))
+
+  emit({ kind: "sdk/idle", method: "sdk/idle", workspaceId: "w1", runtimeGeneration: 0 })
+  expect(captured.props?.connection).toBe("online")
+  act(() => captured.props!.onSelectProject!("p1"))
+  expect(captured.props).toMatchObject({ selectedWorkspaceId: "w1", connection: "idle" })
+  emit({ kind: "sdk/ready", method: "sdk/ready", workspaceId: "w1", runtimeGeneration: 0 })
+  expect(captured.props?.connection).toBe("idle")
+  emit({ kind: "sdk/ready", method: "sdk/ready", workspaceId: "w1", runtimeGeneration: 1 })
+  emit({ kind: "sdk/disconnected", workspaceId: "w1", message: "Old route exited", close: { generation: 0, reason: "subprocess-exited" } })
+  expect(captured.props?.connection).toBe("online")
+  await act(async () => aCapabilities.resolve({}))
+})
+
 it("switches between projects without scanning Git before a review is requested", async () => {
   const request = fixture(input => {
     if (input.kind === "workspace/list") return Promise.resolve([{ id: "w1", path: "D:/a", label: "A" }, { id: "w2", path: "D:/b", label: "B" }])

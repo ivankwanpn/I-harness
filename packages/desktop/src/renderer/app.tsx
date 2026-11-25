@@ -1,5 +1,5 @@
 import { safeCompactionBlockedReason } from "@i-harness/desktop-gateway/src/context-diagnostics.ts"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { captureSessionSubmission, consumeSessionSubmission, ComposerPreparationError, retireSessionDraft, type ComposerProps } from "./session/Composer.tsx"
 import type { HistorySelection } from "./session/SessionSearch.tsx"
 import type { HistoryRequest } from "./session/SessionHistoryView.tsx"
@@ -17,7 +17,7 @@ import type {
 import type { SandboxState } from "../main/sdk-runtime.ts"
 import type { WorkspaceEntry } from "../main/workspaces.ts"
 import type { ProjectEntry } from "../main/projects.ts"
-import type { DesktopBridge } from "../shared/bridge.ts"
+import type { DesktopBridge, DesktopEvent } from "../shared/bridge.ts"
 import type { DesktopWorkStateView } from "@i-harness/desktop-gateway/src/work-state.ts"
 import {
   applyHistory,
@@ -43,6 +43,7 @@ import { usePendingInteractions } from "./interaction/use-pending-interactions.t
 import { affectsSessionDashboard, classifyNotification } from "./session/notifications.ts"
 import { projectTimeline } from "./session/project.ts"
 import { sendGate } from "./session/send-gate.ts"
+import { createWorkspaceConnections } from "./session/workspace-connections.ts"
 import { Workbench } from "./shell/Workbench.tsx"
 import { operationKey, useSessionOperation } from "./session/use-session-operation.ts"
 import { useLocale, useText } from "./design/i18n.ts"
@@ -151,7 +152,10 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const operations = useSessionOperation(bridge, durableInputSupported.current)
   const operation = selectedWorkspaceId && selectedSessionId ? operations.states[operationKey(selectedWorkspaceId, selectedSessionId)] : undefined
   const sending = operation?.busy === true && operation.kind !== "model"
-  const [connection, setConnection] = useState<"online" | "offline" | "connecting" | "reconnecting">("connecting")
+  const workspaceConnections = useMemo(createWorkspaceConnections, [bridge])
+  const connections = useSyncExternalStore(workspaceConnections.subscribe, workspaceConnections.snapshot)
+  const connection = (selectedWorkspaceId ? connections.get(selectedWorkspaceId)?.phase : undefined) ?? "connecting"
+  const selectedWorkspaceEvents = useRef<((event: DesktopEvent) => void) | undefined>(undefined)
   const interactions = usePendingInteractions(bridge, selectedWorkspaceId)
   const pending = interactions.pending
   const [reviewError, setReviewError] = useState<string>()
@@ -380,11 +384,15 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     setCapabilitySnapshot(undefined)
     setSandbox(undefined)
     setError(undefined)
-    // Checking an existing runtime doesn't start another one or delay the bootstrap reads.
+    // A status response only describes the lifecycle observed at the start of this read.
+    const observed = workspaceConnections.get(selectedWorkspaceId)
     void bridge.request({ kind: "desktop/runtime/status", workspaceId: selectedWorkspaceId }).then(value => {
-      if (current() && (value as { ready?: boolean } | undefined)?.ready === true) {
-        setConnection(status => status === "connecting" ? "online" : status)
-      }
+      if (!current()) return
+      const status = value as { ready?: boolean; generation?: number } | undefined
+      if (status?.ready === true && observed?.phase !== "offline" && observed?.phase !== "reconnecting")
+        workspaceConnections.setIfCurrent(selectedWorkspaceId, observed, "online", status.generation)
+      else if (status?.ready === false && observed?.phase === "online")
+        workspaceConnections.setIfCurrent(selectedWorkspaceId, observed, "connecting")
     }).catch(() => undefined)
     // Keep the first selection across failed bootstrap attempts and StrictMode
     // effect replay. A retry may reconcile that restored selection, never a
@@ -399,10 +407,12 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       if (!current()) return
       const confirmed = (value ?? {}) as Record<string, string[]>
       setCapabilitySnapshot({ workspaceId: selectedWorkspaceId, value: confirmed })
-      setConnection("online")
+      if (workspaceConnections.get(selectedWorkspaceId)?.phase !== "online")
+        workspaceConnections.set(selectedWorkspaceId, "online")
       if (confirmed["desktop-interaction"]?.includes("1")) void interactions.refresh().catch(reportFailure)
     }).catch(reason => {
-      if (current()) setConnection("offline")
+      if (current() && workspaceConnections.get(selectedWorkspaceId)?.phase !== "online")
+        workspaceConnections.set(selectedWorkspaceId, "offline")
       reportFailure(reason)
     })
     void bridge.request({ kind: "workspace/sandbox/state", workspaceId: selectedWorkspaceId }).then(value => {
@@ -422,7 +432,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       if (!initialDashboard.listingUnavailable && !initialDashboard.listingPartial) reconciledWorkspaces.current.add(selectedWorkspaceId)
     }).catch(reportFailure)
     return () => { active = false }
-  }, [bridge, interactions.refresh, retryNonce, selectedWorkspaceId])
+  }, [bridge, interactions.refresh, retryNonce, selectedWorkspaceId, workspaceConnections])
 
   useEffect(() => {
     const previews = assistantPreviews.current
@@ -445,8 +455,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     const refreshList = createRefreshScheduler(() => refreshDashboard(selectedWorkspaceId))
     const refreshTurn = selectedSessionId ? createRefreshScheduler(() => refreshTasks(selectedWorkspaceId, selectedSessionId)) : undefined
     const refresh = () => { refreshList.schedule(); refreshTurn?.schedule() }
-    const unsubscribe = bridge.onEvent((event) => {
-      if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity") return
+    const handle = (event: DesktopEvent) => {
+      if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity" || event.kind === "sdk/idle") return
       // Notifications for all workspaces arrive on this bridge. Keep unfinished
       // prefixes between selections, and retire only the disconnected owner.
       let preview: AssistantPreview | undefined
@@ -472,7 +482,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       }
       if (workspaceSelection.current !== workspace || event.workspaceId !== selectedWorkspaceId) return
       if (event.kind === "sdk/ready") {
-        setConnection("online")
         setError(undefined)
         if (disconnected.current === workspace) {
           disconnected.current = undefined
@@ -491,7 +500,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         executionRevision.current = undefined
         setCapabilitySnapshot(undefined)
         setSandbox(undefined)
-        setConnection("offline")
         setEventWindow((current) => markDisconnected(current))
         return
       }
@@ -569,9 +577,18 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       // every submission, including a following turn already running.
       if (executionRevision.current === undefined) setRunning(info.status === "queued")
       refresh()
-    })
-    return () => { unsubscribe(); refreshList.dispose(); refreshTurn?.dispose(); clearChunks() }
+    }
+    selectedWorkspaceEvents.current = handle
+    return () => {
+      if (selectedWorkspaceEvents.current === handle) selectedWorkspaceEvents.current = undefined
+      refreshList.dispose(); refreshTurn?.dispose(); clearChunks()
+    }
   }, [bridge, interactions.update, refreshDashboard, refreshTasks, refreshWorkState, selectedSessionId, selectedWorkspaceId])
+
+  // A background runtime can become ready, disconnect or go idle while it is unselected.
+  useEffect(() => bridge.onEvent(event => {
+    if (workspaceConnections.observe(event)) selectedWorkspaceEvents.current?.(event)
+  }), [bridge, workspaceConnections])
 
   const workStateEnabled = capabilities["desktop-work-state"]?.includes("1") === true
   useEffect(() => {
@@ -742,7 +759,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       } catch (error) { removeEcho(); throw error }
       finally { clearTimeout(timer) }
       if (selection.current !== owner) return
-      if (connection === "online") void pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
+      if (workspaceConnections.get(selectedWorkspaceId)?.phase === "online")
+        void pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
       void refreshTasks(selectedWorkspaceId, selectedSessionId)
       void refreshDashboard(selectedWorkspaceId)
     }
@@ -892,14 +910,14 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         setSelectedProjectId(id)
         const project = projects?.find((row) => row.id === id)
         const workspaceId = project && projectWorkspace(project, workspaces)
-        if (workspaceId !== selection.current.workspaceId) { setDashboard(undefined); setConnection("connecting") }
+        if (workspaceId !== selection.current.workspaceId) setDashboard(undefined)
         setSelectedWorkspaceId(workspaceId); setSelectedSessionId(undefined)
         useUiStore.getState().setSurface(workspaceId ? "conversation" : "projects")
       }}
       onSelectSessionInWorkspace={(workspaceId, sessionId, projectId) => {
         navigationVersion.current++
         setHistoryTarget(undefined)
-        if (workspaceId !== selection.current.workspaceId) { setDashboard(undefined); setConnection("connecting") }
+        if (workspaceId !== selection.current.workspaceId) setDashboard(undefined)
         setSelectedProjectId(projectId)
         setSelectedWorkspaceId(workspaceId); setSelectedSessionId(sessionId)
       }}
@@ -918,7 +936,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       capabilities={capabilities}
       capabilitiesReady={capabilitiesReady}
       sandbox={sandbox}
-      error={connection === "online" && /SdkConnectionError|sdk subprocess exited|sdk-connection/i.test(error ?? projectError ?? "") ? undefined : error ?? projectError}
+      error={(connection === "online" || connection === "idle") && /SdkConnectionError|sdk subprocess exited|sdk-connection/i.test(error ?? projectError ?? "") ? undefined : error ?? projectError}
       selectedWorkspaceId={selectedWorkspaceId}
       selectedSessionId={selectedSessionId}
       connection={selectedWorkspaceId ? connection : undefined}
@@ -931,7 +949,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           if (selection.current !== scope || navigationVersion.current !== version) return
           const validated = value as { workspaceId: string; sessionId: string; projectId?: string }
           if (validated.workspaceId !== target.workspaceId || validated.sessionId !== target.sessionId) throw new Error("Invalid history target")
-          if (target.workspaceId !== scope.workspaceId) { setDashboard(undefined); setConnection("connecting") }
+          if (target.workspaceId !== scope.workspaceId) setDashboard(undefined)
           setSelectedProjectId(validated.projectId); setHistoryTarget({ ...target }); setSelectedWorkspaceId(target.workspaceId); setSelectedSessionId(target.sessionId)
           useUiStore.getState().setSurface("conversation")
         }).catch(reason => { if (selection.current === scope && navigationVersion.current === version) setError(String(reason)) })
@@ -1002,7 +1020,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         setHistoryTarget(undefined)
         setSelectedProjectId(projectId)
         if (workspaceId !== selectedWorkspaceId) {
-          setConnection("connecting")
           setSelectedWorkspaceId(workspaceId)
           setDashboard(undefined)
         }
@@ -1027,13 +1044,16 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       }}
       onRetry={() => {
         forkOperations.current!.retireNavigation()
-        setConnection("reconnecting")
         setError(undefined)
         if (selectedWorkspaceId === undefined) { setRetryNonce(current => current + 1); return }
+        const reconnecting = workspaceConnections.set(selectedWorkspaceId, "reconnecting")
         const recoveryScope = workspaceSelection.current, recoveryNonce = retryNonce
         void bridge.request({ kind: 'desktop/runtime/recover', workspaceId: selectedWorkspaceId }).then(
           () => { if (workspaceSelection.current === recoveryScope) setRetryNonce(current => current === recoveryNonce ? current + 1 : current) },
-          reason => { if (workspaceSelection.current === recoveryScope) { setConnection('offline'); setError(reason instanceof Error ? reason.message : String(reason)) } },
+          reason => { if (workspaceSelection.current === recoveryScope && workspaceConnections.get(selectedWorkspaceId) === reconnecting) {
+            workspaceConnections.setIfCurrent(selectedWorkspaceId, reconnecting, "offline")
+            setError(reason instanceof Error ? reason.message : String(reason))
+          } },
         )
       }}
       onSessionsChanged={(createdWorkspaceId) => {

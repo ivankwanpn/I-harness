@@ -267,7 +267,7 @@ const english = {
   "憑證已設定": "Credentials configured", "憑證未設定": "Credentials not configured", "模型數量：{count}": "Models: {count}", "上下文大小": "Context window", "未指定": "Unspecified",
   "逐段瀏覽差異": "Browse diff sections", "上一段": "Previous section", "下一段": "Next section", "回到差異摘要": "Back to diff summary",
   "預覽略去中間 {count} 列；可逐段瀏覽。": "Preview omits {count} middle lines. Browse sections to read them.",
-  "已連線": "Connected", "連線已中斷": "Disconnected", "重新連線中…": "Reconnecting…", "連線中…": "Connecting…", "正在開啟工作區…": "Opening workspace…", "正在連線，送出暫時停用": "Connecting; sending is temporarily disabled",
+  "已連線": "Connected", "待命": "Standby", "連線已中斷": "Disconnected", "重新連線中…": "Reconnecting…", "連線中…": "Connecting…", "正在開啟工作區…": "Opening workspace…", "正在連線，送出暫時停用": "Connecting; sending is temporarily disabled",
   "查看筆記摘要": "View note summary", "僅擷取已保存筆記，不會呼叫模型。": "Excerpts from saved notes only. No model call.", "沒有可顯示的摘要": "No summary to display",
   "思考過程": "Reasoning", "待辦清單已更新": "Todo list updated", "目標已更新": "Goal updated", "背景任務狀態已更新": "Background task updated",
   "上下文摘要": "Context summary", "上下文已重設": "Context reset", "工具輸出已整理": "Tool outputs condensed",

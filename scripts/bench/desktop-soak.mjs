@@ -55,7 +55,7 @@ export async function sampleDesktopProcesses(pid) {
 // independent of the Node process and avoid sampling transcript content.
 export function rendererState() {
   const marker = document.querySelector(".connection-state")
-  const workspace = ["online", "offline", "connecting", "reconnecting"].find(state =>
+  const workspace = ["online", "offline", "connecting", "reconnecting", "idle"].find(state =>
     marker?.classList.contains("connection-" + state)) ?? "unknown"
   return {
     visibility: document.hidden ? "hidden" : document.hasFocus() ? "foreground" : "visible-unfocused",

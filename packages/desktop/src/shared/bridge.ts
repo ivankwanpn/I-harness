@@ -216,8 +216,11 @@ type UnforwardedNotification = Exclude<DesktopNotificationMethod, (typeof DESKTO
 const _everyNotificationIsForwarded: UnforwardedNotification extends never ? true : never = true
 void _everyNotificationIsForwarded
 
+export type WorkspaceConnection = "online" | "offline" | "connecting" | "reconnecting" | "idle"
+
 export type DesktopEvent =
   | {kind:"sdk/ready";workspaceId:string;runtimeGeneration:number;method:"sdk/ready";params?:never}
+  | {kind:"sdk/idle";workspaceId:string;runtimeGeneration:number;method:"sdk/idle";params?:never}
   | { kind: "runtime/diagnostic"; entry: import("./runtime-diagnostics.ts").RuntimeDiagnosticEntry }
   | ({ kind: "runtime/activity" } & import("./runtime-diagnostics.ts").RuntimeActivity)
   | { kind: "window/state"; maximized: boolean }

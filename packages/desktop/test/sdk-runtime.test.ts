@@ -33,6 +33,8 @@ function activityFixture() {
 
 it("uses one shared-host probe per decision, requires complete results, and retains profile-owned work", async () => {
   const f = activityFixture(), manager = createWorkspaceRuntimeManager({ sessionsRoot: f.sessionsRoot, resourcesPath: f.root })
+  const events: DesktopEvent[] = []
+  const unsubscribe = manager.onEvent(event => events.push(event))
   try {
     const [a, b] = await Promise.all([manager.get(f.workspace("a")), manager.get(f.workspace("b"))])
     expect(a.hostPid).toBe(b.hostPid)
@@ -47,13 +49,19 @@ it("uses one shared-host probe per decision, requires complete results, and reta
     expect(await manager.hasActiveWork()).toBe(true)
     await new Promise(resolve => setTimeout(resolve, 5))
     expect(await manager.evictIdle!(1)).toBe(2)
+    expect(events.filter(event => event.kind === "sdk/idle")).toEqual(expect.arrayContaining([
+      { kind: "sdk/idle", method: "sdk/idle", workspaceId: "a", runtimeGeneration: a.generation },
+      { kind: "sdk/idle", method: "sdk/idle", workspaceId: "b", runtimeGeneration: b.generation },
+    ]))
+    expect(events.some(event => event.kind === "sdk/disconnected")).toBe(false)
     expect(await manager.hasActiveWork()).toBe(true)
     const reopened = await manager.get(f.workspace("a"))
+    expect(reopened.generation).toBe((a.generation ?? 0) + 1)
     expect(reopened.hostPid).toBe(a.hostPid)
     await reopened.client.request("login", { active: false })
     expect(await manager.hasActiveWork()).toBe(false)
     expect(await reopened.client.request("stats")).toMatchObject({ inner: 0 })
-  } finally { await manager.close() }
+  } finally { unsubscribe(); await manager.close() }
 })
 
 it.each(["idle sweep", "dismissed window"])("retries an idle owner's failed release via %s", async trigger => {
