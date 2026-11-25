@@ -1,5 +1,7 @@
 import {expect,it} from 'vitest'
-import {createManagedSessionState,captureManagedHistoryCut,assertManagedHistoryCut} from '../src/managed/view.ts'
+import {createManagedSessionState,createManagedIndexedView,captureManagedHistoryCut,assertManagedHistoryCut} from '../src/managed/view.ts'
+import {createConversationIndex} from '../src/conversation/validation.ts'
+import {readManagedConversationFrontier} from '../src/restoration-internal.ts'
 import type {Session} from '../src/events/types.ts'
 
 it('the original immutable factory retains an append-tolerant nominal cut without source replay',()=>{
@@ -40,4 +42,27 @@ it('never installs a replaced pushed deleted or retained-alias stage row',()=>{
   staged.install();staged.install()
   expect(state.view.events).toEqual([{type:'turn/start',seq:0}])
   assertManagedHistoryCut(cut,state.view,owner,'source')
+})
+
+it('reads only the bound original immutable view frontier at the installed revision', () => {
+  const source: Session = {formatVersion:14,events:[{type:'turn/start',seq:0}]}
+  const state = createManagedSessionState(source,{sessionId:'source'}), owner = {}
+  expect(readManagedConversationFrontier(state.view,'source')).toBeUndefined()
+  state.bindOwner(owner)
+
+  expect(readManagedConversationFrontier(state.view,'source')).toBe(1)
+  expect(readManagedConversationFrontier(state.view,'other')).toBeUndefined()
+  expect(readManagedConversationFrontier(Object.freeze({...state.view}),'source')).toBeUndefined()
+  expect(readManagedConversationFrontier(source,'source')).toBeUndefined()
+  source.events[0] = {type:'assistant/message',seq:0,text:'same-length replacement'}
+  expect(readManagedConversationFrontier(source,'source')).toBeUndefined()
+
+  const compatibility = createManagedIndexedView(state.view.events,14,state.view.header,
+    createConversationIndex(state.view.events),owner,'source')
+  expect(readManagedConversationFrontier(compatibility.view,'source')).toBeUndefined()
+
+  const staged = state.stage([{type:'turn/end',seq:1}])
+  expect(readManagedConversationFrontier(state.view,'source')).toBe(1)
+  staged.install()
+  expect(readManagedConversationFrontier(state.view,'source')).toBe(2)
 })

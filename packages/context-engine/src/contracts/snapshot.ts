@@ -38,5 +38,6 @@ export interface ContextSnapshot {
 }
 export type UnsupportedContext = { kind: "unsupported"; code: "CONTEXT_SNAPSHOT_UNSUPPORTED" | "CONTEXT_STATE_AMBIGUOUS"; component: "conversation" | "surface" | "protection"; sourceIds: readonly string[] }
 export type ContextCapture = { kind: "captured"; snapshot: ContextSnapshot } | UnsupportedContext
+export type ContextSnapshotIdentityRead = { kind: "captured"; identity: Pick<ContextSnapshot, 'coordinates' | 'surfaceRevision'> } | UnsupportedContext
 export type ContextCoordinateRead = { kind: "available"; coordinates: ContextCoordinates; observationRevision: ContextRevision } | UnsupportedContext
 export type ContextCaptureInput = { ownerSessionId: string; surface: RequestSurfaceInput }

@@ -2,7 +2,7 @@ import { deriveContextRecovery, type BudgetRead, type SessionView as Session, ty
 import { agentFacts, committedFactSeqs } from './facts.ts'
 import { createAcceptedCalibration, type PreparedRequestMeasurement } from "@i-harness/token-meter"
 import { assessLegacyPreparedRequest, admissionObservation, readContextCoordinates } from "@i-harness/context-engine"
-import { sameRequestCandidate, requestContextIdentity, type RequestCandidateIdentity, type RequestEvidence } from "./request-snapshot.ts"
+import { sameRequestIdentity, requestContextIdentity, type RequestCandidateIdentity, type RequestEvidence } from "./request-snapshot.ts"
 import { freezePreparedFacts, type PreparedModelRequest } from "@i-harness/llm-seam"
 export interface OwnedBudgetHistory {
  readonly kind:'managed-budget-history'
@@ -13,7 +13,7 @@ export interface OwnedBudgetHistory {
 }
 
 /** The only owner of prepared admission, pressure, calibration and scalar reads. */
-export function createOwnedBudget(session: Session|undefined, ownerSessionId: string, freshness: () => RequestEvidence, observationLifetimeId: string, expectedExecution: (base: import("@i-harness/llm-seam").LiveExecutionIdentity | undefined) => import("./execution.ts").EpochObservation,
+export function createOwnedBudget(session: Session|undefined, ownerSessionId: string, freshness: () => RequestCandidateIdentity, observationLifetimeId: string, expectedExecution: (base: import("@i-harness/llm-seam").LiveExecutionIdentity | undefined) => import("./execution.ts").EpochObservation,
   facts: () => FactPorts<ProducerFactOutcome> = () => {if(!session)throw TypeError('Original budget fact ports required');return agentFacts({session})}, settlement: () => SettlementFacts<ProducerFactOutcome> | undefined = () => undefined,sourceHistory?:OwnedBudgetHistory) {
   if(!sourceHistory&&!session)throw TypeError('Original budget history required')
   const history:OwnedBudgetHistory=sourceHistory??{kind:'managed-budget-history',assessmentRevision(){let history='';for(const event of session!.events)if(event.type==='context/usage'||event.type==='context/recovery')history=`${history}:${event.seq}`;return history},recovery:binding=>deriveContextRecovery(session!,ownerSessionId,binding),coordinates:()=>readContextCoordinates(session!,{ownerSessionId}),ownsAccepted:event=>session!.events[event.seq!]===event}
@@ -55,7 +55,7 @@ export function createOwnedBudget(session: Session|undefined, ownerSessionId: st
       if (latest.kind !== "ready") return latest
       let unavailable = reason ?? invalidated
       if (!unavailable && captured && (latest.observation?.freshness === 'current' || latest.snapshot.admission !== "unavailable")) {
-        try { if (!sameRequestCandidate(captured, freshness())) unavailable = "Model context or request surface/binding changed since the prepared budget" }
+        try { if (!sameRequestIdentity(captured, freshness())) unavailable = "Model context or request surface/binding changed since the prepared budget" }
         catch { unavailable = "Current context capture is unavailable" }
       }
       // Observing a stale assessment makes it historical. Restoring a previous

@@ -11,11 +11,27 @@ const originalSourceSessions = new WeakMap<SessionView, string | undefined>()
 // Only managedSessionState enrolls: its initial copy and every appended row
 // are immutable. Other view factories must qualify their own invariants.
 const immutableFactories = new WeakMap<SessionView, {index:ConversationValidationIndex;assertFrontier(count:number):void}>()
+
+function immutableFactoryFor(view: SessionView, sessionId: string) {
+  const factory = immutableFactories.get(view)
+  if (factory && managedFactOwners.has(view) && originalSourceSessions.get(view) === sessionId && originalIndexes.get(view) === factory.index) return factory
+}
+
+/** Exact installed frontier for this view and session. Passive data identity
+ * only. Callers still verify current work admission independently. */
+export function readManagedConversationFrontier(view: SessionView, sessionId: string): number | undefined {
+  const factory = immutableFactoryFor(view, sessionId)
+  if (!factory) return undefined
+  const count = factory.index.eventCount
+  factory.assertFrontier(count)
+  return count
+}
+
 export interface ManagedHistoryCut {readonly kind:'original-managed-history-cut'}
 const historyCuts = new WeakMap<ManagedHistoryCut,{view:SessionView;owner:object;sessionId:string;factory:NonNullable<ReturnType<typeof immutableFactories.get>>;count:number}>()
 export function captureManagedHistoryCut(view:SessionView,owner:object,sessionId:string):ManagedHistoryCut {
-  const factory=immutableFactories.get(view)
-  if(!factory||managedFactOwners.get(view)!==owner||originalSourceSessions.get(view)!==sessionId||originalIndexes.get(view)!==factory.index)throw TypeError('Original immutable history source required')
+  const factory=immutableFactoryFor(view,sessionId)
+  if(!factory||managedFactOwners.get(view)!==owner)throw TypeError('Original immutable history source required')
   const count=factory.index.eventCount;factory.assertFrontier(count)
   const cut=Object.freeze({kind:'original-managed-history-cut' as const})
   historyCuts.set(cut,{view,owner,sessionId,factory,count});return cut
@@ -23,7 +39,7 @@ export function captureManagedHistoryCut(view:SessionView,owner:object,sessionId
 /** Passive prefix identity only. Original caller admission remains separate. */
 export function assertManagedHistoryCut(cut:ManagedHistoryCut,view:SessionView,owner:object,sessionId:string):void {
   const original=historyCuts.get(cut)
-  if(!original||original.view!==view||original.owner!==owner||original.sessionId!==sessionId||immutableFactories.get(view)!==original.factory||originalIndexes.get(view)!==original.factory.index||managedFactOwners.get(view)!==owner||originalSourceSessions.get(view)!==sessionId)throw TypeError('Original immutable history cut required')
+  if(!original||original.view!==view||original.owner!==owner||original.sessionId!==sessionId||immutableFactoryFor(view,sessionId)!==original.factory||managedFactOwners.get(view)!==owner)throw TypeError('Original immutable history cut required')
   original.factory.assertFrontier(original.count)
 }
 /** Exact containing document identity; a caller label cannot choose a source. */

@@ -1,5 +1,4 @@
 import { type CandidateExecutionState } from "./execution.ts"
-import { sameRequestCandidate } from "./request-snapshot.ts"
 import { prepareModelRequest, type LLMRequest } from "@i-harness/llm-seam"
 import type { AgentConfig, AgentDeps } from "./types.ts"
 import type { AgentContext } from "./context.ts"
@@ -36,7 +35,7 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
       const captured = context.captureCandidate()
       if (deps.requestContext && !deps.requestContext.current(captured.instructions)) { if (++attempts.staleRebuilds > 3) throw stalePreparedInput(); continue }
       onCaptured?.(captured)
-      const current = () => (!deps.requestContext || deps.requestContext.current(captured.instructions)) && context.bindingIsCurrent() && sameRequestCandidate(captured, context.captureCandidate())
+      const current = () => (!deps.requestContext || deps.requestContext.current(captured.instructions)) && context.bindingIsCurrent() && context.isCurrentCandidate(captured)
       const { request, requestRevision } = prepare(abort, scope, getSteps, captured)
       const initial = await prepareModelRequest(captured.model, request)
       abort?.throwIfAborted()

@@ -1,6 +1,6 @@
-import { captureRestoredConversationData, type PreparedConversationArchive } from '@i-harness/core-session/internal/restoration'
+import { captureRestoredConversationData, readManagedConversationFrontier, type PreparedConversationArchive } from '@i-harness/core-session/internal/restoration'
 import { projectConversation, readConversationState, type SessionView as Session } from "@i-harness/core-session"
-import type { ContextCapture, ContextCaptureInput, ContextCoordinateRead, ContextCoordinates, CapturedRequestSurface, UnsupportedContext } from "../contracts/snapshot.ts"
+import type { ContextCapture, ContextCaptureInput, ContextCoordinateRead, ContextCoordinates, ContextSnapshotIdentityRead, CapturedRequestSurface, UnsupportedContext } from "../contracts/snapshot.ts"
 import { captureData } from "./data.ts"
 import { contextRevision, semanticContextRevision } from "./revision.ts"
 import { contextProtection } from "./protected.ts"
@@ -9,16 +9,45 @@ function unsupported(component: UnsupportedContext["component"], sourceIds: read
   return { kind: "unsupported", component, code, sourceIds: Object.freeze([...sourceIds]) }
 }
 
+// Only scalar evidence survives the capture. The prepared request remains
+// the owner of the conversation projection and its message bodies.
+const managedCoordinates = new WeakMap<Session, { frontier: number; coordinates: ContextCoordinates }>()
+const originalStringify = JSON.stringify
+const objectPrototype = Object.prototype
+const arrayPrototype = Array.prototype
+
+function managedFrontier(session: Session, ownerSessionId: string): number | undefined {
+  // An embedder may replace the serialization environment. Let the ordinary
+  // reader construct the digest again in that case.
+  if (JSON.stringify !== originalStringify || Object.getPrototypeOf(arrayPrototype) !== objectPrototype
+      || Object.hasOwn(objectPrototype, 'toJSON') || Object.hasOwn(arrayPrototype, 'toJSON')) return undefined
+  return readManagedConversationFrontier(session, ownerSessionId)
+}
+
 function captureConversation(session: Session, ownerSessionId: string) {
   let sourceIds: readonly string[] = []
   try {
+    const frontier = managedFrontier(session, ownerSessionId)
     const projection = projectConversation(session, { ownerSessionId, capturePayload(value, source) {
       sourceIds = [source.id]
       return captureData(value)
     } })
     const state = readConversationState(session, projection)
-    return finishConversationCapture(projection, state, ownerSessionId)
+    const captured = finishConversationCapture(projection, state, ownerSessionId)
+    if (captured.kind === "available" && frontier !== undefined && managedFrontier(session, ownerSessionId) === frontier) {
+      managedCoordinates.set(session, { frontier, coordinates: captured.coordinates })
+    }
+    return captured
   } catch { return unsupported("conversation", sourceIds) }
+}
+
+function conversationCoordinates(session: Session, ownerSessionId: string) {
+  const cached = managedCoordinates.get(session)
+  if (cached?.coordinates.ownerSessionId === ownerSessionId &&
+      managedFrontier(session, ownerSessionId) === cached.frontier) {
+    return { kind: "available" as const, coordinates: cached.coordinates }
+  }
+  return captureConversation(session, ownerSessionId)
 }
 
 export function captureContextSnapshot(session: Session, input: ContextCaptureInput): ContextCapture {
@@ -30,10 +59,21 @@ export function captureContextSnapshot(session: Session, input: ContextCaptureIn
 }
 
 export function readContextCoordinates(session: Session, input: { ownerSessionId: string }): ContextCoordinateRead {
-  const captured = captureConversation(session, input.ownerSessionId)
+  const captured = conversationCoordinates(session, input.ownerSessionId)
   if (captured.kind === "unsupported") return captured
   const { coordinates } = captured
   return { kind: "available", coordinates, observationRevision: contextRevision("observation", [input.ownerSessionId, coordinates.semanticRevision, coordinates.protectionRevision, coordinates.branchId, coordinates.contextEpoch]) }
+}
+
+/** The exact immutable owner can recheck conversation coordinates without
+ * recapturing its payload. The caller supplies the freshly observed surface. */
+export function readManagedContextSnapshotIdentity(session: Session, input: ContextCaptureInput): ContextSnapshotIdentityRead | undefined {
+  if (managedFrontier(session, input.ownerSessionId) === undefined) return undefined
+  let surface: CapturedRequestSurface
+  try { surface = captureData(input.surface) } catch { return unsupported("surface") }
+  const captured = conversationCoordinates(session, input.ownerSessionId)
+  if (captured.kind === "unsupported") return captured
+  return { kind: "captured", identity: Object.freeze({ coordinates: captured.coordinates, surfaceRevision: contextRevision("surface", surface) }) }
 }
 
 function finishConversationCapture(projection: ReturnType<typeof projectConversation>, state: ReturnType<typeof readConversationState>, ownerSessionId: string) {

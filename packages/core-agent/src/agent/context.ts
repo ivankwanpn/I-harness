@@ -3,7 +3,8 @@ import { resolveCompactSpec, type CompactionConfig } from "@i-harness/compaction
 import { deriveProjectionRewrite, type ContextBindingMetadata } from "@i-harness/core-session"
 import type { AgentBudgetConfig, AgentDeps, AgentConfig, Agent, ModelContextBindingDescriptor } from "./types.ts"
 import { createOwnedBudget } from "./budget.ts"
-import { captureRequestCandidate } from "./request-snapshot.ts"
+import { captureRequestCandidate, rejectUnsupportedRequestContext, sameRequestIdentity, type RequestCandidateIdentity } from "./request-snapshot.ts"
+import { readManagedContextSnapshotIdentity } from '@i-harness/context-engine'
 import { projectionFingerprint } from "@i-harness/token-meter"
 import { snapshotModelData } from "@i-harness/llm-seam"
 import { agentFacts } from './facts.ts'
@@ -53,19 +54,33 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
   // has its own accepted fingerprint so output does not require a shadow prepare.
   const requestSurfaceFingerprint = () => projectionFingerprint({ system: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
     tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(), effort: reasoningEffort(), binding: metadata(), budgetBinding: budgetBinding(), rewrite: projectionRevision() })
-  const captureCandidate = () => {
+  const candidateInput = () => {
     const selected = { model: deps.model, bindingIdentity: deps.modelBindingIdentity?.(), executionIdentity: inherited?.executionIdentity ?? deps.executionIdentity?.() ?? deps.model.executionIdentity }
     const binding = metadata()
     if (currentCompact) resolveCompactSpec(currentCompact, binding?.providerId, binding?.modelId)
-    return { ...captureRequestCandidate(deps.session, requestSessionId, selected, {
+    const surface = {
       systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
       tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(), reasoningEffort: reasoningEffort(),
       maxOutputTokens: deps.sharedBudget ? Math.min((inherited ? inherited.maxOutputTokens : updated ? outputCap : deps.maxOutputTokens) ?? 2048, 2048) : inherited ? inherited.maxOutputTokens : updated ? outputCap : deps.maxOutputTokens,
       contextWindow: inherited ? inherited.contextWindow : binding ? binding.contextWindow : budgetCfg?.contextWindow ?? currentCompact?.contextWindow,
       binding, budgetBinding: budgetBinding(),
-    }, projectionRevision()), instructions: deps.requestContext?.capture() }
+    }
+    return { selected, surface }
   }
-  const ownedBudget = createOwnedBudget(deps.session, requestSessionId, captureCandidate, execution.observationLifetimeId, execution.peekExpected, () => agentFacts(deps), () => deps.sourceFacts)
+  const captureFullCandidate = ({ selected, surface }: ReturnType<typeof candidateInput>) => ({
+    ...captureRequestCandidate(deps.session, requestSessionId, selected, surface, projectionRevision()), instructions: deps.requestContext?.capture(),
+  })
+  const captureCandidate = () => captureFullCandidate(candidateInput())
+  const captureCurrentIdentity = (): RequestCandidateIdentity => {
+    const input = candidateInput()
+    const result = readManagedContextSnapshotIdentity(deps.session, { ownerSessionId: requestSessionId, surface: input.surface })
+    if (!result) return captureFullCandidate(input)
+    if (result.kind === 'unsupported') rejectUnsupportedRequestContext(result)
+    deps.requestContext?.capture()
+    const { model, bindingIdentity } = input.selected
+    return { model, bindingIdentity, snapshot: result.identity }
+  }
+  const ownedBudget = createOwnedBudget(deps.session, requestSessionId, captureCurrentIdentity, execution.observationLifetimeId, execution.peekExpected, () => agentFacts(deps), () => deps.sourceFacts)
   const contextMeter = { invalidate: () => ownedBudget.invalidateCalibration() }
   function buildCompactor(compact: CompactionConfig | undefined) {
     return createContextReduction(deps, compact, captureCandidate, ownedBudget, () => bindingIsCurrent(), () => refreshBinding(), attempts => attempts ? reductionScopes.get(attempts) : undefined)
@@ -96,6 +111,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
 
   return {
     execution, contextMeter, projectionRevision, ownedBudget, metadata, refreshBinding, bindingIsCurrent, requestSurfaceFingerprint, captureCandidate,
+    isCurrentCandidate: (before: RequestCandidateIdentity) => sameRequestIdentity(before, captureCurrentIdentity()),
     bindReductionScope(attempts: import('@i-harness/context-engine').ReductionAttempts, scope: import('@i-harness/llm-seam').LLMRequest['requestScope']) { reductionScopes.set(attempts, scope) },
     readBudget: () => ownedBudget.read(deps.requestContext && !deps.requestContext.current(deps.requestContext.capture()) ? 'Observed instructions unavailable' : bindingIsCurrent() ? undefined : "Inherited model binding changed before the next logical step"),
     get contextWindow() { return inherited ? inherited.contextWindow : metadata() ? metadata()!.contextWindow : budgetCfg?.contextWindow ?? currentCompact?.contextWindow },

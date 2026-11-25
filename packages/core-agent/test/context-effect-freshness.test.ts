@@ -1,5 +1,6 @@
-import { expect, it } from "vitest"
+import { expect, it, vi } from "vitest"
 import { append, createSession, createNondurableFactOwner } from "@i-harness/core-session"
+import * as coreSession from "@i-harness/core-session"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { reductionGroups, reductionSourceCurrent, selectReductionRuns } from "@i-harness/context-engine"
@@ -8,6 +9,63 @@ import { createAgentContext } from "../src/agent/context.ts"
 import { createStepInput } from "../src/agent/step-input.ts"
 import { createRecovery } from "../src/agent/recovery.ts"
 import { captureRequestCandidate, sameRequestCandidate } from "../src/agent/request-snapshot.ts"
+import type { SessionRequestContext } from '../src/agent/request-context.ts'
+
+it('shares the original compatibility frontier while reading live request inputs and instruction hooks', () => {
+  const original = createSession()
+  append(original, { type: 'turn/start' })
+  append(original, { type: 'user/message', text: 'initial' })
+  append(original, { type: 'turn/end' })
+  const state = coreSession.createManagedSessionState(original, { sessionId: 'owner' })
+  state.bindOwner({})
+  const calls: string[] = []
+  let prompt = 'initial surface', appendOnRead = false
+  const requestContext: SessionRequestContext = {
+    async reconcile() {},
+    capture() { calls.push('instructions'); return { kind: 'instruction-request', version: 1 } },
+    current: () => true,
+    retain: () => ({ async release() {} }),
+    succeeded: () => undefined,
+    promotedHumanRequest() {},
+    async close() {},
+  }
+  const context = createAgentContext({ session: state.view, model: { async *stream() {} }, tools: createToolRegistry(createContext()), requestContext,
+    systemPrompt() {
+      calls.push('surface')
+      if (appendOnRead) state.stage([{ type: 'turn/start', seq: 3 }, { type: 'user/message', text: 'changed', seq: 4 }, { type: 'turn/end', seq: 5 }]).install()
+      return prompt
+    },
+    modelToolSchemas() { calls.push('tools'); return [] },
+  }, 'owner')
+  const project = vi.spyOn(coreSession, 'projectConversation')
+  try {
+    const captured = context.captureCandidate()
+    expect(context.isCurrentCandidate(captured)).toBe(true)
+    expect(context.isCurrentCandidate(captured)).toBe(true)
+    expect(project).toHaveBeenCalledOnce()
+    prompt = 'changed surface'
+    expect(context.isCurrentCandidate(captured)).toBe(false)
+    expect(project).toHaveBeenCalledOnce()
+    prompt = 'initial surface'
+    appendOnRead = true
+    expect(context.isCurrentCandidate(captured)).toBe(false)
+    expect(project).toHaveBeenCalledTimes(2)
+    expect(calls).toEqual(Array.from({ length: 5 }, () => ['surface', 'tools', 'instructions']).flat())
+  } finally { project.mockRestore() }
+})
+
+it('reprojects a mutable session after same-length edits without reading its dynamic surface twice', () => {
+  const session = createSession()
+  append(session, { type: 'user/message', text: 'initial' })
+  const systemPrompt = vi.fn(() => 'surface')
+  const context = createAgentContext({ session, model: { async *stream() {} }, tools: createToolRegistry(createContext()), systemPrompt }, 'owner')
+  const captured = context.captureCandidate()
+  const event = session.events[0]!
+  if (event.type !== 'user/message') throw Error('Expected test input')
+  event.text = 'replacement'
+  expect(context.isCurrentCandidate(captured)).toBe(false)
+  expect(systemPrompt).toHaveBeenCalledTimes(2)
+})
 
 it.each([false, true])("contradictory dispatch invalidates the actual candidate guard for a closed exchange (explicit=%s)", async explicit => {
   const session = createSession()

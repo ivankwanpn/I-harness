@@ -1,8 +1,49 @@
-import { expect, it } from "vitest"
-import { append, createSession, renderConversation, type ConversationProjection, type Session } from "@i-harness/core-session"
-import { captureContextPayload, captureContextSnapshot } from "../src/index.ts"
+import { expect, it, vi } from "vitest"
+import { append, createManagedSessionState, createSession, renderConversation, type ConversationProjection, type Session } from "@i-harness/core-session"
+import { captureContextPayload, captureContextSnapshot, readContextCoordinates, readManagedContextSnapshotIdentity } from "../src/index.ts"
 import { contextRevision, semanticContextRevision } from "../src/snapshot/revision.ts"
 import type { ModelBudgetBinding } from "@i-harness/llm-seam"
+
+it('reuses only the original managed frontier and reads each live surface', () => {
+  const session = createSession()
+  append(session, { type: 'user/message', text: 'original context' })
+  const managed = createManagedSessionState(session, { sessionId: 'owner' })
+  const input = { ownerSessionId: 'owner', surface: { systemPrompt: 'first instructions', tools: [] } }
+  expect(readManagedContextSnapshotIdentity(session, input)).toBeUndefined()
+  expect(readManagedContextSnapshotIdentity(managed.view, input)).toBeUndefined()
+  managed.bindOwner({})
+
+  const first = captureContextSnapshot(managed.view, input)
+  if (first.kind !== 'captured') throw new Error('Original snapshot required')
+  expect(readManagedContextSnapshotIdentity(managed.view, { ...input, ownerSessionId: 'other' })).toBeUndefined()
+  const updated = readManagedContextSnapshotIdentity(managed.view, { ...input, surface: { ...input.surface, systemPrompt: 'new instructions' } })
+  if (updated?.kind !== 'captured') throw new Error('Original identity required')
+  expect(updated.identity.coordinates).toBe(first.snapshot.coordinates)
+  expect(updated.identity.surfaceRevision).not.toBe(first.snapshot.surfaceRevision)
+
+  const stringify = JSON.stringify
+  const replacement = vi.spyOn(JSON, 'stringify').mockImplementation((...args) => Reflect.apply(stringify, JSON, args))
+  try {
+    expect(readManagedContextSnapshotIdentity(managed.view, input)).toBeUndefined()
+    const ordinary = readContextCoordinates(managed.view, input)
+    if (ordinary.kind !== 'available') throw new Error('Ordinary coordinates required')
+    expect(ordinary.coordinates).not.toBe(first.snapshot.coordinates)
+    expect(ordinary.coordinates).toEqual(first.snapshot.coordinates)
+  } finally { replacement.mockRestore() }
+
+  const pending = managed.stage([{ type: 'plan/mode', mode: 'on', seq: 1 }])
+  const before = readContextCoordinates(managed.view, input)
+  if (before.kind !== 'available') throw new Error('Original coordinates required')
+  expect(before.coordinates).toBe(first.snapshot.coordinates)
+  pending.install()
+  const after = readManagedContextSnapshotIdentity(managed.view, input)
+  const expected = captureContextSnapshot(managed.view, input)
+  if (after?.kind !== 'captured' || expected.kind !== 'captured') throw new Error('Installed snapshot required')
+  expect(after.identity.coordinates).not.toBe(first.snapshot.coordinates)
+  expect(after.identity.coordinates).toEqual(expected.snapshot.coordinates)
+  expect(after.identity.coordinates.archive.eventCount).toBe(first.snapshot.coordinates.archive.eventCount + 1)
+  expect(after.identity.surfaceRevision).toBe(expected.snapshot.surfaceRevision)
+})
 
 it('keeps the semantic v1 digest for sealed projections with Unicode and omitted optional fields', () => {
   const owner = 'owner-香港-\uD800'

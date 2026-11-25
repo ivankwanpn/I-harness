@@ -1,4 +1,4 @@
-import { captureContextSnapshot, type ContextSnapshot, type ContextRevision, type RequestSurfaceInput } from "@i-harness/context-engine"
+import { captureContextSnapshot, type ContextSnapshot, type ContextRevision, type RequestSurfaceInput, type UnsupportedContext } from "@i-harness/context-engine"
 import { selectConversationMessages, type ContextBindingMetadata, type SessionView as Session } from "@i-harness/core-session"
 import { projectionFingerprint } from "@i-harness/token-meter"
 import type { ModelClient } from "@i-harness/llm-seam"
@@ -19,15 +19,23 @@ export type RequestCandidateIdentity = Pick<RequestEvidence, 'model' | 'bindingI
   readonly snapshot: Pick<ContextSnapshot, 'coordinates' | 'surfaceRevision'>
 }
 
+export function rejectUnsupportedRequestContext(result: UnsupportedContext): never {
+  throw Object.assign(new Error(`${result.code}: ${result.component}`), { code: result.code, component: result.component, sourceIds: result.sourceIds })
+}
+
 /** Capture synchronously after the logical hooks/claim, before any await. */
 export function captureRequestCandidate(session: Session, ownerSessionId: string, selected: { model: ModelClient; bindingIdentity?: object; executionIdentity?: import("@i-harness/llm-seam").LiveExecutionIdentity }, surface: RequestSurfaceInput, projectionRevision: number): RequestEvidence {
   const result = captureContextSnapshot(session, { ownerSessionId, surface })
-  if (result.kind === "unsupported") throw Object.assign(new Error(`${result.code}: ${result.component}`), { code: result.code, component: result.component, sourceIds: result.sourceIds })
+  if (result.kind === "unsupported") rejectUnsupportedRequestContext(result)
   const snapshot = result.snapshot
   return { snapshot, ...selected, projectionRevision, neutralFingerprint: projectionFingerprint(selectConversationMessages(snapshot.conversation)), metadata: snapshot.surface.binding }
 }
 
 export function sameRequestCandidate(before: RequestCandidateIdentity, current: RequestEvidence): boolean {
+  return sameRequestIdentity(before, current)
+}
+
+export function sameRequestIdentity(before: RequestCandidateIdentity, current: RequestCandidateIdentity): boolean {
   const a = before.snapshot.coordinates, b = current.snapshot.coordinates
   return before.model === current.model && before.bindingIdentity === current.bindingIdentity
     && a.semanticRevision === b.semanticRevision && a.protectionRevision === b.protectionRevision
