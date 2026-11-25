@@ -2,10 +2,10 @@ import {afterEach,expect,it,vi} from 'vitest'
 const probe=vi.hoisted(()=>({
  views:0,ordinals:[] as number[],batches:[] as number[][],
  gate:undefined as undefined|{entered():void;wait:Promise<void>},
- historyObservations:0,settleHistory:undefined as undefined|(()=>Promise<void>),
+ historyObservations:0,cleanAttempts:0,legacyReads:0,settleHistory:undefined as undefined|(()=>Promise<void>),
 }))
 vi.mock('@i-harness/core-session',async load=>{const original=await load<typeof import('@i-harness/core-session')>();return {...original,createManagedSessionState(){probe.views++;throw Error('Inbox lookup constructed a complete view')}}})
-vi.mock('../../session-persistence-jsonl/src/backend/archive-reader.ts',async load=>{const original=await load<typeof import('../../session-persistence-jsonl/src/backend/archive-reader.ts')>();return {...original,async readSessionArchive(...args:Parameters<typeof original.readSessionArchive>){const result=await original.readSessionArchive(...args);if(args[4]){probe.ordinals.push(...args[4].ordinals);probe.batches.push([...args[4].ordinals]);const gate=probe.gate;if(gate){probe.gate=undefined;gate.entered();await gate.wait}}return result}}})
+vi.mock('../../session-persistence-jsonl/src/backend/archive-reader.ts',async load=>{const original=await load<typeof import('../../session-persistence-jsonl/src/backend/archive-reader.ts')>();return {...original,async readSessionArchive(...args:Parameters<typeof original.readSessionArchive>){const result=await original.readSessionArchive(...args);if(args[4]){probe.ordinals.push(...args[4].ordinals);probe.batches.push([...args[4].ordinals]);const gate=probe.gate;if(gate){probe.gate=undefined;gate.entered();await gate.wait}}else if(!args[2])probe.legacyReads++;return result}}})
 vi.mock('../../session-persistence-jsonl/src/backend/process-read.ts',async load=>{
  const original=await load<typeof import('../../session-persistence-jsonl/src/backend/process-read.ts')>()
  return {...original,createJsonlProcessReadCapability(...args:Parameters<typeof original.createJsonlProcessReadCapability>){
@@ -14,6 +14,12 @@ vi.mock('../../session-persistence-jsonl/src/backend/process-read.ts',async load
    const read=capability.openTaskHistory(...args)
    return {
     observe(){probe.historyObservations++;return read.observe()},
+    async observeClean(){
+     probe.cleanAttempts++
+     const proof=await read.observeClean()
+     if(proof)probe.historyObservations++
+     return proof
+    },
     async settleResources(){await probe.settleHistory?.();return read.settleResources()},
     retryResources:read.retryResources.bind(read),
     hasDebt:read.hasDebt.bind(read),
@@ -24,14 +30,14 @@ vi.mock('../../session-persistence-jsonl/src/backend/process-read.ts',async load
 import {mkdtemp,readFile,writeFile} from 'node:fs/promises'
 import {appendFileSync} from 'node:fs'
 import {join} from 'node:path'
-import {committedFactSeqs,contextUsageAnchorId,encodeFactBatch,legacyPrefixDigest,type AcceptedRequestAttributionV1} from '@i-harness/core-session'
+import {committedFactSeqs,contextUsageAnchorId,CURRENT_FORMAT_VERSION,encodeFactBatch,legacyPrefixDigest,type AcceptedRequestAttributionV1} from '@i-harness/core-session'
 import {createJsonlBackend} from '@i-harness/session-persistence-jsonl'
 import {composeJsonlTaskTransitionCoordinator} from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
 import {taskDocumentStorageContract} from '../../subagent/src/task/storage-contract.ts'
 import {acquireManagedExecution} from '../src/execution-internal.ts'
 import {readRestoredConversation} from '@i-harness/core-session/internal/restoration'
 const coordinators:ReturnType<typeof composeJsonlTaskTransitionCoordinator>[]=[]
-afterEach(async()=>{probe.gate=undefined;probe.settleHistory=undefined;for(const c of coordinators.splice(0))await c.close();probe.views=0;probe.ordinals=[];probe.batches=[];probe.historyObservations=0})
+afterEach(async()=>{probe.gate=undefined;probe.settleHistory=undefined;for(const c of coordinators.splice(0))await c.close();probe.views=0;probe.ordinals=[];probe.batches=[];probe.historyObservations=0;probe.cleanAttempts=0;probe.legacyReads=0})
 async function fixture(){const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'inbox-records-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract);coordinators.push(coordinator);await coordinator.create({sessionId:'inbox'});return {root,backend,coordinator}}
 
 async function persistedExchanges() {
@@ -95,7 +101,7 @@ it('reuses the verified archive for cold validation and opens the held reader fo
  coordinators.push(coordinator)
  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
  probe.settleHistory=async()=>{entered.resolve();await release.promise}
- const before=probe.historyObservations
+ const before=probe.historyObservations, attempts=probe.cleanAttempts, reads=probe.legacyReads
  let published=false
  const attaching=acquireManagedExecution(coordinator,'inbox').then(execution=>{published=true;return execution})
  try{
@@ -105,6 +111,8 @@ it('reuses the verified archive for cold validation and opens the held reader fo
  }finally{release.resolve();probe.settleHistory=undefined}
  const execution=await attaching
  expect(probe.historyObservations-before).toBe(1)
+ expect(probe.cleanAttempts-attempts).toBe(1)
+ expect(probe.legacyReads-reads).toBe(0)
  expect(probe.ordinals).toEqual([])
  const observation=execution.observe(),admission=await observation.inbox.admitted('saved')
  expect(admission).toMatchObject({text:'original input body'})
@@ -117,6 +125,70 @@ it('reuses the verified archive for cold validation and opens the held reader fo
   expect(rendered).toContain('original response 7')
  }finally{await lease.settle()}
  expect(probe.views).toBe(0)
+},20000)
+
+it('uses the original repair lane for a byte-torn tail before taking the final proof',async()=>{
+ const root=await persistedExchanges()
+ const path=join(root,'inbox.jsonl'), original=await readFile(path)
+ appendFileSync(path,Buffer.concat([Buffer.from('{"unfinished":"'),Buffer.from([0xe4,0xbd])]))
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ coordinators.push(coordinator)
+ const observations=probe.historyObservations,attempts=probe.cleanAttempts,reads=probe.legacyReads
+ await acquireManagedExecution(coordinator,'inbox')
+ expect(probe.cleanAttempts-attempts).toBe(1)
+ expect(probe.legacyReads-reads).toBe(1)
+ expect(probe.historyObservations-observations).toBe(1)
+ expect(await readFile(path)).toEqual(original)
+},20000)
+
+it('requalifies an incomplete tool and turn after original recovery adds their terminal facts',async()=>{
+ const {backend,coordinator}=await fixture()
+ await coordinator.append('inbox',[{type:'turn/start'},{type:'step/start'},{type:'tool/call',callId:'unfinished',name:'read',args:{}}])
+ const observations=probe.historyObservations,attempts=probe.cleanAttempts,reads=probe.legacyReads
+ await acquireManagedExecution(coordinator,'inbox')
+ expect(probe.cleanAttempts-attempts).toBe(1)
+ expect(probe.legacyReads-reads).toBeGreaterThanOrEqual(1)
+ expect(probe.historyObservations-observations).toBe(1)
+ const {events}=await backend.read('inbox')
+ expect(events).toContainEqual(expect.objectContaining({type:'tool/result',callId:'unfinished',isError:true}))
+ expect(events).toContainEqual(expect.objectContaining({type:'turn/end'}))
+ expect(events.map(event=>event.seq)).toEqual(events.map((_,index)=>index))
+},20000)
+
+it('honors a pre-bound JSONL repair wrapper even for a clean journal',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'wrapped-execution-'))
+ let repairs=0
+ const backend=createJsonlBackend(root,{wrap(original){
+  const repair=original.repair.bind(original)
+  original.repair=id=>{repairs++;return repair(id)}
+ }})
+ const coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
+ coordinators.push(coordinator)
+ await coordinator.create({sessionId:'inbox'})
+ const attempts=probe.cleanAttempts
+ await acquireManagedExecution(coordinator,'inbox')
+ expect(probe.cleanAttempts-attempts).toBe(0)
+ expect(repairs).toBe(1)
+},20000)
+
+it.each(['future format','invalid conversation'] as const)('classifies %s without falling back to repair',async kind=>{
+ const {root,coordinator}=await fixture()
+ const path=join(root,'inbox.jsonl'), raw=await readFile(path)
+ const header=JSON.parse(raw.subarray(0,raw.indexOf(10)).toString('utf8'))
+ let changed:Buffer
+ if(kind==='future format'){
+  changed=Buffer.from(JSON.stringify({...header,formatVersion:CURRENT_FORMAT_VERSION+1})+'\n')
+ }else{
+  const frame=encodeFactBatch('unqualified',header.journal.legacyPrefixDigest,[
+   {type:'model/exchange-accepted',version:1,exchangeId:'missing',actionId:'a',attemptId:'p',stepStartSeq:0,assistantSeq:1,callSeqs:[],seq:0},
+  ])
+  changed=Buffer.concat([raw,frame.bytes])
+ }
+ await writeFile(path,changed)
+ const reads=probe.legacyReads
+ await expect(acquireManagedExecution(coordinator,'inbox')).rejects.toMatchObject({code:'SESSION_FORMAT_UNSUPPORTED'})
+ expect(probe.legacyReads).toBe(reads)
+ expect(await readFile(path)).toEqual(changed)
 },20000)
 
 it('starts a fresh post-upgrade proof before attaching a writer to a predecessor',async()=>{

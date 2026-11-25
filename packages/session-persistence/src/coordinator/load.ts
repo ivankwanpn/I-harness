@@ -58,14 +58,14 @@ export function createLoads(
       throw cause
     }
   }
-  function loadThroughTransition<T>(sessionId: string, finalize: (proof: HistoryProof) => Promise<T>, after?: AfterTransition, skipPending = false) {
-    const run = () => transitionLoadOriginal(sessionId, finalize, after, skipPending)
+  function loadThroughTransition<T>(sessionId: string, finalize: (proof: HistoryProof) => Promise<T>, after?: AfterTransition, skipPending = false, allowClean = false) {
+    const run = () => transitionLoadOriginal(sessionId, finalize, after, skipPending, allowClean)
     return withMutationRead ? withMutationRead(sessionId, run) : run()
   }
   function transitionLoad(sessionId: string, after?: AfterTransition, skipPending = false) {
     return loadThroughTransition(sessionId, materializeHistory, after, skipPending)
   }
-  async function transitionLoadOriginal<T>(sessionId: string, finalize: (proof: HistoryProof) => Promise<T>, after?: AfterTransition, skipPending = false) {
+  async function transitionLoadOriginal<T>(sessionId: string, finalize: (proof: HistoryProof) => Promise<T>, after?: AfterTransition, skipPending = false, allowClean = false) {
       if (!transitions) throw new Error('TASK_TRANSITION_UNSUPPORTED')
         assertWritable(sessionId)
         let pending = skipPending ? undefined : pendingWriteBehind(sessionId)
@@ -111,7 +111,10 @@ export function createLoads(
             }
           }
           validateSubagentHeader(repaired.meta)
-        }, pending ? () => pending.flush() : undefined, finalize, after)
+        }, pending ? () => pending.flush() : undefined, finalize, after, allowClean && !pending?.hasWork ? () => {
+          invalidateConversation(sessionId)
+          executionChanges?.invalidated(sessionId)
+        } : undefined)
       }
   async function loadOwnedExecution<T>(sessionId: string, restore: (proof: HistoryProof) => Promise<T>): Promise<T> {
     if (!transitions) throw new Error('TASK_TRANSITION_UNSUPPORTED')
@@ -122,7 +125,7 @@ export function createLoads(
       // Only a fresh proof can attach a writer to the replacement artifact.
       legacy = (await materializeHistory(proof)).session
       return undefined
-    })
+    }, undefined, false, true)
     if (result) return result.value
     return transitions.existing(sessionId, async beforeRepair => {
       if (!legacy) throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED')

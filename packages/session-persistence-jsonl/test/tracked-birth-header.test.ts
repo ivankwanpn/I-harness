@@ -61,7 +61,9 @@ it('classifies a large ordinary journal in one header window and still rejects a
   await expect(fixture.resolve()).resolves.toBeUndefined()
   expect(probe.bytes).toBe(HEADER_READ_MAX_BYTES)
   await writeFile(fixture.path + '.bootstrap-foreign', 'unrelated')
-  await expect(fixture.resolve()).rejects.toThrow('Foreign bootstrap namespace')
+  await expect(fixture.resolve()).rejects.toMatchObject({
+    message: 'Foreign bootstrap namespace', code: 'SESSION_BOOTSTRAP_INCOMPLETE',
+  })
   expect(probe.bytes).toBe(HEADER_READ_MAX_BYTES * 2)
 })
 

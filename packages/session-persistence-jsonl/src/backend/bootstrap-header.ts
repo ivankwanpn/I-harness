@@ -193,7 +193,8 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
       if (end < 0) throw new Error('Invalid bootstrap header')
       const meta = parseHeader(header.subarray(0,end).toString('utf8'))
       if (!meta.semanticSeed) {
-        if ((await bootstrapNamespace(path)).length) throw new Error('Foreign bootstrap namespace')
+        if ((await bootstrapNamespace(path)).length)
+          throw Object.assign(new Error('Foreign bootstrap namespace'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' })
         await assertNotDeleted('session',id)
         scope(id,owner)
         return undefined

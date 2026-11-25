@@ -27,7 +27,7 @@ import { resolveSelectedBirth, snapshotSelectedMetadataUpdate } from './backend/
 import { createSelectedFactJournalBackend } from './backend/selected-fact-journal.ts'
 import { createJsonlProcessReadCapability } from './backend/process-read.ts'
 import { assembleSessionCoordinatorWithProcessStorage, type TaskTransitionBackendSession, type TaskTransitionConfiguration } from '@i-harness/session-persistence/internal/process-read-assembly'
-import { routeInvocation, type CoordinatorOptions, type SessionCoordinator, type BootstrapRoute, type BootstrapReadState } from '@i-harness/session-persistence'
+import { repairTurnTail, routeInvocation, type CoordinatorOptions, type SessionCoordinator, type BootstrapRoute, type BootstrapReadState } from '@i-harness/session-persistence'
 import { createTaskDocumentObservation } from './backend/task-document-observation.ts'
 import { taskDocumentStorageContract } from '@i-harness/session-persistence/internal/task-state'
 import { SessionLockUnsupportedError } from '@i-harness/session-persistence'
@@ -36,7 +36,7 @@ import type { HeldTaskDocumentScope, TaskDocumentBackendSession, HeldFactOwner }
 
 // Only the original constructor below can associate a backend. Byte adapters
 // and callers with structurally identical objects cannot mint this identity.
-const processReadOwners = new WeakMap<object, { sessionPath(id:string):string; capability: ReturnType<typeof createJsonlProcessReadCapability>; assertOriginal(): void; openTask(scope: HeldTaskDocumentScope): TaskDocumentBackendSession; openTransitionTask(scope: HeldTaskDocumentScope): TaskTransitionBackendSession; stageCreateHeader(scope: HeldTaskDocumentScope, meta: SessionMeta, proof: Awaited<ReturnType<ReturnType<typeof createJsonlProcessReadCapability>['observeFreshTaskParent']>>): ReturnType<typeof stageOwnedSessionFile>; stageUpgradeHeader(scope: HeldTaskDocumentScope, proof: Awaited<ReturnType<ReturnType<ReturnType<typeof createJsonlProcessReadCapability>['openTaskHistory']>['observe']>>, held: HeldFactOwner): ReturnType<typeof stageOwnedUpgrade>; trackHeaderOwner(id: string, owner: HeldFactOwner): void; settleTrackedHeaderIO(id: string, owner: HeldFactOwner): Promise<void>; readTrackedState(route: BootstrapRoute, owner: HeldFactOwner): Promise<BootstrapReadState>; hasTrackedHeaderDebt(id: string, owner: HeldFactOwner): boolean; trackedStageIO(id: string, owner: HeldFactOwner): import('./backend/bootstrap-stage.ts').StageLookupIO; resolveTrackedBirth(id: string, owner: HeldFactOwner): ReturnType<ReturnType<typeof createBootstrapHeaderBackend>['resolveTrackedBirth']> }>()
+const processReadOwners = new WeakMap<object, { sessionPath(id:string):string; capability: ReturnType<typeof createJsonlProcessReadCapability>; assertOriginal(): void; prepareCleanHistory?(id: string): Promise<void>; openTask(scope: HeldTaskDocumentScope): TaskDocumentBackendSession; openTransitionTask(scope: HeldTaskDocumentScope): TaskTransitionBackendSession; stageCreateHeader(scope: HeldTaskDocumentScope, meta: SessionMeta, proof: Awaited<ReturnType<ReturnType<typeof createJsonlProcessReadCapability>['observeFreshTaskParent']>>): ReturnType<typeof stageOwnedSessionFile>; stageUpgradeHeader(scope: HeldTaskDocumentScope, proof: Awaited<ReturnType<ReturnType<ReturnType<typeof createJsonlProcessReadCapability>['openTaskHistory']>['observe']>>, held: HeldFactOwner): ReturnType<typeof stageOwnedUpgrade>; trackHeaderOwner(id: string, owner: HeldFactOwner): void; settleTrackedHeaderIO(id: string, owner: HeldFactOwner): Promise<void>; readTrackedState(route: BootstrapRoute, owner: HeldFactOwner): Promise<BootstrapReadState>; hasTrackedHeaderDebt(id: string, owner: HeldFactOwner): boolean; trackedStageIO(id: string, owner: HeldFactOwner): import('./backend/bootstrap-stage.ts').StageLookupIO; resolveTrackedBirth(id: string, owner: HeldFactOwner): ReturnType<ReturnType<typeof createBootstrapHeaderBackend>['resolveTrackedBirth']> }>()
 export function lookupJsonlProcessRead(backend: object) {
   const owner = processReadOwners.get(backend)
   if (!owner) return undefined
@@ -66,6 +66,14 @@ export function composeJsonlTaskTransitionCoordinator(backend: PersistenceBacken
     get acquireRetryMs() { return options?.acquireRetryMs },
     get acquireDeadlineMs() { return options?.acquireDeadlineMs },
     lock: { enabled: true, get lockRoot() { return options?.lock?.lockRoot } },
+  }
+  const prepareCleanHistory = owner.prepareCleanHistory
+  const checkHistoryNamespace = (scope: HeldTaskDocumentScope, held: HeldFactOwner) => async () => {
+    owner.assertOriginal()
+    const birth = await owner.resolveTrackedBirth(scope.parentSessionId, held)
+    scope.assertActive()
+    owner.assertOriginal()
+    return birth?.digest
   }
   return assembleSessionCoordinatorWithProcessStorage(backend, nativeOptions,
     { capture(id, keys) { owner.assertOriginal(); return owner.capability.capture(id, keys) }, captureManagedAuxiliary(id, keys) { owner.assertOriginal(); return owner.capability.captureManagedAuxiliary(id, keys) } },
@@ -111,8 +119,17 @@ export function composeJsonlTaskTransitionCoordinator(backend: PersistenceBacken
         })
       }, openHistory(scope, held) {
         owner.assertOriginal()
-        return owner.capability.openTaskHistory(scope, async () => { owner.assertOriginal(); const birth = await owner.resolveTrackedBirth(scope.parentSessionId,held); scope.assertActive(); owner.assertOriginal(); return birth?.digest })
+        return owner.capability.openTaskHistory(scope, checkHistoryNamespace(scope, held))
       },
+      ...(prepareCleanHistory ? { openCleanHistory(scope: HeldTaskDocumentScope, held: HeldFactOwner) {
+        owner.assertOriginal()
+        return owner.capability.openTaskHistory(scope, checkHistoryNamespace(scope, held), {
+          before: () => prepareCleanHistory(scope.parentSessionId),
+          isCanonical: events => !missingClosers(events).length &&
+            events.every((event, index) => event.seq === index) &&
+            repairTurnTail(events, { appendOnly: true }).length === events.length,
+        })
+      } } : {}),
       openBootstrapHistory(scope, route, held) {
         owner.assertOriginal(); if ((route.protocol === 'public-results-v1' ? route.request.invocation : routeInvocation(route)).targetSessionId !== scope.parentSessionId) throw new Error('Invalid bootstrap task route')
         let originalStage: string | undefined
@@ -681,7 +698,8 @@ export function createJsonlBackend(root: string, options?: {
       return composeJsonlTaskTransitionCoordinator(backend, coordinatorOptions, taskDocumentStorageContract)
     },
   })
-  options?.wrap?.(backend)
+  const wrap = options?.wrap
+  wrap?.call(options, backend)
   const artifactOwner = pathResolution.bindBackend(backend, {
     async prepareRoot() { assertOriginal(); await mkdir(rootPath, {recursive:true}); assertOriginal() },
     async prepareDocumentParents(key: string) {
@@ -723,6 +741,12 @@ export function createJsonlBackend(root: string, options?: {
   }
   processReadOwners.set(backend, {
     sessionPath: filePath, capability, assertOriginal, trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth,
+    ...(!wrap ? { async prepareCleanHistory(id: string) {
+      assertOriginal()
+      await assertWritableGeneration(id)
+      forgetJournal(id)
+      assertOriginal()
+    } } : {}),
     openTask(scope) { return openOwnedTask(scope, false) },
     openTransitionTask(scope) { return openOwnedTask(scope, true) as TaskTransitionBackendSession },
     stageUpgradeHeader(scope, proof, held) {

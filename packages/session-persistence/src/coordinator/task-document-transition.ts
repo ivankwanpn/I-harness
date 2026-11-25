@@ -24,6 +24,7 @@ export type HistoryProof = { initial: SessionView; seedLength: number; assertCur
 type RecoverHistory = (beforeRepair: (version: number, events: readonly SessionEventView[], seedLength: number) => Promise<void>, markRepair: () => void) => Promise<void>
 type HistoryHeader = { confirm(): Promise<import('./bootstrap-types.ts').HeaderOutcome | {kind:'not-required'}>; settle(): Promise<void> }
 type HistoryReader = { observe(): Promise<HistoryProof>; settleResources(): Promise<void>; retryResources(): Promise<void>; hasDebt(): boolean }
+type CleanHistoryReader = HistoryReader & { observeClean(): Promise<HistoryProof | undefined> }
 type TransitionRoute = BootstrapRoute | SelectedResultsRoute
 function isTaskV3(value: unknown): boolean {
   return value !== null && typeof value === 'object' && !types.isProxy(value) && Object.getOwnPropertyDescriptor(value, 'formatVersion')?.value === 3
@@ -36,6 +37,7 @@ export type TaskTransitionConfiguration = {
   observeBootstrap(scope: HeldTaskDocumentScope, route: TransitionRoute, held: HeldFactOwner): Promise<FreshProof>
   observePublishedBootstrap?(scope: HeldTaskDocumentScope, route: TransitionRoute, held: HeldFactOwner, operation: BootstrapHeaderOperation, seed?: Uint8Array, completionLimit?: number): Promise<FreshProof>
   openHistory(scope: HeldTaskDocumentScope, held: HeldFactOwner): HistoryReader
+  openCleanHistory?(scope: HeldTaskDocumentScope, held: HeldFactOwner): CleanHistoryReader
   openBootstrapHistory(scope: HeldTaskDocumentScope, route: TransitionRoute, held: HeldFactOwner): HistoryReader
   openHistoryHeader(scope: HeldTaskDocumentScope, held: HeldFactOwner, proof: HistoryProof): HistoryHeader
   stageUpgrade(scope: HeldTaskDocumentScope, proof: HistoryProof, held: HeldFactOwner): Promise<Header>
@@ -79,10 +81,15 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
   const publishedField = Object.getOwnPropertyDescriptor(config, 'observePublishedBootstrap')
   if (publishedField && !('value' in publishedField) || !publishedField && 'observePublishedBootstrap' in config) throw new TypeError('Invalid published bootstrap capability')
   const observePublishedBootstrap = publishedField?.value === undefined ? undefined : method(config, 'observePublishedBootstrap')!
+  const cleanField = Object.getOwnPropertyDescriptor(config, 'openCleanHistory')
+  if (cleanField && !('value' in cleanField) || !cleanField && 'openCleanHistory' in config) throw new TypeError('Invalid clean history capability')
+  const openCleanHistory = cleanField?.value === undefined ? undefined : method(config, 'openCleanHistory')!
   const configFields = Object.getOwnPropertyDescriptors(config), validatorFields = Object.getOwnPropertyDescriptors(validator)
   const assertConfig = () => {
     const currentPublished = Object.getOwnPropertyDescriptor(config, 'observePublishedBootstrap')
     if (publishedField ? !currentPublished || !('value' in currentPublished) || currentPublished.value !== publishedField.value : currentPublished || 'observePublishedBootstrap' in config) throw new TypeError('Changed published bootstrap capability')
+    const currentClean = Object.getOwnPropertyDescriptor(config, 'openCleanHistory')
+    if (cleanField ? !currentClean || !('value' in currentClean) || currentClean.value !== cleanField.value : currentClean || 'openCleanHistory' in config) throw new TypeError('Changed clean history capability')
     for (const [object, fields, names] of [[config, configFields, ['validator', 'open', 'observeFresh', 'observeBootstrap', 'openHistory', 'openBootstrapHistory', 'openHistoryHeader', 'stageUpgrade', 'trackHeader', 'settleHeader', 'hasHeaderDebt', 'readBootstrapState', 'stageHeader']], [validator, validatorFields, ['validate', 'empty', 'consistency']]] as const) for (const name of names) { const expected = fields[name], now = Object.getOwnPropertyDescriptor(object, name); if (!expected || !now || !('value' in expected) || !('value' in now) || expected.value !== now.value) throw new TypeError('Changed transition configuration') }
   }
 
@@ -98,7 +105,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
   const records = new Map<string, { execute(): Promise<void>; close(): Promise<void>; retryClose(): Promise<void>; finite(): Promise<void> }>()
   const failures = new WeakMap<object, TransitionCleanupOwner>()
   const conflict = () => { throw new Error('TASK_TRANSITION_CONFLICT') }
-  function begin<T>(id: string, meta: SessionMeta | undefined, recover?: RecoverHistory, beforeQueue?: () => Promise<void>, finalize?: (proof: HistoryProof) => Promise<T>, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>): Promise<T | void> {
+  function begin<T>(id: string, meta: SessionMeta | undefined, recover?: RecoverHistory, beforeQueue?: () => Promise<void>, finalize?: (proof: HistoryProof) => Promise<T>, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>, onCleanHistory?: () => void): Promise<T | void> {
     if (records.has(id)) return Promise.reject(new Error('TASK_TRANSITION_RETRY_REQUIRED'))
     const capturedMeta = meta === undefined ? undefined : captureTaskSnapshot(meta) as SessionMeta
     if (!ownership.lockEnabled) return Promise.reject(new Error('TASK_TRANSITION_UNSUPPORTED'))
@@ -115,6 +122,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
     const captureHeader = (value: Header) => { header = value; headerFields = Object.getOwnPropertyDescriptors(value); headerWriteFields = Object.getOwnPropertyDescriptors(value.handle); settleHeaderCandidate = method(value,'settle'); issueHeader = method(value.handle,'issue'); retryHeader = method(value.handle,'retry'); outcomeHeader = method(value.handle,'outcome') }
     let historyHeader: HistoryHeader | undefined, historyHeaderConfirmed = false, historyHeaderUnknown = false, historyHeaderCleanupPending = false, historyHeaderConflict = false, historyHeld: HeldFactOwner | undefined, historyAttempted = false, historyReader: HistoryReader | undefined, history: HistoryProof | undefined, observation: Awaited<ReturnType<TaskTransitionBackendSession['observe']>> | undefined, confirmed = false
     let token: ReturnType<NonNullable<typeof latches>['beginMutation']> | undefined, parentToken: ReturnType<NonNullable<typeof latches>['beginMutation']> | undefined, headerResult: TaskWriteOutcome | undefined, completion: Promise<unknown> | undefined, flight: Promise<void> | undefined, cleanup: Promise<void> | undefined, pendingCleanup = false
+    let triedCleanHistory = false
     const key = `task-${id}`, identity = Object.freeze({})
     latches?.assertUnpoisoned(id, [key])
     const assertOutside = () => { for (let current = transitionContext.getStore(); current; current = current.parent) if (current.identity === identity) conflict() }
@@ -158,6 +166,35 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
             if (!task) { task = open(scope); taskFields = Object.getOwnPropertyDescriptors(task); observeTask = method(task,'observe'); confirmTask = method(task,'confirm'); initializeTask = method(task,'stageInitialize'); settleTask = method(task,'settleResources') }
             guard(); observation ??= await observeTask!(); guard()
           }
+          const prepareHistoryOwner = async () => {
+            historyHeld ??= heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,createArtifactCurrentGuard(()=>claim!.assertHeld()))
+            trackHeader(id,historyHeld)
+            if (historyAttempted && hasHeaderDebt(id,historyHeld)) await settleHeader(id,historyHeld)
+            if (historyAttempted && historyReader?.hasDebt() && history) await historyReader.retryResources()
+            if (historyAttempted && !history && historyReader) {
+              await historyReader.settleResources()
+              historyReader = undefined
+            }
+            return historyHeld
+          }
+          if (recover && !recoveryDone && !triedCleanHistory && onCleanHistory && openCleanHistory) {
+            await ensureTask()
+            const reader = openCleanHistory(scope!, await prepareHistoryOwner())
+            historyAttempted = true
+            historyReader = reader
+            history = await method(reader,'observeClean')()
+            guard()
+            if (history) {
+              if (history.initial.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error('Invalid current history proof')
+              onCleanHistory()
+              recoveryDone = true
+            } else {
+              await reader.settleResources()
+              historyReader = undefined
+            }
+            triedCleanHistory = true
+            guard()
+          }
           if (recover && !recoveryDone) {
             await recover(async (version,events,seedLength) => {
               await ensureTask()
@@ -181,9 +218,8 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
           await ensureTask()
           const taskScope=scope as HeldTaskDocumentScope, taskObservation=observation as Awaited<ReturnType<TaskTransitionBackendSession['observe']>>
           if (recover) {
-            historyHeld ??= heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,createArtifactCurrentGuard(()=>claim!.assertHeld())); trackHeader(id,historyHeld)
-            if (historyAttempted && hasHeaderDebt(id,historyHeld)) await settleHeader(id,historyHeld); if (historyAttempted && historyReader?.hasDebt() && history) await historyReader.retryResources(); if (historyAttempted && !history && historyReader) { await historyReader.settleResources(); historyReader = undefined }
-            historyAttempted = true; historyReader ??= openHistory(taskScope,historyHeld); history ??= await historyReader.observe(); guard(); if (!header) { await history.assertCurrent(); guard() }
+            const held = await prepareHistoryOwner()
+            historyAttempted = true; historyReader ??= openHistory(taskScope,held); history ??= await historyReader.observe(); guard(); if (!header) { await history.assertCurrent(); guard() }
           } else { proof ??= await observeFresh(taskScope); guard() }
           guard()
           if (recover) {
@@ -475,5 +511,5 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
     const prior = bootstrapRecords.get(entry); if (prior) return prior
     const value = makeBootstrap(id,entry,route,mode,borrowed); bootstrapRecords.set(entry,value); return value
   }
-  return { async joinIO() { const results = await Promise.allSettled([...records.values()].map(record => record.finite())); const errors = results.flatMap(value => value.status === 'rejected' ? [value.reason] : []); if (errors.length) throw new AggregateError(errors,'Task transition IO unresolved') }, bootstrap, create(id: string, meta: SessionMeta) { return begin(id, meta) }, existing<T>(id: string, recover: RecoverHistory, beforeQueue: (() => Promise<void>) | undefined, finalize: (proof: HistoryProof) => Promise<T>, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>) { return begin(id, undefined, recover, beforeQueue, finalize, after) as Promise<T> }, cleanupFor(error: unknown) { return error && typeof error === 'object' ? failures.get(error) : undefined } }
+  return { async joinIO() { const results = await Promise.allSettled([...records.values()].map(record => record.finite())); const errors = results.flatMap(value => value.status === 'rejected' ? [value.reason] : []); if (errors.length) throw new AggregateError(errors,'Task transition IO unresolved') }, bootstrap, create(id: string, meta: SessionMeta) { return begin(id, meta) }, existing<T>(id: string, recover: RecoverHistory, beforeQueue: (() => Promise<void>) | undefined, finalize: (proof: HistoryProof) => Promise<T>, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>, onCleanHistory?: () => void) { return begin(id, undefined, recover, beforeQueue, finalize, after, onCleanHistory) as Promise<T> }, cleanupFor(error: unknown) { return error && typeof error === 'object' ? failures.get(error) : undefined } }
 }

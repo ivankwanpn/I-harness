@@ -3,14 +3,15 @@ import { isUtf8 } from 'node:buffer';
 import type { BigIntStats } from 'node:fs';
 import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { CURRENT_FORMAT_VERSION, freezeJsonData, readFactJournal } from '@i-harness/core-session';
+import { CURRENT_FORMAT_VERSION, freezeJsonData, readFactJournal, type SessionEvent } from '@i-harness/core-session';
 import { parseHeader } from '../format.ts';
-import { isHeldTaskDocumentScope, type HeldTaskDocumentScope } from '@i-harness/session-persistence';
+import { isHeldTaskDocumentScope, SessionFormatUnsupportedError, type HeldTaskDocumentScope } from '@i-harness/session-persistence';
 import { preflightDecodedFactHistory, preflightSessionFormat } from '@i-harness/session-persistence/internal/task-document-operations';
 
 type Identity = { dev: bigint; ino: bigint; size: number; mtimeNs: bigint; ctimeNs: bigint };
 type DirectoryChain = { root: Identity; rootAncestry: string; pathAncestry: string };
 type Witness = { path: string; identity: Identity; digest: string; parents: DirectoryChain };
+type CleanHistoryCheck = { before(): Promise<void>; isCanonical(events: SessionEvent[]): boolean };
 type Ports = { assertOriginal(): void; root: string; file(id: string): string; document(key: string): string; checkNamespace(id: string): Promise<void>; checkDeleted(kind: string, id: string): Promise<void> };
 const bad = (): never => { throw new Error('PROCESS_READ_UNAVAILABLE'); };
 const identity = (stat: BigIntStats): Identity => {
@@ -232,12 +233,13 @@ export function createJsonlProcessReadCapability(ports: Ports) {
         await proof.assertCurrent()
         return proof
     }
-    function openTaskHistory(scope: HeldTaskDocumentScope, namespaceCheck?: () => Promise<void | string>) {
+    function openTaskHistory(scope: HeldTaskDocumentScope, namespaceCheck?: () => Promise<void | string>, cleanCheck?: CleanHistoryCheck) {
         if (!isHeldTaskDocumentScope(scope)) bad();
         scope.assertActive(); ports.assertOriginal();
         const id = scope.parentSessionId, path = ports.file(id), checkNamespace = namespaceCheck ?? (() => ports.checkNamespace(id));
         const resources = new Set<{ handle: FileHandle; close: FileHandle['close']; failed: boolean; cause?: unknown }>();
         let observing: Promise<{ initial: import('@i-harness/core-session').SessionView; seedLength: number; assertCurrent(): Promise<void>; assertRoot(): Promise<void> }> | undefined;
+        let observingClean: Promise<Awaited<NonNullable<typeof observing>> | undefined> | undefined;
         let checking: Promise<void> | undefined, cleanup: Promise<void> | undefined, retiring = false;
         async function closeResource(resource: { handle: FileHandle; close: FileHandle['close']; failed: boolean; cause?: unknown }) {
             if (resource.failed && resource.handle.fd < 0) throw resource.cause;
@@ -278,24 +280,57 @@ export function createJsonlProcessReadCapability(ports: Ports) {
             return result;
         }
         const stableParents = (a: DirectoryChain, b: DirectoryChain) => a.root.dev === b.root.dev && a.root.ino === b.root.ino && a.rootAncestry === b.rootAncestry && a.pathAncestry === b.pathAncestry;
-        async function observeOriginal() {
-            scope.assertActive(); ports.assertOriginal(); await ports.checkDeleted('session', id); const sourceDigest = await checkNamespace(); scope.assertActive();
-            const parents = await ancestors(path), captured = await readOriginal(parents); scope.assertActive(); if (sourceDigest !== undefined && sourceDigest !== captured.witness.digest) bad();
-            if (!isUtf8(captured.bytes)) bad();
+        async function observeOriginal(clean?: CleanHistoryCheck) {
+            scope.assertActive(); ports.assertOriginal(); await ports.checkDeleted('session', id);
+            await clean?.before();
+            let sourceDigest = clean ? undefined : await checkNamespace();
+            scope.assertActive();
+            const parents = await ancestors(path), captured = await readOriginal(parents);
+            scope.assertActive();
+            if (sourceDigest !== undefined && sourceDigest !== captured.witness.digest) bad();
+            if (!clean && !isUtf8(captured.bytes)) bad();
             const end = captured.bytes.indexOf(10); if (end < 0) bad();
+            if (clean && !isUtf8(captured.bytes.subarray(0, end))) bad();
             const line = captured.bytes.subarray(0, end).toString('utf8'), raw = JSON.parse(line) as Record<string, unknown>, meta = parseHeader(line);
+            if (clean) {
+                if (!Number.isSafeInteger(meta.formatVersion) || meta.formatVersion < 0)
+                    throw new SessionFormatUnsupportedError('invalid session format version');
+                if (meta.formatVersion > CURRENT_FORMAT_VERSION)
+                    throw new SessionFormatUnsupportedError(`format version ${meta.formatVersion} is newer than this build (upgrade the harness)`);
+            }
             if (meta.sessionId !== id || !Number.isSafeInteger(meta.formatVersion) || meta.formatVersion > CURRENT_FORMAT_VERSION) bad();
             if (Object.hasOwn(raw, 'seedLength') && (!Number.isSafeInteger(raw.seedLength) || (raw.seedLength as number) < 0)) bad();
             if (Object.hasOwn(raw, 'parentSession') && (typeof raw.parentSession !== 'string' || !raw.parentSession || !Object.hasOwn(raw, 'seedLength'))) bad();
             const body = captured.bytes.subarray(end + 1);
+            if (clean) {
+                if (!stableParents(parents, await ancestors(path))) bad();
+                scope.assertActive();
+                const journal = meta.journal;
+                if (meta.formatVersion !== CURRENT_FORMAT_VERSION || meta.semanticSeed !== undefined ||
+                    !journal || journal.legacyEventCount || journal.legacyBodyBytes || journal.separatorBytes ||
+                    captured.bytes.at(-1) !== 10) return undefined;
+                if (!isUtf8(body)) bad();
+                sourceDigest = await checkNamespace();
+                scope.assertActive();
+                if (sourceDigest !== undefined && sourceDigest !== captured.witness.digest) bad();
+            }
             if (meta.formatVersion >= 6 && captured.bytes.at(-1) !== 10) bad();
-            const decoded = meta.formatVersion >= 6 ? readFactJournal(body, meta.journal!, meta.formatVersion, meta) : undefined;
+            let decoded: ReturnType<typeof readFactJournal> | undefined;
+            if (meta.formatVersion >= 6) {
+                try { decoded = readFactJournal(body, meta.journal!, meta.formatVersion, meta); }
+                catch (cause) {
+                    if (clean && ['SESSION_CONTEXT_REPLACEMENT_FORMAT', 'SESSION_CONVERSATION_FORMAT'].includes((cause as { code?: string })?.code ?? ''))
+                        throw new SessionFormatUnsupportedError('unsupported conversation history', { cause });
+                    throw cause;
+                }
+            }
             if (decoded?.torn || decoded && decoded.prefix.bodyBytes !== body.length) bad();
             const events = decoded ? decoded.events : body.toString('utf8').split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
             const seedLength = meta.seedLength ?? 0;
             if (seedLength > events.length) bad();
             if (decoded) preflightDecodedFactHistory(meta.formatVersion, events);
             else preflightSessionFormat(meta.formatVersion, events, meta);
+            if (clean && !clean.isCanonical(events)) return undefined;
             scope.assertActive();
             const initial = freezeJsonData({ formatVersion: meta.formatVersion, header: meta, events }) as import('@i-harness/core-session').SessionView;
             const proof = Object.freeze({ initial, seedLength, async assertRoot() { if (this !== proof || retiring) bad(); scope.assertActive(); ports.assertOriginal(); await ports.checkDeleted('session', id); await checkNamespace(); if (!stableParents(parents, await ancestors(path))) bad(); scope.assertActive(); ports.assertOriginal(); }, assertCurrent() {
@@ -315,11 +350,12 @@ export function createJsonlProcessReadCapability(ports: Ports) {
         }
         function settle(retire: boolean) {
             if (retire) retiring = true; if (cleanup) return cleanup;
-            cleanup = Promise.resolve().then(async () => { await observing?.catch(() => {}); await checking?.catch(() => {}); let failed = false, cause: unknown; for (const resource of resources) try { await closeResource(resource); } catch (error) { if (!failed) { failed = true; cause = error; } } if (failed) throw cause; });
+            cleanup = Promise.resolve().then(async () => { await observing?.catch(() => {}); await observingClean?.catch(() => {}); await checking?.catch(() => {}); let failed = false, cause: unknown; for (const resource of resources) try { await closeResource(resource); } catch (error) { if (!failed) { failed = true; cause = error; } } if (failed) throw cause; });
             void cleanup.then(() => { cleanup = undefined }, () => { cleanup = undefined }); return cleanup;
         }
         const session = Object.freeze({
-            observe() { if (this !== session) return Promise.reject(new TypeError('Invalid history receiver')); if (retiring && !observing) return Promise.reject(new Error('TASK_HISTORY_UNAVAILABLE')); return observing ??= Promise.resolve().then(observeOriginal); },
+            observe() { if (this !== session) return Promise.reject(new TypeError('Invalid history receiver')); if (observingClean || retiring && !observing) return Promise.reject(new Error('TASK_HISTORY_UNAVAILABLE')); return observing ??= Promise.resolve().then(async () => await observeOriginal() ?? bad()); },
+            observeClean() { if (this !== session) return Promise.reject(new TypeError('Invalid history receiver')); if (!cleanCheck || observing || retiring) return Promise.reject(new Error('TASK_HISTORY_UNAVAILABLE')); return observingClean ??= Promise.resolve().then(() => observeOriginal(cleanCheck)); },
             hasDebt() { if (this !== session) throw new TypeError('Invalid history receiver'); return [...resources].some(resource => resource.failed) },
             retryResources() { if (this !== session || retiring) return Promise.reject(new TypeError('Invalid history receiver')); return settle(false) },
             settleResources() { if (this !== session) return Promise.reject(new TypeError('Invalid history receiver')); return settle(true) },
