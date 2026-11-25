@@ -4,6 +4,14 @@ import type { ConversationDiagnostic, ConversationProvenance, ConversationSource
 import type { ConversationPayloadReader } from './payload.ts'
 import { createConversationSourceRef } from '../serialization/context-data.ts'
 
+const indexedChecks = new WeakMap<object, { ref: ConversationSources['ref']; check(eventIndex: number): void }>()
+
+/** Original indexed sources can check the coordinate without creating a DTO. */
+export function indexedConversationSourceCheck(sources: Pick<ConversationSources, 'ref'>): ((eventIndex: number) => void) | undefined {
+  const original = indexedChecks.get(sources)
+  if (original && Object.getOwnPropertyDescriptor(sources, 'ref')?.value === original.ref) return original.check
+}
+
 /** Source coordinates belong to the original archive, even for a prefix view. */
 export function archiveConversationSources(archive: ConversationEventArchive, ownerSessionId: string | undefined, diagnostics: ConversationDiagnostic[], options: { header?: Session['header']; candidate?: { id: string; baseCount: number }; readPayload?: ConversationPayloadReader; coordinates?: ConversationSourceCoordinateView; prunedResults?: ReadonlyMap<number, import('./restoration-types.ts').PreparedPrunedResult> } = {}) {
   const coordinates = options.coordinates === undefined ? undefined : coordinateViews.get(options.coordinates)
@@ -93,7 +101,9 @@ export function archiveConversationSources(archive: ConversationEventArchive, ow
   function isInherited(index: number): boolean {
     return (options.header?.parentSession !== undefined || options.header?.semanticSeed !== undefined) && index < (options.header.seedLength ?? 0)
   }
-  return { ref, provenance, indexOfSeq: (seq: number) => { assertCurrent(); return positions.get(seq) ?? -1 } }
+  const sources = { ref, provenance, indexOfSeq: (seq: number) => { assertCurrent(); return positions.get(seq) ?? -1 } }
+  if (coordinates) indexedChecks.set(sources, { ref, check(eventIndex) { assertCurrent(); seqAt(eventIndex) } })
+  return sources
 }
 
 /** Existing Session consumer entry, backed by the same archive source owner. */

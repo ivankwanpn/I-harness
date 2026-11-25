@@ -2,7 +2,7 @@ import { readDeliveries } from './delivery.ts';
 import { isDeliveryEventType } from '../events/delivery.ts';
 import type { SessionView as Session } from "../managed/types.ts";
 import type { ConversationProjection, ConversationCall } from "./types.ts";
-import { conversationSources } from "./sources.ts";
+import { conversationSources, indexedConversationSourceCheck } from "./sources.ts";
 import { conversationVisibility } from "./visibility.ts";
 import { validateBootstrapReadiness } from './bootstrap-validation.ts';
 export interface ConversationState {
@@ -91,6 +91,12 @@ function stateFact(event: import('../managed/types.ts').SessionEventView): State
     return base;
 }
 function readStateFacts(facts: readonly StateFact[], projection: ConversationProjection, visibility: ReturnType<typeof conversationVisibility>, sources: Pick<ReturnType<typeof conversationSources>, 'ref'>, delivery: ReturnType<typeof readDeliveries>, seedEnd: number): ConversationStateRead {
+    const checkSource = indexedConversationSourceCheck(sources);
+    const eventSourceId = (index: number) => sources.ref(index, 'event').id;
+    const checkEventSource = (index: number) => {
+        if (checkSource) { checkSource(index); return undefined; }
+        return eventSourceId(index);
+    };
     let turn: number | undefined;
     let physicalUnit: string | undefined;
     const pending = new Map<string, {
@@ -107,14 +113,14 @@ function readStateFacts(facts: readonly StateFact[], projection: ConversationPro
         // boundaries before applying content visibility, and count an exact
         // consumed input even when that message is subsequently rewound.
         if (index >= seedEnd) {
-            const physicalSourceId = sources.ref(index, "event").id;
+            const physicalSourceId = checkEventSource(index);
             if (event.type === "turn/start") {
                 if (turn !== undefined)
-                    return { kind: "ambiguous", sourceIds: [sources.ref(turn, "event").id, physicalSourceId] };
+                    return { kind: "ambiguous", sourceIds: [eventSourceId(turn), physicalSourceId ?? eventSourceId(index)] };
                 turn = index;
             } else if (event.type === "turn/end") {
                 if (turn === undefined)
-                    return { kind: "ambiguous", sourceIds: [physicalSourceId] };
+                    return { kind: "ambiguous", sourceIds: [physicalSourceId ?? eventSourceId(index)] };
                 turn = undefined;
             } else if (event.type === "user/message") {
                 const id = event.input?.inputId ?? event.imageInputId;
@@ -123,11 +129,12 @@ function readStateFacts(facts: readonly StateFact[], projection: ConversationPro
         }
         if (!visibility.branch(event))
             continue;
-        const sourceId = sources.ref(index, "event").id;
-        if (event.type === "rewind/point")
-            branch.push({ sourceId, anchorSeq: event.anchorSeq! });
-        if (["rewind/point", "compaction/summary", "compaction/reset", "compaction/prune", 'compaction/replacement'].includes(event.type))
-            rewrites.push({ sourceId, type: event.type });
+        const sourceId = checkEventSource(index);
+        if (["rewind/point", "compaction/summary", "compaction/reset", "compaction/prune", 'compaction/replacement'].includes(event.type)) {
+            const rewriteId = sourceId ?? eventSourceId(index);
+            if (event.type === "rewind/point") branch.push({ sourceId: rewriteId, anchorSeq: event.anchorSeq! });
+            rewrites.push({ sourceId: rewriteId, type: event.type });
+        }
         if (index < seedEnd)
             continue;
         if (event.type === 'step/start')
@@ -138,12 +145,12 @@ function readStateFacts(facts: readonly StateFact[], projection: ConversationPro
             pending.set(event.inputId!, { inputId: event.inputId!, state: "admitted", sourceIds: [sources.ref(index, "admission").id] });
         else if (event.type === "agent/input/promoted") {
             const previous = pending.get(event.inputId!);
-            pending.set(event.inputId!, { inputId: event.inputId!, state: "promoted", sourceIds: [...previous?.sourceIds ?? [], sourceId] });
+            pending.set(event.inputId!, { inputId: event.inputId!, state: "promoted", sourceIds: [...previous?.sourceIds ?? [], sourceId ?? eventSourceId(index)] });
         }
         else if (event.type === "agent/input/cancelled")
             pending.delete(event.inputId!);
         else if (event.type === "subagent/start") {
-            delegations.set(event.taskId!, sourceId);
+            delegations.set(event.taskId!, sourceId ?? eventSourceId(index));
             if (physicalUnit)
                 delegationUnits.set(event.taskId!, physicalUnit);
         }
