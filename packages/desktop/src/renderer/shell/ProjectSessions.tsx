@@ -56,12 +56,13 @@ export interface SidebarWorkspaceReader {
 }
 
 /** Every project that displays this workspace consumes the same paired snapshot. */
-export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, details, readers, setSnapshots }: {
+export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, details, readOpeningDashboard, readers, setSnapshots }: {
   bridge: DesktopBridge
   workspaceId: string
   mode: SidebarReadMode
   revision?: number
   details?: SessionDashboardResult
+  readOpeningDashboard?: ProjectSidebarProps["readOpeningDashboard"]
   readers: RefObject<Map<string, SidebarWorkspaceReader>>
   setSnapshots: Dispatch<SetStateAction<Record<string, SidebarWorkspaceSnapshot>>>
 }) {
@@ -84,13 +85,15 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
       const ticket = generation
       const current = () => active && generation === ticket
       const supplied = foreground.current
-      const initialDetails = initial && mode === "foreground" ? supplied : undefined
+      const opening = initial && mode === "foreground"
       initial = false
       let dashboard: SessionDashboardResult | undefined
       let error: string | undefined
       if (mode !== "owners") {
         try {
-          const result = initialDetails ?? await bridge.request({ kind: "session/dashboard", workspaceId })
+          const result = (opening ? supplied : undefined) ?? await (
+            (opening ? readOpeningDashboard?.(workspaceId) : undefined) ?? bridge.request({ kind: "session/dashboard", workspaceId })
+          )
           if (!confirmedDashboard(result)) throw new Error(en ? "Conversation list is unavailable" : "無法取得會話列表")
           dashboard = result
         } catch (reason) { error = reason instanceof Error ? reason.message : String(reason) }
@@ -143,7 +146,7 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
     readers.current.set(workspaceId, reader)
     refresh.schedule(0)
     return () => { active = false; refresh.dispose(); readers.current.delete(workspaceId) }
-  }, [bridge, workspaceId, mode, revision, en, readers, setSnapshots])
+  }, [bridge, workspaceId, mode, revision, en, readOpeningDashboard, readers, setSnapshots])
 
   useEffect(() => {
     if (!details || details.listingUnavailable || !paired.current) return

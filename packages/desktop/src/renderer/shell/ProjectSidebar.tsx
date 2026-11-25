@@ -22,6 +22,7 @@ export interface ProjectSidebarProps {
   selectedSessionId?: string
   projectSelectionPending?: boolean
   dashboard?: SessionDashboardResult
+  readOpeningDashboard?(workspaceId: string): Promise<unknown> | undefined
   attentionBySession?: Record<string, number>
   canCreate: boolean
   onCreateSession?(workspaceId: string, projectId?: string): void
@@ -154,6 +155,7 @@ function ProjectTree(props: ProjectSidebarProps) {
   return <nav className="sidebar project-sidebar" aria-label={t("專案")}>
     {workspaces.map(folder => <WorkspaceCatalogReader key={folder.id} bridge={bridge} workspaceId={folder.id}
       mode={readModes.get(folder.id) ?? "owners"} revision={props.revision} readers={readers} setSnapshots={setSnapshots}
+      readOpeningDashboard={props.readOpeningDashboard}
       details={folder.id === selectedWorkspaceId && hasProjectSelection ? props.dashboard : undefined} />)}
     <div className="sidebar-header">
     <div className="brand">I-harness</div>

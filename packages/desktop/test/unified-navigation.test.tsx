@@ -130,7 +130,7 @@ it("keeps the shared preview out of the layout grid under the real sidebar CSS c
     expect(useUiStore.getState().sidebarCollapsed).toBe(true)
   } finally { style.remove() }
 })
-it("keeps overflowing new-task content anchored at the scroll origin in short windows", () => {
+it("uses overflow-safe alignment for scrollable new-task content", () => {
   const style = document.createElement("style")
   style.textContent = readFileSync(resolve(import.meta.dirname, "../src/renderer/design/tokens.css"), "utf8")
   document.head.append(style)
@@ -139,9 +139,7 @@ it("keeps overflowing new-task content anchored at the scroll origin in short wi
     const view = render(<Workbench {...props} selectedSessionId={undefined} conversation={undefined} />)
     const empty = view.container.querySelector<HTMLElement>(".empty-conversation")!
     expect(window.getComputedStyle(empty).overflowY).toBe("auto")
-    // Centering oversized flex content clips its leading edge above the scroll
-    // origin. Top alignment keeps the introduction and composer reachable.
-    expect(window.getComputedStyle(empty).justifyContent).toBe("flex-start")
+    expect(window.getComputedStyle(empty).justifyContent).toBe("safe center")
   } finally { style.remove() }
 })
 it("retains project conversation management and original-source selection in the shared slot", async () => {
@@ -228,7 +226,9 @@ it.each([
     fireEvent.pointerDown(control); act(() => control.focus())
     await act(async () => { vi.advanceTimersByTime(220) })
     expect(home.closest<HTMLElement>(".sidebar-container")!.hidden).toBe(false)
-    expect(props.bridge.request).toHaveBeenCalledWith({ kind, workspaceId: "w" })
+    expect(props.bridge.request).toHaveBeenCalledWith(kind === "desktop/session/archived"
+      ? { kind, workspaceId: "w", includeCoverage: true }
+      : { kind, workspaceId: "w" })
     fireEvent.click(within(dialog).getByRole("button", { name: "關閉" }))
     expect(root.hasAttribute("inert")).toBe(false)
     expect(document.activeElement).toBe(trigger)

@@ -195,6 +195,19 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const disconnected = useRef<typeof workspaceSelection.current | undefined>(undefined)
   // Invalidate reads when the selected transport closes, including standby.
   const disconnectRevision = useRef(0)
+  // The project tree can reuse the selected workspace's original opening list.
+  const openingDashboard = useRef<{
+    bridge: DesktopBridge
+    workspace: typeof workspaceSelection.current
+    generation: number
+    request: number
+    result: Promise<unknown>
+  } | undefined>(undefined)
+  const readOpeningDashboard = useCallback((workspaceId: string) => {
+    const opening = openingDashboard.current
+    if (opening?.bridge === bridge && opening.workspace === workspaceSelection.current && opening.workspace.workspaceId === workspaceId
+      && opening.generation === disconnectRevision.current && opening.request === dashboardRequest.current) return opening.result
+  }, [bridge])
 
   useEffect(() => {
     cursorRef.current = eventWindow.cursor
@@ -260,6 +273,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const refreshDashboard = useCallback(async (workspaceId: string): Promise<void> => {
     const scope = workspaceSelection.current
     if (scope.workspaceId !== workspaceId) return
+    if (openingDashboard.current?.workspace === scope) openingDashboard.current = undefined
     const request = ++dashboardRequest.current
     const result = await bridge.request({ kind: "session/dashboard", workspaceId })
     if (workspaceSelection.current !== scope || request < dashboardApplied.current) return
@@ -425,7 +439,12 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     void bridge.request({ kind: "workspace/sandbox/state", workspaceId: selectedWorkspaceId }).then(value => {
       if (current()) setSandbox(value as SandboxState | undefined)
     }).catch(reportFailure)
-    void bridge.request({ kind: "session/dashboard", workspaceId: selectedWorkspaceId }).then(value => {
+    const opening = {
+      bridge, workspace: capabilityScope, generation: lastDisconnect, request: dashboardVersion,
+      result: bridge.request({ kind: "session/dashboard", workspaceId: selectedWorkspaceId }),
+    }
+    openingDashboard.current = opening
+    void opening.result.then(value => {
       if (!current() || dashboardVersion < dashboardApplied.current) return
       dashboardApplied.current = dashboardVersion
       const initialDashboard = value as SessionDashboardResult
@@ -438,7 +457,10 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       }
       if (!initialDashboard.listingUnavailable && !initialDashboard.listingPartial) reconciledWorkspaces.current.add(selectedWorkspaceId)
     }).catch(reportFailure)
-    return () => { active = false }
+    return () => {
+      active = false
+      if (openingDashboard.current === opening) openingDashboard.current = undefined
+    }
   }, [bridge, interactions.refresh, retryNonce, selectedWorkspaceId, workspaceConnections])
 
   useEffect(() => {
@@ -960,6 +982,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         }
       }}
       dashboard={dashboard}
+      readOpeningDashboard={readOpeningDashboard}
       attentionBySession={pending.reduce<Record<string, number>>((counts, row) => { counts[row.sessionId] = (counts[row.sessionId] ?? 0) + 1; return counts }, {})}
       capabilities={capabilities}
       capabilitiesReady={capabilitiesReady}

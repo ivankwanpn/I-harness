@@ -22,7 +22,7 @@ import type { AgentTaskView, SessionDashboardResult, SessionQueueItem } from "@i
 import type { SandboxState } from "../../main/sdk-runtime.ts"
 import type { WorkspaceEntry } from "../../main/workspaces.ts"
 import type { ProjectEntry } from "../../main/projects.ts"
-import { ProjectSidebar } from "./ProjectSidebar.tsx"
+import { ProjectSidebar, type ProjectSidebarProps } from "./ProjectSidebar.tsx"
 import { ProjectManager } from "../projects/ProjectManager.tsx"
 import { SettingsDialog } from "../settings/SettingsDialog.tsx"
 import type { DesktopBridge, WorkspaceConnection } from "../../shared/bridge.ts"
@@ -130,6 +130,7 @@ export interface WorkbenchProps {
   onSelectSessionInWorkspace?(workspaceId: string, sessionId: string, projectId?: string): void
   onManageSessionInWorkspace?(workspaceId: string, sessionId: string, action: Parameters<ManageSession>[1], title?: string): Promise<void>
   dashboard?: SessionDashboardResult
+  readOpeningDashboard?: ProjectSidebarProps["readOpeningDashboard"]
   attentionBySession?: Record<string, number>
   connection?: WorkspaceConnection
   capabilities: Record<string, string[]>
@@ -160,6 +161,7 @@ export function Workbench({
   onSelectSessionInWorkspace,
   onManageSessionInWorkspace,
   dashboard,
+  readOpeningDashboard,
   attentionBySession,
   connection,
   capabilities,
@@ -281,15 +283,15 @@ export function Workbench({
     if (workPaneTab !== paneSelection.id) setPaneSelection({ id: workPaneTab, unavailable: true })
   }, [workPaneTab, paneSelection.id])
   useEffect(() => {
-    const workspaceId = manager?.workspaceId ?? selectedWorkspaceId
-    if (!workspaceId) { setManagerOwners(undefined); return }
-    let active = true
+    const workspaceId = manager?.workspaceId
     setManagerOwners(undefined)
+    if (!workspaceId) return
+    let active = true
     void bridge.request({ kind: "desktop/session/navigation/state", workspaceId }).then(value => {
       if (active && value && typeof value === "object") setManagerOwners(Object.fromEntries(Object.entries(value).map(([id, row]) => [id, (row as { projectId?: string }).projectId])))
     }).catch(() => undefined)
     return () => { active = false }
-  }, [bridge, manager?.workspaceId, selectedWorkspaceId, sidebarRevision])
+  }, [bridge, manager?.workspaceId, sidebarRevision])
   const openManager = (workspaceId: string, sessionId?: string, archived = false) => { setManagerBusy(false); setManager({ workspaceId, sessionId, archived }) }
   const managerManage = manager ? onManageSessionInWorkspace ? (id: string, action: Parameters<ManageSession>[1], title?: string) => onManageSessionInWorkspace(manager.workspaceId, id, action, title) : manager.workspaceId === selectedWorkspaceId ? onManageSession : undefined : undefined
   const batchRequest = useCallback(async (workspaceId: string, command: import("../session/SessionManager.tsx").ManageSessionBatchCommand) => {
@@ -461,7 +463,7 @@ export function Workbench({
         <div className="sidebar-view">
           {projects === undefined ? <nav className="sidebar" aria-label={t("專案")}><div className="brand">I-harness</div><p role="status" className="notice">{english ? "Loading projects…" : "正在讀取專案…"}</p><button type="button" className="link-button" onClick={() => { void onProjectsChanged?.().catch(() => undefined) }}>{t("重試")}</button></nav> : <ProjectSidebar
             bridge={bridge} revision={sidebarRevision} onManageSessions={capabilities["desktop-sessions"]?.includes("1") && (onManageSessionInWorkspace || onManageSession) ? (workspaceId, sessionId) => openManager(workspaceId, sessionId) : undefined} projects={projects} workspaces={workspaces} selectedProjectId={selectedProjectId} selectedWorkspaceId={selectedWorkspaceId} selectedSessionId={selectedSessionId}
-            dashboard={dashboard} attentionBySession={attentionBySession} projectSelectionPending={!!selectedSessionId && contextState.status !== "ready"}
+            dashboard={dashboard} readOpeningDashboard={readOpeningDashboard} attentionBySession={attentionBySession} projectSelectionPending={!!selectedSessionId && contextState.status !== "ready"}
             onSelectProject={(id) => { drawer.closeTemporary(); onSelectProject?.(id) }}
             onSelectWorkspace={(id, projectId) => { drawer.closeTemporary(); setSurface("conversation"); onSelectWorkspace(id, projectId) }}
             onSelectSession={(workspaceId, sessionId, projectId) => { drawer.closeTemporary(); setMemoryOpen(false); setSurface("conversation"); if (onSelectSessionInWorkspace) onSelectSessionInWorkspace(workspaceId, sessionId, projectId); else if (workspaceId === selectedWorkspaceId) onSelectSession(sessionId) }}
