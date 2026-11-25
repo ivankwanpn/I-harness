@@ -3,11 +3,75 @@ import { afterEach, expect, it, vi } from "vitest"
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import type { AgentProcessesRequest, AgentProcessesView } from "@i-harness/desktop-gateway/src/agent-processes.ts"
 import { AgentProcessesPane } from "../src/renderer/session/AgentProcessesPane.tsx"
+import { WindowVisibilityProvider } from "../src/renderer/window-visibility.tsx"
+import type { DesktopBridge, DesktopEvent, DesktopRequest } from "../src/shared/bridge.ts"
 
 afterEach(() => { cleanup(); vi.useRealTimers() })
 const terminal = { id: "t1", ownerSessionId: "s", command: "node owned-fixture.mjs", pid: 42, status: "running" as const, cols: 80, rows: 24, live: true, canControl: true, outputAvailable: true }
 const job = { jobId: "j1", ownerSessionId: "s", kind: "shell", label: "Owned job", status: "running" as const, outputAvailable: true, live: true, canCancel: true }
 const base: AgentProcessesView = { sessionId: "s", live: true, terminals: [terminal], jobs: [job] }
+
+it("coalesces same-session process changes, falls back while idle, and keeps polling live jobs", async () => {
+  vi.useFakeTimers()
+  const first = Promise.withResolvers<AgentProcessesView>()
+  const quiet = { ...base, terminals: [], jobs: [{ ...job, status: "completed" as const, live: false, canCancel: false }] }
+  let snapshot: AgentProcessesView = quiet, listener: ((event: DesktopEvent) => void) | undefined
+  const request = vi.fn(async () => {
+    expect(listener).toBeDefined()
+    return request.mock.calls.length === 1 ? first.promise : snapshot
+  })
+  const bridge = { request, onEvent: (subscribe: (event: DesktopEvent) => void) => { listener = subscribe; return () => { listener = undefined } } }
+  const notice = (event: { type: string; name?: string; kind?: string }, workspaceId = "w", sessionId = "s"): DesktopEvent =>
+    ({ kind: "sdk/notification", workspaceId, method: "session/event", params: { sessionId, event } })
+  await act(async () => { render(<AgentProcessesPane bridge={bridge} workspaceId="w" sessionId="s" />) })
+  await act(async () => {
+    listener!(notice({ type: "exec/end" }))
+    listener!(notice({ type: "tool/result", name: "terminal_open" }))
+    await vi.advanceTimersByTimeAsync(750)
+    expect(request).toHaveBeenCalledTimes(1)
+    first.resolve(quiet)
+  })
+  await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+  expect(request).toHaveBeenCalledTimes(2)
+  await act(async () => {
+    listener!(notice({ type: "assistant/message" }))
+    listener!(notice({ type: "tool/result", name: "read" }))
+    listener!(notice({ type: "exec/end" }, "other"))
+    listener!(notice({ type: "exec/end" }, "w", "other"))
+    await vi.advanceTimersByTimeAsync(5000)
+  })
+  expect(request).toHaveBeenCalledTimes(2)
+  await act(async () => { await vi.advanceTimersByTimeAsync(10050) })
+  expect(request).toHaveBeenCalledTimes(3)
+  snapshot = { ...base, terminals: [] }
+  await act(async () => {
+    listener!(notice({ type: "agent/delivery-source", kind: "exec" }))
+    await vi.advanceTimersByTimeAsync(250)
+  })
+  expect(request).toHaveBeenCalledTimes(4)
+  await act(async () => { await vi.advanceTimersByTimeAsync(1550) })
+  expect(request).toHaveBeenCalledTimes(5)
+})
+
+it("revalidates a quiet process list when the native window becomes visible again", async () => {
+  vi.useFakeTimers()
+  const listeners = new Set<(event: DesktopEvent) => void>()
+  const request = vi.fn(async (input: DesktopRequest) => input.kind === "window/state" ? { visible: true, maximized: false } : { ...base, jobs: [], terminals: [] })
+  const bridge: DesktopBridge = { request, onEvent(listener) { listeners.add(listener); return () => listeners.delete(listener) } }
+  const emit = (event: DesktopEvent) => { for (const listener of listeners) listener(event) }
+  const reads = () => request.mock.calls.filter(([input]) => input.kind === "desktop/session/processes/read")
+  await act(async () => { render(<WindowVisibilityProvider bridge={bridge}><AgentProcessesPane bridge={bridge} workspaceId="w" sessionId="s" /></WindowVisibilityProvider>) })
+  expect(reads()).toHaveLength(1)
+  await act(async () => { emit({ kind: "window/state", maximized: false, visible: false }) })
+  await act(async () => {
+    emit({ kind: "sdk/notification", workspaceId: "w", method: "session/status", params: { sessionId: "s", status: "completed" } })
+    await vi.advanceTimersByTimeAsync(16000)
+  })
+  expect(reads()).toHaveLength(1)
+  await act(async () => { emit({ kind: "window/state", maximized: false, visible: true }) })
+  await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+  expect(reads()).toHaveLength(2)
+})
 
 it("replaces full job snapshots when refreshing instead of duplicating the captured output", async () => {
   let reads = 0

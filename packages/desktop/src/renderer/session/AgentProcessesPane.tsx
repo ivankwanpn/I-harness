@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "react"
 import { RefreshCw, Terminal } from "lucide-react"
 import type { AgentProcessCommand, AgentProcessesRequest, AgentProcessesView } from "@i-harness/desktop-gateway/src/agent-processes.ts"
+import type { DesktopBridge, DesktopEvent } from "../../shared/bridge.ts"
 import { useExecutionSurface } from "./execution-surface.ts"
 import { useExecutionText } from "./execution-i18n.ts"
 import { useToolText } from "./tool-text.ts"
@@ -10,10 +11,38 @@ import { Button } from "../vendor/opencode/Button.tsx"
 import { SettingsDialog } from "../settings/SettingsDialog.tsx"
 import "./execution-processes.css"
 
-type AgentProcessesPaneProps = { bridge: { request(request: AgentProcessesRequest): Promise<unknown> }; workspaceId: string; sessionId: string }
+type AgentProcessesPaneProps = { bridge: { request(request: AgentProcessesRequest): Promise<unknown> } & Partial<Pick<DesktopBridge, "onEvent">>; workspaceId: string; sessionId: string }
 type JobAddress = Omit<Extract<AgentProcessCommand, { action: "job/cancel" }>, "action">
 type OutputTarget = { kind: "terminal"; id: string } | ({ kind: "job" } & JobAddress)
 type Output = OutputTarget & { text: string; nextOffset?: number; mode: "offset" | "snapshot"; truncated: boolean; dropped: boolean; historical: boolean; reason?: string; label: string; record: unknown }
+
+const ACTIVE_PROCESS_POLL_MS = 1500
+const IDLE_PROCESS_POLL_MS = 15000
+const processEvents = new Set(["exec/end", "job/status", "rewind/point", "workflow/end", "subagent/end"])
+const processTools = new Set(["shell", "bash", "pwsh", "job_output", "terminal_open", "terminal_read", "terminal_close", "terminal_signal", "process_spawn", "process_kill", "process_resize_pty"])
+function processListChanged(event: DesktopEvent, workspaceId: string, sessionId: string): boolean {
+  if (!("workspaceId" in event) || event.workspaceId !== workspaceId) return false
+  if (event.kind === "sdk/ready") return true
+  if (event.kind !== "sdk/notification") return false
+  const params = event.params as { sessionId?: unknown; event?: { type?: string; name?: string; kind?: string } } | undefined
+  if (params?.sessionId !== sessionId) return false
+  switch (event.method) {
+    case "session/status":
+    case "desktop/session/navigation/changed":
+    case "desktop/session/subagents/changed":
+    case "desktop/workflow/changed":
+    case "desktop/tasks/projection":
+      return true
+    case "session/event": {
+      const record = params.event
+      if (!record?.type) return false
+      if (record.type === "agent/delivery-source") return record.kind === "exec"
+      if (record.type === "tool/result" || record.type === "code/result") return !!record.name && processTools.has(record.name)
+      return processEvents.has(record.type)
+    }
+    default: return false
+  }
+}
 
 function jobAddress(job: AgentProcessesView["jobs"][number]): JobAddress {
   if (job.nativeJob) return { id: job.jobId, backend: "shell", instanceId: job.nativeJob.instanceId, sourceId: job.nativeJob.sourceId }
@@ -31,7 +60,17 @@ export function AgentProcessesPane(props: AgentProcessesPaneProps) {
 
 function ProcessesScope({ bridge, workspaceId, sessionId, cols, rows, setCols, setRows }: AgentProcessesPaneProps & { cols: number; rows: number; setCols(value: number): void; setRows(value: number): void }) {
   const t = useExecutionText(), tt = useToolText()
-  const view = useExecutionSurface<AgentProcessesView>(() => bridge.request({ kind: "desktop/session/processes/read", workspaceId, sessionId }), workspaceId + ":" + sessionId, true)
+  const polling = useMemo(() => bridge.onEvent ? {
+    interval(state: AgentProcessesView | undefined, error: string | undefined) {
+      const active = !state || error || state.terminals.some(row => row.live && row.status === "running")
+        || state.jobs.some(row => row.live && row.status === "running")
+      return active ? ACTIVE_PROCESS_POLL_MS : IDLE_PROCESS_POLL_MS
+    },
+    subscribe(invalidate: () => void) {
+      return bridge.onEvent!(event => { if (processListChanged(event, workspaceId, sessionId)) invalidate() })
+    },
+  } : true, [bridge, workspaceId, sessionId])
+  const view = useExecutionSurface<AgentProcessesView>(() => bridge.request({ kind: "desktop/session/processes/read", workspaceId, sessionId }), workspaceId + ":" + sessionId, polling)
   const [output, setOutput] = useState<Output>()
   const [drafts, setDrafts] = useState(new Map<string, string>())
   const [confirm, setConfirm] = useState<{ command: AgentProcessCommand; label: string }>()
