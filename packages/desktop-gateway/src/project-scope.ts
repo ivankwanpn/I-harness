@@ -296,6 +296,19 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     if (scope.unavailableReason || !scope.primaryRoot || !scope.roots.length) return { kind: "unavailable", revision, reason: scope.unavailableReason ?? "Project has no workspace folders" }
     return { kind: "bound", revision, primaryRoot: scope.primaryRoot, roots: [...scope.roots], references: [...references] }
   }
+  function projectContext(id: string): SessionProjectContext | undefined {
+    const state = authority(id)
+    if (state.kind === "revoked" || state.kind === "unavailable") throw new Error(state.reason)
+    const projectId = liveOwner(id)
+    const context = projectId ? projects.get(projectId) : undefined
+    if (!context) return undefined
+    assertAvailable(projectId)
+    return { id: context.id, name: context.name, primaryRoot: context.primaryRoot!, roots: [...context.roots] }
+  }
+  async function observeOwner(id: string): Promise<void> {
+    await resolveOwner(id)
+    observed.add(id)
+  }
   async function changed(projectIds: readonly string[], publish = true): Promise<void> {
     if(projectIds.length)invalidateRetained()
     for (const id of projectIds) {
@@ -685,9 +698,13 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
       return Object.freeze({confirm:(facts:BootstrapPreparationFactsV2,current:()=>boolean)=>invoke(facts,current),reconcile:(facts:BootstrapPreparationFactsV2)=>invoke(facts,undefined),assertTargetCurrent:owner.targetPreparation.assertTargetCurrent,targetScope:owner.targetScope,close:owner.close})
     },
     async authorityFor(id: string): Promise<() => AuthorityState> {
-      await resolveOwner(id)
-      observed.add(id)
+      await observeOwner(id)
       return () => authority(id)
+    },
+    /** Resolve the original binding once for execution setup. Both reads stay live. */
+    async executionContextFor(id: string) {
+      await observeOwner(id)
+      return { project: () => projectContext(id), authority: () => authority(id) }
     },
     /** Host-confirmed source registrations impose restrictions only. */
     configureReferences(paths: readonly string[]): Promise<void> {
@@ -895,17 +912,8 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     /** Passive metadata only. Never loads a document or grants project authority. */
     projectSnapshotFor(id:string):string|undefined { return liveOwner(id) },
     async forSession(id: string): Promise<() => SessionProjectContext | undefined> {
-      await resolveOwner(id)
-      observed.add(id)
-      return () => {
-        const state = authority(id)
-        if (state.kind === "revoked" || state.kind === "unavailable") throw new Error(state.reason)
-        const projectId = liveOwner(id)
-        const context = projectId ? projects.get(projectId) : undefined
-        if (!context) return undefined
-        assertAvailable(projectId)
-        return { id: context.id, name: context.name, primaryRoot: context.primaryRoot!, roots: [...context.roots] }
-      }
+      await observeOwner(id)
+      return () => projectContext(id)
     },
     inherit(sourceId: string, childId: string): Promise<void> {
       return serial(childId, async () => {

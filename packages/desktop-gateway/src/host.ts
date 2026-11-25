@@ -378,7 +378,12 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
       },
       onReview: async (record) => { await approvals.append(sessionId, record); notifyWorkflow(sessionId) },
     })
-  const ownedAuthorityFor=async(id:string)=>{const project=await projects.forSession(id);projectContexts.set(id,project);const authority=await projects.authorityFor(id);executionAuthorities.set(id,authority);return authority}
+  const ownedAuthorityFor = async (id: string) => {
+    const { project, authority } = await projects.executionContextFor(id)
+    projectContexts.set(id, project)
+    executionAuthorities.set(id, authority)
+    return authority
+  }
   const wslExecutionFor=()=>{const captured={...wslExecution};if(windowsSandboxBackend!=='wsl'||!captured.workspaceDependencies)return captured;return managedRuntime().then(async runtime=>{const resolved=await runtime.resolve(captured,{installIfMissing:true});if(resolved.status==='missing'||resolved.status==='unavailable')throw Error(resolved.detail);return {...captured,...resolved.runtimePath?{runtimePath:[...resolved.runtimePath]}:{}}})}
   const ownedNative=createOwnedGatewayNative({authorityFor:ownedAuthorityFor,mode:()=>mode,executionOptions:async()=>({windowsSandboxBackend,wslExecution:await wslExecutionFor()}),async resolveShell(_id,config){if(config.windowsSandboxBackend!=='wsl')return agentShell.resolve;const wsl=config.wslExecution;if(!wsl)throw Error('Original WSL execution configuration unavailable');const inspected=await (await import('@i-harness/sandbox-wsl')).inspectWslRuntime(wsl.distribution,[options.workspace]);const shell=resolveWslAgentShell(wsl,inspected.paths.find(path=>path.windows===options.workspace)?.linux);return ()=>shell},resultOptions:id=>({workspace:options.workspace,coordinator,sessionId:id,contextOutput:nativeContext.contextOutput,contextOutputSourceFor:nativeContext.sourceFor,contextOutputLegacyReadObservation:nativeContext.withLegacyReadObservation,projectContext:()=>projectContexts.get(id)?.()})})
   const ownedInstructions=createOwnedGatewayInstructions({workspace:options.workspace,environment:instructionEnvironment,authorityFor:ownedAuthorityFor})

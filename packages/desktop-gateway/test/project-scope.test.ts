@@ -43,6 +43,35 @@ it('drains admitted broker work queued after a move without holding the serial l
   expect(completed).toBe(true)
 })
 describe("trusted project scope broker", () => {
+  it("resolves one original profile for both execution reads and follows a later move", async () => {
+    const { coordinator, workspace, project, third } = await setup()
+    const profile = vi.fn(coordinator.profile.bind(coordinator))
+    const broker = createProjectScopeBroker({ ...coordinator, profile }, workspace, createSessionRuntimeVisibility(coordinator), {
+      async assertIdle() {},
+    })
+    const destination = { id: "p2", name: "Destination", roots: [third], primaryRoot: third }
+    try {
+      await broker.configure(project)
+      await broker.configure(destination)
+      await broker.bind("s1", project.id)
+      profile.mockClear()
+      const { project: readProject, authority } = await broker.executionContextFor("s1")
+      expect(profile.mock.calls).toEqual([["s1"]])
+      const initial = authority()
+      expect(readProject()).toEqual(project)
+      expect(initial).toMatchObject({ kind: "bound", primaryRoot: project.primaryRoot, roots: project.roots })
+      expect(profile.mock.calls).toEqual([["s1"]])
+
+      await broker.move("s1", project.id, destination.id)
+      expect(readProject()).toEqual(destination)
+      expect(authority()).toMatchObject({ kind: "bound", primaryRoot: third, roots: [third] })
+      expect(authority().revision).not.toBe(initial.revision)
+      await broker.revoke(destination.id)
+      expect(readProject).toThrow(/revoked/i)
+      expect(authority().kind).toBe("revoked")
+    } finally { await broker.close(); await coordinator.close() }
+  })
+
   it("makes authority unavailable when a reference registration cannot be confirmed", async () => {
     const { coordinator, broker, workspace } = await setup()
     try {
