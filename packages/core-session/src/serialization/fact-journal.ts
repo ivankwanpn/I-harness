@@ -17,11 +17,56 @@ const hash = (domain: string, ...parts: Uint8Array[]) => {
   return result.digest('hex')
 }
 const utf8 = (value: unknown) => Buffer.from(stringifyJsonData(value) ?? fail(), 'utf8')
+const { parse: nativeParse, stringify: nativeStringify } = JSON
+const { getOwnPropertyDescriptor, getPrototypeOf, hasOwn } = Object
+const { isArray } = Array
+const objectPrototype = Object.prototype
+const arrayPrototype = Array.prototype
+const arraySome = arrayPrototype.some
+const decodedEnvelopeFields = ['recordKind', 'version', 'events', 'batchId', 'previousPrefixDigest', 'firstSeq', 'count'] as const
 const outerStart = Buffer.from('{"recordKind":"session/fact-batch","version":1,')
 const eventKey = Buffer.from(',"events":')
 const closeCore = Buffer.from('}')
 const comma = Buffer.from(',')
 const newline = Buffer.from('\n')
+
+function hasNativeSerializer(): boolean {
+  return getOwnPropertyDescriptor(JSON, 'stringify')?.value === nativeStringify
+    && getPrototypeOf(objectPrototype) === null && getPrototypeOf(arrayPrototype) === objectPrototype
+    && !getOwnPropertyDescriptor(objectPrototype, 'toJSON') && !getOwnPropertyDescriptor(arrayPrototype, 'toJSON')
+}
+
+const hasNativeSequenceCheck = () => getOwnPropertyDescriptor(arrayPrototype, 'some')?.value === arraySome
+
+function canEncodeParsedFrame(row: unknown): boolean {
+  if (!row || typeof row !== 'object' || !hasNativeSerializer()
+    || getOwnPropertyDescriptor(Array, 'isArray')?.value !== isArray || !hasNativeSequenceCheck()) return false
+  // Native parsing creates dense arrays and own JSON data properties. Require
+  // every framing read to be own data too, so inherited getters cannot run
+  // between parsing and canonical encoding.
+  for (let i = 0; i < decodedEnvelopeFields.length; i++) {
+    if (!hasOwn(row, decodedEnvelopeFields[i]!)) return false
+  }
+  const events = (row as { events: unknown }).events
+  if (!isArray(events)) return false
+  for (let i = 0; i < events.length; i++) {
+    const event: unknown = events[i]
+    if (!event || typeof event !== 'object' || typeof getOwnPropertyDescriptor(event, 'seq')?.value !== 'number') return false
+  }
+  return true
+}
+
+function utf8Parsed(value: unknown) {
+  if (!hasNativeSerializer()) return utf8(value)
+  let encoded: string | undefined
+  try { encoded = nativeStringify(value) } catch (cause) {
+    // The iterative encoder also accepts canonical frames whose depth exceeds
+    // the native serializer's stack limit.
+    if (!(cause instanceof RangeError)) throw cause
+    return utf8(value)
+  }
+  return Buffer.from(encoded ?? fail(), 'utf8')
+}
 
 export function legacyPrefixDigest(eventCount: number, body: Uint8Array): string {
   if (!count(eventCount)) fail()
@@ -47,20 +92,21 @@ export function validJournalPrefix(value: JournalPrefix): boolean {
   return count(value.eventCount) && count(value.bodyBytes) && digest(value.prefixDigest)
 }
 
-function factBatchParts(batchId: string, previousPrefixDigest: string, events: readonly import('../managed/types.ts').SessionEventView[]) {
+function factBatchParts(batchId: string, previousPrefixDigest: string, events: readonly import('../managed/types.ts').SessionEventView[], encode = utf8) {
   const firstSeq = events[0]?.seq, eventCount = events.length
   if (typeof batchId !== 'string' || !/^[\x21-\x7e]{1,256}$/.test(batchId) || !digest(previousPrefixDigest)
-    || !count(firstSeq) || !eventCount || !count(firstSeq + eventCount)
-    || events.some((event, position) => event.seq !== firstSeq + position)) fail()
-  const coreHeader = utf8({ batchId, firstSeq, count: eventCount, previousPrefixDigest }).subarray(0, -1)
-  const encodedEvents = utf8(events)
+    || !count(firstSeq) || !eventCount || !count(firstSeq + eventCount)) return fail()
+  if (encode === utf8Parsed && !hasNativeSequenceCheck()) encode = utf8
+  if (events.some((event, position) => event.seq !== firstSeq + position)) fail()
+  const coreHeader = encode({ batchId, firstSeq, count: eventCount, previousPrefixDigest }).subarray(0, -1)
+  const encodedEvents = encode(events)
   // The digest covers the original v1 core object byte for byte. Reuse its
   // event representation in the outer frame instead of walking it again.
   const batchDigest = hash('ih.fact-batch.v1\0', coreHeader, eventKey, encodedEvents, closeCore)
   const prefixDigest = factPrefixDigest(previousPrefixDigest, batchDigest)
-  const trailer = utf8({ batchDigest, prefixDigest }).subarray(1)
+  const trailer = encode({ batchDigest, prefixDigest }).subarray(1)
   return {
-    key: Object.freeze({ batchId, firstSeq: firstSeq!, count: eventCount, previousPrefixDigest, batchDigest }),
+    key: Object.freeze({ batchId, firstSeq, count: eventCount, previousPrefixDigest, batchDigest }),
     prefixDigest,
     parts: [outerStart, coreHeader.subarray(1), eventKey, encodedEvents, comma, trailer, newline],
   }
@@ -78,9 +124,15 @@ export function decodeFactBatch(bytes: Uint8Array): { key: BatchKey; events: Ses
 function decodeBatchBuffer(buffer: Buffer): ReturnType<typeof decodeFactBatch> {
   if (buffer.at(-1) !== 0x0a) fail()
   let row: Record<string, unknown>
-  try { row = JSON.parse(buffer.subarray(0, -1).toString('utf8')) } catch { fail() }
+  let parse: typeof nativeParse
+  try {
+    parse = JSON.parse
+    const text = buffer.subarray(0, -1).toString('utf8')
+    row = parse === nativeParse ? nativeParse(text) : Reflect.apply(parse, JSON, [text])
+  } catch { return fail() }
+  const encode = parse === nativeParse && canEncodeParsedFrame(row) ? utf8Parsed : utf8
   if (!row! || row!.recordKind !== 'session/fact-batch' || row!.version !== 1 || !Array.isArray(row!.events)) fail()
-  const { key, prefixDigest, parts } = factBatchParts(row!.batchId as string, row!.previousPrefixDigest as string, row!.events as SessionEvent[])
+  const { key, prefixDigest, parts } = factBatchParts(row!.batchId as string, row!.previousPrefixDigest as string, row!.events as SessionEvent[], encode)
   if (row!.firstSeq !== key.firstSeq || row!.count !== key.count) fail()
   let offset = 0
   // Compare the canonical envelope directly. Validation needs all its bytes,
