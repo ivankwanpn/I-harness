@@ -1,6 +1,17 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 
+/** Measure reply text independently of the controls in the same bubble. */
+export function renderedAssistantBodies(document) {
+  return [...document.querySelectorAll(".timeline-assistant")]
+    .filter(bubble => bubble.getClientRects().length > 0)
+    .map(bubble => [...bubble.childNodes]
+      .filter(node => node.nodeType !== 1 || !node.matches(".message-actions, .timeline-partial-reply"))
+      .map(node => node.innerText ?? node.textContent ?? "")
+      .join("\n")
+      .trim())
+}
+
 export async function sampleDesktopProcesses(pid) {
   if (process.platform !== "win32") return null
   if (!Number.isSafeInteger(pid) || pid < 1) throw new Error("Invalid Desktop process ID")

@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url"
 import { timingScope } from "../../packages/desktop-gateway/src/timing-trace.ts"
 import { createJsonlBackend } from "../../packages/session-persistence-jsonl/src/index.ts"
 import { createReadOnlySessionCoordinator, createSessionCoordinator } from "../../packages/session-persistence/src/index.ts"
-import { installRendererSoakObserver, rendererState, sampleDesktopProcesses, sumProcessRoles } from "./desktop-soak.mjs"
+import { installRendererSoakObserver, renderedAssistantBodies, rendererState, sampleDesktopProcesses, sumProcessRoles } from "./desktop-soak.mjs"
 
 const { values } = parseArgs({ options: {
   exe: { type: "string" }, rounds: { type: "string", default: "3" }, "require-trace": { type: "boolean" },
@@ -22,6 +22,7 @@ const { values } = parseArgs({ options: {
   "soak-minutes": { type: "string" },
   "soak-cycles": { type: "string" },
   "soak-sample-seconds": { type: "string", default: "60" },
+  "require-visible-replies": { type: "boolean" },
   recovery: { type: "boolean" },
 } })
 const live = values["live-config"]
@@ -302,7 +303,7 @@ async function submit(evaluate, tag, prompt = tag) {
     const next = () => {
       const at = performance.timeOrigin + performance.now()
       if (!document.hidden) {
-        const text = [...document.querySelectorAll(".timeline-assistant")].filter(el => el.getClientRects().length > 0).map(el => el.innerText.trim())
+        const text = (${renderedAssistantBodies})(document)
         if (sample.firstText === undefined && text.some(line => ${Boolean(live)} ? !!line : line.includes("Started " + tag))) {
           sample.firstText = at
           sample.firstTextState = state()
@@ -330,7 +331,7 @@ async function waitForReply(evaluate, workspace, session, tag, submitted) {
     // A record of that check is independent of the animation-frame series.
     const ended = responseMarks.get(tag)?.[1]?.ended
     const now = clock()
-    if (soak && ended !== undefined && now - ended >= 500 && now >= checkedAt + 2000) {
+    if (soak && !values["require-visible-replies"] && ended !== undefined && now - ended >= 500 && now >= checkedAt + 2000) {
       checkedAt = now
       const state = await evaluate(`(${rendererState})()`)
       if (state.visibility !== "hidden" && now - ended < 3000) return undefined

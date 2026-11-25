@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { runInNewContext } from "node:vm"
-import { installRendererSoakObserver, rendererState, sumProcessRoles } from "./desktop-soak.mjs"
+import { installRendererSoakObserver, renderedAssistantBodies, rendererState, sumProcessRoles } from "./desktop-soak.mjs"
 
 test("timer gaps only use callbacks from a single visibility and connection state", () => {
   let now = 0
@@ -81,4 +81,19 @@ test("sums memory by role while keeping unavailable samples distinct from zero",
   ])
   assert.deepEqual(roles["desktop-host"], { count: 1, privateBytes: 15, workingSet: 20, cpuSeconds: 3 })
   assert.deepEqual(roles.renderer, { count: 2, privateBytes: 24, workingSet: 60, cpuSeconds: 5 })
+})
+
+test("reads visible assistant bodies without generation or action text", () => {
+  const element = (innerText, chrome = false) => ({
+    nodeType: 1, innerText, matches: selector => chrome && selector.includes(".message-actions"),
+  })
+  const document = { querySelectorAll(selector) {
+    assert.equal(selector, ".timeline-assistant")
+    return [
+      { getClientRects: () => [{}], childNodes: [element("Finished fixture"), element("19.2 tok/s", true)] },
+      { getClientRects: () => [{}], childNodes: [{ nodeType: 3, textContent: "Started another fixture" }] },
+      { getClientRects: () => [], childNodes: [element("Hidden fixture")] },
+    ]
+  } }
+  assert.deepEqual(renderedAssistantBodies(document), ["Finished fixture", "Started another fixture"])
 })
