@@ -1,4 +1,5 @@
-import type { HistoryFact } from './facts.ts'
+import type { HistoryArchive, HistoryFact } from './facts.ts'
+import type { HistoryCurrent } from './types.ts'
 import { meldRewindCut, type RewindCut } from '../../projection/rewind.ts'
 
 const boundaries = new Set(['step/start', 'step/end', 'step/failed', 'turn/start'])
@@ -19,3 +20,12 @@ export function historyVisibility(events: Iterable<VisibilityFact>, throughSeq?:
     lifecycle: (event: VisibilityFact) => selected(event) && !rewound(event) && (!hidden(event) || boundaries.has(event.type)), shadowed: hidden }
 }
 export type HistoryVisibility = ReturnType<typeof historyVisibility>
+
+/** The runtime floor follows the visible branch independently of message groups. */
+export function findCurrentRuntimeContext(archive: HistoryArchive, branch: HistoryVisibility['branch']): HistoryCurrent | undefined {
+  for (let index = archive.length - 1; index >= 0; index--) {
+    const fact = archive.get(index)
+    if (fact.type === 'runtime/context' && branch(fact)) return { index }
+  }
+  return undefined
+}

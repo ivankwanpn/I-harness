@@ -13,6 +13,8 @@ import type { SessionEventView, EncodedFactBatch, FactReceipt } from './types.ts
 import type { ConversationPayloadCapture } from '../conversation/payload.ts';
 import type { ConversationEventArchive } from '../conversation/archive.ts';
 import { captureData } from '../serialization/context-data.ts';
+import { copyConversationData } from '../conversation/render.ts';
+import { runtimeContextDigest } from '../events/runtime-context.ts';
 import { preparePrunedResultProjection } from '../conversation/payload.ts';
 import type { ConversationProjection } from '../conversation/types.ts';
 import type { PreparedConversationArchive, PreparedPrunedResult, PreparedResultProjection } from '../conversation/restoration-types.ts';
@@ -481,6 +483,20 @@ export function captureRestoredConversationData(lease: PreparedConversationArchi
     } catch {
         return { kind: 'unsupported' as const, sourceIds };
     }
+}
+/** The publication decision only uses the nearest visible runtime digest. */
+export function readRestoredRuntimeContext(lease: PreparedConversationArchive, ownerSessionId: string) {
+    const prepared = preparations.get(lease);
+    if (!prepared) failure('CONVERSATION_PREPARATION_INVALID');
+    prepared.current();
+    if (ownerSessionId !== prepared.candidate.sessionId) failure('CONVERSATION_RESTORATION_OWNER_MISMATCH');
+    const current = prepared.candidate.index.currentRuntimeContext();
+    if (!current) return undefined;
+    const event = prepared.archive.get(current.index);
+    if (event.type !== 'runtime/context') failure('CONVERSATION_RESTORATION_DEPENDENCY_MISMATCH');
+    const semanticDigest = runtimeContextDigest(copyConversationData(event.sections));
+    prepared.current();
+    return { semanticDigest };
 }
 type PreparedPayload = {
     full: Map<number, SessionEventView>;

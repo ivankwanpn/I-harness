@@ -45,6 +45,7 @@ export interface ConversationValidationIndex {
         history(): ReturnType<typeof projectHistory>;
     };
     history(throughSeq?: number): ReturnType<typeof projectHistory>;
+    currentRuntimeContext(): import('./history/types.ts').HistoryCurrent | undefined;
     semanticSeedResultRefs(): readonly import('../results/types.ts').ManagedArtifactRef[];
     iterateSelectedResultRefs(): Iterable<import('../results/types.ts').ManagedArtifactRef>;
     resultFacts(): readonly import('./history/facts.ts').HistoryFact[];
@@ -368,6 +369,7 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
             return fence;
         },
         history: history.history,
+        currentRuntimeContext: history.currentRuntimeContext,
         semanticSeedResultRefs: () => [...index.iterateSelectedResultRefs()],
         *iterateSelectedResultRefs() {
             if (scope.semanticSeed?.version === 3 && count < scope.semanticSeed.seedLength + 1 + (scope.semanticSeed.initialInputId === undefined ? 0 : 1))

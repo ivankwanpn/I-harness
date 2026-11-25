@@ -1,6 +1,6 @@
 import type { SessionView as Session, RuntimeContextFactSource, RuntimeContextRecordV1, CapturedActionFact, ProducerFactOutcome } from '@i-harness/core-session'
 import { committedFactSeqs, createNondurableFactOwner, isNondurableSession, projectCurrentContext, runtimeContextDigest, renderRuntimeContext, validRuntimeContextRecord } from '@i-harness/core-session'
-import { readRestoredConversation, type PreparedConversationArchive } from '@i-harness/core-session/internal/restoration'
+import { readRestoredRuntimeContext, type PreparedConversationArchive } from '@i-harness/core-session/internal/restoration'
 import {types as utilTypes} from 'node:util'
 
 export const RUNTIME_CONTEXT_SOURCE_PLUGIN = 'i-harness/runtime-context'
@@ -136,7 +136,7 @@ function createRuntimeContextEngine(readCurrent:()=>{readonly semanticDigest:str
     try{
       const current=()=>{if(!accepting)throw Error('Runtime context closed');signal?.throwIfAborted();prepared!.assertCurrent();archive.assertCurrent()}
       current()
-      const floor=readRestoredConversation(archive,{ownerSessionId:prepared!.ownerSessionId}).projection.current
+      const floor=readRestoredRuntimeContext(archive,prepared!.ownerSessionId)
       await publish(record,flight,signal,retain,()=>{current();return floor},current)
     }catch(cause){failed=true;primary=cause}
     try{await archive.settle()}catch(cleanup){if(failed)throw new AggregateError([primary,cleanup],'Runtime publication and original archive cleanup failed',{cause:primary});throw cleanup}

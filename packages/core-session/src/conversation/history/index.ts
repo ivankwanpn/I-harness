@@ -1,7 +1,7 @@
 import type { SessionEventView } from '../../managed/types.ts'
 import { conversationSeq, validateConversationEventShape } from '../../events/conversation.ts'
 import { addressKey, replacementFormatError } from '../../events/replacement.ts'
-import { historyVisibility } from './visibility.ts'
+import { findCurrentRuntimeContext, historyVisibility } from './visibility.ts'
 import { canonicalJsonData } from '../../serialization/json-data.ts'
 import { historyFact, type HistoryArchive, type HistoryFact } from './facts.ts'
 import { projectHistory, validateHistoricalReplacement } from './replacements.ts'
@@ -18,6 +18,7 @@ export function createHistoryIndex(formatVersion: number, validateShape = valida
   const consumedSources = new Set<string>()
   const admissions = new Map<string, number | undefined>()
   let count = 0
+  const archive = (): HistoryArchive => ({ length: count, get: position => facts.get(position)! })
   function* iterateSelectedResultRefs() {
     const branch = historyVisibility(facts.values()).branch
     let manifest: HistoryFact | undefined
@@ -39,7 +40,8 @@ export function createHistoryIndex(formatVersion: number, validateShape = valida
   }
   return {
     resultFacts: (): readonly HistoryFact[] => Object.freeze([...facts.values()]),
-    history: (throughSeq?: number) => projectHistory({ length: count, get: position => facts.get(position)! }, throughSeq),
+    history: (throughSeq?: number) => projectHistory(archive(), throughSeq),
+    currentRuntimeContext: () => findCurrentRuntimeContext(archive(), historyVisibility(facts.values()).branch),
     iterateSelectedResultRefs,
     semanticSeedResultRefs: () => [...iterateSelectedResultRefs()],
     dependencies: () => new Map([...dependencies].map(([seq, required]) => [seq, new Set(required)])),

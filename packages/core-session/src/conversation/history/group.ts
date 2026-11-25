@@ -3,7 +3,7 @@ import { inferLegacy, type LegacyStep } from '../legacy.ts'
 import { projectedItem, addItemSource } from '../exchange.ts'
 import { awaitingItemResults, physicalUnitState } from '../unit-state.ts'
 import { historySources } from './sources.ts'
-import { historyVisibility } from './visibility.ts'
+import { findCurrentRuntimeContext, historyVisibility } from './visibility.ts'
 import { historyEntries, historyFacts, type HistoryArchive, type HistoryFact } from './facts.ts'
 import type { HistoryItem, HistoryRecipe } from './types.ts'
 import { historyTurns } from './turns.ts'
@@ -34,7 +34,7 @@ class HistoryGrouping {
     this.turns = historyTurns(archive)
     this.sources = historySources(archive, this.diagnostics)
     this.visibility = historyVisibility(historyFacts(archive), throughSeq)
-    for (const [index, fact] of historyEntries(archive)) if (fact.type === 'runtime/context' && this.visibility.branch(fact)) this.current = { index }
+    this.current = findCurrentRuntimeContext(archive, this.visibility.branch)
     this.legacy = inferLegacy(archive, this.visibility, this.sources, this.diagnostics)
   }
 

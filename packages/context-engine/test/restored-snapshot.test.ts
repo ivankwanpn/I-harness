@@ -1,12 +1,12 @@
-import { deriveContextRecovery, deriveContextBudget } from '@i-harness/core-session';
+import { deriveContextRecovery, deriveContextBudget, runtimeContextDigest } from '@i-harness/core-session';
 import { expect, it } from 'vitest';
 import { captureContextSnapshot } from '../src/index.ts';
 import { captureRestoredContextSnapshot } from '../src/snapshot/build.ts';
-import { restoreManagedConversation, installRestoredManagedConversation, readRestoredConversation, readRestoredRecovery, readRestoredBudget } from '../../core-session/src/managed/restored-view.ts';
+import { restoreManagedConversation, installRestoredManagedConversation, readRestoredConversation, readRestoredRecovery, readRestoredBudget, readRestoredRuntimeContext } from '../../core-session/src/managed/restored-view.ts';
 import type { OriginalConversationRestorationSource } from '../../core-session/src/conversation/restoration-input.ts';
 import type { Session } from '@i-harness/core-session';
 const input = { ownerSessionId: 'owner', surface: { systemPrompt: 'system', tools: [] } };
-function fixture(orphan = false) {
+function fixture(orphan = false, runtimeFloor = false) {
     const excluded = 'OLD-EXCLUDED-PAYLOAD-'.repeat(1000), rawResult = 'PRUNED-RAW-BODY-'.repeat(1000);
     const session: Session = { formatVersion: 14, events: [{ type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, text: 'task' }, { type: 'step/start', seq: 2 }, { type: 'assistant/message', seq: 3, text: excluded }, { type: 'step/end', seq: 4 }, { type: 'step/start', seq: 5 }, { type: 'tool/call', seq: 6, callId: 'c', name: 'read', args: {} }, { type: 'assistant/message', seq: 7, text: 'tail', thinkingBlocks: [{ type: 'thinking', thinking: 'native reasoning', signature: 'signed' }], providerContinuation: { kind: 'anthropic', model: 'literal', contentOrder: [{ kind: 'reasoning', index: 0 }, { kind: 'text', text: 'tail' }, { kind: 'tool', index: 0 }], producerWitness: { version: 1, thinkingConfigId: 'a'.repeat(64), effortConfigId: 'b'.repeat(64), interleavedBeta: false, mode: 'absent', interleaving: 'unknown' } } }, { type: 'tool/result', seq: 8, callId: 'c', name: 'read', output: { text: rawResult, images: [{ mediaType: 'image/png', dataBase64: 'eA==' }] } }, { type: 'step/end', seq: 9 }, { type: 'turn/end', seq: 10 }, { type: 'compaction/replacement', version: 1, seq: 11, replacementId: 'r', text: 'summary', coverage: [{ item: { kind: 'exchange', at: { seq: 3, part: 'message' } }, sources: [{ seq: 2, part: 'step' }, { seq: 3, part: 'message' }] }], insertBefore: { kind: 'exchange', at: { seq: 3, part: 'message' } } }, { type: 'compaction/prune', version: 1, seq: 12, pruned: [{ callId: 'c', head: 'head', tail: 'tail', removedBytes: rawResult.length }] }] };
     const recovery = { type: 'context/recovery' as const, version: 1 as const, ownerSessionId: 'owner', logicalStepSeq: 0, bindingFingerprint: 'a'.repeat(64), rejectedInputFingerprint: 'b'.repeat(64), modelId: 'model', protocol: 'chat' };
@@ -16,6 +16,10 @@ function fixture(orphan = false) {
     session.events.push({ type: 'turn/start', seq: 21 }, { type: 'user/message', seq: 22, text: 'next task' }, { type: 'step/start', seq: 23 }, { type: 'tool/call', seq: 24, callId: 'unpruned', name: 'read', args: {} }, { type: 'assistant/message', seq: 25, text: 'unpruned round' }, { type: 'tool/result', seq: 26, callId: 'unpruned', name: 'read', output: 'required complete body' }, { type: 'step/end', seq: 27 }, { type: 'turn/end', seq: 28 });
     if (orphan)
         session.events.push({ type: 'tool/result', seq: 29, callId: 'orphan', name: 'diagnostic', output: 'ORPHAN-EXCLUDED-'.repeat(1000) }, { type: 'compaction/prune', version: 1, seq: 30, pruned: [{ callId: 'orphan', head: 'orphan-head', tail: 'orphan-tail', removedBytes: 16000 }] });
+    if (runtimeFloor)
+        session.events.push({ type: 'runtime/context', version: 1, seq: 29, sections: [{ name: 'workspace', text: 'original' }] },
+            { type: 'runtime/context', version: 1, seq: 30, sections: [{ name: 'workspace', text: 'rewound' }] },
+            { type: 'rewind/point', version: 1, seq: 31, anchorSeq: 30, targetTurn: 1, mode: 'conversation', fileOps: [] });
     let current = true, reads = 0, checks = 0, failAtCheck = Infinity, changeDuringRead = false, settleFailure = false, settles = 0;
     const source: OriginalConversationRestorationSource = {
         formatVersion: 14, prefix: { eventCount: session.events.length, bodyBytes: 0, prefixDigest: 'a'.repeat(64) }, assertCurrent() {
@@ -165,6 +169,26 @@ it('uses the guarded archive when prepared data contains an opaque payload', asy
         });
         expect(captureRestoredContextSnapshot(lease, input)).toMatchObject({ kind: 'unsupported', component: 'conversation' });
         expect(accesses).toBe(1);
+    } finally {
+        await lease.settle();
+        await state.close();
+    }
+});
+
+it('reads only the visible runtime context needed by publication', async () => {
+    const f = fixture(false, true), owner = {};
+    const state = installRestoredManagedConversation(await restoreManagedConversation(f.source, owner, 'owner'), owner);
+    const lease = await state.prepare();
+    try {
+        const expected = runtimeContextDigest([{ name: 'workspace', text: 'original' }]);
+        expect(readRestoredConversation(lease, { ownerSessionId: 'owner' }).projection.current?.semanticDigest).toBe(expected);
+        const historical = f.session.events[25]!;
+        Object.defineProperty(historical, 'text', { get() { throw new Error('Runtime floor read touched a historical payload'); } });
+        const before = f.checks();
+        expect(readRestoredRuntimeContext(lease, 'owner')).toEqual({ semanticDigest: expected });
+        expect(f.checks() - before).toBe(3);
+        f.change();
+        expect(() => readRestoredRuntimeContext(lease, 'owner')).toThrow('source changed');
     } finally {
         await lease.settle();
         await state.close();

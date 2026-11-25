@@ -15,6 +15,5 @@ export function projectConversation(session: SessionView, options: { ownerSessio
  * Runtime reconciliation never reads unrelated historical message payloads. */
 export function projectCurrentContext(session: SessionView) {
   const index = createConversationValidationIndex(session.events, { formatVersion: session.formatVersion, header: session.header })
-  const history = index.history()
-  return renderConversationItems(eventArchive(session.events), { items: [], diagnostics: [], current: history.current }, { header: session.header }).current
+  return renderConversationItems(eventArchive(session.events), { items: [], diagnostics: [], current: index.currentRuntimeContext() }, { header: session.header }).current
 }
