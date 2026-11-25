@@ -208,6 +208,7 @@ it("discloses retained execution folder and commits move with the expected owner
   expect(document.activeElement).toBe(trigger)
   fireEvent.click(screen.getByRole("button", { name: "移動所選會話" }))
   expect(screen.getByRole("dialog").textContent).toContain("D:/source")
+  expect(screen.getByRole("dialog").textContent).toContain("WSL 命令會由目的專案的主資料夾啟動")
   expect(batch).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole("button", { name: "確認移動" }))
   await waitFor(() => expect(batch).toHaveBeenCalledWith({ action: "move", sessionIds: ["a"], projectId: "p2", expectedOwners: { a: "p1" } }))

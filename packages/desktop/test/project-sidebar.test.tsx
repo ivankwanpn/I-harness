@@ -75,6 +75,28 @@ describe("project conversation sidebar", () => {
     expect({ expanded, refreshed: counts() }).toEqual({ expanded: [1, 1], refreshed: [1, 1] })
   })
 
+  it.each([false, true])("reuses the selected dashboard when expanded projects share its folder (reverse order %s)", async reverse => {
+    const { props, bridge } = fixture()
+    const shared = [
+      { ...projects[0]!, workspaceIds: ["w1"] },
+      { ...projects[1]!, workspaceIds: ["w1", "w2"] },
+    ]
+    if (reverse) shared.reverse()
+    const source = { ...props, projects: shared, workspaces: workspaces.slice(0, 2) }
+    const view = render(<ProjectSidebar {...source} />)
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "chat" } })
+    expect(await screen.findByText("Current chat")).toBeTruthy()
+    const request = vi.mocked(bridge.request)
+    expect(request.mock.calls.filter(([input]) => input.kind === "desktop/session/navigation/state" && input.workspaceId === "w1")).toHaveLength(1)
+    expect(request).not.toHaveBeenCalledWith({ kind: "session/dashboard", workspaceId: "w1" })
+    await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/session/navigation/state", workspaceId: "w2", includeCoverage: true }))
+    expect(request).toHaveBeenCalledWith({ kind: "session/dashboard", workspaceId: "w2" })
+
+    view.rerender(<ProjectSidebar {...source} dashboard={dashboard("Latest selected chat")} />)
+    expect(screen.getByText("Latest selected chat")).toBeTruthy()
+    expect(request).not.toHaveBeenCalledWith({ kind: "session/dashboard", workspaceId: "w1" })
+  })
+
   it('discovers unclassified history in inactive assigned folders using metadata without opening their conversation lists', async () => {
     const { props, bridge } = fixture(request => request.kind === 'desktop/session/navigation/state'
       ? { s1: { pinned: true, unread: false } } : undefined)
@@ -424,7 +446,7 @@ it("keeps confirmed foreign owners out of a project and lists shared-folder lega
   expect(screen.queryByText("Current chat")).toBeNull()
   fireEvent.click(screen.getByRole("button", { name: "Pinned" }))
   const group = within(screen.getByRole("button", { name: "Pinned" }).closest("li")! as HTMLElement)
-  const moved = await group.findByText("Chat w1")
+  const moved = await group.findByText("Current chat")
   fireEvent.click(moved)
   expect(props.onSelectSession).toHaveBeenCalledWith("w1", "s1", "p2")
   expect(group.queryByText("Chat w2")).toBeNull()

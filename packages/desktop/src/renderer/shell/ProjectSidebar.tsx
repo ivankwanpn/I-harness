@@ -120,7 +120,7 @@ function ProjectTree(props: ProjectSidebarProps) {
     if (!expanded(projectId)) return
     for (const folder of folders) {
       const selected = hasProjectSelection && projectId === effectiveProjectId && folder.id === selectedWorkspaceId
-      if (!selected || !readModes.has(folder.id)) readModes.set(folder.id, selected ? "foreground" : "sessions")
+      if (selected || !readModes.has(folder.id)) readModes.set(folder.id, selected ? "foreground" : "sessions")
     }
   }
   for (const project of projects) include(members.get(project.id)!, project.id)
