@@ -15,9 +15,10 @@ import {createLoopbackProvider} from '../../core-agent/test/helpers/provider-loo
 import {createOpenAICompatibleClient} from '../../llm-openai-compatible/src/index.ts'
 import {createOwnedMetadataFold} from '../src/lifecycle/owned-metadata-fold.ts'
 import {createSessionService} from '../src/service.ts'
+import {originalManagedRuntimeFor} from '../src/host-managed-execution.ts'
 import {acquireAssemblyResultStore} from '../src/lifecycle/result-store.ts'
 
-it('mounts and dispatches the original native Shell through the private service',async()=>{
+it.each(['session','service'] as const)('retires private delivery at clean %s close and settles the original native Shell',async closeScope=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-service-shell-'))
  const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root,'sessions')),{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract);await coordinator.create({sessionId:'main'})
  const output=createContextOutputService({root:join(root,'results'),workspaceId:'fixture',config:{enabled:false}});let launches=0,releases=0
@@ -27,8 +28,23 @@ it('mounts and dispatches the original native Shell through the private service'
  const wire=(tool:boolean)=>`data: ${JSON.stringify({choices:[{delta:tool?{tool_calls:[{index:0,id:'shell-1',function:{name:'shell',arguments:JSON.stringify({command:'controlled'})}}]}:{content:'done'},finish_reason:tool?'tool_calls':'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
  const server=await createLoopbackProvider('/v1/chat/completions',[async r=>{r.end(wire(true))},async r=>{r.end(wire(false))}])
  const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[],ownedShell:{executionFor(id){return {...execution,defaultOwner:{sessionId:id}}},async acquireOutput(_id,retain){retain(()=>output.close());return {service:output}},agentShell:()=>({id:'controlled',label:'controlled',command:'controlled',dialect:'posix'})}},model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),contextWindow:4096,maxOutputTokens:128})
- try{await service.submit('main','run controlled',new AbortController().signal);expect(JSON.stringify(server.requests[0]!.body)).toContain('"name":"shell"');expect(launches).toBe(1);expect(server.requests).toHaveLength(2)}finally{done.resolve();await service.close();await coordinator.close();await server.close()}
- expect(releases).toBe(1)
+ const warn=vi.spyOn(console,'warn')
+ try{
+  await service.submit('main','run controlled',new AbortController().signal)
+  expect(JSON.stringify(server.requests[0]!.body)).toContain('"name":"shell"')
+  expect(launches).toBe(1)
+  expect(server.requests).toHaveLength(2)
+  const runtime=originalManagedRuntimeFor(service,'main')!
+  const stopped=Promise.withResolvers<{error:unknown;terminal:boolean}>()
+  const off=subscribeManagedExecutionReadiness(runtime.domain,()=>{},(error,terminal)=>stopped.resolve({error,terminal}))
+  try{
+   if(closeScope==='session')await service.closeSession('main')
+   else await service.close()
+   expect(await stopped.promise).toMatchObject({error:{code:'FACT_CLOSED'},terminal:true})
+  }finally{off()}
+  expect(warn.mock.calls.map(args=>args.map(String).join(' ')).filter(message=>message.includes('private delivery readiness unavailable'))).toEqual([])
+  expect(releases).toBe(1)
+ }finally{warn.mockRestore();done.resolve();await service.close();await coordinator.close();await server.close()}
 },60000)
 
 it('wakes the original private service after a background Shell receipt',async()=>{

@@ -384,7 +384,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   type StopSettlement = { acknowledged: boolean; settlement?: Promise<import('@i-harness/core-session').DeliveryCloseReceipt> }
   const managedStopReceipts=new Map<string,{recipient:ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>;fenceId:string;settleSources?:()=>Promise<void>} & StopSettlement>()
   const laneControls=(id:string):Omit<SessionTurnLane,'runAdmitted'>|undefined=>managedRuntimes.get(id)?.lane??lanes.get(id)
-  type CreatingAssembly = { work: Promise<unknown>; publicWork?:Promise<SessionAssembly>; managedWork?:Promise<ManagedRuntime>; cleanup?: () => Promise<void>; failed: boolean; assembly?: SessionAssembly; residentActivation: ResidentActivationController }
+  type CreatingAssembly = { work: Promise<unknown>; publicWork?:Promise<SessionAssembly>; managedWork?:Promise<ManagedRuntime>; retireNewWork?: () => void; cleanup?: () => Promise<void>; failed: boolean; assembly?: SessionAssembly; residentActivation: ResidentActivationController }
   const creating = new Map<string, CreatingAssembly>()
   const modelBindings = new Map<string, Promise<SessionModelBindingResult>>()
   const extensionRefreshes = new Map<string, Promise<void>>()
@@ -1175,7 +1175,43 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const title=opts.managedRuntime.ownedTitle?.enabled?createOwnedPostTurnLifetime():undefined
     if(title)mounted.add(()=>title.close())
     let retired=false,recipient:ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>|undefined,privateDrain:ReturnType<typeof createDeliveryDrain>|undefined,unsubscribe:(()=>void)|undefined,unsubscribeReadiness:(()=>void)|undefined
-    row.cleanup=async()=>{retired=true;retireManaged(sessionId);privateDrain?.retire();unsubscribe?.();unsubscribeReadiness?.();await privateDrain?.join();await runtime?.close();await drainManagedIngress(sessionId);for(const cleanup of [...mounted].reverse()){await cleanup();mounted.delete(cleanup)}await recipient?.settle();recipient?.revoke();await privateCache.close(sessionId);privateCache.releaseClosed(sessionId);managedRuntimes.delete(sessionId);managedTitles.delete(sessionId);managedRecipients.delete(sessionId);managedPrepubSettlers.delete(sessionId);managedStopReceipts.delete(sessionId);managedCodeMounts.delete(sessionId);managedCodeStops.delete(sessionId);managedTaskOwners.delete(sessionId);managedWorkflowOwners.delete(sessionId);managedRewinds.delete(sessionId);removeManaged(sessionId);privateEntries.delete(sessionId)}
+    const retireNewWork = () => {
+      if (retired) return
+      retired = true
+      privateDrain?.retire()
+      unsubscribe?.()
+      unsubscribeReadiness?.()
+      unsubscribe = undefined
+      unsubscribeReadiness = undefined
+    }
+    row.retireNewWork = retireNewWork
+    row.cleanup = async () => {
+      retireNewWork()
+      retireManaged(sessionId)
+      await privateDrain?.join()
+      await runtime?.close()
+      await drainManagedIngress(sessionId)
+      for (const cleanup of [...mounted].reverse()) {
+        await cleanup()
+        mounted.delete(cleanup)
+      }
+      await recipient?.settle()
+      recipient?.revoke()
+      await privateCache.close(sessionId)
+      privateCache.releaseClosed(sessionId)
+      managedRuntimes.delete(sessionId)
+      managedTitles.delete(sessionId)
+      managedRecipients.delete(sessionId)
+      managedPrepubSettlers.delete(sessionId)
+      managedStopReceipts.delete(sessionId)
+      managedCodeMounts.delete(sessionId)
+      managedCodeStops.delete(sessionId)
+      managedTaskOwners.delete(sessionId)
+      managedWorkflowOwners.delete(sessionId)
+      managedRewinds.delete(sessionId)
+      removeManaged(sessionId)
+      privateEntries.delete(sessionId)
+    }
     void(async()=>{
       const entry=await privateCache.get(sessionId);assertWritableOpen(sessionId)
       const context=createContext()
@@ -1666,9 +1702,11 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const liveAssembly = (sessionId: string) => closed || closing.has(sessionId) || failedClose.has(sessionId) ? undefined : assemblies.get(sessionId)
   const resultReader = createResultPageReader(opts, id => !closed && !closing.has(id) && !failedClose.has(id))
   function revokeSession(sessionId: string): void {
+    const building = creating.get(sessionId)
+    building?.retireNewWork?.()
     retireManaged(sessionId)
     pendingExecutionNotifications.get(sessionId)?.();pendingExecutionNotifications.delete(sessionId)
-    creating.get(sessionId)?.residentActivation.retire()
+    building?.residentActivation.retire()
     deliveryDrains.get(sessionId)?.retire()
     const assembly = assemblies.get(sessionId) ?? mountingAssemblies.get(sessionId)
     if (assembly) receivedInputsFor(assembly.factOwner, sessionId).delivery.revoke()
