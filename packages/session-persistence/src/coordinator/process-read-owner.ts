@@ -1,8 +1,9 @@
 import { freezeJsonData, type SessionEvent, type SessionEventView, type SessionView } from '@i-harness/core-session'
-import { buildSession, guardIgnorable, preflightSessionFormat } from '../format/validation.ts'
+import { buildSession, guardIgnorable, preflightDecodedFactHistory, preflightSessionFormat } from '../format/validation.ts'
+import { recognizesOriginalDecodedProcessHistory } from '../archive-read-internal.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
 import type { ProcessReadStorage } from './process-read-storage.ts'
-import type { ObservedDocument, SessionMeta } from './types.ts'
+import type { ObservedDocument, PersistenceBackend, SessionMeta } from './types.ts'
 import { createProcessReadVisibility } from './process-read-visibility.ts'
 
 export interface ProcessReadOptions { readonly documentKeys: readonly string[] }
@@ -13,9 +14,10 @@ export interface ProcessReadScopeControl { assertExit(): void; assertPageAdmissi
 export type ProcessReadVisibility = Pick<ReturnType<typeof createProcessReadVisibility>, 'contains'>
 export type ProcessReadScopeRunner = <T>(observation: ProcessReadObservation, visibility: ProcessReadVisibility, run: () => Promise<T>, control: ProcessReadScopeControl) => Promise<T>
 
-function prepareColdTranscript(initial: SessionView) {
+function prepareColdTranscript(initial: SessionView, decodedByOriginal: boolean) {
   const events = initial.events as SessionEvent[], meta = initial.header as SessionMeta | undefined
-  preflightSessionFormat(initial.formatVersion, events, meta)
+  if (decodedByOriginal) preflightDecodedFactHistory(initial.formatVersion, events)
+  else preflightSessionFormat(initial.formatVersion, events, meta)
   if (guardIgnorable(events).length !== events.length) throw new Error('PROCESS_READ_UNAVAILABLE')
   const session = freezeJsonData(buildSession(meta, events))
   const visibility = createProcessReadVisibility()
@@ -24,7 +26,7 @@ function prepareColdTranscript(initial: SessionView) {
 }
 
 /** Internal lifecycle; the composition owner is solely responsible for run. */
-export function createColdProcessReadOwner(storage: ProcessReadStorage, latches: ReturnType<typeof createProcessReadLatches>) {
+export function createColdProcessReadOwner(storage: ProcessReadStorage, latches: ReturnType<typeof createProcessReadLatches>, backend?: PersistenceBackend) {
   // The backend owns the lifetime of its bounded immutable key. Prepared
   // data carries neither a latch nor any request's document or artifact scope.
   const preparedTranscripts = new WeakMap<SessionView, ReturnType<typeof prepareColdTranscript>>()
@@ -39,7 +41,7 @@ export function createColdProcessReadOwner(storage: ProcessReadStorage, latches:
       const source = raw.initial
       const reusable = raw.reusableInitial === true && Object.isFrozen(source) && Object.isFrozen(source.events)
       const cached = reusable ? preparedTranscripts.get(source) : undefined
-      const prepared = cached ?? prepareColdTranscript(source)
+      const prepared = cached ?? prepareColdTranscript(source, backend !== undefined && recognizesOriginalDecodedProcessHistory(backend, id, source))
       const { session, visibility } = prepared, highWater = session.events.length
       const initial: ProcessReadInitial = Object.freeze({ session, highWater, documents: raw.documents })
       const assertCurrent = () => {

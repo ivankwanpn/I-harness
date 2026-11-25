@@ -37,6 +37,13 @@ vi.mock('@i-harness/core-session', async original => {
   const real = await original<typeof import('@i-harness/core-session')>()
   return { ...real, readFactJournal(...args: Parameters<typeof real.readFactJournal>) { if (trace.active) trace.decodes++; return real.readFactJournal(...args) } }
 })
+vi.mock('@i-harness/core-session/internal/archive', async original => {
+  const real = await original<typeof import('@i-harness/core-session/internal/archive')>()
+  return { ...real, createArchiveJournalHistoryDecoder(...args: Parameters<typeof real.createArchiveJournalHistoryDecoder>) {
+    const decoder = real.createArchiveJournalHistoryDecoder(...args)
+    return { ...decoder, finish() { if (trace.active) trace.decodes++; return decoder.finish() } }
+  } }
+})
 vi.mock('node:fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
   return { ...fs, readFile: async (...args: Parameters<typeof fs.readFile>) => { if (trace.active && String(args[0]) === trace.path) trace.fullReads++; return fs.readFile(...args) }, open: async (...args: Parameters<typeof fs.open>) => {

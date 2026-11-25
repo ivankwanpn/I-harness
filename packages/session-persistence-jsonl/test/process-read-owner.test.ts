@@ -1,9 +1,11 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { createJsonlBackend, lookupJsonlProcessRead } from '../src/backend-factory.ts';
-import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session';
+import { CURRENT_FORMAT_VERSION, encodeFactBatch, freezeJsonData, readFactJournal, type SessionEvent } from '@i-harness/core-session';
+import { preflightDecodedFactHistory, preflightSessionFormat } from '@i-harness/session-persistence/internal/task-document-operations';
+import { recognizesOriginalDecodedProcessHistory } from '../../session-persistence/src/archive-read-internal.ts';
 import { createProcessReadLatches } from '../../session-persistence/src/coordinator/process-read-latches.ts';
 import { createColdProcessReadOwner } from '../../session-persistence/src/coordinator/process-read-owner.ts';
 import { createManagedProcessReadOwner } from '../../session-persistence/src/coordinator/process-read-managed-owner.ts';
@@ -23,6 +25,56 @@ it('publishes only after a genuine cold finish and retires escaped observation',
             escaped = o; expect(o.initial.highWater).toBe(0); expect(await o.check()).toEqual({ kind: 'unchanged', highWater: 0 }); return 'candidate';
         }, async (candidate, o, last) => { expect(last.kind).toBe('unchanged'); o.assertCurrent(); return candidate; });
         expect(result).toBe('candidate'); expect(() => escaped!.assertCurrent()).toThrow();
+    } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it('applies persistence format rules to the exact native decoded Process view', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-cold-decoded-rules-')), backend = createJsonlBackend(root);
+    try {
+        await backend.create('s', { sessionId: 's', formatVersion: CURRENT_FORMAT_VERSION, createdAt: '2026-01-01T00:00:00.000Z' });
+        const path = join(root, 's.jsonl'), header = await readFile(path), meta = JSON.parse(header.toString('utf8'));
+        const storage = lookupJsonlProcessRead(backend)!;
+        const owner = createColdProcessReadOwner(storage, createProcessReadLatches(), backend);
+        const work = vi.fn(async () => 'candidate');
+        for (const [value, error] of [
+            [{ type: 'future/fixture', seq: 0 }, /unknown event type/],
+            [{ type: 'future/fixture', seq: 0, ignorable: true }, /PROCESS_READ_UNAVAILABLE/],
+            [{ type: 'context/budget', seq: 0, version: 1, snapshot: {} }, /unsupported operational payload/],
+        ] as const) {
+            const frame = encodeFactBatch('fixture', meta.journal.legacyPrefixDigest, [value as unknown as SessionEvent]);
+            expect(readFactJournal(frame.bytes, meta.journal, meta.formatVersion, meta).events).toEqual([value]);
+            await writeFile(path, Buffer.concat([header, frame.bytes]));
+            const raw = await storage.capture('s', []);
+            expect(recognizesOriginalDecodedProcessHistory(backend, 's', raw.initial)).toBe(true);
+            await expect(owner.run('s', { documentKeys: [] }, work, async candidate => candidate)).rejects.toThrow(error);
+        }
+        expect(work).not.toHaveBeenCalled();
+    } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it('runs full graph validation for a substituted frozen view even with the original backend', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-unproven-process-view-')), backend = createJsonlBackend(root);
+    try {
+        await backend.create('s', { sessionId: 's', formatVersion: CURRENT_FORMAT_VERSION, createdAt: '2026-01-01T00:00:00.000Z' });
+        const storage = lookupJsonlProcessRead(backend)!;
+        const invalid: SessionEvent[] = [
+            { type: 'conversation/semantics', version: 1, mode: 'accepted-exchange-v1', seq: 0 },
+            { type: 'conversation/semantics', version: 1, mode: 'accepted-exchange-v1', seq: 1 },
+        ];
+        expect(() => preflightDecodedFactHistory(CURRENT_FORMAT_VERSION, invalid)).not.toThrow();
+        expect(() => preflightSessionFormat(CURRENT_FORMAT_VERSION, invalid)).toThrow(/unsupported conversation history/);
+        const owner = createColdProcessReadOwner({
+            async capture(id, keys) {
+                const raw = await storage.capture(id, keys);
+                const initial = freezeJsonData({ ...raw.initial, events: invalid });
+                expect(recognizesOriginalDecodedProcessHistory(backend, id, initial)).toBe(false);
+                return { ...raw, initial, reusableInitial: true };
+            },
+            captureManagedAuxiliary: storage.captureManagedAuxiliary,
+        }, createProcessReadLatches(), backend);
+        const work = vi.fn(async () => 'candidate');
+        await expect(owner.run('s', { documentKeys: [] }, work, async candidate => candidate)).rejects.toThrow(/unsupported conversation/);
+        expect(work).not.toHaveBeenCalled();
     } finally { await rm(root, { recursive: true, force: true }); }
 });
 

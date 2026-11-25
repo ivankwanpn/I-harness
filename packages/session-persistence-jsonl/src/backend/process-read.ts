@@ -4,6 +4,7 @@ import type { BigIntStats } from 'node:fs';
 import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { CURRENT_FORMAT_VERSION, freezeJsonData, readFactJournal, type SessionEvent, type SessionView } from '@i-harness/core-session';
+import { createArchiveJournalHistoryDecoder } from '@i-harness/core-session/internal/archive';
 import { parseHeader } from '../format.ts';
 import { isHeldTaskDocumentScope, SessionFormatUnsupportedError, type HeldTaskDocumentScope } from '@i-harness/session-persistence';
 import { preflightDecodedFactHistory, preflightSessionFormat } from '@i-harness/session-persistence/internal/task-document-operations';
@@ -35,6 +36,7 @@ const nativeTranscriptDecoding = () => JSON.parse === nativeParse && JSON.string
 export function createJsonlProcessReadCapability(ports: Ports) {
     const freshOwners = new WeakMap<object, HeldTaskDocumentScope>();
     const historyOwners = new WeakMap<object, { scope: HeldTaskDocumentScope; bytes: Buffer; identity: Identity; prefix?: Readonly<import('@i-harness/core-session').JournalPrefix>; assertPrefixCurrent():void }>();
+    const decodedProcessHistory = new WeakMap<SessionView, { id: string; generation: object }>();
     let coldTranscript: ColdTranscript | undefined, coldGeneration = {};
     function retireColdTranscript() { coldGeneration = {}; coldTranscript = undefined; }
     function processHeader(line: string) {
@@ -92,7 +94,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
     async function verify(w: Witness, stableDirectories = false) {
         if (!await digestMatches(w, stableDirectories)) bad();
     }
-    async function captureTranscript(id: string, path: string, parents: DirectoryChain, decoder: TextDecoder): Promise<ColdTranscript> {
+    async function captureTranscript(id: string, path: string, parents: DirectoryChain, decoder: TextDecoder, generation: object): Promise<ColdTranscript> {
         const prior = coldTranscript, native = nativeTranscriptDecoding();
         if (prior?.id === id) {
             if (native && prior.witness.path === path && sameParents(prior.witness.parents, parents)) {
@@ -110,12 +112,24 @@ export function createJsonlProcessReadCapability(ports: Ports) {
         const raw = await file(path, parents);
         if (!isUtf8(raw.bytes)) bad();
         const end = raw.bytes.indexOf(10); if (end < 0 || raw.bytes.at(-1) !== 10) bad();
+        const nativeHeader = native && nativeTranscriptDecoding();
         const meta = processHeader(decoder.decode(raw.bytes.subarray(0, end)));
-        const decoded = readFactJournal(raw.bytes.subarray(end + 1), meta.journal!, meta.formatVersion, meta);
-        if (decoded.torn || decoded.prefix.bodyBytes !== raw.bytes.length - end - 1) bad();
+        const journal = meta.journal!, body = raw.bytes.subarray(end + 1);
+        const originalDecoder = nativeHeader && nativeTranscriptDecoding() &&
+            !journal.legacyBodyBytes && !journal.legacyEventCount && !journal.separatorBytes;
+        let decoded: ReturnType<typeof readFactJournal>;
+        if (originalDecoder) {
+            const history = createArchiveJournalHistoryDecoder(journal, meta.formatVersion);
+            history.push(body);
+            const { prefix, torn, validatedEvents } = history.finish();
+            decoded = { prefix, torn, events: validatedEvents(meta) };
+        } else decoded = readFactJournal(body, journal, meta.formatVersion, meta);
+        if (decoded.torn || decoded.prefix.bodyBytes !== body.length) bad();
         // Only data produced by the original JSON decoders qualifies for a
         // reusable recursively frozen capture. Keep ordinary reads unchanged.
         const initial = freezeJsonData({ formatVersion: meta.formatVersion, header: meta, events: decoded.events });
+        if (originalDecoder && meta.sessionId === id && nativeTranscriptDecoding())
+            decodedProcessHistory.set(initial, { id, generation });
         const reusable = native && nativeTranscriptDecoding() && raw.witness.identity.size < MAX_REUSABLE_TRANSCRIPT_BYTES
             && decoded.events.length <= MAX_REUSABLE_TRANSCRIPT_EVENTS;
         return { id, witness: raw.witness, initial, ...(reusable ? { reusableInitial: true as const } : {}) };
@@ -128,7 +142,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
         const path = ports.file(id), sessionParents = await ancestors(path);
         await ports.checkDeleted('session', id); await ports.checkNamespace(id);
         const decoder = new TextDecoder('utf-8', { fatal: true });
-        const raw = transcript ? await captureTranscript(id, path, sessionParents, decoder) : undefined;
+        const raw = transcript ? await captureTranscript(id, path, sessionParents, decoder, generation) : undefined;
         assertGeneration();
         if (!transcript) {
             // Generic loads may normalize malformed legacy boundary fields.
@@ -401,6 +415,10 @@ export function createJsonlProcessReadCapability(ports: Ports) {
     }
     return {
         openTaskHistory, observeFreshTaskParent, observeReservedTaskParent, observePublishedTaskParent, retireColdTranscript,
+        recognizesDecodedProcessHistory(id: string, initial: SessionView): boolean {
+            const proof = decodedProcessHistory.get(initial);
+            return !!proof && proof.id === id && proof.generation === coldGeneration && nativeTranscriptDecoding();
+        },
         assertFreshOwner(proof: object, scope: HeldTaskDocumentScope) { if (freshOwners.get(proof) !== scope) bad(); scope.assertActive(); },
         qualifiedHistoryPrefix(proof:object){const value=historyOwners.get(proof);if(!value?.prefix)return undefined;try{value.assertPrefixCurrent();return value.prefix}catch{return undefined}},
         originalHistory(proof: object, scope: HeldTaskDocumentScope) { const value = historyOwners.get(proof); if (!value || value.scope !== scope) return bad(); scope.assertActive(); return { bytes: value.bytes, identity: value.identity }; },

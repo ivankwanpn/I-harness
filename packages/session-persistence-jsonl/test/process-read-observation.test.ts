@@ -61,6 +61,9 @@ it('reuses only finished cold transcript data and still observes the selected do
         const first = await capability.capture('s', ['one']);
         const premature = await capability.capture('s', []);
         expect(first.reusableInitial).toBe(true);
+        expect(capability.recognizesDecodedProcessHistory('s', first.initial)).toBe(true);
+        expect(capability.recognizesDecodedProcessHistory('wrong-session', first.initial)).toBe(false);
+        expect(capability.recognizesDecodedProcessHistory('s', Object.freeze({ ...first.initial }))).toBe(false);
         expect(premature.initial).not.toBe(first.initial);
         await first.finish();
         const size = (await readFile(path)).length;
@@ -69,6 +72,7 @@ it('reuses only finished cold transcript data and still observes the selected do
         const next = await capability.capture('s', ['two']);
         expect(next.reusableInitial).toBe(true);
         expect(next.initial).toBe(first.initial);
+        expect(capability.recognizesDecodedProcessHistory('s', next.initial)).toBe(true);
         expect(Object.isFrozen(next.initial.events)).toBe(true);
         const event = next.initial.events[0];
         if (event?.type !== 'tool/call') throw new Error('Missing original nested tool call');
@@ -80,6 +84,56 @@ it('reuses only finished cold transcript data and still observes the selected do
         expect(trace.chunks.reduce((sum, chunk) => sum + chunk.bytesRead, 0)).toBe(2 * size);
         expect(trace.chunks.every(chunk => chunk.length <= 65536)).toBe(true);
     } finally { closeInterposition.reads = undefined; await rm(root, { recursive: true, force: true }); }
+});
+
+it('keeps ordinary Process validation when the serializer changes or original history has a predecessor', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-cold-decode-fallback-')), backend = createJsonlBackend(root);
+    try {
+        await backend.create('native', { sessionId: 'native', formatVersion: CURRENT_FORMAT_VERSION, createdAt: '2026-01-01T00:00:00.000Z' });
+        const capability = lookupJsonlProcessRead(backend)!, native = await capability.capture('native', []);
+        expect(capability.recognizesDecodedProcessHistory('native', native.initial)).toBe(true);
+        await native.finish();
+        const serialize = vi.spyOn(JSON, 'stringify');
+        const fallback = await (async () => {
+            try {
+                expect(capability.recognizesDecodedProcessHistory('native', native.initial)).toBe(false);
+                return await capability.capture('native', []);
+            } finally { serialize.mockRestore(); }
+        })();
+        expect(fallback.initial).not.toBe(native.initial);
+        expect(capability.recognizesDecodedProcessHistory('native', fallback.initial)).toBe(false);
+        expect(fallback.initial.events).toEqual(native.initial.events);
+        await fallback.finish();
+
+        const event = { type: 'user/message', seq: 0, text: 'valid predecessor' };
+        const body = Buffer.from(JSON.stringify(event) + '\n');
+        const header = { sessionId: 'legacy', formatVersion: CURRENT_FORMAT_VERSION, journal: {
+            version: 1, legacyBodyBytes: body.length, legacyEventCount: 1,
+            legacyPrefixDigest: legacyPrefixDigest(1, body), separatorBytes: 0,
+        } };
+        await writeFile(join(root, 'legacy.jsonl'), Buffer.concat([Buffer.from(JSON.stringify(header) + '\n'), body]));
+        const legacy = await capability.capture('legacy', []);
+        expect(legacy.initial.events).toEqual([event]);
+        expect(capability.recognizesDecodedProcessHistory('legacy', legacy.initial)).toBe(false);
+        await legacy.finish();
+    } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it('does not enroll a native transcript with a malformed conversation graph', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-cold-native-graph-')), backend = createJsonlBackend(root);
+    try {
+        await backend.create('s', { sessionId: 's', formatVersion: CURRENT_FORMAT_VERSION, createdAt: '2026-01-01T00:00:00.000Z' });
+        const invalid = encodeFactBatch('duplicate-fence', legacyPrefixDigest(0, new Uint8Array()), [
+            { type: 'conversation/semantics', version: 1, mode: 'accepted-exchange-v1', seq: 0 },
+            { type: 'conversation/semantics', version: 1, mode: 'accepted-exchange-v1', seq: 1 },
+        ]);
+        const path = join(root, 's.jsonl'), header = await readFile(path);
+        await appendFile(path, invalid.bytes);
+        await expect(lookupJsonlProcessRead(backend)!.capture('s', [])).rejects.toMatchObject({
+            code: 'SESSION_CONVERSATION_FORMAT', message: expect.stringMatching(/duplicate semantics fence/),
+        });
+        expect(await readFile(path)).toEqual(Buffer.concat([header, invalid.bytes]));
+    } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 it('uses a full digest rather than unchanged inode, extent and timestamps for a candidate hit', async () => {
@@ -127,6 +181,7 @@ it('retires both the cached transcript and unfinished observations with the orig
         const pending = await capability.capture('s', []);
         expect(pending.initial).toBe(first.initial);
         await firstCoordinator.close();
+        expect(capability.recognizesDecodedProcessHistory('s', pending.initial)).toBe(false);
         await expect(pending.finish()).rejects.toThrow();
         const nextCoordinator = createSessionCoordinator(backend);
         try {

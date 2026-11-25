@@ -38,7 +38,7 @@ export function assembleSessionCoordinatorWithProcessStorage(backend: Persistenc
   let owners: Parameters<NonNullable<Parameters<typeof createSessionCoordinatorCore>[3]>>[0] | undefined
   const coordinator = createSessionCoordinatorCore(backend, options, storage, value => { owners = value }, taskStorage, transitionStorage)
   const original = owners!
-  const cold = createColdProcessReadOwner(storage, original.latches), managed = createManagedProcessReadOwner(storage, original.managed)
+  const cold = createColdProcessReadOwner(storage, original.latches, backend), managed = createManagedProcessReadOwner(storage, original.managed)
   let originalMethod: SessionCoordinator['withProcessReadObservation']
   let originalDescriptors: PropertyDescriptorMap
   const method: NonNullable<SessionCoordinator['withProcessReadObservation']> = async function<T, U>(this: SessionCoordinator, id: string, options: ProcessReadOptions, work: (observation: ProcessReadObservation) => Promise<T>, publish: (candidate: T, observation: ProcessReadObservation, last: ProcessReadUpdate) => Promise<U>) {

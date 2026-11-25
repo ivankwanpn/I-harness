@@ -1,4 +1,4 @@
-import type { JournalPrefix, SessionEvent } from '@i-harness/core-session'
+import type { JournalPrefix, SessionEvent, SessionView } from '@i-harness/core-session'
 import type { PersistenceBackend } from './coordinator/types.ts'
 
 /** Constructor-private resource participation, never storage/read authority. */
@@ -9,6 +9,8 @@ export interface ArchiveReadResources {
         settle(): Promise<void>;
         withMutationRead<T>(sessionId: string, work: () => Promise<T>): Promise<T>;
     };
+    /** The original decoder recognizes only its exact immutable cold view. */
+    recognizesDecodedProcessHistory?(sessionId: string, initial: SessionView): boolean;
 }
 const owners = new WeakMap<object, { owner: ArchiveReadResources; decodedRead: PersistenceBackend['read'] }>();
 
@@ -24,6 +26,11 @@ export function attachArchiveReadResources(backend: object) { return owners.get(
 export function originalDecodedArchiveRead(backend: object): PersistenceBackend['read'] | undefined {
   const read = owners.get(backend)?.decodedRead
   if (read && Object.getOwnPropertyDescriptor(backend, 'read')?.value === read) return read
+}
+
+export function recognizesOriginalDecodedProcessHistory(backend: object, sessionId: string, initial: SessionView): boolean {
+  return originalDecodedArchiveRead(backend) !== undefined
+    && owners.get(backend)?.owner.recognizesDecodedProcessHistory?.(sessionId, initial) === true
 }
 
 /** The original archive owner lends only frame evidence and verified records. */

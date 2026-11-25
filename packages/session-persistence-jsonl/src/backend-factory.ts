@@ -716,6 +716,7 @@ export function createJsonlBackend(root: string, options?: {
   const assertOriginal = artifactOwner.assertOriginal
 
   associateArchiveReadResources(backend, {
+    recognizesDecodedProcessHistory(id, initial) { assertOriginal(); return capability.recognizesDecodedProcessHistory(id, initial) },
     attach() {
       const participant = archiveReads.association.attach()
       return { ...participant, fence() { participant.fence(); capability.retireColdTranscript() } }
