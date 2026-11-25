@@ -2,7 +2,7 @@ import { deriveContextRecovery, type BudgetRead, type SessionView as Session, ty
 import { agentFacts, committedFactSeqs } from './facts.ts'
 import { createAcceptedCalibration, type PreparedRequestMeasurement } from "@i-harness/token-meter"
 import { assessLegacyPreparedRequest, admissionObservation, readContextCoordinates } from "@i-harness/context-engine"
-import { sameRequestCandidate, requestContextIdentity, type RequestEvidence } from "./request-snapshot.ts"
+import { sameRequestCandidate, requestContextIdentity, type RequestCandidateIdentity, type RequestEvidence } from "./request-snapshot.ts"
 import { freezePreparedFacts, type PreparedModelRequest } from "@i-harness/llm-seam"
 export interface OwnedBudgetHistory {
  readonly kind:'managed-budget-history'
@@ -25,7 +25,7 @@ export function createOwnedBudget(session: Session|undefined, ownerSessionId: st
   let latest: BudgetRead = { kind: "unavailable", reason: "No prepared request budget is available" }
   let latestDecision: import('@i-harness/context-engine').CapacityAssessment | undefined
   let bindingRevision = 0
-  let captured: RequestEvidence | undefined
+  let captured: RequestCandidateIdentity | undefined
   let invalidated: string | undefined
   let calibrationRevision = 0
   const historical = (reason: string): BudgetRead => latest.kind === "ready"
@@ -90,7 +90,8 @@ export function createOwnedBudget(session: Session|undefined, ownerSessionId: st
       })
       latest = { kind: "ready", snapshot: result.snapshot, observation: freezePreparedFacts(admissionObservation(result, purpose)) }
       latestDecision = result.decision
-      captured = evidence
+      const { model, bindingIdentity, snapshot: { coordinates, surfaceRevision } } = evidence
+      captured = { model, bindingIdentity, snapshot: { coordinates, surfaceRevision } }
       invalidated = undefined
       return result
     },

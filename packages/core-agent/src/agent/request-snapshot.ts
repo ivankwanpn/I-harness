@@ -14,6 +14,11 @@ export interface RequestEvidence {
   readonly metadata?: ContextBindingMetadata
 }
 
+/** The identity needed to compare even after a prepared request is released. */
+export type RequestCandidateIdentity = Pick<RequestEvidence, 'model' | 'bindingIdentity'> & {
+  readonly snapshot: Pick<ContextSnapshot, 'coordinates' | 'surfaceRevision'>
+}
+
 /** Capture synchronously after the logical hooks/claim, before any await. */
 export function captureRequestCandidate(session: Session, ownerSessionId: string, selected: { model: ModelClient; bindingIdentity?: object; executionIdentity?: import("@i-harness/llm-seam").LiveExecutionIdentity }, surface: RequestSurfaceInput, projectionRevision: number): RequestEvidence {
   const result = captureContextSnapshot(session, { ownerSessionId, surface })
@@ -22,7 +27,7 @@ export function captureRequestCandidate(session: Session, ownerSessionId: string
   return { snapshot, ...selected, projectionRevision, neutralFingerprint: projectionFingerprint(selectConversationMessages(snapshot.conversation)), metadata: snapshot.surface.binding }
 }
 
-export function sameRequestCandidate(before: RequestEvidence, current: RequestEvidence): boolean {
+export function sameRequestCandidate(before: RequestCandidateIdentity, current: RequestCandidateIdentity): boolean {
   const a = before.snapshot.coordinates, b = current.snapshot.coordinates
   return before.model === current.model && before.bindingIdentity === current.bindingIdentity
     && a.semanticRevision === b.semanticRevision && a.protectionRevision === b.protectionRevision

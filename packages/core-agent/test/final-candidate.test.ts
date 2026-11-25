@@ -47,6 +47,38 @@ it.each(["repriced", "incomplete"] as const)("rejects the selected %s derivative
   if(mode==='incomplete')expect(result.snapshot).not.toHaveProperty('remainingInputBudget')
   else expect(result.snapshot.remainingInputBudget).toBe(0)
 })
+
+it('keeps budget freshness tied to the original model, binding and context revisions', () => {
+  const session = createSession(), model = { async *stream() { yield { type: 'end' as const } } }
+  const evidence = captureRequestCandidate(session, 'owner', { model, bindingIdentity: {} }, { systemPrompt: 'context', tools: [] }, 0)
+  const snapshot = { ...evidence.snapshot, coordinates: { ...evidence.snapshot.coordinates } }
+  const matching = { ...evidence, snapshot, projectionRevision: 1 }
+  const changes = [
+    { ...matching, model: { ...model } },
+    { ...matching, bindingIdentity: {} },
+    ...(['semanticRevision', 'protectionRevision', 'branchId', 'contextEpoch'] as const).map(field => ({
+      ...matching, snapshot: { ...snapshot, coordinates: { ...snapshot.coordinates, [field]: 'new revision' } },
+    })),
+    { ...matching, snapshot: { ...snapshot, surfaceRevision: 'new revision' } },
+  ]
+  const input = new ProjectionCounter().finish({ protocol: 'fixture', modelId: 'm' }, [], {})
+  const prepared: PreparedModelRequest = { measurement: { projectionId: input.inputFingerprint, input,
+    output: { capSupport: 'supported', effectiveCap: 10, minimumCap: 1, source: 'request' },
+    packet: { sizeKind: 'http-json-body', inlineBinaryBytes: 0, cacheMetadataBytes: 0, signatureBytes: 0 } },
+    withOutputCap() { return this }, stream: model.stream }
+  let current = matching
+  const budget = createOwnedBudget(session, 'owner', () => current, 'lifetime', () => ({ kind: 'unclassified' }))
+  for (const changed of changes) {
+    budget.assess(prepared, evidence, 1000, 10)
+    expect(budget.read()).toMatchObject({ kind: 'ready', observation: { freshness: 'current' } })
+    current = changed
+    expect(budget.read()).toMatchObject({ kind: 'ready', observation: { freshness: 'stale' },
+      snapshot: { admission: 'unavailable', reason: 'Model context or request surface/binding changed since the prepared budget' } })
+    current = matching
+    expect(budget.read()).toMatchObject({ kind: 'ready', observation: { freshness: 'stale' } })
+  }
+})
+
 it("the main admission never sends a derivative that became too large", async () => {
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
   let sends = 0, selections = 0
