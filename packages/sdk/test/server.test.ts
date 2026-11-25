@@ -179,6 +179,7 @@ function makeStubService(): SessionService {
     rebindModel: vi.fn(() => true),
     liveSession: () => undefined,
     liveAssembly: () => undefined,
+    pendingAssemblyMount: () => undefined,
     hasAssembly: () => false,
     queueState: vi.fn(() => ({ running: false, queued: 0 })),
     queue: vi.fn(() => []),
