@@ -11,6 +11,7 @@ export type { ResultArtifactScope, ArtifactOwner, ArtifactSettlement, ResultArti
 export { contextPathKey, contextWorkspaceIdentity, contextOutputServiceRoot, contextWorkspaceLocation, contextSourceIdentity, loadContextOutputConfiguration } from './workspace.ts'
 export type { ExecFramePage } from './artifact/exec-reader.ts'
 export { summarizeExecFrames, type ExecFrameSummary } from './artifact/exec-summary.ts'
+export { createExecFramePageValidator } from './artifact/exec-validation.ts'
 export { readManagedResultPage, parseResultPageQuery, resultPageFailure } from './result-page.ts'
 export type { ResultPageQuery, ResultPageResult } from './result-page.ts'
 

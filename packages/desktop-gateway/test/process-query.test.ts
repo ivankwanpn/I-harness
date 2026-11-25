@@ -9,6 +9,34 @@ import { createAgentProcesses } from '../src/agent-processes.ts'
 import { createAgentProcessReadRunner } from '../src/agent-process-read.ts'
 import { createSessionManagementFence } from '../src/session-management-fence.ts'
 import { contextRequestParams } from '../../desktop/src/main/context-requests.ts'
+import { buildSavedProcessIndex } from '../src/saved-process-index.ts'
+
+it('reads a live native job by exact instance and source before its terminal is committed', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'process-live-instance-'))
+  const coordinator = createJsonlTaskTransitionCoordinator(root, undefined, taskDocumentStorageContract)
+  const service = createSessionService({ workspace: root, coordinator })
+  const nativeJob = { version: 1 as const, jobId: 'bash-1', instanceId: 'current', ownerSessionId: 's', sourceId: 'process:original' }
+  const processes = createAgentProcesses(coordinator, service, { runRead: (_id, work) => work({
+    index: buildSavedProcessIndex([], 's', 14),
+    session: { events: [], formatVersion: 14 }, document: undefined,
+    managedProcesses: () => ({ background: [
+      { id: 'bash-1', kind: 'shell', status: 'running', output: 'current output', outputTruncated: false, ownerSessionId: 's', nativeJob },
+    ], tasks: () => [] }),
+    select() {}, selectTerminal() {}, assertCurrent() {}, async checkpoint() {},
+    async page() { throw new Error('An unsettled job has no retained page') },
+  }) })
+  try {
+    const query = { backend: 'shell' as const, instanceId: nativeJob.instanceId, sourceId: nativeJob.sourceId }
+    expect(await processes.jobOutput('s', 'bash-1', query)).toMatchObject({ text: 'current output', live: true, ownerSessionId: 's' })
+    await expect(processes.jobOutput('s', 'bash-1', { ...query, instanceId: 'previous' })).rejects.toMatchObject({ code: 'unavailable' })
+    await expect(processes.jobOutput('s', 'bash-1', { ...query, sourceId: 'process:previous' })).rejects.toMatchObject({ code: 'stale-source' })
+  } finally {
+    await service.close()
+    await coordinator.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 it('closed process query transport retains complete fixed selectors and refuses unknown authority fields', () => {
   const query = { kind: 'desktop/session/processes/job-output', workspaceId: 'w', sessionId: 's', id: 'bash-1', backend: 'shell', instanceId: 'i', sourceId: 'source', mode: 'frames', cursor: { recordOffset: 9, sliceOffset: 1 }, expectedRef: { original: 'comparison-only' } }
   const { kind: _kind, workspaceId: _workspace, ...params } = query

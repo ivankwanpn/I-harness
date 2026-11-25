@@ -1,6 +1,6 @@
 import { savedResultDescriptor } from './saved-result-json.ts'
 import { createHash } from 'node:crypto'
-import { sameManagedArtifactRef, validManagedArtifactRef, type SessionView, type ManagedArtifactRef } from "@i-harness/core-session"
+import { sameManagedArtifactRef, validDeliveryEvent, validManagedArtifactRef, type ExecDeliverySourceEvent, type ExecTerminalEvent, type SessionView, type ManagedArtifactRef } from "@i-harness/core-session"
 type Fact = Record<string, any>
 type Cut = { cutFrom: number; markerSeq: number }
 export function effectiveCuts(events: readonly unknown[]): Cut[] {
@@ -24,11 +24,15 @@ export interface SavedCall {
   callIndex: number; resultIndex: number; callSeq?: number; resultSeq?: number; dispatchSeq?: number
   surface: 'tool' | 'code'; cellId?: string; parentCallId?: string; callId: string; name: string
   catalog?: ManagedArtifactRef; args: unknown; value: unknown; provenance: 'inline' | 'legacy' | 'artifact'; descriptor?: NonNullable<ReturnType<typeof savedResultDescriptor>>
+  needsNativeTerminal?: true
 }
 /** Decode only uniquely paired original facts. This is evidence, not read authority. */
 export function decodeSavedCalls(events: readonly unknown[], owner: string): SavedCall[] {
+  return decodeProcessCalls(events, owner, effectiveCuts(events), false)
+}
+function shellTool(name: unknown): boolean { return name === 'shell' || name === 'bash' || name === 'pwsh' }
+function decodeProcessCalls(events: readonly unknown[], owner: string, cuts: Cut[], nativeTerminals: boolean): SavedCall[] {
   const facts = events.map(e => e && typeof e === 'object' && !Array.isArray(e) ? e as Fact : {})
-  const cuts = effectiveCuts(events)
   const visible = (e: Fact) => !hidden(e.seq, cuts)
   const cells = new Map<string, Fact[]>()
   for (const [index, e] of facts.entries()) if (visible(e) && e.type === 'code/cell' && typeof e.cellId === 'string') cells.set(e.cellId, [...cells.get(e.cellId) ?? [], { ...e, index }])
@@ -69,12 +73,20 @@ export function decodeSavedCalls(events: readonly unknown[], owner: string): Sav
       const di = group.dispatches[0]!, dispatch = facts[di]!
       if (di <= ci || di >= ri || dispatch.eventSeq !== undefined && dispatch.eventSeq !== call.seq) continue
     }
-    let catalog: ManagedArtifactRef | undefined
+    let catalog: ManagedArtifactRef | undefined, needsNativeTerminal = false
     let value: unknown, provenance: SavedCall['provenance'], descriptor: SavedCall['descriptor']
     if ('envelope' in result) {
       if ('output' in result || 'isError' in result) continue
       const envelope = result.envelope
-      if (!envelope || envelope.execution?.outcome !== 'succeeded' || envelope.execution?.dispatch !== 'dispatched') continue
+      if (!envelope || envelope.execution?.dispatch !== 'dispatched') continue
+      if (envelope.execution.outcome !== 'succeeded') {
+        const launch = object(envelope.retention?.value), dispatch = facts[group.dispatches[0] ?? -1]
+        if (!nativeTerminals || envelope.execution.outcome !== 'unknown' || !shellTool(call.name) || envelope.retention?.kind !== 'inline'
+          || !dispatch || !Number.isSafeInteger(call.seq) || dispatch.eventSeq !== call.seq || !launch || 'error' in launch
+          || typeof launch.job_id !== 'string' || !identity(launch.native_job, owner, launch.job_id)
+          || object(call.args)?.background !== true && launch.promoted !== true) continue
+        needsNativeTerminal = true
+      }
       const dep = envelope.dependencies
       if (dep?.kind === 'artifact-set' && dep.count === 1 && validManagedArtifactRef(dep.ref) && dep.ref.codec === 'json-utf8-v1' && dep.ref.encodedBytes <= 65536 && ['complete', 'source-limited'].includes(dep.ref.completeness)) catalog = Object.freeze({ ...dep.ref })
       if (envelope.retention?.kind === 'inline' && Object.hasOwn(envelope.retention, 'value')) { value = envelope.retention.value; provenance = 'inline' }
@@ -83,13 +95,14 @@ export function decodeSavedCalls(events: readonly unknown[], owner: string): Sav
       if (!('output' in result) || result.isError) continue
       value = result.output; provenance = 'legacy'
     }
-    out.push({ callIndex: ci, resultIndex: ri, callSeq: call.seq, resultSeq: result.seq, dispatchSeq: group.dispatches.length ? facts[group.dispatches[0]!]!.seq : undefined, surface, cellId: surface === 'code' ? call.cellId : undefined, parentCallId: call.parentCallId, callId: call.callId, name: call.name, args: structuredClone(call.args), value: structuredClone(value), provenance, descriptor, catalog })
+    out.push({ callIndex: ci, resultIndex: ri, callSeq: call.seq, resultSeq: result.seq, dispatchSeq: group.dispatches.length ? facts[group.dispatches[0]!]!.seq : undefined, surface, cellId: surface === 'code' ? call.cellId : undefined, parentCallId: call.parentCallId, callId: call.callId, name: call.name, args: structuredClone(call.args), value: structuredClone(value), provenance, descriptor, catalog, ...(needsNativeTerminal ? { needsNativeTerminal: true } : {}) })
   }
   return out.sort((a, b) => a.resultIndex - b.resultIndex)
 }
 
 export interface NativeIdentity { version: 1; jobId: string; instanceId: string; ownerSessionId: string; sourceId: string }
-export interface SavedCandidate { id: string; nativeJob?: NativeIdentity; declaration: SavedCall; snapshot?: Record<string, unknown>; observation?: SavedCall; sourceObservation?: SavedCall; descriptor?: NonNullable<ReturnType<typeof savedResultDescriptor>>; conflict: boolean }
+export interface SavedNativeTerminal { sourceSeq: number; terminalSeq: number; status: 'completed' | 'killed' | 'error'; ref?: ManagedArtifactRef }
+export interface SavedCandidate { id: string; nativeJob?: NativeIdentity; declaration: SavedCall; snapshot?: Record<string, unknown>; observation?: SavedCall; sourceObservation?: SavedCall; descriptor?: NonNullable<ReturnType<typeof savedResultDescriptor>>; terminal?: SavedNativeTerminal; conflict: boolean }
 const object = (v: unknown): Record<string, any> | undefined => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, any> : undefined
 const immutableFields = ['total_bytes', 'stderr_total_bytes', 'total_raw_bytes', 'digest', 'stderr_digest', 'digest_format', 'completeness']
 function remember(evidence: Fact, value: Fact): boolean {
@@ -137,8 +150,45 @@ function nativeRelation(original: NativeIdentity, observed: NativeIdentity): 'sa
   if (original.ownerSessionId !== observed.ownerSessionId || original.instanceId !== observed.instanceId) return 'other'
   return original.jobId === observed.jobId && original.sourceId === observed.sourceId ? 'same' : 'conflict'
 }
-export function buildSavedProcessIndex(events: readonly unknown[], owner: string) {
-  const calls = decodeSavedCalls(events, owner)
+type NativeTerminals = ReturnType<typeof indexNativeTerminals>
+function collectUnique<K, V>(entries: Map<K, V | null>, key: K, value: V): void {
+  entries.set(key, entries.has(key) ? null : value)
+}
+function indexNativeTerminals(events: readonly unknown[], cuts: Cut[]) {
+  const sources = new Map<string, ExecDeliverySourceEvent | null>()
+  const terminals = new Map<number, ExecTerminalEvent | null>(), instances = new Map<string, ExecTerminalEvent | null>()
+  for (const raw of events) {
+    const fact = object(raw)
+    if (!fact || !Number.isSafeInteger(fact.seq) || hidden(fact.seq, cuts)
+      || !(fact.type === 'exec/end' || fact.type === 'agent/delivery-source' && fact.kind === 'exec') || !validDeliveryEvent(fact)) continue
+    if (fact.type === 'agent/delivery-source' && fact.kind === 'exec') collectUnique(sources, fact.sourceId, fact)
+    else if (fact.type === 'exec/end') {
+      collectUnique(terminals, fact.sourceSeq, fact)
+      collectUnique(instances, fact.instanceId, fact)
+    }
+  }
+  return { sources, terminals, instances }
+}
+function nativeTerminal(index: NativeTerminals, launch: SavedCall, identity: NativeIdentity): SavedNativeTerminal | undefined {
+  const source = index.sources.get(identity.instanceId)
+  const { dispatchSeq, resultSeq } = launch
+  if (!source || source.seq === undefined || source.recipientSessionId !== identity.ownerSessionId || source.callSeq !== launch.callSeq
+    || dispatchSeq === undefined || resultSeq === undefined || !Number.isSafeInteger(dispatchSeq) || !Number.isSafeInteger(resultSeq)
+    || source.callSeq >= dispatchSeq || dispatchSeq >= source.seq || source.seq >= resultSeq) return undefined
+  const terminal = index.terminals.get(source.seq)
+  if (!terminal || terminal.seq === undefined || terminal.seq <= source.seq || terminal.instanceId !== identity.instanceId
+    || index.instances.get(identity.instanceId) !== terminal || !('dependency' in terminal) || terminal.frameSourceId !== identity.sourceId) return undefined
+  const status = terminal.timedOut || terminal.execution.outcome === 'canceled' ? 'killed'
+    : terminal.execution.outcome === 'succeeded' && terminal.exitCode === 0 ? 'completed' : 'error'
+  const retention = terminal.dependency.retention
+  const ref = retention.kind === 'artifact' && ['complete', 'source-limited'].includes(retention.ref.completeness) ? retention.ref : undefined
+  return { sourceSeq: source.seq, terminalSeq: terminal.seq, status, ...(ref ? { ref: Object.freeze({ ...ref }) } : {}) }
+}
+
+export function buildSavedProcessIndex(events: readonly unknown[], owner: string, formatVersion = 13) {
+  const cuts = effectiveCuts(events)
+  const originalTerminals = formatVersion === 14 ? indexNativeTerminals(events, cuts) : undefined
+  const calls = decodeProcessCalls(events, owner, cuts, !!originalTerminals)
   const candidates: SavedCandidate[] = []
   const known = new Map<SavedCandidate, Fact>()
   const byId = new Map<string, SavedCandidate[]>(), byInstance = new Map<string, SavedCandidate>()
@@ -154,14 +204,17 @@ export function buildSavedProcessIndex(events: readonly unknown[], owner: string
       continue
     }
     if (!value || 'error' in value) continue
-    if (['shell', 'bash', 'pwsh'].includes(call.name) && typeof value.job_id === 'string' && value.job_id && value.job_id.length <= 256 && !value.job_id.includes('\0')) {
+    if (shellTool(call.name) && typeof value.job_id === 'string' && value.job_id && value.job_id.length <= 256 && !value.job_id.includes('\0')) {
       const nativeJob = call.provenance === 'inline' ? identity(value.native_job, owner, value.job_id) : undefined
       if (call.provenance === 'inline' && !nativeJob) continue
+      const terminal = nativeJob && originalTerminals ? nativeTerminal(originalTerminals, call, nativeJob) : undefined
+      if (call.needsNativeTerminal && !terminal) continue
       const same = nativeJob && byInstance.get(nativeJob.instanceId)
       if (same) {
-        if (nativeRelation(same.nativeJob!, nativeJob!) === 'conflict') same.conflict = true
+        if (nativeRelation(same.nativeJob!, nativeJob!) === 'conflict' || (same.terminal || terminal) && same.declaration.resultSeq !== call.resultSeq) same.conflict = true
       } else {
-        const candidate = { id: value.job_id, nativeJob, declaration: call, conflict: false }
+        const candidate: SavedCandidate = { id: value.job_id, nativeJob, declaration: call, ...(terminal ? { terminal } : {}), conflict: false }
+        if (terminal?.ref) known.set(candidate, { ref: terminal.ref })
         candidates.push(candidate)
         const bucket = byId.get(candidate.id) ?? []; bucket.push(candidate); byId.set(candidate.id, bucket)
         if (nativeJob) byInstance.set(nativeJob.instanceId, candidate)
@@ -199,7 +252,7 @@ export function buildObservedSavedProcessIndex(initial: { readonly session: Sess
   if (typeof owner !== 'string' || !owner || !session || !Array.isArray(session.events) || !Number.isSafeInteger(initial.highWater) || initial.highWater !== session.events.length || ![13,14].includes(session.formatVersion)) throw new Error('Unsupported process read initial')
   if (header !== undefined && !object(header) || header && Object.hasOwn(header, 'semanticSeed') || header?.seedLength !== undefined && (!Number.isSafeInteger(header.seedLength) || header.seedLength !== 0)
     || session.events.some(e => e.type === 'conversation/seed-group')) throw new Error('Inherited process history unavailable')
-  return buildSavedProcessIndex(session.events, owner)
+  return buildSavedProcessIndex(session.events, owner, session.formatVersion)
 }
 
 
@@ -213,7 +266,7 @@ export interface FixedSavedSelection {
 export function createFixedSavedSelection(initial: SavedProcessInitial, owner: string, id: string, instanceId?: string, prepared?: ReturnType<typeof buildSavedProcessIndex>): FixedSavedSelection {
   const selected = (prepared ?? buildObservedSavedProcessIndex(initial, owner)).select(id, instanceId)
   if (selected.kind !== 'selected') throw new Error('Process selection unavailable: ' + selected.kind)
-  const fixed = structuredClone(selected.candidate), evidence: Fact = {}
+  const fixed = structuredClone(selected.candidate), evidence: Fact = fixed.terminal?.ref ? { ref: fixed.terminal.ref } : {}
   let cuts = effectiveCuts(initial.session.events)
   type Slot = { call: Fact; index: number; dispatch?: Fact; invalid: boolean }
   const pending = new Map<string, Slot>(), completed = new Map<string, Slot>(), cells = new Map<string, Fact[]>()
@@ -222,7 +275,6 @@ export function createFixedSavedSelection(initial: SavedProcessInitial, owner: s
   const keyFor = (e: Fact) => JSON.stringify([e.type.startsWith('code/') ? 'code' : 'tool', e.type.startsWith('code/') ? e.cellId : null, e.callId])
   const originalKey = (call: SavedCall) => JSON.stringify([call.surface, call.cellId ?? null, call.callId])
   const isFixed = (key: string) => [fixed.declaration, fixed.observation, fixed.sourceObservation].some(call => call !== undefined && key === originalKey(call))
-  const shell = (e: Fact) => ['shell', 'bash', 'pwsh'].includes(e.name)
   function cellValid(call: Fact, index: number): boolean {
     if (!call.type.startsWith('code/')) return true
     const declarations = cells.get(call.cellId) ?? []
@@ -243,11 +295,12 @@ export function createFixedSavedSelection(initial: SavedProcessInitial, owner: s
         if (nativeRelation(fixed.nativeJob, n) === 'conflict' || remember(evidence, value)) failed = true
       }
     }
-    if (!initialPass && shell({ name: call.name }) && value && typeof value.job_id === 'string' && !('error' in value)) {
+    if (!initialPass && shellTool(call.name) && value && typeof value.job_id === 'string' && !('error' in value)) {
       const n = call.provenance === 'inline' ? identity(value.native_job, owner, value.job_id) : undefined
       if (call.provenance === 'inline' && !n) return
       const relation = n && fixed.nativeJob ? nativeRelation(fixed.nativeJob, n) : 'other'
-      if (relation === 'conflict' || value.job_id === id && instanceId === undefined && relation !== 'same') failed = true
+      if (relation === 'conflict' || fixed.terminal && relation === 'same' && call.resultSeq !== fixed.declaration.resultSeq
+        || value.job_id === id && instanceId === undefined && relation !== 'same') failed = true
     }
   }
   function consume(raw: unknown, index: number, initialPass: boolean) {
@@ -256,6 +309,7 @@ export function createFixedSavedSelection(initial: SavedProcessInitial, owner: s
     if (!initialPass && e.type === 'rewind/point' && Number.isSafeInteger(e.seq) && Number.isSafeInteger(e.anchorSeq) && e.anchorSeq < e.seq) {
       const cut = { cutFrom: e.anchorSeq, markerSeq: e.seq }
       for (const c of [fixed.declaration, fixed.observation, fixed.sourceObservation]) if (c && [c.callSeq, c.dispatchSeq, c.resultSeq].some(seq => hidden(seq, [cut]))) failed = true
+      if (fixed.terminal && [fixed.terminal.sourceSeq, fixed.terminal.terminalSeq].some(seq => hidden(seq, [cut]))) failed = true
       for (const c of [fixed.declaration, fixed.observation, fixed.sourceObservation]) if (c?.cellId && (cells.get(c.cellId) ?? []).some(d => hidden(d.seq, [cut]))) failed = true
       // Only outstanding records can contribute future authority; retired history is never replayed.
       for (const [key, slot] of pending) if (hidden(slot.call.seq, [cut]) || slot.dispatch && hidden(slot.dispatch.seq, [cut])) { pending.delete(key); unresolvedShells.delete(key) }
@@ -263,6 +317,10 @@ export function createFixedSavedSelection(initial: SavedProcessInitial, owner: s
       return
     }
     if (hidden(e.seq, cuts)) return
+    if (!initialPass && fixed.terminal && fixed.nativeJob && (
+      e.type === 'agent/delivery-source' && e.kind === 'exec' && (e.sourceId === fixed.nativeJob.instanceId || e.seq === fixed.terminal.sourceSeq)
+      || e.type === 'exec/end' && (e.sourceSeq === fixed.terminal.sourceSeq || e.instanceId === fixed.nativeJob.instanceId || e.seq === fixed.terminal.terminalSeq)
+    )) { failed = true; return }
     if (e.type === 'code/cell' && typeof e.cellId === 'string') {
       cells.set(e.cellId, [...cells.get(e.cellId) ?? [], { ...structuredClone(e), index }]); if (!initialPass) checkFixedCells(); return
     }
@@ -273,7 +331,7 @@ export function createFixedSavedSelection(initial: SavedProcessInitial, owner: s
       if (old || done?.invalid) {
         if (isFixed(key)) failed = true
       }
-      pending.set(key, { call: structuredClone(e), index, invalid: !!old }); if (shell(e)) unresolvedShells.add(key); return
+      pending.set(key, { call: structuredClone(e), index, invalid: !!old }); if (shellTool(e.name)) unresolvedShells.add(key); return
     }
     const slot = pending.get(key)
     if (!slot) { if (!initialPass && isFixed(key)) failed = true; return }
@@ -283,7 +341,7 @@ export function createFixedSavedSelection(initial: SavedProcessInitial, owner: s
     completed.set(key, slot)
     if (slot.invalid || prior?.invalid || !cellValid(slot.call, slot.index)) { if (isFixed(key)) failed = true; return }
     const cellRecords = slot.call.type.startsWith('code/') ? (cells.get(slot.call.cellId) ?? []).map(({ index: _index, ...c }) => c) : []
-    const decoded = decodeSavedCalls([...cellRecords, slot.call, ...(slot.dispatch ? [slot.dispatch] : []), e], owner)
+    const decoded = decodeProcessCalls([...cellRecords, slot.call, ...(slot.dispatch ? [slot.dispatch] : []), e], owner, [], initial.session.formatVersion === 14)
     if (decoded[0]) accept(decoded[0], initialPass)
   }
   // Seed the same pending/cell state from the original owner snapshot once.

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { RefreshCw, Terminal } from "lucide-react"
 import type { AgentProcessCommand, AgentProcessesRequest, AgentProcessesView } from "@i-harness/desktop-gateway/src/agent-processes.ts"
 import { useExecutionSurface } from "./execution-surface.ts"
@@ -11,7 +11,17 @@ import { SettingsDialog } from "../settings/SettingsDialog.tsx"
 import "./execution-processes.css"
 
 type AgentProcessesPaneProps = { bridge: { request(request: AgentProcessesRequest): Promise<unknown> }; workspaceId: string; sessionId: string }
-interface Output { id: string; kind: "terminal" | "job"; text: string; nextOffset?: number; mode: "offset" | "snapshot"; truncated: boolean; dropped: boolean; historical: boolean; reason?: string; label: string; record: unknown }
+type JobAddress = Omit<Extract<AgentProcessCommand, { action: "job/cancel" }>, "action">
+type OutputTarget = { kind: "terminal"; id: string } | ({ kind: "job" } & JobAddress)
+type Output = OutputTarget & { text: string; nextOffset?: number; mode: "offset" | "snapshot"; truncated: boolean; dropped: boolean; historical: boolean; reason?: string; label: string; record: unknown }
+
+function jobAddress(job: AgentProcessesView["jobs"][number]): JobAddress {
+  if (job.nativeJob) return { id: job.jobId, backend: "shell", instanceId: job.nativeJob.instanceId, sourceId: job.nativeJob.sourceId }
+  return { id: job.jobId }
+}
+function jobAddressKey(address: JobAddress) {
+  return JSON.stringify([address.id, address.backend, address.instanceId, address.sourceId])
+}
 
 /** Size preferences persist; output, drafts and confirmations belong to scope. */
 export function AgentProcessesPane(props: AgentProcessesPaneProps) {
@@ -27,18 +37,29 @@ function ProcessesScope({ bridge, workspaceId, sessionId, cols, rows, setCols, s
   const [confirm, setConfirm] = useState<{ command: AgentProcessCommand; label: string }>()
   const [actionError, setActionError] = useState<string>()
   const outputTicket = useRef(0)
-  const current = useRef({ state: view.state, busy: view.busy, confirm }); current.current = { state: view.state, busy: view.busy, confirm }
+  const jobs = useMemo(() => {
+    const rows = new Map<string, AgentProcessesView["jobs"][number] | undefined>()
+    if (view.state?.sessionId === sessionId) for (const job of view.state.jobs) {
+      if (job.ownerSessionId !== sessionId) continue
+      const key = jobAddressKey(jobAddress(job))
+      rows.set(key, rows.has(key) ? undefined : job)
+    }
+    return rows
+  }, [view.state, sessionId])
+  const current = useRef({ state: view.state, busy: view.busy, confirm, jobs }); current.current = { state: view.state, busy: view.busy, confirm, jobs }
   const control = (command: AgentProcessCommand) => bridge.request({ kind: "desktop/session/processes/control", workspaceId, sessionId, command })
   function terminalFor(id: string, state = current.current.state) { return state?.sessionId === sessionId ? state.terminals.find(row => row.id === id && row.ownerSessionId === sessionId) : undefined }
-  function jobFor(id: string, state = current.current.state) { return state?.sessionId === sessionId ? state.jobs.find(row => row.jobId === id && row.ownerSessionId === sessionId) : undefined }
-  function canControl(command: Pick<AgentProcessCommand, "action" | "id">, state = current.current.state) {
+  function jobFor(target: JobAddress) { return current.current.jobs.get(jobAddressKey(target)) }
+  function canControl(command: Pick<AgentProcessCommand, "action"> & JobAddress) {
+    const state = current.current.state
     if (!state?.live || state.sessionId !== sessionId) return false
-    if (command.action === "job/cancel") { const job = jobFor(command.id, state); return !!(job?.live && job.canCancel) }
+    if (command.action === "job/cancel") { const job = jobFor(command); return !!(job?.live && job.canCancel) }
     const terminal = terminalFor(command.id, state)
     return !!(terminal?.live && terminal.canControl)
   }
-  function attach(id: string, kind: Output["kind"], more = false) {
-    const state = current.current.state, terminal = kind === "terminal" ? terminalFor(id, state) : undefined, job = kind === "job" ? jobFor(id, state) : undefined
+  function attach(address: OutputTarget, more = false) {
+    const { id, kind } = address
+    const state = current.current.state, terminal = kind === "terminal" ? terminalFor(id, state) : undefined, job = address.kind === "job" ? jobFor(address) : undefined
     const target = terminal ?? job
     if (!target || current.current.busy || !(target.live || target.outputAvailable)) return
     const liveOffset = !!(terminal?.live && state?.live)
@@ -47,7 +68,11 @@ function ProcessesScope({ bridge, workspaceId, sessionId, cols, rows, setCols, s
     void view.act(async () => {
       // Allocate a read ticket only after the shared operation gate admits it.
       ticket = ++outputTicket.current
-      const value = await (kind === "terminal" ? liveOffset ? control({ action: "read", id, offset: before?.nextOffset ?? 0 }) : bridge.request({ kind: "desktop/session/processes/terminal-output", workspaceId, sessionId, id }) : bridge.request({ kind: "desktop/session/processes/job-output", workspaceId, sessionId, id }))
+      const value = job
+        ? await bridge.request({ kind: "desktop/session/processes/job-output", workspaceId, sessionId, ...jobAddress(job) })
+        : liveOffset
+          ? await control({ action: "read", id, offset: before?.nextOffset ?? 0 })
+          : await bridge.request({ kind: "desktop/session/processes/terminal-output", workspaceId, sessionId, id })
       const result = value as { ownerSessionId?: string }
       if (result?.ownerSessionId !== undefined && result.ownerSessionId !== sessionId) throw new Error(tt("輸出不屬於目前會話。", "Output does not belong to this conversation."))
       return value
@@ -59,7 +84,7 @@ function ProcessesScope({ bridge, workspaceId, sessionId, cols, rows, setCols, s
       const previous = offsetData ? before : undefined
       const text = (previous?.text ?? "") + (result.data ?? result.text ?? "")
       const clipped = text.length > 131072
-      setOutput({ id, kind, text: text.slice(-131072), nextOffset, mode: offsetData ? "offset" : "snapshot",
+      setOutput({ ...address, text: text.slice(-131072), nextOffset, mode: offsetData ? "offset" : "snapshot",
         truncated: result.truncated === true || previous?.truncated === true || clipped, dropped: result.dropped === true || previous?.dropped === true || clipped,
         historical: typeof result.live === "boolean" ? !result.live : !target.live, reason: result.reason,
         label: terminal?.command || job?.label || (kind === "terminal" ? tt("PTY 程序", "PTY process") : t("背景工作")), record: value })
@@ -84,7 +109,7 @@ function ProcessesScope({ bridge, workspaceId, sessionId, cols, rows, setCols, s
     setActionError(undefined); setConfirm({ command, label })
   }
   const selected = output?.kind === "terminal" ? terminalFor(output.id) : undefined
-  const selectedJob = output?.kind === "job" ? jobFor(output.id) : undefined
+  const selectedJob = output?.kind === "job" ? jobFor(output) : undefined
   const draft = output?.kind === "terminal" ? drafts.get(output.id) ?? "" : ""
   const editable = !!(output?.kind === "terminal" && selected && canControl({ action: "send", id: output.id }))
   const eligible = !!confirm && canControl(confirm.command)
@@ -99,23 +124,25 @@ function ProcessesScope({ bridge, workspaceId, sessionId, cols, rows, setCols, s
       <div className="execution-record-header"><h4>{row.command || tt("PTY 程序", "PTY process") + " " + (index + 1)}</h4><span className="execution-record-status">{row.status} · {row.live ? t("活躍") : t("歷史")}</span></div>
       {!row.live && row.status === "running" ? <p className="execution-surface-note">{t("已儲存狀態，未確認仍在執行")}</p> : null}
       {row.outputReason ? <p className="execution-surface-note">{row.outputReason}</p> : null}
-      <div className="execution-record-actions">{terminalFor(row.id) && (row.live || row.outputAvailable) ? <Button size="small" disabled={view.busy} onClick={() => attach(row.id, "terminal")}>{t(row.live ? "附接輸出" : "查看輸出")}</Button> : null}
+      <div className="execution-record-actions">{terminalFor(row.id) && (row.live || row.outputAvailable) ? <Button size="small" disabled={view.busy} onClick={() => attach({ kind: "terminal", id: row.id })}>{t(row.live ? "附接輸出" : "查看輸出")}</Button> : null}
         {canControl({ action: "close", id: row.id }) ? <><Button size="small" disabled={view.busy} onClick={() => openConfirmation({ action: "signal", id: row.id, signal: "INT" }, row.command ?? tt("PTY 程序", "PTY process"))}>Ctrl+C</Button><Button variant="danger" size="small" disabled={view.busy} onClick={() => openConfirmation({ action: "signal", id: row.id, signal: "TERM" }, row.command ?? tt("PTY 程序", "PTY process"))}>{t("終止程序")}</Button><Button variant="danger" size="small" disabled={view.busy} onClick={() => openConfirmation({ action: "signal", id: row.id, signal: "KILL" }, row.command ?? tt("PTY 程序", "PTY process"))}>{t("強制終止")}</Button><Button size="small" disabled={view.busy} onClick={() => openConfirmation({ action: "close", id: row.id }, row.command ?? tt("PTY 程序", "PTY process"))}>{t("關閉程序")}</Button></> : null}
       </div><RawRecordedRecord value={row} />
     </article>)}</div>
     <h3>{t("背景工作")}</h3>
     {view.state?.jobs.length === 0 ? <p className="ih-empty-state">{t("尚無背景工作")}</p> : null}
-    <div className="execution-record-list">{view.state?.jobs.map(job => <article key={job.jobId} className="execution-record-card">
+    <div className="execution-record-list">{view.state?.jobs.map(job => {
+      const address = jobAddress(job)
+      return <article key={JSON.stringify([job.kind, address.id, address.instanceId ?? job.declaration?.callIndex, address.sourceId])} className="execution-record-card">
       <div className="execution-record-header"><h4>{job.label}</h4><span className="execution-record-status">{job.status} · {job.live ? t("活躍") : t("歷史")}</span></div>
       {!job.live && job.status === "running" ? <p className="execution-surface-note">{t("已儲存狀態，未確認仍在執行")}</p> : null}
-      <div className="execution-record-actions">{jobFor(job.jobId) && (job.outputAvailable || job.live) ? <Button size="small" disabled={view.busy} onClick={() => attach(job.jobId, "job")}>{t("查看輸出")}</Button> : null}{canControl({ action: "job/cancel", id: job.jobId }) ? <Button variant="danger" size="small" disabled={view.busy} onClick={() => openConfirmation({ action: "job/cancel", id: job.jobId }, job.label)}>{t("取消工作")}</Button> : null}</div><RawRecordedRecord value={job} />
-    </article>)}</div>
+      <div className="execution-record-actions">{jobFor(address) && (job.outputAvailable || job.live) ? <Button size="small" disabled={view.busy} onClick={() => attach({ kind: "job", ...address })}>{t("查看輸出")}</Button> : null}{canControl({ action: "job/cancel", ...address }) ? <Button variant="danger" size="small" disabled={view.busy} onClick={() => openConfirmation({ action: "job/cancel", ...address }, job.label)}>{t("取消工作")}</Button> : null}</div><RawRecordedRecord value={job} />
+    </article>})}</div>
     {output ? <section className="execution-record-card process-output-card" aria-label={t("程序輸出")}><div className="execution-record-header"><h3>{output.label}</h3><Button variant="ghost" size="small" disabled={view.busy} onClick={() => { outputTicket.current++; setOutput(undefined) }}>{t("關閉輸出")}</Button></div>
       <OutputBlock label={t("程序輸出")} text={output.text} />
       {output.mode === "snapshot" ? <p className="execution-surface-note">{tt("每次讀取會更新這份輸出快照。", "Each read replaces this output snapshot.")}</p> : null}
       {output.dropped ? <p className="execution-surface-note">{t("較早輸出已離開保留視窗")}</p> : null}{output.truncated ? <p className="execution-surface-note">{t("輸出已截斷")}</p> : null}
       {output.reason ? <p className="execution-surface-note">{output.reason}</p> : null}
-      <div className="execution-record-actions">{output.kind === "terminal" && output.mode === "offset" && selected?.live && view.state?.live ? <Button size="small" disabled={view.busy} onClick={() => attach(output.id, output.kind, true)}>{t("讀取後續輸出")}</Button> : output.kind === "job" && selectedJob && (selectedJob.live || selectedJob.outputAvailable) ? <Button size="small" disabled={view.busy} onClick={() => attach(output.id, output.kind, true)}>{tt("重新讀取輸出", "Refresh output")}</Button> : null}</div>
+      <div className="execution-record-actions">{output.kind === "terminal" && output.mode === "offset" && selected?.live && view.state?.live ? <Button size="small" disabled={view.busy} onClick={() => attach({ kind: "terminal", id: output.id }, true)}>{t("讀取後續輸出")}</Button> : output.kind === "job" && selectedJob && (selectedJob.live || selectedJob.outputAvailable) ? <Button size="small" disabled={view.busy} onClick={() => attach({ kind: "job", ...jobAddress(selectedJob) })}>{tt("重新讀取輸出", "Refresh output")}</Button> : null}</div>
       {editable ? <><div className="process-input-editor"><label>{t("終端輸入")}<textarea className="ih-control" aria-label={t("終端輸入")} data-terminal-id={output.id} value={draft} maxLength={32767} onChange={event => setDraft(event.target.value)} /></label><Button disabled={view.busy || !draft} onClick={() => {
         if (current.current.busy || !canControl({ action: "send", id: output.id })) return
         const sent = draft, id = output.id

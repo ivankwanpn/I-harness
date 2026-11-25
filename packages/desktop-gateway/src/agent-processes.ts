@@ -3,6 +3,7 @@ import { createFixedFactSelection, savedCallEvidence } from './saved-fact-select
 import { createFixedSavedSelection } from './saved-process-index.ts'
 import { buildSavedProcessIndex, type SavedCall, type NativeIdentity } from './saved-process-index.ts'
 import { hydrateSavedCandidate, hydrateSavedInlineCatalog } from './saved-result-json.ts'
+import { readSavedProcessFrame, readSavedProcessPreview } from './saved-process-output.ts'
 import type { AgentProcessReadRunner, AgentProcessReadContext } from './agent-process-read.ts'
 import { originalManagedExecutionFor } from '../../session-executor/src/host-managed-execution.ts'
 import { sameManagedArtifactRef, validManagedArtifactRef, type ExecFrameCursor, type ManagedArtifactRef } from '@i-harness/core-session'
@@ -31,15 +32,16 @@ export type AgentProcessesRequest =
   | ({ kind: "desktop/session/processes/job-output"; workspaceId: string; sessionId: string; id: string } & JobOutputQuery)
   | { kind: "desktop/session/processes/terminal-output"; workspaceId: string; sessionId: string; id: string }
 
-/** Saved shell tool results are evidence of submission/output, never of a
- * live process. A saved running state remains explicitly unconfirmed. */
+/** Settled jobs use the original terminal fact. Older launch-only rows
+ * remain historical and do not attest to a live process. */
 function savedShellJobs(index: ReturnType<typeof buildSavedProcessIndex>) {
   return index.candidates.map(candidate => {
     const value = candidate.snapshot as Record<string, any> | undefined, args = candidate.declaration.args as Record<string, unknown>
     return { startedAt: undefined, endedAt: undefined, jobId: candidate.id, kind: 'shell', label: typeof args.command === 'string' ? args.command.slice(0, 256) : candidate.id,
-      status: ['running', 'completed', 'killed', 'error'].includes(value?.status) ? value!.status : 'running',
-      outputAvailable: typeof value?.text === 'string' && !!value.text || !candidate.nativeJob && (typeof value?.stdout === 'string' && !!value.stdout || typeof value?.stderr === 'string' && !!value.stderr) || !!candidate.descriptor, nativeJob: candidate.nativeJob,
-      declaration: candidate.declaration, conflict: candidate.conflict, outputDisposition: candidate.conflict ? "conflict" as const : candidate.snapshot ? "saved-preview" as const : candidate.descriptor ? "retained-unverified" as const : "unavailable" as const }
+      status: candidate.terminal?.status ?? (['running', 'completed', 'killed', 'error'].includes(value?.status) ? value!.status : 'running'),
+      outputAvailable: !candidate.conflict && (typeof value?.text === 'string' && !!value.text || !candidate.nativeJob && (typeof value?.stdout === 'string' && !!value.stdout || typeof value?.stderr === 'string' && !!value.stderr) || !!candidate.descriptor || !!candidate.terminal?.ref),
+      nativeJob: candidate.nativeJob, declaration: candidate.declaration, conflict: candidate.conflict,
+      outputDisposition: candidate.conflict ? "conflict" as const : candidate.snapshot ? "saved-preview" as const : candidate.descriptor || candidate.terminal?.ref ? "retained-unverified" as const : "unavailable" as const }
   })
 }
 export interface JobOutputQuery { backend?: 'shell' | 'child' | 'workflow'; instanceId?: string; sourceId?: string; mode?: 'snapshot' | 'frames'; cursor?: ExecFrameCursor; expectedRef?: ManagedArtifactRef }
@@ -49,14 +51,14 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: S
     const { meta } = await coordinator.profile(id)
     if (meta.archived) throw new Error('Conversation unavailable')
     const assembly = service.liveAssembly(id), session = assembly?.session ?? await readDesktopSnapshot(coordinator, id)
-    const index = buildSavedProcessIndex(session.events, id)
+    const index = buildSavedProcessIndex(session.events, id, session.formatVersion)
     const checks: { id: string; instanceId?: string; cursor: number; selected: ReturnType<typeof createFixedSavedSelection>; facts: ReturnType<typeof createFixedFactSelection> }[] = []
     const terminals: ReturnType<typeof createFixedFactSelection>[] = []
     const document = await coordinator.getDocument(id)
     const original = () => { if (service.liveAssembly(id) !== assembly) throw new Error('Process owner changed') }
     async function revalidate() {
       original(); const fresh = await readDesktopSnapshot(coordinator, id, original); original()
-      const current = checks.length ? buildSavedProcessIndex(fresh.events, id) : undefined
+      const current = checks.length ? buildSavedProcessIndex(fresh.events, id, fresh.formatVersion) : undefined
       for (const check of checks) {
         check.facts.revalidate(fresh)
         if (fresh.events.length > check.cursor) { check.selected.append(check.cursor, fresh.events.slice(check.cursor)); check.cursor = fresh.events.length }
@@ -68,7 +70,14 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: S
     const context: AgentProcessReadContext = { index, session, document,
       select(jobId, instanceId) {
         const selected = createFixedSavedSelection({ session, highWater: session.events.length }, id, jobId, instanceId, index), fixed = selected.current()
-        checks.push({ id: jobId, instanceId, cursor: session.events.length, selected, facts: createFixedFactSelection(session, savedCallEvidence(session, [fixed.declaration, fixed.observation, fixed.sourceObservation]), id) })
+        const evidence = savedCallEvidence(session, [fixed.declaration, fixed.observation, fixed.sourceObservation])
+        if (fixed.terminal) for (const sequence of [fixed.terminal.sourceSeq, fixed.terminal.terminalSeq]) {
+          const index = session.events.findIndex(event => event.seq === sequence)
+          const event = session.events[index]
+          if (!event) throw new Error('Saved process terminal unavailable')
+          evidence.push({ index, event })
+        }
+        checks.push({ id: jobId, instanceId, cursor: session.events.length, selected, facts: createFixedFactSelection(session, evidence, id) })
       },
       selectTerminal(terminalId, evidence) { terminals.push(createFixedFactSelection(session, evidence, id, terminalId)) },
       assertCurrent() { original(); for (const check of checks) { check.selected.current(); check.facts.assertCurrent() }; for (const terminal of terminals) terminal.assertCurrent() },
@@ -95,14 +104,31 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: S
         const child = doc?.jobs?.find(job => job.id === id)
         const assembly = service.liveAssembly(sessionId), managed = context.managedProcesses?.()
         const background = (assembly?.backgroundJobs?.() ?? managed?.background ?? []).filter(job => job.id === id && job.ownerSessionId === sessionId)
-        if ((query.backend === undefined || query.backend === 'shell') && (chosen.kind === 'ambiguous-selector' || chosen.kind === 'conflict')) return unavailable(chosen.kind)
+        const shellQuery = query.backend === undefined || query.backend === 'shell'
+        if (shellQuery && (chosen.kind === 'ambiguous-selector' || chosen.kind === 'conflict')) return unavailable(chosen.kind)
         if (chosen.kind === 'selected' && child && !query.backend && !query.instanceId) return unavailable('ambiguous-selector')
-        if (chosen.kind === 'selected' && (query.backend === undefined || query.backend === 'shell')) {
+        if (chosen.kind === 'selected' && shellQuery) {
           const candidate = chosen.candidate
           if (query.sourceId !== undefined && candidate.nativeJob?.sourceId !== query.sourceId) return unavailable('stale-source')
+          if (!query.instanceId && candidate.nativeJob
+            && background.some(row => row.kind === 'shell' && row.nativeJob && row.nativeJob.instanceId !== candidate.nativeJob?.instanceId)) return unavailable('ambiguous-selector')
           context.select(id, query.instanceId)
           const active = background.find(row => row.kind === 'shell' && (!candidate.nativeJob || row.nativeJob?.instanceId === candidate.nativeJob.instanceId))
+          if (active && candidate.nativeJob && active.nativeJob?.sourceId !== candidate.nativeJob.sourceId) return unavailable('stale-source')
           if (active && !frames) return { text: active.output.slice(0, 131072), truncated: active.outputTruncated || active.output.length > 131072, ownerSessionId: sessionId, live: true }
+          const terminalRef = candidate.terminal?.ref
+          if (terminalRef && candidate.nativeJob && (frames || !candidate.snapshot)) {
+            if (!options.runRead) return unavailable('retained-reader-unavailable')
+            if (query.expectedRef && !sameManagedArtifactRef(query.expectedRef, terminalRef)) return unavailable('stale-ref')
+            if (!frames) {
+              const preview = await readSavedProcessPreview(context, terminalRef)
+              if ('kind' in preview) return unavailable(preview.reason)
+              return { ...preview, ownerSessionId: sessionId, live: false }
+            }
+            const page = await readSavedProcessFrame(context, terminalRef, query.cursor)
+            if ('kind' in page) return page
+            return { kind: 'frames' as const, ownerSessionId: sessionId, live: Boolean(active), backend: 'shell' as const, nativeJob: candidate.nativeJob, page, sourceCompleteness: terminalRef.completeness, scope: 'captured' as const }
+          }
           let value = (candidate.snapshot ?? (frames ? candidate.sourceObservation?.value : undefined)) as Record<string, any> | undefined
           let catalogCompleteness = candidate.descriptor?.catalog?.completeness
           if (candidate.descriptor && (!value || frames)) {
@@ -125,18 +151,16 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: S
           const original = value?.full_result?.args?.ref as ManagedArtifactRef | undefined
           if (!original || !validManagedArtifactRef(original) || !catalog) return unavailable('catalog-unavailable')
           if (query.expectedRef && !sameManagedArtifactRef(query.expectedRef, original)) return unavailable('stale-ref')
-          const page = await context.page({ ref: original, cursor: query.cursor, viaCatalog: catalog, maxBytes: 32768 })
-          if ('kind' in page) return { kind: 'unavailable' as const, reason: page.reason }
-          const start = query.cursor && query.cursor.recordOffset !== 0 ? query.cursor : { recordOffset: 9, sliceOffset: 0 }
-          if (!('frames' in page) || !validManagedArtifactRef(page.ref) || !sameManagedArtifactRef(page.ref, original) || page.cursor.recordOffset !== start.recordOffset || page.cursor.sliceOffset !== start.sliceOffset
-            || typeof page.eof !== 'boolean' || page.eof !== (page.nextCursor === null) || !Array.isArray(page.frames) || Buffer.byteLength(JSON.stringify(page)) > 32768
-            || page.nextCursor && (!Number.isSafeInteger(page.nextCursor.recordOffset) || page.nextCursor.recordOffset < 9 || page.nextCursor.recordOffset > original.encodedBytes || !Number.isSafeInteger(page.nextCursor.sliceOffset) || page.nextCursor.sliceOffset < 0 || page.nextCursor.recordOffset < start.recordOffset || page.nextCursor.recordOffset === start.recordOffset && page.nextCursor.sliceOffset <= start.sliceOffset)) return unavailable('invalid-page')
-          for (const part of page.frames) if (!['stdout', 'stderr'].includes(part.channel) || !Number.isSafeInteger(part.frame) || part.frame < 0 || !Number.isSafeInteger(part.offset) || part.offset < 0 || typeof part.end !== 'boolean' || typeof part.data !== 'string' || Buffer.from(part.data, 'base64').toString('base64') !== part.data) return unavailable('invalid-page')
+          const page = await readSavedProcessFrame(context, original, query.cursor, catalog)
+          if ('kind' in page) return page
           return { kind: 'frames' as const, ownerSessionId: sessionId, live: Boolean(active), backend: 'shell' as const, nativeJob: candidate.nativeJob, page, catalogCompleteness: catalogCompleteness ?? catalog.completeness, sourceCompleteness: original.completeness, scope: 'captured' as const }
         }
-        if (query.instanceId || query.sourceId || frames) return unavailable('unavailable')
-        const live = background.find(job => query.backend === undefined || job.kind === query.backend)
+        if (frames) return unavailable()
+        const live = background.find(job => (query.backend === undefined || job.kind === query.backend)
+          && (query.instanceId === undefined || job.nativeJob?.instanceId === query.instanceId))
+        if (query.sourceId !== undefined && live?.nativeJob?.sourceId !== query.sourceId) return unavailable(live ? 'stale-source' : 'unavailable')
         if (live) return { text: live.output.slice(0, 131072), truncated: live.outputTruncated || live.output.length > 131072, ownerSessionId: sessionId, live: true }
+        if (query.instanceId) return unavailable()
         if (!child || query.backend === 'shell' || query.backend === 'workflow') return unavailable()
         const text = child.output ?? ''
         return { text: text.slice(0, 131072), truncated: text.length > 131072, ownerSessionId: sessionId, live: Boolean((assembly?.tasks() ?? managed?.tasks())?.some(task => task.id === id)) }

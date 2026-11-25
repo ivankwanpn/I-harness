@@ -21,6 +21,86 @@ const originalPair = (callId: string, name: string, args: object, value: object,
 const startingFacts = () => originalPair('start', 'shell', {}, { job_id: 'j', native_job: nativeFor() }, 1)
 const selectedInitial = (events: any[]) => ({ session: { formatVersion: 13, events }, highWater: events.length }) as never
 
+const frameRef = (value = 'a') => ({ version: 1, id: 'ctxv1_' + value.repeat(64), revision: 'd'.repeat(64), codec: 'exec-frames-v1',
+  encodedBytes: 92, contentDigest: 'e'.repeat(64), completeness: 'complete' })
+const settledNative = () => {
+  const identity = { ...nativeFor(), sourceId: 'process:execution-1' }, ref = frameRef()
+  const [call, dispatch, result] = originalPair('native', 'pwsh', { background: true }, { job_id: 'j', native_job: identity }, 1)
+  const launch = { ...result!, seq: 4, envelope: { ...result!.envelope, execution: { dispatch: 'dispatched', outcome: 'unknown' } } }
+  const source = { type: 'agent/delivery-source', version: 1, kind: 'exec', sourceNamespace: 'exec', recipientSessionId: 'owner',
+    generationId: 'generation', sourceId: identity.instanceId, callSeq: 1, delivery: 'parent', seq: 3 }
+  const terminal = { type: 'exec/end', version: 1, sourceSeq: 3, instanceId: identity.instanceId, execution: { dispatch: 'dispatched', outcome: 'succeeded' },
+    frameSourceId: identity.sourceId, dependency: { kind: 'exec-frames', sourceId: identity.sourceId, retention: { kind: 'artifact', ref } },
+    exitCode: 0, timedOut: false, seq: 5 }
+  return { identity, ref, start: [call!, dispatch!, source, launch], source, terminal }
+}
+const modernInitial = (events: unknown[]) => ({ session: { formatVersion: 14, events }, highWater: events.length }) as never
+
+it('binds a genuine unknown background launch to its exact physical terminal without a saved job_output', () => {
+  const { start, terminal, ref, identity } = settledNative()
+  expect(buildObservedSavedProcessIndex(modernInitial(start), 'owner').select('j', 'a').kind).toBe('unavailable')
+  const facts = [...start, terminal]
+  expect(buildSavedProcessIndex(facts, 'owner').select('j', 'a').kind).toBe('unavailable')
+  expect(buildObservedSavedProcessIndex(modernInitial(facts), 'owner').select('j', 'a')).toMatchObject({ kind: 'selected', candidate: {
+    nativeJob: identity, terminal: { sourceSeq: 3, terminalSeq: 5, status: 'completed', ref },
+  } })
+  const earlierTerminal = [...start.slice(0, -1), { ...terminal, seq: 4 }, { ...start[3], seq: 5 }]
+  expect(buildObservedSavedProcessIndex(modernInitial(earlierTerminal), 'owner').select('j', 'a').kind).toBe('selected')
+})
+
+it('refuses unrelated, duplicate, and rewound source or terminal evidence', () => {
+  const { start, terminal, source } = settledNative()
+  const withoutSource = [start[0], start[1], start[3]]
+  const cases = [
+    [...withoutSource, { ...source, recipientSessionId: 'other' }, terminal],
+    [...withoutSource, { ...source, callSeq: 0 }, terminal],
+    [...start, { ...terminal, instanceId: 'other' }],
+    [...start, { ...terminal, sourceSeq: 2 }],
+    [...start, { ...terminal, frameSourceId: 'process:elsewhere', dependency: { ...terminal.dependency, sourceId: 'process:elsewhere' } }],
+    [...start, terminal, { ...source, seq: 6 }],
+    [...start, terminal, { ...terminal, seq: 6, dependency: { ...terminal.dependency, retention: { kind: 'artifact', ref: frameRef('b') } } }],
+    [...start, terminal, { type: 'rewind/point', anchorSeq: terminal.seq, seq: 6 }],
+  ]
+  for (const facts of cases) expect(buildObservedSavedProcessIndex(modernInitial(facts), 'owner').select('j', 'a').kind).toBe('unavailable')
+})
+
+it('retains terminal status separately from eligible retained frames', () => {
+  const { start, terminal, ref } = settledNative()
+  const failed = { ...terminal, exitCode: 7, execution: { dispatch: 'dispatched', outcome: 'failed' } }
+  const timedOut = { ...failed, timedOut: true, dependency: { ...terminal.dependency, retention: { kind: 'unavailable', reason: 'capture-canceled' } } }
+  const read = (event: unknown) => buildObservedSavedProcessIndex(modernInitial([...start, event]), 'owner').candidates[0]?.terminal
+  expect(read(failed)).toMatchObject({ status: 'error', ref })
+  expect(read(timedOut)).toEqual({ sourceSeq: 3, terminalSeq: 5, status: 'killed' })
+})
+
+it('retains the original Code Mode cell boundary for its native terminal', () => {
+  const { start, terminal } = settledNative()
+  const cell = { type: 'code/cell', cellId: 'cell', sessionId: 'owner', parentCallId: 'outer', state: 'started', seq: 0 }
+  const events = [cell, ...start.map(fact => fact.type.startsWith('tool/') ? { ...fact, type: fact.type.replace('tool/', 'code/'), cellId: 'cell', parentCallId: 'outer' } : fact), terminal]
+  const initial = modernInitial(events)
+  expect(buildObservedSavedProcessIndex(initial, 'owner').select('j', 'a')).toMatchObject({ kind: 'selected', candidate: { declaration: { surface: 'code', cellId: 'cell' }, terminal: { status: 'completed' } } })
+  const fixed = createFixedSavedSelection(initial, 'owner', 'j', 'a')
+  fixed.append(events.length, [{ ...cell, state: 'completed', parentCallId: 'foreign', seq: 6 }])
+  expect(() => fixed.current()).toThrow(/conflict/)
+})
+
+it('holds a fixed terminal across unrelated suffixes, but rejects a competing source, frame ref, or rewind without rereading the prefix', () => {
+  const { start, source, terminal, identity } = settledNative()
+  let locked = false
+  const sealed = [...start, terminal]
+  const facts = new Proxy(sealed, { get(target, key, receiver) { if (locked) throw new Error('prefix rescanned'); return Reflect.get(target, key, receiver) } })
+  const fix = () => createFixedSavedSelection(modernInitial(facts), 'owner', 'j', 'a')
+  const control = fix(), changed = fix(), rewound = fix(), competing = fix()
+  locked = true
+  control.append(5, [{ type: 'assistant/message', text: 'unrelated', seq: 6 }])
+  expect(control.current().terminal?.ref).toEqual(terminal.dependency.retention.ref)
+  changed.append(5, originalPair('output', 'job_output', { job_id: 'j', job_instance_id: 'a' }, { job_id: 'j', native_job: identity,
+    text: 'prefix', full_result: { args: { ref: frameRef('b') } } }, 6))
+  rewound.append(5, [{ type: 'rewind/point', anchorSeq: terminal.seq, seq: 6 }])
+  competing.append(5, [{ ...source, seq: 6 }])
+  for (const selected of [changed, rewound, competing]) expect(() => selected.current()).toThrow(/conflict/)
+})
+
 it('detects immutable summary conflicts in initial nonzero observations', () => {
   const events = [...startingFacts(), ...originalPair('prefix', 'job_output', { job_id: 'j' }, { job_id: 'j', native_job: nativeFor(), text: 'prefix', offset_bytes: 0, digest: 'a'.repeat(64) }, 4),
     ...originalPair('tail', 'job_output', { job_id: 'j', offset_bytes: 6 }, { job_id: 'j', native_job: nativeFor(), text: 'tail', offset_bytes: 6, digest: 'b'.repeat(64) }, 7)]

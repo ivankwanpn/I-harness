@@ -19,6 +19,36 @@ it("replaces full job snapshots when refreshing instead of duplicating the captu
   await waitFor(() => expect(view.container.querySelector("pre")?.textContent).toBe("first snapshot\nnew evidence"))
 })
 
+it("opens and refreshes the exact historical native job when a new runtime reuses the short ID", async () => {
+  const older = { ...job, backend: "shell" as const, label: "Previous command", status: "completed" as const, live: false, canCancel: false,
+    nativeJob: { version: 1 as const, jobId: job.jobId, ownerSessionId: "s", instanceId: "older-instance", sourceId: "process:previous" } }
+  const newer = { ...job, backend: "shell" as const, label: "Current command",
+    nativeJob: { ...older.nativeJob, instanceId: "current-instance", sourceId: "process:current" } }
+  const requests: AgentProcessesRequest[] = []
+  const request = async (input: AgentProcessesRequest) => {
+    if (input.kind === "desktop/session/processes/read") return { ...base, terminals: [], jobs: [newer, older] }
+    requests.push(input)
+    if (input.kind === "desktop/session/processes/job-output") return { text: input.instanceId, ownerSessionId: "s", live: false }
+    return {}
+  }
+  const { container } = render(<AgentProcessesPane bridge={{ request }} workspaceId="w" sessionId="s" />)
+  const history = (await screen.findByRole("heading", { name: "Previous command" })).closest("article")!
+  const current = screen.getByRole("heading", { name: "Current command" }).closest("article")!
+  fireEvent.click(within(history).getByRole("button", { name: "查看輸出" }))
+  await waitFor(() => expect(container.querySelector("pre")?.textContent).toBe("older-instance"))
+  fireEvent.click(screen.getByRole("button", { name: "重新讀取輸出" }))
+  await waitFor(() => expect(requests).toHaveLength(2))
+  await waitFor(() => expect(within(current).getByRole("button", { name: "取消工作" }).hasAttribute("disabled")).toBe(false))
+  fireEvent.click(within(current).getByRole("button", { name: "取消工作" }))
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "確認執行" }))
+  await waitFor(() => expect(requests).toEqual([
+    ...Array.from({ length: 2 }, () => ({ kind: "desktop/session/processes/job-output", workspaceId: "w", sessionId: "s",
+      id: "j1", backend: "shell", instanceId: "older-instance", sourceId: "process:previous" })),
+    { kind: "desktop/session/processes/control", workspaceId: "w", sessionId: "s",
+      command: { action: "job/cancel", id: "j1", backend: "shell", instanceId: "current-instance", sourceId: "process:current" } },
+  ]))
+})
+
 it("appends only live terminal offset data and preserves prior retention loss", async () => {
   const commands: unknown[] = []
   const request = async (input: AgentProcessesRequest) => {
