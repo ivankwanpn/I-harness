@@ -1,18 +1,37 @@
 import {afterEach,expect,it,vi} from 'vitest'
-const probe=vi.hoisted(()=>({views:0,ordinals:[] as number[],batches:[] as number[][],gate:undefined as undefined|{entered():void;wait:Promise<void>}}))
+const probe=vi.hoisted(()=>({
+ views:0,ordinals:[] as number[],batches:[] as number[][],
+ gate:undefined as undefined|{entered():void;wait:Promise<void>},
+ historyObservations:0,settleHistory:undefined as undefined|(()=>Promise<void>),
+}))
 vi.mock('@i-harness/core-session',async load=>{const original=await load<typeof import('@i-harness/core-session')>();return {...original,createManagedSessionState(){probe.views++;throw Error('Inbox lookup constructed a complete view')}}})
 vi.mock('../../session-persistence-jsonl/src/backend/archive-reader.ts',async load=>{const original=await load<typeof import('../../session-persistence-jsonl/src/backend/archive-reader.ts')>();return {...original,async readSessionArchive(...args:Parameters<typeof original.readSessionArchive>){const result=await original.readSessionArchive(...args);if(args[4]){probe.ordinals.push(...args[4].ordinals);probe.batches.push([...args[4].ordinals]);const gate=probe.gate;if(gate){probe.gate=undefined;gate.entered();await gate.wait}}return result}}})
-import {mkdtemp} from 'node:fs/promises'
+vi.mock('../../session-persistence-jsonl/src/backend/process-read.ts',async load=>{
+ const original=await load<typeof import('../../session-persistence-jsonl/src/backend/process-read.ts')>()
+ return {...original,createJsonlProcessReadCapability(...args:Parameters<typeof original.createJsonlProcessReadCapability>){
+  const capability=original.createJsonlProcessReadCapability(...args)
+  return {...capability,openTaskHistory(...args:Parameters<typeof capability.openTaskHistory>){
+   const read=capability.openTaskHistory(...args)
+   return {
+    observe(){probe.historyObservations++;return read.observe()},
+    async settleResources(){await probe.settleHistory?.();return read.settleResources()},
+    retryResources:read.retryResources.bind(read),
+    hasDebt:read.hasDebt.bind(read),
+   }
+  }}
+ }}
+})
+import {mkdtemp,readFile,writeFile} from 'node:fs/promises'
 import {appendFileSync} from 'node:fs'
 import {join} from 'node:path'
-import {committedFactSeqs,contextUsageAnchorId,type AcceptedRequestAttributionV1} from '@i-harness/core-session'
+import {committedFactSeqs,contextUsageAnchorId,encodeFactBatch,legacyPrefixDigest,type AcceptedRequestAttributionV1} from '@i-harness/core-session'
 import {createJsonlBackend} from '@i-harness/session-persistence-jsonl'
 import {composeJsonlTaskTransitionCoordinator} from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
 import {taskDocumentStorageContract} from '../../subagent/src/task/storage-contract.ts'
 import {acquireManagedExecution} from '../src/execution-internal.ts'
 import {readRestoredConversation} from '@i-harness/core-session/internal/restoration'
 const coordinators:ReturnType<typeof composeJsonlTaskTransitionCoordinator>[]=[]
-afterEach(async()=>{probe.gate=undefined;for(const c of coordinators.splice(0))await c.close();probe.views=0;probe.ordinals=[];probe.batches=[]})
+afterEach(async()=>{probe.gate=undefined;probe.settleHistory=undefined;for(const c of coordinators.splice(0))await c.close();probe.views=0;probe.ordinals=[];probe.batches=[];probe.historyObservations=0})
 async function fixture(){const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'inbox-records-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract);coordinators.push(coordinator);await coordinator.create({sessionId:'inbox'});return {root,backend,coordinator}}
 
 async function persistedExchanges() {
@@ -74,7 +93,18 @@ it('reuses the verified archive for cold validation and opens the held reader fo
  const root=await persistedExchanges()
  const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
  coordinators.push(coordinator)
- const execution=await acquireManagedExecution(coordinator,'inbox')
+ const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ probe.settleHistory=async()=>{entered.resolve();await release.promise}
+ const before=probe.historyObservations
+ let published=false
+ const attaching=acquireManagedExecution(coordinator,'inbox').then(execution=>{published=true;return execution})
+ try{
+  await Promise.race([entered.promise,attaching.then(()=>{throw Error('Execution attached before history cleanup')})])
+  expect(published).toBe(false)
+  expect(probe.historyObservations-before).toBe(1)
+ }finally{release.resolve();probe.settleHistory=undefined}
+ const execution=await attaching
+ expect(probe.historyObservations-before).toBe(1)
  expect(probe.ordinals).toEqual([])
  const observation=execution.observe(),admission=await observation.inbox.admitted('saved')
  expect(admission).toMatchObject({text:'original input body'})
@@ -87,6 +117,26 @@ it('reuses the verified archive for cold validation and opens the held reader fo
   expect(rendered).toContain('original response 7')
  }finally{await lease.settle()}
  expect(probe.views).toBe(0)
+},20000)
+
+it('starts a fresh post-upgrade proof before attaching a writer to a predecessor',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'predecessor-execution-'))
+ const digest=legacyPrefixDigest(0,new Uint8Array())
+ const journal={version:1,legacyBodyBytes:0,legacyEventCount:0,legacyPrefixDigest:digest,separatorBytes:0}
+ const header={formatVersion:13,createdAt:'2026-01-01',sessionId:'inbox',journal}
+ const path=join(root,'inbox.jsonl')
+ const frame=encodeFactBatch('predecessor',digest,[{type:'plan/mode',mode:'on',seq:0}]).bytes
+ await writeFile(path,Buffer.concat([Buffer.from(JSON.stringify(header)+'\n'),frame]))
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ coordinators.push(coordinator)
+ const execution=await acquireManagedExecution(coordinator,'inbox')
+ expect(probe.historyObservations).toBe(2)
+ expect(execution.observe()).toMatchObject({formatVersion:14,eventCount:1})
+ const upgraded=await readFile(path)
+ expect(upgraded.subarray(upgraded.indexOf(10)+1)).toEqual(Buffer.from(frame))
+ const action=execution.owner.beginAction()
+ try{expect(await action.facts.metadata.admit({type:'plan/mode',mode:'off'})).toMatchObject({kind:'committed',seqs:[1]})}
+ finally{action.finish()}
 },20000)
 
 it('validates a warm usage append with one archive read for the remaining exchange dependencies',async()=>{

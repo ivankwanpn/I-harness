@@ -46,27 +46,37 @@ export function preflightSessionFormat(version: number, events: SessionEvent[], 
 
 /** A batch may name earlier durable records. References are checked by the writer's prefix index. */
 export function preflightBatchShape(version: number, events: readonly SessionEvent[]): void {
+  preflightEventPayloads(version, events, true)
+}
+
+/** Call only after readFactJournal has validated each shape and the full conversation. */
+export function preflightDecodedFactHistory(version: number, events: readonly SessionEvent[]): void {
+  preflightEventPayloads(version, events, false)
+}
+
+function preflightEventPayloads(version: number, events: readonly SessionEvent[], checkConversationShape: boolean): void {
   assertVersionSupported(version)
-  guardIgnorable([...events], true)
+  for (const event of events) isRegisteredEvent(event)
   for (const event of events) {
-    try { validateConversationEventShape(event, version) }
-    catch (cause) { throw new SessionFormatUnsupportedError("unsupported conversation payload", { cause }) }
+    if (checkConversationShape) {
+      try { validateConversationEventShape(event, version) }
+      catch (cause) { throw new SessionFormatUnsupportedError("unsupported conversation payload", { cause }) }
+    }
     if (isContextEventType(event.type) && (version < 2 || !validContextEvent(event))) {
       throw new SessionFormatUnsupportedError(`unsupported operational payload or format for '${event.type}'`)
     }
   }
 }
 
+function isRegisteredEvent(event: SessionEvent): boolean {
+  if (isKnownEventType(event.type)) return true
+  if ((event as { ignorable?: true }).ignorable === true) return false
+  throw new SessionFormatUnsupportedError(`unknown event type '${event.type}' without ignorable marker`)
+}
+
 export function guardIgnorable(events: SessionEvent[], retainIgnorable = false): SessionEvent[] {
   const kept: SessionEvent[] = []
-  for (const ev of events) {
-    if (isKnownEventType(ev.type)) { kept.push(ev); continue }
-    if ((ev as { ignorable?: true }).ignorable === true) {
-      if (retainIgnorable) kept.push(ev)
-      continue
-    }
-    throw new SessionFormatUnsupportedError(`unknown event type '${ev.type}' without ignorable marker`)
-  }
+  for (const event of events) if (isRegisteredEvent(event) || retainIgnorable) kept.push(event)
   return kept
 }
 

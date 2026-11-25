@@ -1,10 +1,11 @@
-import { mkdtemp, rm, appendFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, appendFile, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { createJsonlBackend, lookupJsonlProcessRead } from '../src/backend-factory.ts'
 import { createPredecessorSession } from './helpers/predecessor.ts'
 import { createOwnership } from '../../session-persistence/src/coordinator/ownership.ts'
 import { issueHeldTaskDocumentScope } from '../../session-persistence/src/coordinator/task-document-scope.ts'
+import { encodeFactBatch, readFactJournal, type SessionEvent } from '@i-harness/core-session'
 
 it('captures only the complete original framed parent under its genuine task scope', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-history-'))
@@ -39,6 +40,36 @@ it('captures a legacy full history and preserves its explicit inherited boundary
     const unscoped = lookupJsonlProcessRead(backend)!.openTaskHistory(scope); await expect(unscoped.observe()).rejects.toThrow(); await unscoped.settleResources()
     await writeFile(path, [JSON.stringify({ sessionId: 'p', formatVersion: 5, createdAt: 'x' }), '{bad}', JSON.stringify(start('local')), ''].join('\n'))
     const corrupt = lookupJsonlProcessRead(backend)!.openTaskHistory(scope); await expect(corrupt.observe()).rejects.toThrow(); await corrupt.settleResources()
+  } finally { await lease.release(); await pin.release(); await rm(root, { recursive: true, force: true }) }
+})
+
+it('applies registration and operational DTO checks after managed journal validation', async () => {
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-history-format-'))
+  const backend = createJsonlBackend(root)
+  const owner = createOwnership(backend, { lock: { enabled: true } })
+  const pin = await owner.pinOwnership('p')
+  const lease = await owner.acquireLease('doc:task-p')
+  const scope = issueHeldTaskDocumentScope(owner, 'p', pin, { assertActive() { if (!lease.held) throw Error('revoked') } })
+  try {
+    const path = await createPredecessorSession(backend, root, 'p', 13)
+    const header = await readFile(path)
+    const meta = JSON.parse(header.toString('utf8'))
+    const cases = [
+      { event: { type: 'future/fixture', seq: 0 }, rejection: /unknown event type/ },
+      { event: { type: 'future/fixture', seq: 0, ignorable: true } },
+      { event: { type: 'context/budget', seq: 0, version: 1, snapshot: {} }, rejection: /unsupported operational payload/ },
+    ]
+    for (const { event, rejection } of cases) {
+      const frame = encodeFactBatch('fixture', meta.journal.legacyPrefixDigest, [event as unknown as SessionEvent])
+      // These cases pass conversation validation and exercise the separate persistence gate.
+      expect(readFactJournal(frame.bytes, meta.journal, meta.formatVersion, meta).events).toEqual([event])
+      await writeFile(path, Buffer.concat([header, frame.bytes]))
+      const reader = lookupJsonlProcessRead(backend)!.openTaskHistory(scope)
+      try {
+        if (rejection) await expect(reader.observe()).rejects.toThrow(rejection)
+        else expect((await reader.observe()).initial.events).toEqual([event])
+      } finally { await reader.settleResources() }
+    }
   } finally { await lease.release(); await pin.release(); await rm(root, { recursive: true, force: true }) }
 })
 

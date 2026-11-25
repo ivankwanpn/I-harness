@@ -20,11 +20,12 @@ import type { createProcessReadLatches } from './process-read-latches.ts'
 import type { createColdExecutionWrites } from './cold-execution-writes.ts'
 import { captureColdObservationEntry, type ColdSelectedObservation } from './cold-selected-target.ts'
 import type { createTaskDocumentTransitions } from './task-document-transition.ts'
+import type { LoadOwnedExecution } from './load.ts'
 
 /** Sole opening/ready registry. A failed public call cannot evict issued work. */
 export function createManagedDocuments(backend: PersistenceBackend, ownership: Ownership,
   loadOwned: (id: string) => Promise<{ session: Session }>, options: CoordinatorOptions | undefined,
-  report: (error: unknown) => void, mutations: Mutations, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: (id: string) => void = () => {}, revokeTaskOperations: (id: string) => Promise<void> = async () => {}, transitions?: ReturnType<typeof createTaskDocumentTransitions>, executionChanges?: ReturnType<typeof createColdExecutionWrites>) {
+  report: (error: unknown) => void, mutations: Mutations, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: (id: string) => void = () => {}, revokeTaskOperations: (id: string) => Promise<void> = async () => {}, transitions?: ReturnType<typeof createTaskDocumentTransitions>, executionChanges?: ReturnType<typeof createColdExecutionWrites>, loadOwnedExecution?: LoadOwnedExecution) {
   const foldFactory = options?.originalExecutionFoldFactory
   for (const value of [options?.maxPendingGroups, options?.coalesceTargetBytes]) {
     if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) throw new TypeError('Managed scheduling options must be positive safe integers')
@@ -201,7 +202,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     }, document => document)
   }
   async function acquireExecution(id:string):Promise<ManagedExecutionAttachment>{
-    if(!transitions||!ownership.lockEnabled||!hasExecutionDependencies(backend))throw Object.assign(new Error('Original execution backend unavailable'),{code:'FACT_OWNER_UNSUPPORTED'})
+    if(!transitions||!loadOwnedExecution||!ownership.lockEnabled||!hasExecutionDependencies(backend))throw Object.assign(new Error('Original execution backend unavailable'),{code:'FACT_OWNER_UNSUPPORTED'})
     let entry=documents.get(id);assertEntry(entry)
     if(!entry){entry={};documents.set(id,entry)}
     const original=entry;
@@ -210,7 +211,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     let retained=executions.get(original)
     if(retained?.attachment)return retained.attachment
     if(original.document||restoredEntries.has(original))throw Object.assign(new Error('Original execution attachment requires its original entry construction'),{code:'FACT_OWNER_UNSUPPORTED'})
-    if(!retained){const source=createManagedExecutionSource({id,entry:original,backend,ownership,transitions,loadOwned,foldFactory,assertEntry:createArtifactCurrentGuard(()=>{if(documents.get(id)!==original)throw new FactRecoveryRequiredError();assertEntry(original)})});retained={source};executions.set(original,retained)}
+    if(!retained){const source=createManagedExecutionSource({id,entry:original,backend,ownership,transitions,loadOwnedExecution,foldFactory,assertEntry:createArtifactCurrentGuard(()=>{if(documents.get(id)!==original)throw new FactRecoveryRequiredError();assertEntry(original)})});retained={source};executions.set(original,retained)}
     const record=retained;
     const flight=(async()=>{
       const state=await record.source.initialize();

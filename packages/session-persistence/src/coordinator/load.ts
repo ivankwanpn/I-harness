@@ -1,4 +1,4 @@
-import { CURRENT_FORMAT_VERSION, stringifyJsonData, type SessionEvent, type SessionEventView } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, stringifyJsonData, validateSubagentHeader, type Session, type SessionEvent, type SessionEventView } from "@i-harness/core-session"
 import { repairTurnTail } from "../repair.ts"
 import { preflightSessionFormat, preflightBatchShape, migrate, guardIgnorable, buildSession } from "../format/validation.ts"
 import { assertUpgradeCapability, ensureWritableFormatUnlocked } from "./writable-format.ts"
@@ -9,7 +9,21 @@ import { SessionFormatUnsupportedError } from '../format/registry.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
 import { notIssuedFailure } from './not-issued.ts'
 import type { createColdExecutionWrites } from './cold-execution-writes.ts'
-import type { createTaskDocumentTransitions } from './task-document-transition.ts'
+import type { createTaskDocumentTransitions, HistoryProof } from './task-document-transition.ts'
+
+export type LoadOwnedExecution = ReturnType<typeof createLoads>['loadOwnedExecution']
+type AfterTransition = (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>
+
+async function materializeHistory(proof: HistoryProof): Promise<{session: Session}> {
+  const meta = proof.initial.header as SessionMeta | undefined
+  let physical: SessionEvent[]
+  try { physical = JSON.parse(JSON.stringify(proof.initial.events)) as SessionEvent[] }
+  catch (error) {
+    if (!(error instanceof RangeError)) throw error
+    throw Object.assign(new Error('Session events exceed the supported nesting depth', { cause: error }), { code: 'SESSION_EVENTS_TOO_DEEP' })
+  }
+  return { session: buildSession(meta, await migrate(proof.initial.formatVersion, guardIgnorable(physical, true), meta)) }
+}
 
 export function createLoads(
   backend: Pick<PersistenceBackend, "read" | "repair" | "replaceEvents" | "append" | "id" | "upgradeSessionFormat">,
@@ -44,9 +58,14 @@ export function createLoads(
       throw cause
     }
   }
-  const transitionLoad = (...args: Parameters<typeof transitionLoadOriginal>) => withMutationRead
-    ? withMutationRead(args[0], () => transitionLoadOriginal(...args)) : transitionLoadOriginal(...args)
-  async function transitionLoadOriginal(sessionId: string, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>, skipPending = false) {
+  function loadThroughTransition<T>(sessionId: string, finalize: (proof: HistoryProof) => Promise<T>, after?: AfterTransition, skipPending = false) {
+    const run = () => transitionLoadOriginal(sessionId, finalize, after, skipPending)
+    return withMutationRead ? withMutationRead(sessionId, run) : run()
+  }
+  function transitionLoad(sessionId: string, after?: AfterTransition, skipPending = false) {
+    return loadThroughTransition(sessionId, materializeHistory, after, skipPending)
+  }
+  async function transitionLoadOriginal<T>(sessionId: string, finalize: (proof: HistoryProof) => Promise<T>, after?: AfterTransition, skipPending = false) {
       if (!transitions) throw new Error('TASK_TRANSITION_UNSUPPORTED')
         assertWritable(sessionId)
         let pending = skipPending ? undefined : pendingWriteBehind(sessionId)
@@ -57,20 +76,25 @@ export function createLoads(
           invalidateConversation(sessionId)
           const peeked = await read(sessionId)
           preflightSessionFormat(peeked.version, peeked.events, peeked.meta)
-          await migrate(peeked.version, guardIgnorable(peeked.events, true), peeked.meta)
+          if (peeked.version !== CURRENT_FORMAT_VERSION)
+            await migrate(peeked.version, guardIgnorable(peeked.events, true), peeked.meta)
           await beforeRepair(peeked.version,peeked.events,peeked.meta?.seedLength ?? 0)
           markRepair()
           executionChanges?.invalidated(sessionId)
           const repaired = await backend.repair(sessionId)
           preflightSessionFormat(repaired.version, repaired.events, repaired.meta)
           if (stringifyJsonData(peeked.events) !== stringifyJsonData(repaired.events)) executionChanges?.committed(sessionId)
-          const migrated = await migrate(repaired.version, guardIgnorable(repaired.events, true), repaired.meta)
+          const migrated = repaired.version === CURRENT_FORMAT_VERSION ? repaired.events
+            : await migrate(repaired.version, guardIgnorable(repaired.events, true), repaired.meta)
           const canonical = repairTurnTail(migrated, { appendOnly: repaired.meta?.journal !== undefined }).map((event, index): SessionEvent => {
             if (event.seq !== undefined && event.seq !== index) throw new Error(`session sequence invariant failed for ${sessionId}`)
             return event.seq === index ? event : { ...event, seq: index }
           })
-          preflightSessionFormat(CURRENT_FORMAT_VERSION, canonical, repaired.meta)
           const needsRewrite = canonical.length !== repaired.events.length || canonical.some((event, index) => stringifyJsonData(event) !== stringifyJsonData(repaired.events[index]))
+          // The repaired current-format prefix has already passed full validation.
+          // Re-run it for a changed recovery result or a format conversion.
+          if (needsRewrite || repaired.version !== CURRENT_FORMAT_VERSION)
+            preflightSessionFormat(CURRENT_FORMAT_VERSION, canonical, repaired.meta)
           if (needsRewrite) {
             const unchanged = canonical.slice(0, repaired.events.length).every((event, index) => stringifyJsonData(event) === stringifyJsonData(repaired.events[index]))
             if (unchanged) {
@@ -86,11 +110,29 @@ export function createLoads(
               executionChanges?.committed(sessionId)
             }
           }
-          return { session: buildSession(repaired.meta, canonical) }
-        }, pending ? () => pending.flush() : undefined, async proof => { const meta = proof.initial.header as SessionMeta | undefined; const physical = (() => { try { return JSON.parse(JSON.stringify(proof.initial.events)) as SessionEvent[] } catch (error) { if (!(error instanceof RangeError)) throw error; throw Object.assign(new Error('Session events exceed the supported nesting depth', { cause: error }), { code: 'SESSION_EVENTS_TOO_DEEP' }) } })(); return { session: buildSession(meta, await migrate(proof.initial.formatVersion, guardIgnorable(physical, true), meta)) } }, after)
+          validateSubagentHeader(repaired.meta)
+        }, pending ? () => pending.flush() : undefined, finalize, after)
       }
+  async function loadOwnedExecution<T>(sessionId: string, restore: (proof: HistoryProof) => Promise<T>): Promise<T> {
+    if (!transitions) throw new Error('TASK_TRANSITION_UNSUPPORTED')
+    let legacy: Session | undefined
+    const result = await loadThroughTransition(sessionId, async proof => {
+      if (proof.initial.formatVersion === CURRENT_FORMAT_VERSION) return { value: await restore(proof) }
+      // The transition upgrades the header after capturing this history proof.
+      // Only a fresh proof can attach a writer to the replacement artifact.
+      legacy = (await materializeHistory(proof)).session
+      return undefined
+    })
+    if (result) return result.value
+    return transitions.existing(sessionId, async beforeRepair => {
+      if (!legacy) throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED')
+      await beforeRepair(legacy.formatVersion, legacy.events, legacy.header?.seedLength ?? 0)
+      legacy = undefined
+    }, undefined, restore)
+  }
   return {
     transitionLoad,
+    loadOwnedExecution,
     async snapshot(sessionId: string) {
       const { version, events, meta } = await read(sessionId)
       preflightSessionFormat(version, events, meta)

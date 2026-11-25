@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto'
 import {types} from 'node:util'
 import {createArtifactCurrentGuard,composeOriginalArtifactGuards,isArtifactCurrentGuard,associateArtifactCurrentnessReader} from './artifact-path-association.ts'
 import {originalOwnershipArtifactGuard} from './ownership.ts'
-import {FactRecoveryRequiredError,type JournalPrefix,type Session,type SessionView} from '@i-harness/core-session'
+import {FactRecoveryRequiredError,type JournalPrefix,type SessionView} from '@i-harness/core-session'
 import {restoreManagedExecutionState} from '@i-harness/core-session/internal/execution'
 import type {OriginalConversationRestorationSource} from '@i-harness/core-session/internal/restoration'
 import {readArchiveHistoryPrefix} from '../archive-read-internal.ts'
@@ -11,10 +11,11 @@ import {heldFactOwner} from './fact-owner.ts'
 import type {PersistenceBackend} from './types.ts'
 import type {Ownership} from './ownership.ts'
 import type {ManagedEntry} from './bootstrap.ts'
+import type {LoadOwnedExecution} from './load.ts'
 import type {createTaskDocumentTransitions} from './task-document-transition.ts'
 
 /** One original entry's construction/reader debt, registered before initialize. */
-export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry;backend:PersistenceBackend;ownership:Ownership;transitions:ReturnType<typeof createTaskDocumentTransitions>;loadOwned(id:string):Promise<{session:Session}>;foldFactory?:import('@i-harness/core-session/internal/execution').OriginalExecutionFoldFactory;assertEntry():void}){
+export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry;backend:PersistenceBackend;ownership:Ownership;transitions:ReturnType<typeof createTaskDocumentTransitions>;loadOwnedExecution:LoadOwnedExecution;foldFactory?:import('@i-harness/core-session/internal/execution').OriginalExecutionFoldFactory;assertEntry():void}){
  const revision=ports.entry.metadataRevision,token=Object.freeze({sessionId:ports.id,incarnation:randomUUID()})
  let retired=false,initial:SessionView|undefined,prefix:JournalPrefix|undefined,formatVersion:number|undefined,header:SessionView['header']
  let proof:{assertCurrent():Promise<void>}|undefined,scope:ReturnType<typeof openExecutionDependencies>|undefined,state:Awaited<ReturnType<typeof restoreManagedExecutionState>>|undefined,flight:Promise<unknown>|undefined
@@ -63,10 +64,8 @@ export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry
  return {
   held,assertCurrent,get prefix(){return source.prefix},
   async initialize(){
-   if(initialFailure)throw initialFailure.cause;if(state)return state;if(flight){await flight;return state!}
-   const pending=(async()=>{
-    let transient:Session|undefined=(await ports.loadOwned(ports.id)).session;assertCurrent()
-    await ports.transitions.existing(ports.id,async before=>{await before(transient!.formatVersion,transient!.events,transient!.header?.seedLength??0);transient=undefined},undefined,async history=>{
+   if(initialFailure)throw initialFailure.cause;if(flight){await flight;return state!}if(state)return state
+   const pending=ports.loadOwnedExecution(ports.id,async history=>{
      const snapshot=history.initial
      await history.assertCurrent();assertCurrent()
      const read=readArchiveHistoryPrefix(ports.backend,history)
@@ -74,8 +73,7 @@ export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry
      initial=snapshot;proof=history;formatVersion=snapshot.formatVersion;header=snapshot.header;prefix=Object.freeze({...read.prefix})
      state=await restoreManagedExecutionState(source,Object.freeze({token,assertHeld:held.assertHeld,openDependencies(expected:JournalPrefix){assertCurrent();return openExecutionDependencies(ports.backend,ports.id,held,expected)}}),ports.foldFactory)
      await history.assertCurrent();assertCurrent()
-    })
-   })();flight=pending
+   });flight=pending
    try{await pending;return state!}catch(cause){initialFailure={cause};throw cause}finally{initial=undefined;proof=undefined;flight=undefined}
   },
   async close(){await flight?.catch(()=>{});if(state)await state.close();else await source.close();if(initialFailure)await ports.transitions.joinIO()},

@@ -6,7 +6,7 @@ import { dirname } from 'node:path';
 import { CURRENT_FORMAT_VERSION, freezeJsonData, readFactJournal } from '@i-harness/core-session';
 import { parseHeader } from '../format.ts';
 import { isHeldTaskDocumentScope, type HeldTaskDocumentScope } from '@i-harness/session-persistence';
-import { preflightSessionFormat } from '@i-harness/session-persistence/internal/task-document-operations';
+import { preflightDecodedFactHistory, preflightSessionFormat } from '@i-harness/session-persistence/internal/task-document-operations';
 
 type Identity = { dev: bigint; ino: bigint; size: number; mtimeNs: bigint; ctimeNs: bigint };
 type DirectoryChain = { root: Identity; rootAncestry: string; pathAncestry: string };
@@ -244,20 +244,38 @@ export function createJsonlProcessReadCapability(ports: Ports) {
             try { await Reflect.apply(resource.close, resource.handle, []); resources.delete(resource); }
             catch (error) { resource.failed = true; resource.cause = error; throw error; }
         }
-        async function readOriginal(parents: DirectoryChain) {
+        type CapturedHistory = { bytes: Buffer; witness: Witness };
+        async function readOriginal(parents: DirectoryChain): Promise<CapturedHistory>;
+        async function readOriginal(parents: DirectoryChain, expected: Witness): Promise<void>;
+        async function readOriginal(parents: DirectoryChain, expected?: Witness): Promise<CapturedHistory | void> {
             scope.assertActive(); if (resources.size) bad();
             const before = await lstat(path, { bigint: true }); scope.assertActive(); if (!before.isFile() || before.isSymbolicLink()) bad();
-            const first = identity(before), handle = await open(path, 'r'), resource = { handle, close: handle.close, failed: false }; resources.add(resource);
-            let result: { bytes: Buffer; witness: Witness } | undefined, failed = false, cause: unknown;
+            const first = identity(before);
+            if (expected && !same(expected.identity, first)) bad();
+            const handle = await open(path, 'r'), resource = { handle, close: handle.close, failed: false }; resources.add(resource);
+            let result: CapturedHistory | undefined, observedDigest: string | undefined, failed = false, cause: unknown;
             try {
                 scope.assertActive(); if (!same(first, identity(await handle.stat({ bigint: true })))) bad();
-                const bytes = Buffer.alloc(first.size + 1); let offset = 0;
-                while (offset < bytes.length) { scope.assertActive(); const read = await handle.read(bytes, offset, Math.min(65536, bytes.length - offset), offset); if (!read.bytesRead) break; offset += read.bytesRead; }
+                // Include one byte past the fixed extent to detect early EOF and growth.
+                const length = first.size + 1, digest = createHash('sha256');
+                const buffer = expected ? Buffer.allocUnsafe(Math.min(65536, length)) : Buffer.alloc(length);
+                let offset = 0;
+                while (offset < length) {
+                    scope.assertActive();
+                    const targetOffset = expected ? 0 : offset;
+                    const { bytesRead } = await handle.read(buffer, targetOffset, Math.min(65536, length - offset), offset);
+                    if (!bytesRead) break;
+                    digest.update(buffer.subarray(targetOffset, targetOffset + bytesRead));
+                    offset += bytesRead;
+                }
                 scope.assertActive(); if (offset !== first.size || !same(first, identity(await handle.stat({ bigint: true }))) || !same(first, identity(await lstat(path, { bigint: true })))) bad();
-                result = { bytes: bytes.subarray(0, first.size), witness: { path, identity: first, digest: hash(bytes.subarray(0, first.size)), parents } };
+                observedDigest = digest.digest('hex');
+                if (!expected) result = { bytes: buffer.subarray(0, first.size), witness: { path, identity: first, digest: observedDigest, parents } };
             } catch (error) { failed = true; cause = error; }
             try { await closeResource(resource); } catch (error) { if (failed) throw new AggregateError([cause, error], 'Task history read and cleanup failed'); throw error; }
-            if (failed) throw cause; return result!;
+            if (failed) throw cause;
+            if (expected && observedDigest !== expected.digest) bad();
+            return result;
         }
         const stableParents = (a: DirectoryChain, b: DirectoryChain) => a.root.dev === b.root.dev && a.root.ino === b.root.ino && a.rootAncestry === b.rootAncestry && a.pathAncestry === b.pathAncestry;
         async function observeOriginal() {
@@ -276,15 +294,17 @@ export function createJsonlProcessReadCapability(ports: Ports) {
             const events = decoded ? decoded.events : body.toString('utf8').split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
             const seedLength = meta.seedLength ?? 0;
             if (seedLength > events.length) bad();
-            preflightSessionFormat(meta.formatVersion, events, meta); scope.assertActive();
+            if (decoded) preflightDecodedFactHistory(meta.formatVersion, events);
+            else preflightSessionFormat(meta.formatVersion, events, meta);
+            scope.assertActive();
             const initial = freezeJsonData({ formatVersion: meta.formatVersion, header: meta, events }) as import('@i-harness/core-session').SessionView;
             const proof = Object.freeze({ initial, seedLength, async assertRoot() { if (this !== proof || retiring) bad(); scope.assertActive(); ports.assertOriginal(); await ports.checkDeleted('session', id); await checkNamespace(); if (!stableParents(parents, await ancestors(path))) bad(); scope.assertActive(); ports.assertOriginal(); }, assertCurrent() {
                 if (this !== proof || retiring || checking || resources.size) return Promise.reject(new Error('TASK_HISTORY_UNAVAILABLE'));
                 checking = Promise.resolve().then(async () => {
                     scope.assertActive(); ports.assertOriginal(); await ports.checkDeleted('session', id); const currentDigest = await checkNamespace(); if (currentDigest !== undefined && currentDigest !== captured.witness.digest) bad();
                     if (!stableParents(parents, await ancestors(path))) bad();
-                    const again = await readOriginal(parents);
-                    if (!same(captured.witness.identity, again.witness.identity) || captured.witness.digest !== again.witness.digest || !stableParents(parents, await ancestors(path))) bad();
+                    await readOriginal(parents, captured.witness);
+                    if (!stableParents(parents, await ancestors(path))) bad();
                     scope.assertActive(); ports.assertOriginal();
                 });
                 void checking.then(() => { checking = undefined }, () => { checking = undefined }); return checking;
