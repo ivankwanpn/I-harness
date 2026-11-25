@@ -22,15 +22,37 @@ let validationSamples: Map<Win32ArtifactApi, Samples> | undefined
  * an opaque callback, settling resources, a failed verification or ending the
  * operation invalidates all entries. Nothing is retained outside the scope.
  */
-const verificationScopes = new AsyncLocalStorage<Readonly<{ key: string; token: object }>>()
+type VerificationScope = { readonly key: string; readonly token: object; active: boolean }
+const verificationScopes = new AsyncLocalStorage<VerificationScope>()
 let verificationGeneration = 0
 export function withOriginalArtifactVerificationScope<T>(key: string, operation: () => T): T {
-  const current = verificationScopes.getStore()
+  const current = currentVerificationScope()
   if (current && current.key === key) return operation()
-  return verificationScopes.run(Object.freeze({ key, token: Object.freeze({}) }), operation)
+  const scope: VerificationScope = { key, token: Object.freeze({}), active: true }
+  return verificationScopes.run(scope, () => {
+    let asynchronous = false
+    try {
+      const result = operation()
+      if (types.isPromise(result)) {
+        asynchronous = true
+        // Descendant async resources may keep the store after this operation.
+        // Retire its token at settlement and return the original promise.
+        void (async () => {
+          try { await result } catch { /* The caller receives the original rejection. */ }
+          finally { scope.active = false }
+        })()
+      }
+      return result
+    } finally {
+      if (!asynchronous) scope.active = false
+    }
+  })
 }
 export function invalidateOriginalArtifactVerification(): void { verificationGeneration++ }
-function currentVerificationScope(): Readonly<{ key: string; token: object }> | undefined { return verificationScopes.getStore() }
+function currentVerificationScope(): VerificationScope | undefined {
+  const scope = verificationScopes.getStore()
+  return scope?.active ? scope : undefined
+}
 function verificationSignature(target: string, snapshot: Snapshot): string {
   let evidence = ''
   for (const item of snapshot.evidence) {

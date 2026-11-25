@@ -58,7 +58,7 @@ it('reuses one verified original identity for repeated accessors inside one guar
     withOriginalArtifactVerificationScope('session-a', () => {
       capture.assertCurrent()
       const first = { ...f.counts }
-      capture.assertCurrent()
+      withOriginalArtifactVerificationScope('session-a', () => capture.assertCurrent())
       capture.assertCurrent()
       expect({ ...f.counts }).toEqual(first)
     })
@@ -67,6 +67,48 @@ it('reuses one verified original identity for repeated accessors inside one guar
     capture.assertCurrent()
     expect(f.counts.open).toBeGreaterThan(before.open)
   } finally { f.owner.settleResources() }
+})
+
+it.each(['return', 'throw', 'resolve', 'reject'] as const)('re-proves in a detached descendant after scope %s', async ending => {
+  const f = fixture(), capture = f.owner.capture('C:\\store\\source.jsonl')
+  const release = Promise.withResolvers<void>()
+  const failure = new Error('Original operation failed')
+  let detached: Promise<unknown> | undefined
+  const start = () => {
+    capture.assertCurrent()
+    detached = release.promise.then(() => capture.assertCurrent()).catch(error => error)
+  }
+  try {
+    if (ending === 'resolve' || ending === 'reject') {
+      const operation = async () => {
+        start()
+        const checked = { ...f.counts }
+        await Promise.resolve()
+        capture.assertCurrent()
+        expect(f.counts).toEqual(checked)
+        if (ending === 'reject') throw failure
+      }
+      const completed = withOriginalArtifactVerificationScope('session-a', operation)
+      if (ending === 'reject') await expect(completed).rejects.toBe(failure)
+      else await completed
+    } else {
+      const run = () => withOriginalArtifactVerificationScope('session-a', () => {
+        start()
+        if (ending === 'throw') throw failure
+      })
+      if (ending === 'throw') expect(run).toThrow(failure)
+      else run()
+    }
+    const checked = { ...f.counts }
+    f.directories.get('C:\\store')!.id = 9
+    release.resolve()
+    expect(await detached).toMatchObject({ message: expect.stringMatching(/changed/) })
+    expect(f.counts.open).toBeGreaterThan(checked.open)
+  } finally {
+    release.resolve()
+    await detached
+    f.owner.settleResources()
+  }
 })
 
 it('records the capture proof for the operation that created it', () => {
