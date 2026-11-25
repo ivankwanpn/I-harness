@@ -11,6 +11,8 @@ export interface ArchiveReadResources {
     };
     /** The original decoder recognizes only its exact immutable cold view. */
     recognizesDecodedProcessHistory?(sessionId: string, initial: SessionView): boolean;
+    /** Held native clean history already passed complete semantic validation. */
+    recognizesCleanHistoryMaterialization?(proof: object): boolean;
 }
 const owners = new WeakMap<object, { owner: ArchiveReadResources; decodedRead: PersistenceBackend['read'] }>();
 
@@ -31,6 +33,11 @@ export function originalDecodedArchiveRead(backend: object): PersistenceBackend[
 export function recognizesOriginalDecodedProcessHistory(backend: object, sessionId: string, initial: SessionView): boolean {
   return originalDecodedArchiveRead(backend) !== undefined
     && owners.get(backend)?.owner.recognizesDecodedProcessHistory?.(sessionId, initial) === true
+}
+
+export function recognizesOriginalCleanHistoryMaterialization(backend: object, proof: object): boolean {
+    return originalDecodedArchiveRead(backend) !== undefined
+        && owners.get(backend)?.owner.recognizesCleanHistoryMaterialization?.(proof) === true
 }
 
 /** The original archive owner lends only frame evidence and verified records. */

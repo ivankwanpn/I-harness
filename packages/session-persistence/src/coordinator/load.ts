@@ -1,8 +1,8 @@
-import { CURRENT_FORMAT_VERSION, stringifyJsonData, validateSubagentHeader, type Session, type SessionEvent, type SessionEventView, type SessionHistoryPageOptions } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, stringifyJsonData, validateSubagentHeader, type JournalPrefix, type Session, type SessionEvent, type SessionEventView, type SessionHistoryPageOptions } from "@i-harness/core-session"
 import { materializeSessionHistoryPage, planSessionHistoryPage, sessionHistoryFact, type SessionHistoryFact } from '@i-harness/core-session/internal/archive'
 import { repairTurnTail } from "../repair.ts"
 import { preflightSessionFormat, preflightBatchShape, preflightDecodedFactHistory, migrate, guardIgnorable, buildSession } from "../format/validation.ts"
-import { originalColdArchiveHistoryReader, originalDecodedArchiveRead, type ColdArchiveHistoryReader } from '../archive-read-internal.ts'
+import { originalColdArchiveHistoryReader, originalDecodedArchiveRead, readArchiveHistoryPrefix, recognizesOriginalCleanHistoryMaterialization, type ColdArchiveHistoryReader } from '../archive-read-internal.ts'
 import { assertUpgradeCapability, ensureWritableFormatUnlocked } from "./writable-format.ts"
 import type { PersistenceBackend, SessionMeta } from "./types.ts"
 import type { Ownership } from "./ownership.ts"
@@ -15,6 +15,7 @@ import type { createTaskDocumentTransitions, HistoryProof } from './task-documen
 
 export type LoadOwnedExecution = ReturnType<typeof createLoads>['loadOwnedExecution']
 type AfterTransition = (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>
+type MaterializedHistory = { session: Session; readonly archivePrefix?: Readonly<JournalPrefix> }
 
 const MAX_COLD_HISTORY_SESSIONS = 2
 const MAX_COLD_HISTORY_FACTS = 16_384
@@ -39,15 +40,29 @@ function historyFacts(events: readonly SessionEvent[]): SessionHistoryFact[] | u
   return facts
 }
 
-async function materializeHistory(proof: HistoryProof): Promise<{session: Session}> {
+async function materializeHistory(backend: object, proof: HistoryProof, retainArchivePrefix = false): Promise<MaterializedHistory> {
   const meta = proof.initial.header as SessionMeta | undefined
+  const clean = recognizesOriginalCleanHistoryMaterialization(backend, proof)
   let physical: SessionEvent[]
   try { physical = JSON.parse(JSON.stringify(proof.initial.events)) as SessionEvent[] }
   catch (error) {
     if (!(error instanceof RangeError)) throw error
     throw Object.assign(new Error('Session events exceed the supported nesting depth', { cause: error }), { code: 'SESSION_EVENTS_TOO_DEEP' })
   }
-  return { session: buildSession(meta, await migrate(proof.initial.formatVersion, guardIgnorable(physical, true), meta)) }
+  const formatVersion = proof.initial.formatVersion
+  let events: SessionEvent[]
+  if (clean && formatVersion === CURRENT_FORMAT_VERSION && recognizesOriginalCleanHistoryMaterialization(backend, proof)) {
+    // The exact current-format data survived the unchanged JSON copy. Recheck
+    // the local registry and operational payloads on the detached events.
+    preflightDecodedFactHistory(formatVersion, physical)
+    events = physical
+  } else events = await migrate(formatVersion, guardIgnorable(physical, true), meta)
+  const session = buildSession(meta, events)
+  if (retainArchivePrefix && formatVersion === CURRENT_FORMAT_VERSION && originalDecodedArchiveRead(backend)) {
+    const observed = readArchiveHistoryPrefix(backend, proof)
+    if (observed.kind === 'available') return { session, archivePrefix: observed.prefix }
+  }
+  return { session }
 }
 
 export function createLoads(
@@ -62,6 +77,7 @@ export function createLoads(
 ) {
   const coldHistory = new Map<string, ColdHistory>()
   let coldHistoryRetired = false
+  const materialize = (proof: HistoryProof) => materializeHistory(backend, proof)
 
   function rememberColdHistory(sessionId: string, history: ColdHistory) {
     coldHistory.delete(sessionId)
@@ -97,7 +113,7 @@ export function createLoads(
     return withMutationRead ? withMutationRead(sessionId, run) : run()
   }
   function transitionLoad(sessionId: string, after?: AfterTransition, skipPending = false) {
-    return loadThroughTransition(sessionId, materializeHistory, after, skipPending)
+    return loadThroughTransition(sessionId, materialize, after, skipPending)
   }
   async function transitionLoadOriginal<T>(sessionId: string, finalize: (proof: HistoryProof) => Promise<T>, after?: AfterTransition, skipPending = false, allowClean = false) {
       if (!transitions) throw new Error('TASK_TRANSITION_UNSUPPORTED')
@@ -157,7 +173,7 @@ export function createLoads(
       if (proof.initial.formatVersion === CURRENT_FORMAT_VERSION) return { value: await restore(proof) }
       // The transition upgrades the header after capturing this history proof.
       // Only a fresh proof can attach a writer to the replacement artifact.
-      legacy = (await materializeHistory(proof)).session
+      legacy = (await materialize(proof)).session
       return undefined
     }, undefined, false, true)
     if (result) return result.value
@@ -289,10 +305,10 @@ export function createLoads(
         return { session: buildSession(meta, canonical) }
       }))
     },
-    async loadOwned(sessionId: string) {
+    async loadOwned(sessionId: string, retainArchivePrefix = false) {
       // A clean original history proof can also populate the compatibility
       // writer. Keep the same materialization and historical recovery fallback.
-      if (transitions) return loadThroughTransition(sessionId, materializeHistory, undefined, false, true)
+      if (transitions) return loadThroughTransition(sessionId, proof => materializeHistory(backend, proof, retainArchivePrefix), undefined, false, true)
       assertWritable(sessionId)
       return processMutation(sessionId, async () => {
       const pendingWrites = pendingWriteBehind(sessionId)

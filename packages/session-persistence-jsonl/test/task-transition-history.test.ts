@@ -1,11 +1,59 @@
 import { mkdtemp, rm, appendFile, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { createJsonlBackend, lookupJsonlProcessRead } from '../src/backend-factory.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 import { createPredecessorSession } from './helpers/predecessor.ts'
 import { createOwnership } from '../../session-persistence/src/coordinator/ownership.ts'
 import { issueHeldTaskDocumentScope } from '../../session-persistence/src/coordinator/task-document-scope.ts'
 import { encodeFactBatch, readFactJournal, type SessionEvent } from '@i-harness/core-session'
+
+it('keeps an ordinary caller-supplied clean check outside native history qualification', async () => {
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-history-check-'))
+  const backend = createJsonlBackend(root), owner = createOwnership(backend, { lock: { enabled: true } })
+  const pin = await owner.pinOwnership('p'), lease = await owner.acquireLease('doc:task-p')
+  const scope = issueHeldTaskDocumentScope(owner, 'p', pin, { assertActive() { if (!lease.held) throw Error('revoked') } })
+  const capability = lookupJsonlProcessRead(backend)!
+  const reader = capability.openTaskHistory(scope, undefined, { async before() {}, isCanonical: () => true })
+  try {
+    await backend.create('p', { formatVersion: 14, sessionId: 'p', createdAt: 'fixture' })
+    const proof = await reader.observeClean()
+    expect(proof?.initial.events).toEqual([])
+    expect(capability.recognizesCleanHistoryMaterialization(proof!)).toBe(false)
+  } finally { await reader.settleResources(); await lease.release(); await pin.release(); await rm(root, { recursive: true, force: true }) }
+})
+
+it.each([false, true])('preserves ordinary clean decode failures with a duplicate fence and a later invalid frame (%s)', async corruptSuffix => {
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-history-invalid-'))
+  const create = () => createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const seed = create()
+  try { await seed.create({ sessionId: 'p' }) } finally { await seed.close() }
+  const path = join(root, 'p.jsonl'), header = await readFile(path), metadata = JSON.parse(header.toString()).journal
+  const duplicate = encodeFactBatch('duplicate', metadata.legacyPrefixDigest, [
+    { type: 'conversation/semantics', version: 1, mode: 'accepted-exchange-v1', seq: 0 },
+    { type: 'conversation/semantics', version: 1, mode: 'accepted-exchange-v1', seq: 1 },
+  ])
+  const bytes = Buffer.concat([header, duplicate.bytes, Buffer.from(corruptSuffix ? 'invalid\n' : '')])
+  await writeFile(path, bytes)
+  async function rejected(replacedParser: boolean) {
+    const coordinator = create()
+    const parse = replacedParser ? vi.spyOn(JSON, 'parse') : undefined
+    try {
+      const result = await coordinator.loadOwned('p').then(() => undefined, error => error)
+      expect(result).toBeInstanceOf(Error)
+      const reasons: { code?: string; message: string }[] = []
+      for (let e = result; e instanceof Error; e = e.cause)
+        reasons.push({ message: e.message, code: (e as Error & { code?: string }).code })
+      return reasons
+    } finally { parse?.mockRestore(); await coordinator.close() }
+  }
+  try {
+    const baseline = await rejected(true)
+    expect(baseline.at(-1)?.message).toMatch(corruptSuffix ? /Invalid fact journal frame/ : /duplicate semantics fence/)
+    expect(await rejected(false)).toEqual(baseline)
+    expect(await readFile(path)).toEqual(bytes)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
 
 it('captures only the complete original framed parent under its genuine task scope', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-history-'))

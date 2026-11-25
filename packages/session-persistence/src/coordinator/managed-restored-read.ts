@@ -14,6 +14,9 @@ type History = {
     assertRoot(): Promise<void>;
 };
 type State = ReturnType<typeof installRestoredManagedConversation>;
+export function sameArchivePrefix(expected: Readonly<JournalPrefix>, actual: Readonly<JournalPrefix>): boolean {
+    return expected.eventCount === actual.eventCount && expected.bodyBytes === actual.bodyBytes && expected.prefixDigest === actual.prefixDigest;
+}
 /** Subordinate to the one original ManagedEntry, not a second document registry. */
 export function createManagedRestoredRead(ports: {
     id: string;
@@ -188,7 +191,11 @@ export function createManagedRestoredRead(ports: {
         }
     });
     return {
-        read, ensure, stage(events: readonly SessionEventView[], readCurrentEvent: (index: number) => SessionEventView | undefined) {
+        read, ensure,
+        matchesPrefix(current: Readonly<JournalPrefix>): boolean {
+            return !retired && !hasFailure && prefix !== undefined && sameArchivePrefix(prefix, current);
+        },
+        stage(events: readonly SessionEventView[], readCurrentEvent: (index: number) => SessionEventView | undefined) {
             // A terminal read is not authority to cancel original required
             // writer settlement. Its leases already refuse publication.
             const terminal = () => hasFailure || retired || ports.entry.revoked || ports.entry.metadataRevision !== metadataRevision;

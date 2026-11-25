@@ -1,5 +1,4 @@
-import { Buffer as NodeBuffer } from 'node:buffer'
-import { TextEncoder as NodeTextEncoder, types } from 'node:util'
+import { types } from 'node:util'
 import { validateDeliveryFrame } from '../conversation/delivery.ts'
 import { digestRuntimeContextEvent } from '../conversation/render.ts'
 import { CURRENT_FORMAT_VERSION, type Session, type SessionEvent } from '../events/types.ts'
@@ -10,41 +9,13 @@ import type { SessionView } from './types.ts'
 import { prepareSessionEvent } from '../events/intake.ts'
 import { createManagedIntakeIndex } from './intake-index.ts'
 import { canFoldPruneProjection } from '../projection/pruning.ts'
+import { isOriginalArchiveValidationEnvironment } from '../serialization/validation-environment.ts'
 const originalIndexes = new WeakMap<SessionView, ConversationValidationIndex>()
 const originalSourceSessions = new WeakMap<SessionView, string | undefined>()
 // Only managedSessionState enrolls: its initial copy and every appended row
 // are immutable. Other view factories must qualify their own invariants.
 const immutableFactories = new WeakMap<SessionView, {index:ConversationValidationIndex;assertFrontier(count:number):void;hasContiguousSeq():boolean;hasProjectionProof():boolean}>()
-const { parse: originalParse, stringify: originalStringify } = JSON
 const originalObjectPrototype = Object.prototype, originalArrayPrototype = Array.prototype
-const originalTextEncoderPrototype = NodeTextEncoder.prototype
-const originalGlobalBuffer = Object.getOwnPropertyDescriptor(globalThis, 'Buffer')
-const originalUtf8Encode = ownMethod(originalTextEncoderPrototype, 'encode')
-const originalByteLength = ownMethod(NodeBuffer, 'byteLength')
-const originalBufferFrom = ownMethod(NodeBuffer, 'from')
-const originalBufferCompare = ownMethod(NodeBuffer, 'compare')
-
-function ownMethod(receiver: object, key: string) {
-  const value: unknown = Object.getOwnPropertyDescriptor(receiver, key)?.value
-  return typeof value === 'function' && !types.isProxy(value) ? value : undefined
-}
-
-function originalProjectionEnvironment() {
-  const buffer = Object.getOwnPropertyDescriptor(globalThis, 'Buffer')
-  // Node's lazy accessor can still be installed after its value was replaced.
-  const originalBuffer = buffer?.value === NodeBuffer || (buffer?.get !== undefined && buffer.get === originalGlobalBuffer?.get
-    && buffer.set === originalGlobalBuffer?.set && !types.isProxy(buffer.get) && Reflect.apply(buffer.get, globalThis, []) === NodeBuffer)
-  return Object.getOwnPropertyDescriptor(JSON, 'parse')?.value === originalParse
-    && Object.getOwnPropertyDescriptor(JSON, 'stringify')?.value === originalStringify
-    && originalUtf8Encode !== undefined && Object.getOwnPropertyDescriptor(globalThis, 'TextEncoder')?.value === NodeTextEncoder
-    && Object.getOwnPropertyDescriptor(originalTextEncoderPrototype, 'encode')?.value === originalUtf8Encode
-    && originalBuffer && originalByteLength !== undefined && Object.getOwnPropertyDescriptor(NodeBuffer, 'byteLength')?.value === originalByteLength
-    && originalBufferFrom !== undefined && Object.getOwnPropertyDescriptor(NodeBuffer, 'from')?.value === originalBufferFrom
-    && originalBufferCompare !== undefined && Object.getOwnPropertyDescriptor(NodeBuffer, 'compare')?.value === originalBufferCompare
-    && Object.getPrototypeOf(originalObjectPrototype) === null
-    && Object.getPrototypeOf(originalArrayPrototype) === originalObjectPrototype
-    && !Object.hasOwn(originalObjectPrototype, 'toJSON') && !Object.hasOwn(originalArrayPrototype, 'toJSON')
-}
 
 function ordinaryProjectionHeader(header: SessionView['header']) {
   return header?.semanticSeed === undefined && header?.parentSession === undefined && header?.seedLength === undefined
@@ -81,7 +52,7 @@ function immutableFactoryFor(view: SessionView, sessionId: string) {
 
 function qualifiedProjectionFactoryFor(view: SessionView, sessionId: string) {
   const factory = immutableFactoryFor(view, sessionId)
-  if (factory?.hasProjectionProof() && factory.hasContiguousSeq() && originalProjectionEnvironment()) return factory
+  if (factory?.hasProjectionProof() && factory.hasContiguousSeq() && isOriginalArchiveValidationEnvironment()) return factory
 }
 
 /** Exact installed frontier for this view and session. Passive data identity
@@ -227,7 +198,7 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
   let projectionProof = createIndex === createConversationIndex && formatVersion === CURRENT_FORMAT_VERSION
     && ordinaryProjectionHeader(indexHeader) && ordinaryProjectionHeader(captured.value.header)
     && (!captured.value.header || !Object.hasOwn(captured.value.header, 'sessionId'))
-    && originalProjectionEnvironment() && isImmutableProjectionData(captured.value) && events.every(canFoldPruneProjection)
+    && isOriginalArchiveValidationEnvironment() && isImmutableProjectionData(captured.value) && events.every(canFoldPruneProjection)
   const index = createIndex(events, position => events[position], formatVersion, indexHeader)
   const intake=createManagedIntakeIndex()
   intake.stage(events,false).commit()
@@ -241,7 +212,7 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
   })
   const sessionId = scope?.sessionId
   projectionProof &&= view.formatVersion === formatVersion && typeof sessionId === 'string'
-    && indexHeader.sessionId === sessionId && originalProjectionEnvironment()
+    && indexHeader.sessionId === sessionId && isOriginalArchiveValidationEnvironment()
   managedSessions.add(view)
   originalIndexes.set(view, index)
   originalSourceSessions.set(view, sessionId)
@@ -261,10 +232,10 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
       for (const event of suffix) prepared.push(freezeJsonData(prepareSessionEvent(view, event, event.seq!, prepared)) as SessionEvent)
       const inputs=intake.stage(prepared)
       validateDeliveryFrame(prepared, view.formatVersion)
-      const suffixProof = projectionProof && originalProjectionEnvironment()
+      const suffixProof = projectionProof && isOriginalArchiveValidationEnvironment()
         && prepared.every(event => isImmutableProjectionData(event) && canFoldPruneProjection(event))
       const staged = index.stage(prepared)
-      const verifiedSuffix = suffixProof && originalProjectionEnvironment()
+      const verifiedSuffix = suffixProof && isOriginalArchiveValidationEnvironment()
       // Keep the validated installation array private and immutable. Exposing
       // it allowed a caller to substitute a row after index validation.
       Object.freeze(prepared)

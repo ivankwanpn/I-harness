@@ -8,20 +8,32 @@ const probe = vi.hoisted(() => ({ path: '', resident: false, allowPublic: false,
     } }));
 vi.mock('node:fs/promises', async (load) => {
     const actual = await load<typeof import('node:fs/promises')>();
+    async function holdRead() {
+        const gate = probe.gate;
+        if (gate) {
+            probe.gate = undefined;
+            gate.entered();
+            await gate.wait;
+        }
+    }
     return {
         ...actual, async readFile(...args: Parameters<typeof actual.readFile>) {
             if (String(args[0]) === probe.path) {
                 probe.fullReads++;
                 if (probe.resident)
                     throw Error('hidden complete archive fallback');
-                const gate = probe.gate;
-                if (gate) {
-                    probe.gate = undefined;
-                    gate.entered();
-                    await gate.wait;
-                }
+                await holdRead();
             }
             return actual.readFile(...args);
+        },
+        async open(...args: Parameters<typeof actual.open>) {
+            // The original cold proof now owns a descriptor instead of using
+            // readFile. Resident preparation may still open selected ranges.
+            if (String(args[0]) === probe.path && args[1] === 'r' && !probe.resident) {
+                probe.fullReads++;
+                await holdRead();
+            }
+            return actual.open(...args);
         }
     };
 });

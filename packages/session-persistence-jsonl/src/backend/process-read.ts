@@ -4,7 +4,7 @@ import type { BigIntStats } from 'node:fs';
 import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { CURRENT_FORMAT_VERSION, freezeJsonData, readFactJournal, type SessionEvent, type SessionView } from '@i-harness/core-session';
-import { createArchiveJournalHistoryDecoder } from '@i-harness/core-session/internal/archive';
+import { createArchiveJournalHistoryDecoder, isOriginalArchiveValidationEnvironment } from '@i-harness/core-session/internal/archive';
 import { parseHeader } from '../format.ts';
 import { isHeldTaskDocumentScope, SessionFormatUnsupportedError, type HeldTaskDocumentScope } from '@i-harness/session-persistence';
 import { preflightDecodedFactHistory, preflightSessionFormat } from '@i-harness/session-persistence/internal/task-document-operations';
@@ -13,8 +13,8 @@ type Identity = { dev: bigint; ino: bigint; size: number; mtimeNs: bigint; ctime
 type DirectoryChain = { root: Identity; rootAncestry: string; pathAncestry: string };
 type Witness = { path: string; identity: Identity; digest: string; parents: DirectoryChain };
 type ColdTranscript = { id: string; witness: Witness; initial: SessionView; reusableInitial?: true };
-type CleanHistoryCheck = { before(): Promise<void>; isCanonical(events: SessionEvent[]): boolean };
-type Ports = { assertOriginal(): void; root: string; file(id: string): string; document(key: string): string; checkNamespace(id: string): Promise<void>; checkDeleted(kind: string, id: string): Promise<void> };
+export type CleanHistoryCheck = Readonly<{ before(id: string): Promise<void>; isCanonical(events: SessionEvent[]): boolean }>;
+type Ports = { assertOriginal(): void; root: string; file(id: string): string; document(key: string): string; checkNamespace(id: string): Promise<void>; checkDeleted(kind: string, id: string): Promise<void>; isOriginalCleanCheck?(check: CleanHistoryCheck): boolean };
 const bad = (): never => { throw new Error('PROCESS_READ_UNAVAILABLE'); };
 const identity = (stat: BigIntStats): Identity => {
     if (typeof stat.dev !== 'bigint' || typeof stat.ino !== 'bigint' || stat.ino <= 0n || stat.size < 0n || stat.size > BigInt(Number.MAX_SAFE_INTEGER)) return bad();
@@ -32,10 +32,25 @@ const { parse: nativeParse, stringify: nativeStringify } = JSON;
 const nativeTranscriptDecoding = () => JSON.parse === nativeParse && JSON.stringify === nativeStringify
     && Object.getPrototypeOf(Array.prototype) === Object.prototype
     && !Object.hasOwn(Object.prototype, 'toJSON') && !Object.hasOwn(Array.prototype, 'toJSON');
+const originalBufferToString = Buffer.prototype.toString;
+const cleanDecodeEnvironment = () => isOriginalArchiveValidationEnvironment()
+    && Object.getOwnPropertyDescriptor(Buffer.prototype, 'toString')?.value === originalBufferToString;
+
+/** The stream decoder owns the fresh bytes and decoded rows through validation.
+ * Use the ordinary decoder to preserve its error ordering on malformed input. */
+function decodeCleanHistory(body: Buffer, meta: ReturnType<typeof parseHeader>) {
+    try {
+        const history = createArchiveJournalHistoryDecoder(meta.journal!, meta.formatVersion);
+        history.push(body);
+        const result = history.finish();
+        if (result.torn || result.prefix.bodyBytes !== body.length) return undefined;
+        return { prefix: result.prefix, torn: false, events: result.validatedEvents(meta) };
+    } catch { return undefined; }
+}
 /** Low-level byte adapter; cannot associate a backend with factory authority. */
 export function createJsonlProcessReadCapability(ports: Ports) {
     const freshOwners = new WeakMap<object, HeldTaskDocumentScope>();
-    const historyOwners = new WeakMap<object, { scope: HeldTaskDocumentScope; bytes: Buffer; identity: Identity; prefix?: Readonly<import('@i-harness/core-session').JournalPrefix>; assertPrefixCurrent():void }>();
+    const historyOwners = new WeakMap<object, { scope: HeldTaskDocumentScope; bytes: Buffer; identity: Identity; prefix?: Readonly<import('@i-harness/core-session').JournalPrefix>; cleanGeneration?: object; assertPrefixCurrent():void }>();
     const decodedProcessHistory = new WeakMap<SessionView, { id: string; generation: object }>();
     let coldTranscript: ColdTranscript | undefined, coldGeneration = {};
     function retireColdTranscript() { coldGeneration = {}; coldTranscript = undefined; }
@@ -333,7 +348,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
         const stableParents = (a: DirectoryChain, b: DirectoryChain) => a.root.dev === b.root.dev && a.root.ino === b.root.ino && a.rootAncestry === b.rootAncestry && a.pathAncestry === b.pathAncestry;
         async function observeOriginal(clean?: CleanHistoryCheck) {
             scope.assertActive(); ports.assertOriginal(); await ports.checkDeleted('session', id);
-            await clean?.before();
+            await clean?.before(id);
             let sourceDigest = clean ? undefined : await checkNamespace();
             scope.assertActive();
             const parents = await ancestors(path), captured = await readOriginal(parents);
@@ -342,6 +357,8 @@ export function createJsonlProcessReadCapability(ports: Ports) {
             if (!clean && !isUtf8(captured.bytes)) bad();
             const end = captured.bytes.indexOf(10); if (end < 0) bad();
             if (clean && !isUtf8(captured.bytes.subarray(0, end))) bad();
+            const generation = coldGeneration;
+            const nativeHeader = !!clean && ports.isOriginalCleanCheck?.(clean) && cleanDecodeEnvironment();
             const line = captured.bytes.subarray(0, end).toString('utf8'), raw = JSON.parse(line) as Record<string, unknown>, meta = parseHeader(line);
             if (clean) {
                 if (!Number.isSafeInteger(meta.formatVersion) || meta.formatVersion < 0)
@@ -367,8 +384,18 @@ export function createJsonlProcessReadCapability(ports: Ports) {
             }
             if (meta.formatVersion >= 6 && captured.bytes.at(-1) !== 10) bad();
             let decoded: ReturnType<typeof readFactJournal> | undefined;
+            let validatedClean = false;
             if (meta.formatVersion >= 6) {
-                try { decoded = readFactJournal(body, meta.journal!, meta.formatVersion, meta); }
+                // The clean route above already excluded older formats, seeds,
+                // legacy boundaries, and partial bytes. Inherited lineages and
+                // published forks retain their ordinary validation semantics.
+                if (nativeHeader && sourceDigest === undefined && !Object.hasOwn(raw, 'parentSession') &&
+                    !Object.hasOwn(raw, 'seedLength') && !Object.hasOwn(raw, 'forkPublication') &&
+                    meta.origin !== 'fork' && cleanDecodeEnvironment()) {
+                    decoded = decodeCleanHistory(body, meta);
+                    validatedClean = decoded !== undefined;
+                }
+                try { decoded ??= readFactJournal(body, meta.journal!, meta.formatVersion, meta); }
                 catch (cause) {
                     if (clean && ['SESSION_CONTEXT_REPLACEMENT_FORMAT', 'SESSION_CONVERSATION_FORMAT'].includes((cause as { code?: string })?.code ?? ''))
                         throw new SessionFormatUnsupportedError('unsupported conversation history', { cause });
@@ -397,7 +424,9 @@ export function createJsonlProcessReadCapability(ports: Ports) {
             } });
             if(historyOwners.has(proof))bad();
             const prefix=decoded?Object.freeze({eventCount:decoded.prefix.eventCount,bodyBytes:decoded.prefix.bodyBytes,prefixDigest:decoded.prefix.prefixDigest}):undefined;
-            historyOwners.set(proof, { scope, bytes: captured.bytes, identity: captured.witness.identity, prefix, assertPrefixCurrent(){if(retiring||checking||resources.size)bad();scope.assertActive();ports.assertOriginal()} }); await proof.assertCurrent(); return proof;
+            historyOwners.set(proof, { scope, bytes: captured.bytes, identity: captured.witness.identity, prefix,
+                cleanGeneration: validatedClean && cleanDecodeEnvironment() ? generation : undefined,
+                assertPrefixCurrent(){if(retiring||checking||resources.size)bad();scope.assertActive();ports.assertOriginal()} }); await proof.assertCurrent(); return proof;
         }
         function settle(retire: boolean) {
             if (retire) retiring = true; if (cleanup) return cleanup;
@@ -418,6 +447,11 @@ export function createJsonlProcessReadCapability(ports: Ports) {
         recognizesDecodedProcessHistory(id: string, initial: SessionView): boolean {
             const proof = decodedProcessHistory.get(initial);
             return !!proof && proof.id === id && proof.generation === coldGeneration && nativeTranscriptDecoding();
+        },
+        recognizesCleanHistoryMaterialization(proof: object) {
+            const owner = historyOwners.get(proof);
+            if (!owner || owner.cleanGeneration !== coldGeneration || !cleanDecodeEnvironment()) return false;
+            try { owner.assertPrefixCurrent(); return true; } catch { return false; }
         },
         assertFreshOwner(proof: object, scope: HeldTaskDocumentScope) { if (freshOwners.get(proof) !== scope) bad(); scope.assertActive(); },
         qualifiedHistoryPrefix(proof:object){const value=historyOwners.get(proof);if(!value?.prefix)return undefined;try{value.assertPrefixCurrent();return value.prefix}catch{return undefined}},

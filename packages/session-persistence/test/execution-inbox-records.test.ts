@@ -2,9 +2,13 @@ import {afterEach,expect,it,vi} from 'vitest'
 const probe=vi.hoisted(()=>({
  views:0,ordinals:[] as number[],batches:[] as number[][],
  gate:undefined as undefined|{entered():void;wait:Promise<void>},
- historyObservations:0,cleanAttempts:0,legacyReads:0,settleHistory:undefined as undefined|(()=>Promise<void>),
+ historyObservations:0,cleanAttempts:0,legacyReads:0,compatibilityValidations:0,settleHistory:undefined as undefined|(()=>Promise<void>),
 }))
-vi.mock('@i-harness/core-session',async load=>{const original=await load<typeof import('@i-harness/core-session')>();return {...original,createManagedSessionState(){probe.views++;throw Error('Inbox lookup constructed a complete view')}}})
+vi.mock('@i-harness/core-session',async load=>{
+ const original=await load<typeof import('@i-harness/core-session')>()
+ return {...original,createManagedSessionState(){probe.views++;throw Error('Inbox lookup constructed a complete view')},
+  validateConversationHistory(...args:Parameters<typeof original.validateConversationHistory>){probe.compatibilityValidations++;return original.validateConversationHistory(...args)}}
+})
 vi.mock('../../session-persistence-jsonl/src/backend/archive-reader.ts',async load=>{const original=await load<typeof import('../../session-persistence-jsonl/src/backend/archive-reader.ts')>();return {...original,async readSessionArchive(...args:Parameters<typeof original.readSessionArchive>){const result=await original.readSessionArchive(...args);if(args[4]){probe.ordinals.push(...args[4].ordinals);probe.batches.push([...args[4].ordinals]);const gate=probe.gate;if(gate){probe.gate=undefined;gate.entered();await gate.wait}}else if(!args[2])probe.legacyReads++;return result}}})
 vi.mock('../../session-persistence-jsonl/src/backend/process-read.ts',async load=>{
  const original=await load<typeof import('../../session-persistence-jsonl/src/backend/process-read.ts')>()
@@ -30,14 +34,14 @@ vi.mock('../../session-persistence-jsonl/src/backend/process-read.ts',async load
 import {mkdtemp,readFile,writeFile} from 'node:fs/promises'
 import {appendFileSync} from 'node:fs'
 import {join} from 'node:path'
-import {committedFactSeqs,contextUsageAnchorId,CURRENT_FORMAT_VERSION,encodeFactBatch,legacyPrefixDigest,type AcceptedRequestAttributionV1} from '@i-harness/core-session'
+import {committedFactSeqs,contextUsageAnchorId,CURRENT_FORMAT_VERSION,encodeFactBatch,legacyPrefixDigest,type AcceptedRequestAttributionV1,type SessionEvent} from '@i-harness/core-session'
 import {createJsonlBackend} from '@i-harness/session-persistence-jsonl'
 import {composeJsonlTaskTransitionCoordinator} from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
 import {taskDocumentStorageContract} from '../../subagent/src/task/storage-contract.ts'
 import {acquireManagedExecution} from '../src/execution-internal.ts'
 import {readRestoredConversation} from '@i-harness/core-session/internal/restoration'
 const coordinators:ReturnType<typeof composeJsonlTaskTransitionCoordinator>[]=[]
-afterEach(async()=>{probe.gate=undefined;probe.settleHistory=undefined;for(const c of coordinators.splice(0))await c.close();probe.views=0;probe.ordinals=[];probe.batches=[];probe.historyObservations=0;probe.cleanAttempts=0;probe.legacyReads=0})
+afterEach(async()=>{probe.gate=undefined;probe.settleHistory=undefined;for(const c of coordinators.splice(0))await c.close();probe.views=0;probe.ordinals=[];probe.batches=[];probe.historyObservations=0;probe.cleanAttempts=0;probe.legacyReads=0;probe.compatibilityValidations=0})
 async function fixture(options?: Parameters<typeof createJsonlBackend>[1]){const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'inbox-records-')),backend=createJsonlBackend(root,options),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract);coordinators.push(coordinator);await coordinator.create({sessionId:'inbox'});return {root,backend,coordinator}}
 
 it.each(['pristine', 'interrupted', 'wrapped', 'public load'] as const)('compatibility cold history retains its original materialization and admission (%s)', async mode => {
@@ -52,7 +56,7 @@ it.each(['pristine', 'interrupted', 'wrapped', 'public load'] as const)('compati
   {type:'user/message',text:'compatibility input'},
  ])
  const file=join(root,'inbox.jsonl'),before=await readFile(file)
- repairs=0;probe.cleanAttempts=0;probe.historyObservations=0;probe.legacyReads=0
+ repairs=0;probe.cleanAttempts=0;probe.historyObservations=0;probe.legacyReads=0;probe.compatibilityValidations=0
  const {session}=await (mode==='public load'?coordinator.load('inbox'):coordinator.loadOwned('inbox'))
  expect(session.formatVersion).toBe(CURRENT_FORMAT_VERSION)
  expect(session.events.map(event=>event.type)).toEqual(interrupted?['turn/start','step/start','user/message','step/end','turn/end']:['user/message'])
@@ -61,12 +65,36 @@ it.each(['pristine', 'interrupted', 'wrapped', 'public load'] as const)('compati
  expect(Object.isFrozen(session.events[0])).toBe(false)
  expect(probe.cleanAttempts).toBe(mode==='pristine'||interrupted?1:0)
  expect(probe.historyObservations).toBe(1)
- if(mode==='pristine')expect(probe.legacyReads).toBe(0)
- else expect(probe.legacyReads).toBeGreaterThan(0)
+ if(mode==='pristine'){
+  expect(probe.legacyReads).toBe(0)
+  expect(probe.compatibilityValidations).toBe(0)
+ }else{
+  expect(probe.legacyReads).toBeGreaterThan(0)
+  expect(probe.compatibilityValidations).toBeGreaterThan(0)
+ }
  if(mode==='wrapped')expect(repairs).toBe(1)
  const after=await readFile(file)
  if(interrupted){expect(after.length).toBeGreaterThan(before.length);expect(after.subarray(0,before.length)).toEqual(before)}
  else expect(after).toEqual(before)
+})
+
+it('retains and detaches ignorable event payloads in the qualified native history handoff', async () => {
+ const {root,coordinator}=await fixture()
+ const provenance={kind:'human',authority:'request',scope:'turn',producer:'fixture'} as const
+ const optional={type:'fixture/optional-history',ignorable:true,payload:{label:'香港',lines:['first','second']}} as const
+ await coordinator.append('inbox', [{type:'user/message',text:'original request',provenance}, optional as unknown as SessionEvent])
+ const file=join(root,'inbox.jsonl'),before=await readFile(file)
+ probe.compatibilityValidations=0
+ const {session}=await coordinator.loadOwned('inbox')
+ const detached=session.events[1] as unknown as {payload:{label:string;lines:string[]}}
+ expect(session.events).toEqual([{type:'user/message',text:'original request',provenance,seq:0},{...optional,seq:1}])
+ expect(probe.compatibilityValidations).toBe(0)
+ expect(Object.isFrozen(detached.payload.lines)).toBe(false)
+ detached.payload.label='detached edit'
+ detached.payload.lines.push('more')
+ expect((await coordinator.loadOwned('inbox')).session.events[1]).toEqual({...optional,seq:1})
+ expect(probe.compatibilityValidations).toBe(0)
+ expect(await readFile(file)).toEqual(before)
 })
 
 async function persistedExchanges() {

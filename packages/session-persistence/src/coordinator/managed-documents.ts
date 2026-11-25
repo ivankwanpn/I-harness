@@ -2,7 +2,7 @@ import { retainManagedJournalCleanup, settleManagedJournalCleanup } from '../nat
 import {associateArtifactCurrentnessReader,createArtifactCurrentGuard,isArtifactCurrentGuard,withImmediateArtifactCurrentChecks} from './artifact-path-association.ts'
 import {runOriginalCurrentnessRead} from '../../../core-session/src/managed/currentness-guards.ts'
 import { hasArchiveHistoryPrefixReader, originalColdArchiveHistoryReader } from '../archive-read-internal.ts'
-import { createManagedRestoredRead } from './managed-restored-read.ts'
+import { createManagedRestoredRead, sameArchivePrefix } from './managed-restored-read.ts'
 import type { ManagedRestoredContextRead } from '../restored-context-internal.ts'
 import type { Session, JournalPrefix, OwnedSessionHistoryPage, SessionHistoryPageOptions } from '@i-harness/core-session'
 import { FactRecoveryRequiredError, aggregateErrors, freezeJsonData } from '@i-harness/core-session'
@@ -22,9 +22,18 @@ import { captureColdObservationEntry, type ColdSelectedObservation } from './col
 import type { createTaskDocumentTransitions } from './task-document-transition.ts'
 import type { LoadOwnedExecution } from './load.ts'
 
+/** The writer proves its own durable prefix. A native load can also identify
+ * which prefix supplied the bodies that are about to be attached. */
+class RecoveryArchiveMismatch extends Error {
+  constructor() { super('Managed recovery archive mismatch') }
+}
+function assertRecoveryArchive(session: Session, observed: Readonly<JournalPrefix> | undefined, actual: JournalPrefix) {
+  if (actual.eventCount !== session.events.length || observed && !sameArchivePrefix(observed, actual)) throw new RecoveryArchiveMismatch()
+}
+
 /** Sole opening/ready registry. A failed public call cannot evict issued work. */
 export function createManagedDocuments(backend: PersistenceBackend, ownership: Ownership,
-  loadOwned: (id: string) => Promise<{ session: Session }>, options: CoordinatorOptions | undefined,
+  loadOwned: (id: string, retainArchivePrefix?: boolean) => Promise<{ session: Session; readonly archivePrefix?: Readonly<JournalPrefix> }>, options: CoordinatorOptions | undefined,
   report: (error: unknown) => void, mutations: Mutations, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: (id: string) => void = () => {}, revokeTaskOperations: (id: string) => Promise<void> = async () => {}, transitions?: ReturnType<typeof createTaskDocumentTransitions>, executionChanges?: ReturnType<typeof createColdExecutionWrites>, loadOwnedExecution?: LoadOwnedExecution) {
   const foldFactory = options?.originalExecutionFoldFactory
   for (const value of [options?.maxPendingGroups, options?.coalesceTargetBytes]) {
@@ -34,6 +43,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
   const executions=new WeakMap<ManagedEntry,{source:ReturnType<typeof createManagedExecutionSource>;attachment?:ManagedExecutionAttachment;read?:ManagedRestoredContextRead}>()
   const restoredEntries = new WeakMap<ManagedEntry, ReturnType<typeof createManagedRestoredRead>>()
   const restoredBindings = new WeakSet<ManagedDocument>()
+  const compatibilityOpenings = new WeakMap<ManagedEntry, Promise<ReturnType<typeof createManagedDocument>>>()
   function bindRestored(entry:ManagedEntry,document:ManagedDocument){const restored=restoredEntries.get(entry);if(restored&&!restoredBindings.has(document)){bindManagedRestoredStage(document,ownership,restored.stage);restoredBindings.add(document)}}
   const resolved = new Map<string, ReturnType<typeof createManagedDocument>>()
   const documentEntries = new WeakMap<object, { id: string; entry: ManagedEntry }>()
@@ -383,7 +393,20 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError()
       assertEntry(original)
       let restored=restoredEntries.get(original)
-      if(!restored){restored=createManagedRestoredRead({id,entry:original,backend,ownership,transitions,loadOwned,assertEntry:createArtifactCurrentGuard(()=>{if(documents.get(id)!==original)throw new FactRecoveryRequiredError();assertEntry(original)}),closeEntry:()=>closeOne(id),onValidated(){if(original.document)bindRestored(original,original.document)}});restoredEntries.set(original,restored)}
+      if (!restored) {
+        const reader = createManagedRestoredRead({ id, entry: original, backend, ownership, transitions, loadOwned,
+          assertEntry: createArtifactCurrentGuard(() => {
+            if (documents.get(id) !== original) throw new FactRecoveryRequiredError()
+            assertEntry(original)
+          }),
+          async closeEntry() {
+            if (documents.get(id) === original && restoredEntries.get(original) === reader) await closeOne(id)
+          },
+          onValidated() { if (original.document) bindRestored(original, original.document) },
+        })
+        restoredEntries.set(original, reader)
+        restored = reader
+      }
       const pending=restored.ensure();if(!original.document)original.flight=pending;await pending
       if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError()
       if(original.document)bindRestored(original,original.document)
@@ -393,37 +416,45 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       if(!ownership.lockEnabled||!backend.appendOwnedBatch||!backend.reconcileOwnedBatch||!backend.readJournalPrefix)return Promise.reject(Object.assign(new Error('Exclusive owned fact backend is required'),{code:'FACT_OWNER_UNSUPPORTED'}))
       const existing=documents.get(id)
       if(existing&&executions.has(existing))return materializeExecution(id,existing)
-      if(existing){try{assertEntry(existing)}catch(error){return Promise.reject(error)}
-        if (restoredEntries.has(existing) && !existing.document) {
-          const prior = existing.flight
-          const operation = (async () => {
-            await prior
-            const { session } = await loadOwned(id)
-            return ownership.withSessionOperation(id, async () => {
-              if (documents.get(id) !== existing || existing.revoked) throw new FactRecoveryRequiredError()
-              const held = heldFactOwner({sessionId:id,incarnation:'restored-compatibility'},ownership,()=>{})
-              retainManagedJournalCleanup(existing.journalCleanup ??= new Map(), backend, id, held)
-              const prefix = await backend.readJournalPrefix!(id, held)
-              return attach(id, existing, session, prefix)
-            })
-          })()
-          existing.flight = operation
-          return operation
+      if (existing) {
+        try { assertEntry(existing) } catch (error) { return Promise.reject(error) }
+        const opening = compatibilityOpenings.get(existing)
+        if (opening) return opening
+        if (existing.document || !restoredEntries.has(existing)) {
+          return existing.flight ? existing.flight.then(() => existing.document!) : Promise.resolve(existing.document!)
         }
-        return existing.flight ? existing.flight.then(()=>existing.document!) : Promise.resolve(existing.document!)}
-      const entry:ManagedEntry={};documents.set(id,entry)
+      }
+      const entry: ManagedEntry = existing ?? {}
+      if (!existing) documents.set(id, entry)
+      const prior = entry.flight
+      const restored = restoredEntries.get(entry)
       let token=transitions ? undefined : beginJournalMutation(id,entry)
       const operation=(async()=>{
-        const {session}=await loadOwned(id)
+        if (prior) await prior
+        const { session, archivePrefix } = await loadOwned(id, true)
+        // Retire any previous reader of a replaced log before the writer
+        // takes the session lane. Retain its mapping if cleanup does not settle.
+        if (archivePrefix && restored && !restored.matchesPrefix(archivePrefix)) {
+          await restored.close()
+          if (restoredEntries.get(entry) === restored) restoredEntries.delete(entry)
+        }
         if (transitions) token=beginJournalMutation(id,entry)
         return ownership.withSessionOperation(id,async()=>{
+          if (documents.get(id) !== entry || entry.revoked) throw new FactRecoveryRequiredError()
           ownership.assertHeld(id)
-          const held=heldFactOwner({sessionId:id,incarnation:'cold-recovery'},ownership,()=>{})
+          const incarnation = restored ? 'restored-compatibility' : 'cold-recovery'
+          const held = heldFactOwner({ sessionId: id, incarnation }, ownership, () => {})
           retainManagedJournalCleanup(entry.journalCleanup ??= new Map(),backend,id,held)
           const prefix=await backend.readJournalPrefix!(id,held)
-          if(prefix.eventCount!==session.events.length)throw new Error('Managed recovery archive mismatch')
-          const birth=await backend.bootstrapRoutes?.resolveBirth?.(id)
-          if(birth)entry.route=captureBootstrapRoute(birth.route)
+          try { assertRecoveryArchive(session, archivePrefix, prefix) }
+          catch (error) {
+            if (!entry.journalCleanup?.get(held.owner)?.hasDebt()) entry.journalCleanup?.delete(held.owner)
+            throw error
+          }
+          if (!restoredEntries.has(entry)) {
+            const birth = await backend.bootstrapRoutes?.resolveBirth?.(id)
+            if (birth) entry.route = captureBootstrapRoute(birth.route)
+          }
           return attach(id,entry,session,prefix)
         })
       })()
@@ -431,14 +462,20 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
         finishJournalMutation(entry,token,'settled')
         return document
       }, error => {
-        finishJournalMutation(entry,token,'unknown')
-        const hasCleanup = hasJournalDebt(entry)
-        if (documents.get(id) === entry && !hasCleanup) {
-          documents.delete(id)
-          resolved.delete(id)
+        // A successful prefix read followed by a local mismatch has no
+        // uncertain writer disposition. A new load may observe the new file.
+        finishJournalMutation(entry, token, error instanceof RecoveryArchiveMismatch ? 'settled' : 'unknown')
+        if (documents.get(id) === entry && !hasJournalDebt(entry)) {
+          if (!restoredEntries.has(entry)) {
+            documents.delete(id)
+            resolved.delete(id)
+          } else if (error instanceof RecoveryArchiveMismatch) {
+            entry.flight = prior
+          }
         }
         throw error
-      })
+      }).finally(() => compatibilityOpenings.delete(entry))
+      compatibilityOpenings.set(entry, tracked)
       entry.flight=tracked
       return tracked
     },
