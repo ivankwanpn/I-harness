@@ -294,6 +294,8 @@ export interface SessionService {
   writableSessionFor?(sessionId: string, fallback?: (sessionId: string) => Promise<Session | undefined>): Promise<Session | undefined>
   /** Synchronous observation only; never resolves a model or constructs an Agent. */
   liveAssembly(sessionId: string): SessionAssembly | undefined
+  /** Observe only the original unpublished compatibility mount, if already started. */
+  pendingAssemblyMount(sessionId: string): Promise<SessionAssembly> | undefined
   hasAssembly(sessionId: string): boolean
   /** Read current owners without creating a runtime. Unknown resource state stays active. */
   inspectActivity?(sessionId: string): { live: boolean; running: boolean; queued: number; tasks: number; active: boolean }
@@ -1706,6 +1708,13 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
 
   const failedClose = new Set<string>()
   const liveAssembly = (sessionId: string) => closed || closing.has(sessionId) || failedClose.has(sessionId) ? undefined : assemblies.get(sessionId)
+  function pendingAssemblyMount(sessionId: string): Promise<SessionAssembly> | undefined {
+    if (closed || closing.has(sessionId) || failedClose.has(sessionId) || assemblies.has(sessionId)) return undefined
+    const pending = creating.get(sessionId)
+    if (!pending?.publicWork || pending.failed) return undefined
+    opts.sessionOperation?.assertOpen(sessionId)
+    return pending.publicWork
+  }
   const resultReader = createResultPageReader(opts, id => !closed && !closing.has(id) && !failedClose.has(id))
   function revokeSession(sessionId: string): void {
     const building = creating.get(sessionId)
@@ -1947,6 +1956,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     receivedInputFor,
     managedInputFor,
     liveAssembly,
+    pendingAssemblyMount,
     instructionState(sessionId, childSessionId) { return instructionOwner(sessionId, childSessionId)?.read() ?? { state: 'not-published' } },
     onInstructionsChanged(sessionId, childSessionId, listener) {
       let active = true, assembly: SessionAssembly | undefined, owner: ReturnType<NonNullable<SessionAssembly['instructionDiagnostics']>>, offOwner: (() => void) | undefined, offChildren: (() => void) | undefined

@@ -100,6 +100,46 @@ describe("createSessionService", () => {
       expect(resolve).toHaveBeenCalledTimes(1)
     } finally { await service.close() }
   })
+
+  it.each([false, true])("observes only an already-started compatibility mount (failed: %s)", async failed => {
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    const failure = new Error("Original assembly mount refused")
+    const sessionFor = vi.fn(async () => {
+      entered.resolve()
+      await release.promise
+      if (failed) throw failure
+      return createSession()
+    })
+    const service = createSessionService({ workspace: process.cwd(), modelPolicy: "test-mock", sessionFor })
+    const published = vi.fn(() => service.pendingAssemblyMount("warming"))
+    service.onAssembly(published)
+    expect(service.pendingAssemblyMount("cold")).toBeUndefined()
+    expect(sessionFor).not.toHaveBeenCalled()
+    const mounting = service.assemblyFor("warming")
+    void mounting.catch(() => {})
+    try {
+      await entered.promise
+      expect(service.liveAssembly("warming")).toBeUndefined()
+      expect(service.pendingAssemblyMount("cold")).toBeUndefined()
+      const original = service.pendingAssemblyMount("warming")
+      expect(original).toBeDefined()
+      expect(service.pendingAssemblyMount("warming")).toBe(original)
+      release.resolve()
+      if (failed) {
+        await expect(mounting).rejects.toBe(failure)
+        await expect(original).rejects.toBe(failure)
+        expect(published).not.toHaveBeenCalled()
+      } else {
+        const assembly = await mounting
+        await expect(original).resolves.toBe(assembly)
+        expect(published).toHaveBeenCalledExactlyOnceWith(assembly)
+        expect(published).toHaveReturnedWith(undefined)
+      }
+      expect(service.pendingAssemblyMount("warming")).toBeUndefined()
+      expect(sessionFor).toHaveBeenCalledOnce()
+    } finally { release.resolve(); await mounting.catch(() => {}); await service.close() }
+  })
+
   it("runs a host completion hook with the live assembly and resolved limits before submit settles", async () => {
     const model: ModelClient = { prepare: prepareTextFixture,  async *stream() { yield { type: "text/chunk", text: "answer" }; yield { type: "end" } } }
     const completed = vi.fn(async (_sessionId: string, assembly: unknown, limits: unknown) => {

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
 import { taskDocumentStorageContract } from '@i-harness/subagent/internal/task-storage-contract'
-import { createSessionService } from '@i-harness/session-executor'
+import { createDurableSessionLoader, createSessionService } from '@i-harness/session-executor'
 import { createAgentProcesses } from '../src/agent-processes.ts'
 import { createAgentProcessReadRunner } from '../src/agent-process-read.ts'
 import { createSessionManagementFence } from '../src/session-management-fence.ts'
@@ -27,4 +27,45 @@ it('malformed frame selectors refuse before any genuine observation or reader pa
     }
     expect(pages).toBe(0); expect(policyCalls).toBe(0); expect(service.hasAssembly('missing')).toBe(false)
   } finally { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it('joins only the existing compatibility mount for the selected process read', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'process-warm-owner-'))
+  const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const fence = createSessionManagementFence()
+  const service = createSessionService({
+    workspace: root,
+    coordinator,
+    sessionFor: createDurableSessionLoader(coordinator),
+    modelPolicy: 'test-mock',
+    sessionOperation: fence,
+    async extensionsFor(id) {
+      if (id === 'warming') { entered.resolve(); await release.promise }
+      return { options: {} }
+    },
+  })
+  const runRead = createAgentProcessReadRunner({
+    coordinator, service, fence, isConversation: async () => true, resultReadScopeFor: async () => undefined,
+  })
+  const processes = createAgentProcesses(coordinator, service, { runRead })
+  try {
+    await coordinator.create({ sessionId: 'warming' })
+    await coordinator.create({ sessionId: 'cold' })
+    const warm = service.assemblyFor('warming')
+    void warm.catch(() => {})
+    await entered.promise
+    expect(service.liveAssembly('warming')).toBeUndefined()
+    const reading = processes.read('warming')
+    void reading.catch(() => {})
+    expect(await processes.read('cold')).toMatchObject({ sessionId: 'cold', live: false })
+    expect(service.hasAssembly('cold')).toBe(false)
+    release.resolve()
+    expect(await warm).toBe(service.liveAssembly('warming'))
+    expect(await reading).toMatchObject({ sessionId: 'warming', live: true, jobs: [], terminals: [] })
+  } finally {
+    release.resolve()
+    try { await service.close() }
+    finally { try { await coordinator.close() } finally { await rm(root, { recursive: true, force: true }) } }
+  }
 })

@@ -19,7 +19,7 @@ export interface AgentProcessReadContext {
 export type AgentProcessReadRunner = <T>(id: string, work: (context: AgentProcessReadContext) => Promise<T>) => Promise<T>
 /** Whole request lives inside the genuine original observation and host fence. */
 export function createAgentProcessReadRunner(options: {
-  coordinator: SessionCoordinator; service: Pick<SessionService, 'liveAssembly'>
+  coordinator: SessionCoordinator; service: Pick<SessionService, 'liveAssembly' | 'pendingAssemblyMount'>
   isConversation(id: string, meta: SessionMeta): Promise<boolean>; fence: SessionManagementFence
   resultReadScopeFor?: ResultReadScopeResolver
   readResultPage?: (id: string, query: ResultPageQuery) => Promise<ResultPageResult>
@@ -27,9 +27,17 @@ export function createAgentProcessReadRunner(options: {
   return (id, work) => options.fence.run(id, async () => {
     const { coordinator, service, fence } = options
     if (!coordinator.withProcessReadObservation || !options.resultReadScopeFor) throw Object.assign(new Error('Process observation unsupported'), { code: 'observation-unsupported' })
+    // Let an already-admitted mount establish its owner before taking a read witness.
+    // A failed warmup still allows the normal, independently verified cold read.
+    const mounting = service.pendingAssemblyMount(id)
+    if (mounting) await mounting.catch(() => {})
     const assembly = service.liveAssembly(id)
     let getter: Awaited<ReturnType<ResultReadScopeResolver>>, revision: string | undefined, established = false
-    const synchronous = () => { fence.assertOpen(id); if (service.liveAssembly(id) !== assembly || established && getter?.().revision !== revision) throw new Error('Process read owner changed') }
+    const synchronous = () => {
+      fence.assertOpen(id)
+      if (service.liveAssembly(id) !== assembly) throw new Error('Process read owner changed')
+      if (established && getter?.().revision !== revision) throw new Error('Process project scope changed')
+    }
     async function policy() {
       synchronous(); const { meta } = await coordinator.profile(id); synchronous()
       const visible = await options.isConversation(id, meta); synchronous()
