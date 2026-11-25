@@ -1,5 +1,6 @@
 """Original selected-location proof, using private directories and injected syscalls only."""
 import importlib.util
+import itertools
 import os
 import sys
 import tempfile
@@ -25,6 +26,25 @@ class SelectedLocationTests(unittest.TestCase):
         os.mkdir(self.root + '/Other')
         self.fd = REAL_OPEN(self.path, os.O_PATH | os.O_DIRECTORY)
         self.addCleanup(REAL_CLOSE, self.fd)
+
+    def selected_parent_entries(self, before):
+        scan = os.scandir
+        parent = worker.Directory.key(os.stat(self.root))
+
+        class Scan:
+            def __init__(inner, fd):
+                inner.original = scan(fd)
+                inner.selected = worker.Directory.key(os.fstat(fd)) == parent
+
+            def __enter__(inner):
+                if not inner.selected:
+                    return inner.original
+                return itertools.chain((types.SimpleNamespace(name=name) for name in before()), inner.original)
+
+            def __exit__(inner, *args):
+                inner.original.close()
+
+        return mock.patch.object(worker.os, 'scandir', side_effect=Scan)
 
     def test_selected_names_need_no_sibling_metadata_or_inode(self):
         original_scan = os.scandir
@@ -115,17 +135,81 @@ class SelectedLocationTests(unittest.TestCase):
         with mock.patch.object(worker, 'metadata', side_effect=metadata):
             with self.assertRaises(worker.Refusal): worker.canonical_directory(self.fd)
 
-    def test_entry_time_and_depth_limits_retire_temporaries(self):
-        class ManyNames:
-            def __enter__(inner):
-                return (types.SimpleNamespace(name='unselected') for _ in range(8193))
-            def __exit__(inner, *args): pass
-        with mock.patch.object(worker.os, 'scandir', return_value=ManyNames()):
-            with self.assertRaises(worker.Refusal): worker.canonical_directory(self.fd)
+    def test_late_exact_name_survives_wide_sibling_stream(self):
+        scanned, samples = 0, []
+
+        def before():
+            nonlocal scanned
+            for index in range(9000):
+                scanned += 1
+                yield 'unselected-' + str(index)
+
+        def checkpoint():
+            samples.append(scanned)
+
+        with self.selected_parent_entries(before), mock.patch.object(worker.time, 'monotonic', return_value=0):
+            physical, _ = worker.canonical_directory(self.fd, checkpoint)
+        self.assertEqual(physical, self.path)
+        self.assertEqual(scanned, 9000)
+        self.assertTrue(any(0 < sample < 9000 for sample in samples))
+
+    def test_duplicate_exact_names_remain_unavailable(self):
+        with self.selected_parent_entries(lambda: iter(['Selected'])):
+            with self.assertRaisesRegex(worker.Refusal, 'exact selected name unavailable'):
+                worker.canonical_directory(self.fd)
+        os.fstat(self.fd)
+
+    def test_cancel_during_wide_scan_retires_temporaries(self):
+        scanned, acquired, closed = 0, [], []
+
+        def before():
+            nonlocal scanned
+            for index in range(9000):
+                scanned += 1
+                yield 'unselected-' + str(index)
+
+        def checkpoint():
+            if scanned >= 512:
+                raise worker.AdmissionCancelled()
+
+        def open_fd(path, flags, *args, **kwargs):
+            fd = REAL_OPEN(path, flags, *args, **kwargs)
+            acquired.append(fd)
+            return fd
+
+        def close_fd(fd):
+            closed.append(fd)
+            return REAL_CLOSE(fd)
+
+        with self.selected_parent_entries(before), mock.patch.object(worker.time, 'monotonic', return_value=0), \
+             mock.patch.object(worker.os, 'open', side_effect=open_fd), mock.patch.object(worker.os, 'close', side_effect=close_fd):
+            with self.assertRaises(worker.AdmissionCancelled):
+                worker.canonical_directory(self.fd, checkpoint)
+        self.assertTrue(512 <= scanned < 9000)
+        self.assertTrue(acquired)
+        self.assertCountEqual(acquired, closed)
+        self.assertNotIn(self.fd, closed)
+        os.fstat(self.fd)
+
+    def test_time_and_depth_limits_retire_temporaries(self):
         with mock.patch.object(worker.time, 'monotonic', side_effect=[0, 0, 3]):
             with self.assertRaises(worker.Refusal): worker.canonical_directory(self.fd)
         with mock.patch.object(worker.os, 'readlink', return_value=b'/' + b'/'.join([b'x'] * 128)):
             with self.assertRaises(worker.Refusal): worker.canonical_directory(self.fd)
+        os.fstat(self.fd)
+
+    def test_deadline_expires_during_wide_name_scan(self):
+        scanned = 0
+        def before():
+            nonlocal scanned
+            for index in range(9000):
+                scanned += 1
+                yield 'unselected-' + str(index)
+        with self.selected_parent_entries(before), \
+             mock.patch.object(worker.time, 'monotonic', side_effect=lambda: 3 if scanned >= 512 else 0):
+            with self.assertRaisesRegex(worker.Refusal, 'directory canonicalization limit exceeded'):
+                worker.canonical_directory(self.fd)
+        self.assertEqual(scanned, 512)
         os.fstat(self.fd)
 
     def test_selected_symlink_swap_after_enumeration_refuses(self):
@@ -225,8 +309,8 @@ class SelectedLocationTests(unittest.TestCase):
         entry = worker.Directory(self.path, linux=True)
         original = worker.canonical_directory
         try:
-            def proof(fd):
-                value = original(fd)
+            def proof(fd, checkpoint=lambda: None):
+                value = original(fd, checkpoint)
                 return value if fd == entry.fd else (self.root + '/alias', value[1])
             with mock.patch.object(worker, 'canonical_directory', side_effect=proof):
                 with self.assertRaises(worker.Refusal): entry.validate({})
@@ -347,6 +431,8 @@ class PreparedPolicyTests(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    print('INJECTED_SELECTED_LOCATION_CASES=26', flush=True)
     sys.argv = sys.argv[:1]
-    unittest.main()
+    result = unittest.main(exit=False).result
+    if not result.wasSuccessful():
+        sys.exit(1)
+    print(f'INJECTED_SELECTED_LOCATION_CASES={result.testsRun}', flush=True)

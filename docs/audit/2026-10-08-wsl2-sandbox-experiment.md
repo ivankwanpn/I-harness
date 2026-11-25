@@ -134,11 +134,13 @@ No network proxy, PTY, retained tree, unrestricted mode, general read/deny-path
 isolation, Desktop settings integration or release packaging is supplied.
 
 The hardlink inventory admits at most 4096 entries, 512 directories, depth 32
-and a cooperative two-second scan. Canonical resolution permits 128 ancestor
-levels, 8192 examined entries and a cooperative two-second budget per distinct
-directory. Larger/changing/hardlinked/special/cross-device layouts refuse;
-blocking filesystem operations can exceed cooperative timing. These are
-experimental compatibility limits, including for some dependency trees.
+and a cooperative two-second scan. Each canonical location proof has a
+cooperative two-second deadline and a bounded ancestry depth. The proof
+checks exact selected names across the full directory stream, retaining
+only its selected edges. Long scans poll the same admission cancellation
+and progress controller in batches. Blocking filesystem operations can
+exceed cooperative timing. Layouts that exhaust these budgets are refused
+along with changing, hardlinked, special and cross-device layouts.
 Each writable root is additionally restricted to one existing mount; nested
 mounts, even on the same device, and missing mount-ID metadata refuse.
 

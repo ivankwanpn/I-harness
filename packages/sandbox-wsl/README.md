@@ -118,9 +118,10 @@ aliases refused. Missing managed paths refuse admission.
   descriptors; nested mounts, including same-device mounts, and unavailable
   metadata refuse. The previously blocked native nested-mount witness is not
   needed or repeated by the metadata tests.
-- Canonical directory resolution is bounded to 128 ancestor levels, 8192
-  examined entries and a cooperative two-second budget per distinct captured
-  directory. Blocking filesystem operations can outlast a cooperative budget.
+- Canonical directory resolution has a bounded ancestry depth and a cooperative
+  two-second deadline per location proof. It streams exact-name checks and
+  polls for cancellation in batches. Blocking filesystem operations can
+  outlast a cooperative budget.
 - Descriptor pinning and final revalidation protect captured roots; they do not
   create an atomic filesystem snapshot or lock out concurrent trusted host
   filesystem modifications after the final scan.

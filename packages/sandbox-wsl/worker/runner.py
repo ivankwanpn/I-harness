@@ -105,7 +105,7 @@ def require_same_mount(fd, expected):
             'writable inventory crosses mount identity')
 
 
-def canonical_directory(fd):
+def canonical_directory(fd, checkpoint=lambda: None):
     """Prove the selected location; proc text only nominates exact entry names.
 
     Other names need no metadata. This deliberately no longer rejects a selected
@@ -113,7 +113,6 @@ def canonical_directory(fd):
     """
     owner = Prepared.__new__(Prepared)
     owner.directories = []
-    examined = 0
     deadline = time.monotonic() + 2.0
     flags = os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
@@ -145,18 +144,22 @@ def canonical_directory(fd):
         root_identity = identity(root)
         current, ancestors, edges = root, [root_identity], []
         for name in names:
+            checkpoint()
             parent_identity = identity(current)
             readable = temporary_directory(owner, '.', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                                            dir_fd=current)
             require(identity(readable) == parent_identity, 'directory parent changed')
             matches = 0
             with os.scandir(readable) as entries:
-                for entry in entries:
-                    examined += 1
+                # Count only witnesses to the selected name. Unrelated
+                # entries cost time, but never occupy proof storage.
+                for index, entry in enumerate(entries, 1):
+                    if index % 256 == 0:
+                        checkpoint()
                     bounded()
-                    require(examined <= 8192, 'directory canonicalization limit exceeded')
                     # NAME bytes only: no d_ino, type, stat or casefold premise.
                     matches += os.fsencode(entry.name) == name
+                    require(matches <= 1, 'directory exact selected name unavailable')
             require(matches == 1, 'directory exact selected name unavailable')
             selected, mount = metadata(current, name)
             require(stat.S_ISDIR(selected[2]), 'selected directory changed')
@@ -211,7 +214,7 @@ def directory_object_contains(root, child):
 
 
 class Directory:
-    def __init__(self, windows_path, canonical_cache=None, linux=False):
+    def __init__(self, windows_path, canonical_cache=None, linux=False, checkpoint=lambda: None):
         if linux:
             require(text(windows_path) and windows_path.startswith('/')
                     and not any(c in windows_path for c in '\r\n:'), 'invalid runtime directory')
@@ -229,8 +232,8 @@ class Directory:
         try:
             self.identity = self.key(os.fstat(self.fd))
             self.mount_identity = read_mount_id(self.fd)
-            self.physical, self.ancestors = canonical_directory(self.fd)
-            self.validate(canonical_cache)
+            self.physical, self.ancestors = canonical_directory(self.fd, checkpoint)
+            self.validate(canonical_cache, checkpoint)
         except BaseException as primary:
             try:
                 self.close()
@@ -243,7 +246,7 @@ class Directory:
     def key(info):
         return info.st_dev, info.st_ino
 
-    def validate(self, canonical_cache=None):
+    def validate(self, canonical_cache=None, checkpoint=lambda: None):
         require(self.close_state == 'live', 'directory original descriptor is retiring')
         owner = Prepared.__new__(Prepared)
         owner.directories = []
@@ -257,9 +260,9 @@ class Directory:
                 current_fd = temporary_directory(owner, path, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
                 require_same_mount(current_fd, self.mount_identity)
                 require(self.key(os.fstat(current_fd)) == self.identity, 'directory identity changed')
-                require(canonical_directory(current_fd) == (self.physical, self.ancestors),
+                require(canonical_directory(current_fd, checkpoint) == (self.physical, self.ancestors),
                         'directory selected spelling changed')
-            current = canonical_directory(self.fd)
+            current = canonical_directory(self.fd, checkpoint)
             require(current == (self.physical, self.ancestors), 'directory identity or ancestry changed')
             cache_key = self.identity + (self.mount_identity, self.physical)
             if canonical_cache is not None:
@@ -417,7 +420,7 @@ class Prepared:
             canonical_cache = {}
             def capture(path):
                 checkpoint()
-                entry = Directory(path, canonical_cache)
+                entry = Directory(path, canonical_cache, checkpoint=checkpoint)
                 self.directories.append(entry)
                 return entry
             def roots(key):
@@ -436,9 +439,9 @@ class Prepared:
                 root = os.path.dirname(path) if os.path.basename(path) == 'bin' else path
                 require(root not in ('/', '/usr', '/bin', '/tmp', '/proc', '/dev', '/run/WSL'), 'unsupported runtime directory')
                 try:
-                    directory = Directory(root, canonical_cache, linux=True)
+                    directory = Directory(root, canonical_cache, linux=True, checkpoint=checkpoint)
                     self.directories.append(directory)
-                    binary_directory = Directory(path, canonical_cache, linux=True)
+                    binary_directory = Directory(path, canonical_cache, linux=True, checkpoint=checkpoint)
                     self.directories.append(binary_directory)
                 except OSError:
                     raise Refusal('managed runtime directory unavailable or changed') from None
@@ -470,7 +473,7 @@ class Prepared:
         canonical_cache = {}
         for directory in self.directories:
             checkpoint()
-            directory.validate(canonical_cache)
+            directory.validate(canonical_cache, checkpoint)
         require(write_inventory(self.writes, checkpoint) == self.inventory, 'writable inventory changed')
         require(write_inventory(self.runtimes, checkpoint) == self.runtime_inventory, 'managed runtime inventory changed')
 
