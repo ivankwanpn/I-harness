@@ -1,3 +1,4 @@
+import { types } from 'node:util'
 import { validateDeliveryFrame } from '../conversation/delivery.ts'
 import { CURRENT_FORMAT_VERSION, type Session, type SessionEvent } from '../events/types.ts'
 import { createConversationIndex, createBootstrapConversationIndex, readConversationDeliveries, readConversationGenerations, conversationScopeKey, type ConversationValidationIndex } from '../conversation/validation.ts'
@@ -10,7 +11,45 @@ const originalIndexes = new WeakMap<SessionView, ConversationValidationIndex>()
 const originalSourceSessions = new WeakMap<SessionView, string | undefined>()
 // Only managedSessionState enrolls: its initial copy and every appended row
 // are immutable. Other view factories must qualify their own invariants.
-const immutableFactories = new WeakMap<SessionView, {index:ConversationValidationIndex;assertFrontier(count:number):void;hasContiguousSeq():boolean}>()
+const immutableFactories = new WeakMap<SessionView, {index:ConversationValidationIndex;assertFrontier(count:number):void;hasContiguousSeq():boolean;hasProjectionProof():boolean}>()
+const { parse: originalParse, stringify: originalStringify } = JSON
+const originalObjectPrototype = Object.prototype, originalArrayPrototype = Array.prototype
+
+function originalProjectionEnvironment() {
+  return Object.getOwnPropertyDescriptor(JSON, 'parse')?.value === originalParse
+    && Object.getOwnPropertyDescriptor(JSON, 'stringify')?.value === originalStringify
+    && Object.getPrototypeOf(originalObjectPrototype) === null
+    && Object.getPrototypeOf(originalArrayPrototype) === originalObjectPrototype
+    && !Object.hasOwn(originalObjectPrototype, 'toJSON') && !Object.hasOwn(originalArrayPrototype, 'toJSON')
+}
+
+function ordinaryProjectionHeader(header: SessionView['header']) {
+  return header?.semanticSeed === undefined && header?.parentSession === undefined && header?.seedLength === undefined
+    && header?.forkPublication === undefined && header?.origin !== 'fork'
+}
+
+/** Direct staging also supports legacy payloads. A frozen caller-owned parent
+ * alone cannot prove its descendants are frozen data for a later observation. */
+function isImmutableProjectionData(value: unknown): boolean {
+  const pending = [value], seen = new Set<object>()
+  while (pending.length) {
+    const node = pending.pop()
+    if (node === null || node === undefined || typeof node === 'boolean' || typeof node === 'string' || typeof node === 'number' && Number.isFinite(node)) continue
+    if (typeof node !== 'object' || types.isProxy(node) || !Object.isFrozen(node)) return false
+    if (seen.has(node)) return false
+    seen.add(node)
+    const prototype = Object.getPrototypeOf(node)
+    if (Array.isArray(node) ? prototype !== originalArrayPrototype : prototype !== originalObjectPrototype && prototype !== null) return false
+    const fields = Object.getOwnPropertyDescriptors(node)
+    for (const key of Reflect.ownKeys(fields)) {
+      if (typeof key !== 'string') return false
+      const field = fields[key]!
+      if (!('value' in field)) return false
+      pending.push(field.value)
+    }
+  }
+  return true
+}
 
 function immutableFactoryFor(view: SessionView, sessionId: string) {
   const factory = immutableFactories.get(view)
@@ -49,6 +88,23 @@ export function readManagedConversationAuditAdvance(view: SessionView, ownerSess
   if (immutableFactoryFor(view, ownerSessionId) !== factory || factory.index.eventCount !== eventCount) return undefined
   factory.assertFrontier(eventCount)
   return Object.freeze({ eventCount, lastSeq: eventCount - 1 })
+}
+
+/** Read only the original ordinary factory's logical history at its installed
+ * frontier. The caller renders through the same view and rechecks before use. */
+export function readManagedProjectionHistory(view: SessionView, ownerSessionId: string) {
+  const factory = immutableFactoryFor(view, ownerSessionId)
+  if (!factory?.hasProjectionProof() || !factory.hasContiguousSeq() || !originalProjectionEnvironment()) return undefined
+  const count = factory.index.eventCount
+  const assertCurrent = () => {
+    if (immutableFactoryFor(view, ownerSessionId) !== factory || factory.index.eventCount !== count
+        || !factory.hasProjectionProof() || !originalProjectionEnvironment()) throw new TypeError('Original managed projection changed')
+    factory.assertFrontier(count)
+  }
+  assertCurrent()
+  const history = factory.index.history()
+  assertCurrent()
+  return { history, assertCurrent }
 }
 
 export interface ManagedHistoryCut {readonly kind:'original-managed-history-cut'}
@@ -106,7 +162,12 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
   const events: SessionEvent[] = [...captured.value.events] as SessionEvent[]
   // A repeated sequence could change the addressability of an earlier fact.
   let contiguousSeq = events.every((event, ordinal) => event.seq === ordinal)
-  const index = createIndex(events, position => events[position], source.formatVersion, { ...source.header, ...scope })
+  const formatVersion = source.formatVersion, indexHeader = { ...source.header, ...scope }
+  let projectionProof = createIndex === createConversationIndex && formatVersion === CURRENT_FORMAT_VERSION
+    && ordinaryProjectionHeader(indexHeader) && ordinaryProjectionHeader(captured.value.header)
+    && (!captured.value.header || !Object.hasOwn(captured.value.header, 'sessionId'))
+    && originalProjectionEnvironment() && isImmutableProjectionData(captured.value)
+  const index = createIndex(events, position => events[position], formatVersion, indexHeader)
   const intake=createManagedIntakeIndex()
   intake.stage(events,false).commit()
   const deny = (): never => { throw new TypeError('Managed Session is readonly') }
@@ -117,10 +178,13 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
     formatVersion: source.formatVersion, events: facade,
     ...(captured.value.header ? { header: captured.value.header } : {}),
   })
+  const sessionId = scope?.sessionId
+  projectionProof &&= view.formatVersion === formatVersion && typeof sessionId === 'string'
+    && indexHeader.sessionId === sessionId && originalProjectionEnvironment()
   managedSessions.add(view)
   originalIndexes.set(view, index)
-  originalSourceSessions.set(view, scope?.sessionId)
-  immutableFactories.set(view,{index,hasContiguousSeq:()=>contiguousSeq,assertFrontier(count){
+  originalSourceSessions.set(view, sessionId)
+  immutableFactories.set(view,{index,hasContiguousSeq:()=>contiguousSeq,hasProjectionProof:()=>projectionProof,assertFrontier(count){
     // The private array has no replacement path, only frozen-row append.
     // Index and array publication are one synchronous original installation.
     if(events.length<count||index.eventCount!==events.length)throw TypeError('Original immutable history frontier unavailable')
@@ -136,7 +200,9 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
       for (const event of suffix) prepared.push(freezeJsonData(prepareSessionEvent(view, event, event.seq!, prepared)) as SessionEvent)
       const inputs=intake.stage(prepared)
       validateDeliveryFrame(prepared, view.formatVersion)
+      const suffixProof = projectionProof && originalProjectionEnvironment() && prepared.every(isImmutableProjectionData)
       const staged = index.stage(prepared)
+      const verifiedSuffix = suffixProof && originalProjectionEnvironment()
       // Keep the validated installation array private and immutable. Exposing
       // it allowed a caller to substitute a row after index validation.
       Object.freeze(prepared)
@@ -152,6 +218,7 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
           events.push(event)
         }
         inputs.commit()
+        projectionProof &&= verifiedSuffix
         installed = true
       } })
     },

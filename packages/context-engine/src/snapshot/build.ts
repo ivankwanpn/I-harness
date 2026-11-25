@@ -1,5 +1,5 @@
-import { captureRestoredConversationData, readManagedConversationAuditAdvance, readManagedConversationFrontier, type PreparedConversationArchive } from '@i-harness/core-session/internal/restoration'
-import { projectConversation, readConversationState, type SessionView as Session } from "@i-harness/core-session"
+import { captureRestoredConversationData, projectManagedConversation, readManagedConversationAuditAdvance, readManagedConversationFrontier, type PreparedConversationArchive } from '@i-harness/core-session/internal/restoration'
+import { projectConversation, readConversationState, type ConversationPayloadCapture, type SessionView as Session } from "@i-harness/core-session"
 import type { ContextCapture, ContextCaptureInput, ContextCoordinateRead, ContextCoordinates, ContextSnapshotIdentityRead, CapturedRequestSurface, UnsupportedContext } from "../contracts/snapshot.ts"
 import { captureData } from "./data.ts"
 import { contextRevision, semanticContextRevision } from "./revision.ts"
@@ -28,10 +28,13 @@ function captureConversation(session: Session, ownerSessionId: string) {
   let sourceIds: readonly string[] = []
   try {
     const frontier = managedFrontier(session, ownerSessionId)
-    const projection = projectConversation(session, { ownerSessionId, capturePayload(value, source) {
+    const capturePayload: ConversationPayloadCapture = (value, source) => {
       sourceIds = [source.id]
       return captureData(value)
-    } })
+    }
+    const options = { ownerSessionId, capturePayload }
+    const ownedProjection = frontier === undefined ? undefined : projectManagedConversation(session, options)
+    const projection = ownedProjection ?? projectConversation(session, options)
     const state = readConversationState(session, projection)
     const captured = finishConversationCapture(projection, state, ownerSessionId)
     if (captured.kind === "available" && frontier !== undefined && managedFrontier(session, ownerSessionId) === frontier) {

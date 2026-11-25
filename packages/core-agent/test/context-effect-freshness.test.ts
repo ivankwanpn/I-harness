@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest"
 import { append, createSession, createNondurableFactOwner } from "@i-harness/core-session"
 import * as coreSession from "@i-harness/core-session"
+import * as restoration from "@i-harness/core-session/internal/restoration"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { reductionGroups, reductionSourceCurrent, selectReductionRuns } from "@i-harness/context-engine"
@@ -38,20 +39,25 @@ it('shares the original compatibility frontier while reading live request inputs
     modelToolSchemas() { calls.push('tools'); return [] },
   }, 'owner')
   const project = vi.spyOn(coreSession, 'projectConversation')
+  const projectManaged = vi.spyOn(restoration, 'projectManagedConversation')
   try {
     const captured = context.captureCandidate()
     expect(context.isCurrentCandidate(captured)).toBe(true)
     expect(context.isCurrentCandidate(captured)).toBe(true)
-    expect(project).toHaveBeenCalledOnce()
+    expect(projectManaged).toHaveBeenCalledOnce()
     prompt = 'changed surface'
     expect(context.isCurrentCandidate(captured)).toBe(false)
-    expect(project).toHaveBeenCalledOnce()
+    expect(projectManaged).toHaveBeenCalledOnce()
     prompt = 'initial surface'
     appendOnRead = true
     expect(context.isCurrentCandidate(captured)).toBe(false)
-    expect(project).toHaveBeenCalledTimes(2)
+    expect(projectManaged).toHaveBeenCalledTimes(2)
+    expect(project).not.toHaveBeenCalled()
     expect(calls).toEqual(Array.from({ length: 5 }, () => ['surface', 'tools', 'instructions']).flat())
-  } finally { project.mockRestore() }
+  } finally {
+    projectManaged.mockRestore()
+    project.mockRestore()
+  }
 })
 
 it('reprojects a mutable session after same-length edits without reading its dynamic surface twice', () => {
