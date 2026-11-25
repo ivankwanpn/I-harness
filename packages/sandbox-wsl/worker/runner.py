@@ -305,19 +305,21 @@ def write_inventory(roots, checkpoint=lambda: None, statistics=None):
     deadline = time.monotonic() + MAX_INVENTORY_SECONDS
     count, directories = 0, 0
     digest = hashlib.sha256()
+    encoder = json.JSONEncoder(ensure_ascii=True, separators=(',', ':'))
     aliases, seen_entries = {}, set()
 
     def record(root, relative, info, link=None):
-        digest.update(json.dumps([root, relative, info, link], ensure_ascii=True,
-                                 separators=(',', ':')).encode() + b'\n')
+        digest.update(encoder.encode([root, relative, info, link]).encode() + b'\n')
 
-    def walk(fd, root, relative, device, mount_identity, depth):
+    def walk(fd, root, relative, device, mount_identity, depth, selected=None):
         nonlocal count, directories
         checkpoint()
         directories += 1
         require(directories <= MAX_INVENTORY_DIRECTORIES and depth <= MAX_INVENTORY_DEPTH
                 and time.monotonic() <= deadline, 'writable inventory limit exceeded')
         before, mount = metadata(fd)
+        if selected is not None:
+            require((before, mount) == selected, 'writable inventory changed')
         require(mount == mount_identity, 'writable inventory crosses mount identity')
         require(stat.S_ISDIR(before[2]) and before[0] == device, 'unsupported writable inventory')
         record(root, relative, before)
@@ -329,7 +331,8 @@ def write_inventory(roots, checkpoint=lambda: None, statistics=None):
                 require(count <= MAX_INVENTORY_ENTRIES and time.monotonic() <= deadline,
                         'writable inventory limit exceeded')
                 names.append(entry.name)
-        for name in sorted(names):
+        names.sort()
+        for name in names:
             checkpoint()
             require(time.monotonic() <= deadline, 'writable inventory limit exceeded')
             initial, mount = metadata(fd, name)
@@ -339,8 +342,7 @@ def write_inventory(roots, checkpoint=lambda: None, statistics=None):
             if stat.S_ISDIR(initial[2]):
                 child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
                 try:
-                    require(metadata(child) == (initial, mount), 'writable inventory changed')
-                    walk(child, root, path, device, mount_identity, depth + 1)
+                    walk(child, root, path, device, mount_identity, depth + 1, (initial, mount))
                     require(metadata(fd, name) == metadata(child),
                             'writable inventory changed')
                 finally:
@@ -418,10 +420,17 @@ class Prepared:
             if runtime_path:
                 self.env['PATH'] = ':'.join(runtime_path + [self.env.get('PATH', SAFE_ENV['PATH'])])
             canonical_cache = {}
-            def capture(path):
+            captured_paths = {}
+            def capture(path, *, linux=False):
                 checkpoint()
-                entry = Directory(path, canonical_cache, checkpoint=checkpoint)
-                self.directories.append(entry)
+                # One preparation owns each exact input spelling. Distinct
+                # spellings are proved separately even if they alias a directory.
+                key = (linux, path) if isinstance(path, str) else None
+                entry = captured_paths.get(key)
+                if entry is None:
+                    entry = Directory(path, canonical_cache, linux=linux, checkpoint=checkpoint)
+                    self.directories.append(entry)
+                    captured_paths[key] = entry
                 return entry
             def roots(key):
                 values = policy.get(key)
@@ -439,10 +448,8 @@ class Prepared:
                 root = os.path.dirname(path) if os.path.basename(path) == 'bin' else path
                 require(root not in ('/', '/usr', '/bin', '/tmp', '/proc', '/dev', '/run/WSL'), 'unsupported runtime directory')
                 try:
-                    directory = Directory(root, canonical_cache, linux=True, checkpoint=checkpoint)
-                    self.directories.append(directory)
-                    binary_directory = Directory(path, canonical_cache, linux=True, checkpoint=checkpoint)
-                    self.directories.append(binary_directory)
+                    directory = capture(root, linux=True)
+                    binary_directory = capture(path, linux=True)
                 except OSError:
                     raise Refusal('managed runtime directory unavailable or changed') from None
                 require(directory_contains(directory, binary_directory), 'managed runtime bin escapes release')

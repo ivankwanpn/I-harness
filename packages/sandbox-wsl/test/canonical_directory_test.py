@@ -429,6 +429,24 @@ class PreparedPolicyTests(unittest.TestCase):
             self.assertEqual(args[args.index('--chdir') + 1], '/allowed/work')
         finally: prepared.close()
 
+    def test_same_input_path_has_one_original_owner_and_a_fresh_commit_check(self):
+        self.policy['primaryRoot'] = 'authority'
+        self.spec['cwd'] = 'write'
+        for entry in self.entries.values():
+            entry.validate = mock.Mock()
+        with mock.patch.object(worker, 'Directory', side_effect=lambda path, *args, **kwargs: self.entries[path]) as opened, \
+             mock.patch.object(worker, 'write_inventory', return_value='controlled-inventory'):
+            prepared = worker.Prepared(self.spec, self.policy)
+            try:
+                self.assertIs(prepared.primary, prepared.authority[0])
+                self.assertIs(prepared.cwd, prepared.writes[0])
+                self.assertEqual([call.args[0] for call in opened.call_args_list], ['authority', 'write', 'reference'])
+                prepared.validate()
+                for name in ('authority', 'write', 'reference'):
+                    self.entries[name].validate.assert_called_once()
+            finally: prepared.close()
+        self.assertCountEqual(self.closed, [501, 504, 505])
+
 
 if __name__ == '__main__':
     sys.argv = sys.argv[:1]

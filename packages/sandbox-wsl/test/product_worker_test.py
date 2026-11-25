@@ -1,4 +1,5 @@
 """Product regression fixtures and evidence stay in repository-owned task directories."""
+import hashlib
 import json
 import os
 import pathlib
@@ -7,6 +8,7 @@ import time
 import unittest
 import sys
 import socket
+from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from worker_test import WorkerTests, Session, WORKER, REPO, windows
 
@@ -30,6 +32,41 @@ class ProductWorkerTests(WorkerTests):
             os.link(self.work / 'a', self.sibling / 'outside')
             with self.assertRaisesRegex(module['Refusal'], 'hardlink'):
                 module['write_inventory']([root])
+        finally: root.close()
+
+    def test_inventory_keeps_legacy_digest_and_checks_nested_descriptor_once_at_entry(self):
+        module = self.worker_module()
+        nested = self.work / '00-dir'
+        nested.mkdir()
+        (self.work / '02-original').write_text('data')
+        os.link(self.work / '02-original', nested / 'alias')
+        os.symlink('00-dir', self.work / '01-link')
+        (self.work / '03-caf\u00e9').write_text('unicode')
+
+        root = module['Directory'](str(self.work), linux=True)
+        try:
+            metadata = module['metadata']
+            expected = hashlib.sha256()
+            for path, link in [('', None), ('00-dir', None), ('00-dir/alias', None), ('01-link', '00-dir'),
+                               ('02-original', None), ('03-caf\u00e9', None)]:
+                payload = [root.physical, '/' + path if path else '', metadata(root.fd, path)[0], link]
+                expected.update(json.dumps(payload, ensure_ascii=True, separators=(',', ':')).encode() + b'\n')
+
+            identity = module['Directory'].key(os.stat(nested))
+            nested_descriptor_reads = 0
+
+            def read(fd, name=''):
+                nonlocal nested_descriptor_reads
+                if not name and module['Directory'].key(os.fstat(fd)) == identity:
+                    nested_descriptor_reads += 1
+                return metadata(fd, name)
+
+            statistics = {}
+            with mock.patch.dict(module, {'metadata': read}):
+                self.assertEqual(module['write_inventory']([root], statistics=statistics), expected.hexdigest())
+            self.assertEqual(statistics, {'entries': 5, 'directories': 2})
+            # First observation, child end metadata/mount checks, and parent's final comparison.
+            self.assertEqual(nested_descriptor_reads, 4)
         finally: root.close()
 
     def test_desktop_project_prepares_with_finite_inventory_budget(self):
