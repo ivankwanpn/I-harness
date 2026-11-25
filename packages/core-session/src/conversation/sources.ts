@@ -2,6 +2,7 @@ import { eventArchive, type ConversationEventArchive } from './archive.ts'
 import type { SessionView as Session } from "../managed/types.ts"
 import type { ConversationDiagnostic, ConversationProvenance, ConversationSourceRef } from "./types.ts"
 import type { ConversationPayloadReader } from './payload.ts'
+import { createConversationSourceRef } from '../serialization/context-data.ts'
 
 /** Source coordinates belong to the original archive, even for a prefix view. */
 export function archiveConversationSources(archive: ConversationEventArchive, ownerSessionId: string | undefined, diagnostics: ConversationDiagnostic[], options: { header?: Session['header']; candidate?: { id: string; baseCount: number }; readPayload?: ConversationPayloadReader; coordinates?: ConversationSourceCoordinateView; prunedResults?: ReadonlyMap<number, import('./restoration-types.ts').PreparedPrunedResult> } = {}) {
@@ -31,7 +32,7 @@ export function archiveConversationSources(archive: ConversationEventArchive, ow
     const prospective = options.candidate !== undefined && eventIndex >= options.candidate.baseCount
     const addressable = !prospective && valid(seq) && counts.get(seq) === 1
     const coordinate = prospective ? `candidate:${options.candidate!.id}:${eventIndex - options.candidate!.baseCount}` : addressable ? seq : `event:${eventIndex}`
-    source = Object.freeze({ id: JSON.stringify([ownerSessionId ?? null, coordinate, part]), eventIndex, ...(addressable ? { seq } : {}), part, addressable })
+    source = createConversationSourceRef(JSON.stringify([ownerSessionId ?? null, coordinate, part]), eventIndex, part, addressable ? seq : undefined)
     cache.set(key, source)
     return source
   }

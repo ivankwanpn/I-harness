@@ -1,3 +1,5 @@
+import type { ConversationSourceRef } from '../conversation/types.ts'
+
 export type ImmutableJson = null | boolean | number | string | readonly ImmutableJson[] | { readonly [key: string]: ImmutableJson }
 export type Captured<T> = unknown extends T ? ImmutableJson : T extends readonly (infer E)[] ? readonly Captured<E>[] : T extends object ? { readonly [K in keyof T]: Captured<T[K]> } : T
 
@@ -12,6 +14,21 @@ export function isCapturedData(value: unknown): boolean {
 
 export class UnsupportedData extends Error {
   constructor() { super("CONTEXT_SNAPSHOT_UNSUPPORTED") }
+}
+
+function supportsCapturedNumber(value: number): boolean {
+  return Number.isFinite(value) && !Object.is(value, -0) && (!Number.isInteger(value) || Number.isSafeInteger(value))
+}
+
+/** Construct the closed scalar DTO so the projection can share the reference.
+ * Legacy coordinates outside the capture domain still use the ordinary validator. */
+export function createConversationSourceRef(id: string, eventIndex: number, part: string, seq: number | undefined): ConversationSourceRef {
+  const addressable = seq !== undefined
+  const reference = Object.freeze({ id, eventIndex, ...(addressable ? { seq } : {}), part, addressable })
+  if (typeof id === 'string' && typeof part === 'string' && supportsCapturedNumber(eventIndex) && (!addressable || supportsCapturedNumber(seq))) {
+    capturedNodes.add(reference)
+  }
+  return reference
 }
 
 /** Own only supported JSON data. Descriptors precede all unknown child reads.
@@ -29,7 +46,7 @@ export function captureData<T>(input: T): Captured<T> {
     const value = task.value
     if (value === null || typeof value === "string" || typeof value === "boolean") { task.put(value); continue }
     if (typeof value === "number") {
-      if (!Number.isFinite(value) || Object.is(value, -0) || Number.isInteger(value) && !Number.isSafeInteger(value)) throw new UnsupportedData()
+      if (!supportsCapturedNumber(value)) throw new UnsupportedData()
       task.put(value); continue
     }
     if (typeof value !== "object") throw new UnsupportedData()

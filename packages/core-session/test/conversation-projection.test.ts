@@ -1,8 +1,12 @@
 import { deriveMessagesUpTo } from '../src/projection/messages.ts'
+import { createHash } from 'node:crypto'
+import { eventArchive } from '../src/conversation/archive.ts'
+import { archiveConversationSources, createConversationSourceCoordinates } from '../src/conversation/sources.ts'
+import { captureData, isCapturedData } from '../src/serialization/context-data.ts'
 import { describe, expect, it } from "vitest"
 import {
   append, createSession, deriveMessages, fromJSONL, toJSONL,
-  projectConversation, renderConversation,
+  canonicalJsonData, projectConversation, renderConversation,
   type Session, type SessionEvent, type ProviderContinuation,
 } from "../src/index.ts"
 
@@ -20,6 +24,45 @@ const continuation: ProviderContinuation = {
 }
 
 describe("semantic conversation projection", () => {
+  it('reuses original immutable source references with the same canonical bytes and digest', () => {
+    const session = log({ type: 'turn/start' }, { type: 'step/start' }, { type: 'user/message', text: '工作 🧭\ud800' },
+      { type: 'assistant/message', text: '結果' }, { type: 'step/end' }, { type: 'turn/end' })
+    const projection = projectConversation(session, { ownerSessionId: '工作區 \ud800' })
+    const original = projection.items[0]!.unit!.source
+    const captured = captureData(projection)
+    const ordinary = captureData(structuredClone(projection))
+    const repeated = (value: typeof captured) => value.items.map(item => item.unit!.source)
+    expect(isCapturedData(original)).toBe(true)
+    expect(Object.isFrozen(original)).toBe(true)
+    expect(Object.keys(original)).toEqual(['id', 'eventIndex', 'seq', 'part', 'addressable'])
+    expect(repeated(captured).every(reference => reference === original)).toBe(true)
+    expect(new Set(repeated(ordinary)).size).toBe(2)
+    const encoded = canonicalJsonData(captured), baseline = canonicalJsonData(ordinary)
+    expect(encoded).toBe(baseline)
+    const digest = (bytes: string) => createHash('sha256').update(bytes).digest('hex')
+    expect(digest(encoded)).toBe(digest(baseline))
+  })
+
+  it('keeps legacy sequence validation and requires fresh coordinates for cached references', () => {
+    const events: SessionEvent[] = [
+      { type: 'user/message', text: 'negative zero', seq: -0 },
+      { type: 'user/message', text: 'nonfinite', seq: Infinity },
+    ]
+    const index = createConversationSourceCoordinates()
+    const current = index.stage(events).commit()
+    const sources = archiveConversationSources(eventArchive(events), 'owner', [], { coordinates: current })
+    const negativeZero = sources.ref(0, 'message')
+    expect(Object.is(negativeZero.seq, -0)).toBe(true)
+    expect(negativeZero.addressable).toBe(true)
+    expect(isCapturedData(negativeZero)).toBe(false)
+    expect(() => captureData(negativeZero)).toThrow('CONTEXT_SNAPSHOT_UNSUPPORTED')
+    const nonfinite = sources.ref(1, 'message')
+    expect(nonfinite).toEqual({ id: '["owner","event:1","message"]', eventIndex: 1, part: 'message', addressable: false })
+    expect(captureData(nonfinite)).toBe(nonfinite)
+    index.stage([{ type: 'turn/start', seq: 2 }]).commit()
+    expect(() => sources.ref(1, 'message')).toThrow('Stale source coordinates')
+  })
+
   it('exposes only physical unit DTOs through the actual owner source factory', () => {
     const session = log({ type: 'turn/start' }, { type: 'step/start' }, { type: 'user/message', text: 'H' },
       { type: 'assistant/message', text: 'E' }, { type: 'step/end' }, { type: 'turn/end' })
