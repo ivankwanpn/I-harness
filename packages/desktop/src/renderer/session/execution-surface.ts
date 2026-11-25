@@ -8,11 +8,16 @@ export function useExecutionSurface<T>(read: () => Promise<unknown>, scope: stri
   const generation = useRef(0)
   const ticket = useRef(0)
   const pending = useRef(false)
+  const reads = useRef({ generation: 0, count: 0 })
   const readRef = useRef(read); readRef.current = read
   const refresh = useCallback(async () => {
     const current = generation.current; const request = ++ticket.current
+    if (reads.current.generation !== current) reads.current = { generation: current, count: 0 }
+    const inFlight = reads.current
+    inFlight.count++
     try { const value = await readRef.current(); if (current === generation.current && request === ticket.current) { setState(value as T); setError(undefined) } }
     catch (reason) { if (current === generation.current && request === ticket.current) setError(reason instanceof Error ? reason.message : String(reason)) }
+    finally { inFlight.count-- }
   }, [])
   useEffect(() => {
     generation.current++; ticket.current++; pending.current = false
@@ -22,8 +27,19 @@ export function useExecutionSurface<T>(read: () => Promise<unknown>, scope: stri
   }, [scope, refresh])
   useEffect(() => {
     if (!poll || !active) return
-    const timer = setInterval(() => { if (!pending.current) void refresh() }, 1500)
-    return () => clearInterval(timer)
+    let timer: ReturnType<typeof setInterval> | undefined
+    const stop = () => { clearInterval(timer); timer = undefined }
+    const updateVisibility = () => {
+      stop()
+      if (document.hidden) return
+      timer = setInterval(() => {
+        const inFlight = reads.current
+        if (!document.hidden && !pending.current && (inFlight.generation !== generation.current || inFlight.count === 0)) void refresh()
+      }, 1500)
+    }
+    updateVisibility()
+    document.addEventListener('visibilitychange', updateVisibility)
+    return () => { document.removeEventListener('visibilitychange', updateVisibility); stop() }
   }, [scope, poll, active, refresh])
   async function act(run: () => Promise<unknown>, after?: (value: unknown) => void, refreshAfter = true) {
     if (pending.current) return false

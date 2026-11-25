@@ -115,7 +115,7 @@ function isInitializeResult(value: unknown): value is {
 const passiveRequests = new Set([
   "ping", "session/list", "session/dashboard", "session/history", "session/queue", "session/context", "session/tasks",
   "desktop/interaction/pending", "desktop/session/navigation/state", "desktop/session/project/state",
-  "desktop/session/input/state", "desktop/sandbox/state",
+  "desktop/session/input/state", "desktop/session/processes/read", "desktop/sandbox/state",
 ])
 
 export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"> & Partial<SdkServer>, send: GatewayWrite, handlers: DesktopHandlers, internalIds: Set<string> = new Set()): {

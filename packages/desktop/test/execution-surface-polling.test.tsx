@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 import { useExecutionSurface } from "../src/renderer/session/execution-surface.ts"
-afterEach(() => { cleanup(); vi.useRealTimers() })
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers() })
 it("does not let a read started before a mutation replace its authoritative result", async () => {
   let finishRead!: (value: unknown) => void, finishSave!: (value: unknown) => void
   const oldRead = new Promise(resolve => { finishRead = resolve })
@@ -48,4 +48,55 @@ it("pauses hidden polling without invalidating a pending mutation or dropping it
   view.rerender(<Fixture active />)
   await act(async () => { vi.advanceTimersByTime(1500) })
   expect(read).toHaveBeenCalledTimes(3)
+})
+
+it("lets each slow automatic read settle before starting another poll", async () => {
+  vi.useFakeTimers()
+  const first = Promise.withResolvers<string>(), next = Promise.withResolvers<string>()
+  const read = vi.fn<() => Promise<string>>().mockReturnValueOnce(first.promise).mockReturnValueOnce(next.promise).mockResolvedValue("latest")
+  function Fixture() {
+    const view = useExecutionSurface<string>(read, "workspace", true)
+    return <p>{view.state}</p>
+  }
+  render(<Fixture />)
+  await act(async () => { vi.advanceTimersByTime(4500) })
+  expect(read).toHaveBeenCalledTimes(1)
+  await act(async () => { first.resolve("initial"); await first.promise })
+  expect(screen.getByText("initial")).toBeTruthy()
+
+  await act(async () => { vi.advanceTimersByTime(4500) })
+  expect(read).toHaveBeenCalledTimes(2)
+  await act(async () => { next.resolve("updated"); await next.promise })
+  expect(screen.getByText("updated")).toBeTruthy()
+  await act(async () => { vi.advanceTimersByTime(1500) })
+  expect(read).toHaveBeenCalledTimes(3)
+  expect(screen.getByText("latest")).toBeTruthy()
+})
+
+it("suspends polling while the desktop document is hidden and resumes on visibility", async () => {
+  vi.useFakeTimers()
+  const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false)
+  const read = vi.fn(async () => "ready")
+  function Fixture() {
+    const view = useExecutionSurface<string>(read, "workspace", true)
+    return <button onClick={() => { void view.refresh() }}>Refresh</button>
+  }
+  render(<Fixture />)
+  await act(async () => {})
+  await act(async () => { vi.advanceTimersByTime(1500) })
+  expect(read).toHaveBeenCalledTimes(2)
+  await act(async () => {
+    hidden.mockReturnValue(true)
+    document.dispatchEvent(new Event("visibilitychange"))
+    vi.advanceTimersByTime(6000)
+  })
+  expect(read).toHaveBeenCalledTimes(2)
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Refresh" })) })
+  expect(read).toHaveBeenCalledTimes(3)
+  await act(async () => {
+    hidden.mockReturnValue(false)
+    document.dispatchEvent(new Event("visibilitychange"))
+    vi.advanceTimersByTime(1500)
+  })
+  expect(read).toHaveBeenCalledTimes(4)
 })

@@ -52,6 +52,17 @@ it("observes overlapping Gateway requests and background work without listing sa
   const background = vi.fn(() => false)
   const sidebar = Promise.withResolvers<{sessions: []}>()
   const listSessions = vi.fn(() => sidebar.promise)
+  const processView = { sessionId: "session", live: false, terminals: [], jobs: [] }
+  const readStarted = Promise.withResolvers<void>()
+  const controlStarted = Promise.withResolvers<void>()
+  const processRead = Promise.withResolvers<typeof processView>()
+  const processControl = Promise.withResolvers<{ cancelled: true }>()
+  const agentProcesses: NonNullable<DesktopHandlers["agentProcesses"]> = {
+    read: vi.fn(() => { readStarted.resolve(); return processRead.promise }),
+    control: vi.fn(() => { controlStarted.resolve(); return processControl.promise }),
+    jobOutput: vi.fn(),
+    terminalOutput: vi.fn(),
+  }
   const service = createSessionService({ workspace: process.cwd(), modelPolicy: "required" })
   const projection = Promise.withResolvers<void>()
   const contextState = vi.fn<typeof service.contextState>(async () => {
@@ -59,7 +70,7 @@ it("observes overlapping Gateway requests and background work without listing sa
     return { kind: "unavailable", reason: "Fixture" }
   })
   const tasks = vi.fn(async () => { await projection.promise; return [] })
-  const handlers: DesktopHandlers = { hasActiveWork: background, sessionReload: () => held.promise }
+  const handlers: DesktopHandlers = { hasActiveWork: background, sessionReload: () => held.promise, agentProcesses }
   const base = createSdkServer({ ...service, contextState, tasksAsync: tasks }, { listSessions, onWrite: createGatewayWrite(send, handlers) })
   const router = createDesktopRouter(base, send, handlers)
   let id = 0
@@ -80,6 +91,20 @@ it("observes overlapping Gateway requests and background work without listing sa
     expect(await call("desktop/runtime/activity")).toMatchObject({ result: { active: true } })
     expect(await call("desktop/runtime/activity")).toMatchObject({ result: { active: false } })
     expect(listSessions).not.toHaveBeenCalled()
+    const processes = call("desktop/session/processes/read", { sessionId: "session" })
+    await readStarted.promise
+    expect(agentProcesses.read).toHaveBeenCalledWith("session")
+    expect(await call("desktop/runtime/activity")).toMatchObject({ result: { active: false } })
+    const command = { action: "job/cancel", id: "job" }
+    const control = call("desktop/session/processes/control", { sessionId: "session", command })
+    await controlStarted.promise
+    expect(agentProcesses.control).toHaveBeenCalledWith("session", command)
+    expect(await call("desktop/runtime/activity")).toMatchObject({ result: { active: true } })
+    processControl.resolve({ cancelled: true })
+    expect(await control).toMatchObject({ result: { cancelled: true } })
+    expect(await call("desktop/runtime/activity")).toMatchObject({ result: { active: false } })
+    processRead.resolve(processView)
+    expect(await processes).toMatchObject({ result: processView })
     const rendering = call("session/dashboard")
     const details = [call("session/context", {sessionId:"session"}), call("session/tasks", {sessionId:"session"})]
     expect(contextState).toHaveBeenCalledOnce()
@@ -88,7 +113,11 @@ it("observes overlapping Gateway requests and background work without listing sa
     sidebar.resolve({ sessions: [] }); await rendering
     projection.resolve(); await Promise.all(details)
     expect(listSessions).toHaveBeenCalledTimes(1)
-  } finally { held.resolve(); projection.resolve(); sidebar.resolve({ sessions: [] }); await router.close(); await service.close() }
+  } finally {
+    held.resolve(); projection.resolve(); sidebar.resolve({ sessions: [] })
+    processRead.resolve(processView); processControl.resolve({ cancelled: true })
+    await router.close(); await service.close()
+  }
 })
 
 it("awaits terminal settlement and returns an async cleanup failure", async () => {
