@@ -1,4 +1,4 @@
-import { readRestoredConversation, type PreparedConversationArchive } from '@i-harness/core-session/internal/restoration'
+import { captureRestoredConversationData, type PreparedConversationArchive } from '@i-harness/core-session/internal/restoration'
 import { projectConversation, readConversationState, type SessionView as Session } from "@i-harness/core-session"
 import type { ContextCapture, ContextCaptureInput, ContextCoordinateRead, ContextCoordinates, CapturedRequestSurface, UnsupportedContext } from "../contracts/snapshot.ts"
 import { captureData } from "./data.ts"
@@ -52,11 +52,10 @@ function finishConversationCapture(projection: ReturnType<typeof projectConversa
 }
 
 function captureRestoredConversation(lease: PreparedConversationArchive, ownerSessionId: string) {
-  let sourceIds: readonly string[] = []
-  try {
-    const paired = readRestoredConversation(lease,{ownerSessionId,capturePayload(value,source){sourceIds=[source.id];return captureData(value)}})
-    return finishConversationCapture(paired.projection,paired.state,ownerSessionId)
-  } catch { return unsupported('conversation',sourceIds) }
+  const paired = captureRestoredConversationData(lease, ownerSessionId)
+  if (paired.kind === 'unsupported') return unsupported('conversation', paired.sourceIds)
+  try { return finishConversationCapture(paired.projection, paired.state, ownerSessionId) }
+  catch { return unsupported('conversation', paired.sourceIds) }
 }
 /** Internal original-document consumer; nominal preparation has no Session fallback. */
 export function captureRestoredContextSnapshot(lease: PreparedConversationArchive, input: ContextCaptureInput): ContextCapture {

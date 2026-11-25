@@ -3,3 +3,5 @@ export type { PreparedConversationArchive, PreparedResultProjection } from './co
 export type { OriginalConversationRestorationSource } from './conversation/restoration-input.ts'
 
 export {previewRestoredConversationCandidate} from './managed/restored-view.ts'
+export { captureRestoredConversationData } from './managed/restored-view.ts'
+export { captureData, isCapturedData, UnsupportedData, type Captured, type ImmutableJson } from './serialization/context-data.ts'

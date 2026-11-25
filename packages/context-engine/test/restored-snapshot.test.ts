@@ -16,10 +16,11 @@ function fixture(orphan = false) {
     session.events.push({ type: 'turn/start', seq: 21 }, { type: 'user/message', seq: 22, text: 'next task' }, { type: 'step/start', seq: 23 }, { type: 'tool/call', seq: 24, callId: 'unpruned', name: 'read', args: {} }, { type: 'assistant/message', seq: 25, text: 'unpruned round' }, { type: 'tool/result', seq: 26, callId: 'unpruned', name: 'read', output: 'required complete body' }, { type: 'step/end', seq: 27 }, { type: 'turn/end', seq: 28 });
     if (orphan)
         session.events.push({ type: 'tool/result', seq: 29, callId: 'orphan', name: 'diagnostic', output: 'ORPHAN-EXCLUDED-'.repeat(1000) }, { type: 'compaction/prune', version: 1, seq: 30, pruned: [{ callId: 'orphan', head: 'orphan-head', tail: 'orphan-tail', removedBytes: 16000 }] });
-    let current = true, reads = 0, changeDuringRead = false, settleFailure = false, settles = 0;
+    let current = true, reads = 0, checks = 0, failAtCheck = Infinity, changeDuringRead = false, settleFailure = false, settles = 0;
     const source: OriginalConversationRestorationSource = {
         formatVersion: 14, prefix: { eventCount: session.events.length, bodyBytes: 0, prefixDigest: 'a'.repeat(64) }, assertCurrent() {
-            if (!current)
+            checks++;
+            if (!current || checks >= failAtCheck)
                 throw Error('source changed');
         }, async consume(accept) {
             for (const event of session.events)
@@ -46,7 +47,8 @@ function fixture(orphan = false) {
             changeDuringRead = true;
         }, failSettle() {
             settleFailure = true;
-        }, settles: () => settles, reads: () => reads
+        }, settles: () => settles, reads: () => reads, checks: () => checks,
+        failOnCheck(check: number) { failAtCheck = checks + check; }
     };
 }
 it('nominal restored lease reaches actual context capture with identical coordinates and prune payload, without retired history', async () => {
@@ -128,4 +130,43 @@ it('pruned result provenance uses original metadata without demanding an exclude
     expect(JSON.stringify(lease.preparedResult(29))).not.toContain('ORPHAN-EXCLUDED-');
     await lease.settle();
     await state.close();
+});
+
+it('brackets a data-only capture and refuses publication when the final ownership check fails', async () => {
+    const f = fixture(), owner = {};
+    const state = installRestoredManagedConversation(await restoreManagedConversation(f.source, owner, 'owner'), owner);
+    const lease = await state.prepare();
+    try {
+        const before = f.checks();
+        expect(captureRestoredContextSnapshot(lease, input)).toEqual(captureContextSnapshot(f.session, input));
+        expect(f.checks() - before).toBe(3);
+        f.failOnCheck(3);
+        expect(captureRestoredContextSnapshot(lease, input)).toMatchObject({ kind: 'unsupported', component: 'conversation' });
+    } finally {
+        await lease.settle();
+        await state.close();
+    }
+});
+
+it('uses the guarded archive when prepared data contains an opaque payload', async () => {
+    const f = fixture(), owner = {};
+    const state = installRestoredManagedConversation(await restoreManagedConversation(f.source, owner, 'owner'), owner);
+    const lease = await state.prepare();
+    try {
+        const event = f.session.events[24]!;
+        if (event.type !== 'tool/call') throw new Error('Expected a retained call');
+        let accesses = 0;
+        event.args = new Proxy({}, {
+            ownKeys(target) {
+                accesses++;
+                f.change();
+                return Reflect.ownKeys(target);
+            },
+        });
+        expect(captureRestoredContextSnapshot(lease, input)).toMatchObject({ kind: 'unsupported', component: 'conversation' });
+        expect(accesses).toBe(1);
+    } finally {
+        await lease.settle();
+        await state.close();
+    }
 });

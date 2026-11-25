@@ -11,6 +11,8 @@ import {extendPruneDependencyView} from '../projection/pruning.ts';
 import { captureOriginalRestorationSource } from './restoration-source.ts';
 import type { SessionEventView, EncodedFactBatch, FactReceipt } from './types.ts';
 import type { ConversationPayloadCapture } from '../conversation/payload.ts';
+import type { ConversationEventArchive } from '../conversation/archive.ts';
+import { captureData } from '../serialization/context-data.ts';
 import { preparePrunedResultProjection } from '../conversation/payload.ts';
 import type { ConversationProjection } from '../conversation/types.ts';
 import type { PreparedConversationArchive, PreparedPrunedResult, PreparedResultProjection } from '../conversation/restoration-types.ts';
@@ -59,10 +61,8 @@ export function readOriginalRestoredTaskHistory(source: object) {
 type Preparation = {
     candidate: Candidate;
     current(): void;
-    archive: {
-        length: number;
-        get(index: number): SessionEventView;
-    };
+    archive: ConversationEventArchive;
+    dataArchive(): ConversationEventArchive | undefined;
     pruned: Map<number, PreparedPrunedResult>;
     substitutes: Awaited<ReturnType<typeof preparePruneSubstitutes>>;
     coordinates: ReturnType<Candidate['sources']['read']>;
@@ -443,11 +443,44 @@ export function readRestoredConversation(lease: PreparedConversationArchive, opt
     const owned = prepared.candidate;
     if (options.ownerSessionId !== owned.sessionId)
         failure('CONVERSATION_RESTORATION_OWNER_MISMATCH');
-    const projection = renderConversationItems(prepared.archive, owned.index.history(), { ...options, header: owned.source.header, sourceCoordinates: prepared.coordinates, pruneSubstitutes: prepared.substitutes, prunedResults: prepared.pruned });
-    const sources = archiveConversationSources(prepared.archive, options.ownerSessionId, [], { header: owned.source.header, coordinates: prepared.coordinates, prunedResults: prepared.pruned });
-    const state = readIndexedConversationState(prepared.state, projection, { sources, visibility: historyVisibility(owned.index.resultFacts()), delivery: readConversationDeliveries(owned.index)!, seedEnd: owned.source.header?.seedLength ?? 0 });
+    const result = renderRestoredPair(prepared, prepared.archive, options, owned.source.header);
     prepared.current();
+    return result;
+}
+function renderRestoredPair(prepared: Preparation, archive: ConversationEventArchive, options: {
+    ownerSessionId: string; capturePayload?: ConversationPayloadCapture;
+}, header: SessionViewHeader) {
+    const owned = prepared.candidate;
+    const projection = renderConversationItems(archive, owned.index.history(), { ...options, header, sourceCoordinates: prepared.coordinates, pruneSubstitutes: prepared.substitutes, prunedResults: prepared.pruned });
+    const sources = archiveConversationSources(archive, options.ownerSessionId, [], { header, coordinates: prepared.coordinates, prunedResults: prepared.pruned });
+    const state = readIndexedConversationState(prepared.state, projection, { sources, visibility: historyVisibility(owned.index.resultFacts()), delivery: readConversationDeliveries(owned.index)!, seedEnd: header?.seedLength ?? 0 });
     return { projection, state };
+}
+type SessionViewHeader = OriginalConversationRestorationSource['header'];
+
+/** Render one original preparation with the local descriptor-based capture.
+ * Plain data is read synchronously between two ownership checks. Arbitrary
+ * callbacks and payloads stay on the individually guarded archive path. */
+export function captureRestoredConversationData(lease: PreparedConversationArchive, ownerSessionId: string) {
+    let sourceIds: readonly string[] = [];
+    try {
+        const prepared = preparations.get(lease);
+        if (!prepared) failure('CONVERSATION_PREPARATION_INVALID');
+        prepared.current();
+        const owned = prepared.candidate;
+        if (ownerSessionId !== owned.sessionId) failure('CONVERSATION_RESTORATION_OWNER_MISMATCH');
+        const header = owned.source.header;
+        prepared.current();
+        const archive = (isStrictFactData(header) ? prepared.dataArchive() : undefined) ?? prepared.archive;
+        const result = renderRestoredPair(prepared, archive, { ownerSessionId, capturePayload(value, source) {
+            sourceIds = [source.id];
+            return captureData(value);
+        } }, header);
+        prepared.current();
+        return { kind: 'captured' as const, ...result, sourceIds };
+    } catch {
+        return { kind: 'unsupported' as const, sourceIds };
+    }
 }
 type PreparedPayload = {
     full: Map<number, SessionEventView>;
@@ -546,12 +579,12 @@ function issuePreparation(owned: Candidate, payload: PreparedPayload, current: (
             failure('CONVERSATION_PREPARATION_EXPIRED');
         current();
     };
-    const eventAt = (index: number) => {
-        assert();
-        if (!full.has(index))
-            failure('CONVERSATION_PAYLOAD_NOT_PREPARED');
-        return full.get(index)!;
+    const readDataEvent = (index: number) => {
+        const event = full.get(index);
+        if (!event) failure('CONVERSATION_PAYLOAD_NOT_PREPARED');
+        return event;
     };
+    const eventAt = (index: number) => { assert(); return readDataEvent(index); };
     const archive = { length: owned.index.eventCount, get: eventAt };
     const lease: PreparedConversationArchive = Object.freeze({
         length: archive.length, assertCurrent: assert, preparedEvent(index: number) {
@@ -581,7 +614,14 @@ function issuePreparation(owned: Candidate, payload: PreparedPayload, current: (
             leases.delete(lease);
         }
     });
-    preparations.set(lease, { candidate: owned, current: assert, archive, pruned, substitutes, coordinates: payload.coordinates, state: payload.state });
+    preparations.set(lease, { candidate: owned, current: assert, archive, pruned, substitutes,
+        dataArchive() {
+            for (const map of [full, pruned, substitutes]) {
+                for (const value of map.values()) if (!isStrictFactData(value)) return undefined;
+            }
+            return { length: archive.length, get: readDataEvent };
+        },
+        coordinates: payload.coordinates, state: payload.state });
     leases.add(lease);
     return lease;
 }

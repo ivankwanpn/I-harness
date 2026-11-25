@@ -1,9 +1,9 @@
 import type { ContextBindingMetadata, ConversationProjection } from "@i-harness/core-session"
 import type { ReasoningEffort, ToolSchema } from "@i-harness/llm-seam"
+import type { Captured } from '@i-harness/core-session/internal/restoration'
+export type { Captured, ImmutableJson } from '@i-harness/core-session/internal/restoration'
 
 export type ContextRevision = string
-export type ImmutableJson = null | boolean | number | string | readonly ImmutableJson[] | { readonly [key: string]: ImmutableJson }
-export type Captured<T> = unknown extends T ? ImmutableJson : T extends readonly (infer E)[] ? readonly Captured<E>[] : T extends object ? { readonly [K in keyof T]: Captured<T[K]> } : T
 export interface ContextCoordinates {
   readonly ownerSessionId: string
   readonly archive: { readonly eventCount: number; readonly lastSeq?: number }
