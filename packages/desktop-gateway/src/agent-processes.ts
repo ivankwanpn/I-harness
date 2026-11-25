@@ -4,6 +4,7 @@ import { createFixedSavedSelection } from './saved-process-index.ts'
 import { buildSavedProcessIndex, type SavedCall, type NativeIdentity } from './saved-process-index.ts'
 import { hydrateSavedCandidate, hydrateSavedInlineCatalog } from './saved-result-json.ts'
 import type { AgentProcessReadRunner, AgentProcessReadContext } from './agent-process-read.ts'
+import { originalManagedExecutionFor } from '../../session-executor/src/host-managed-execution.ts'
 import { sameManagedArtifactRef, validManagedArtifactRef, type ExecFrameCursor, type ManagedArtifactRef } from '@i-harness/core-session'
 import { randomUUID } from "node:crypto"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -42,7 +43,7 @@ function savedShellJobs(index: ReturnType<typeof buildSavedProcessIndex>) {
   })
 }
 export interface JobOutputQuery { backend?: 'shell' | 'child' | 'workflow'; instanceId?: string; sourceId?: string; mode?: 'snapshot' | 'frames'; cursor?: ExecFrameCursor; expectedRef?: ManagedArtifactRef }
-export function createAgentProcesses(coordinator: SessionCoordinator, service: Pick<SessionService, "liveAssembly">, options: { runRead?: AgentProcessReadRunner } = {}) {
+export function createAgentProcesses(coordinator: SessionCoordinator, service: SessionService, options: { runRead?: AgentProcessReadRunner } = {}) {
   const unavailable = (code = 'unavailable'): never => { throw Object.assign(new Error('Job output unavailable for this owner'), { code }) }
   const runRead: AgentProcessReadRunner = options.runRead ?? (async (id, work) => {
     const { meta } = await coordinator.profile(id)
@@ -92,7 +93,8 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: P
         const index = context.index, chosen = index.select(id, query.instanceId)
         const doc = context.document as { jobs?: { id: string; output?: string }[] } | undefined
         const child = doc?.jobs?.find(job => job.id === id)
-        const assembly = service.liveAssembly(sessionId), background = assembly?.backgroundJobs?.().filter(job => job.id === id && job.ownerSessionId === sessionId) ?? []
+        const assembly = service.liveAssembly(sessionId), managed = context.managedProcesses?.()
+        const background = (assembly?.backgroundJobs?.() ?? managed?.background ?? []).filter(job => job.id === id && job.ownerSessionId === sessionId)
         if ((query.backend === undefined || query.backend === 'shell') && (chosen.kind === 'ambiguous-selector' || chosen.kind === 'conflict')) return unavailable(chosen.kind)
         if (chosen.kind === 'selected' && child && !query.backend && !query.instanceId) return unavailable('ambiguous-selector')
         if (chosen.kind === 'selected' && (query.backend === undefined || query.backend === 'shell')) {
@@ -137,7 +139,7 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: P
         if (live) return { text: live.output.slice(0, 131072), truncated: live.outputTruncated || live.output.length > 131072, ownerSessionId: sessionId, live: true }
         if (!child || query.backend === 'shell' || query.backend === 'workflow') return unavailable()
         const text = child.output ?? ''
-        return { text: text.slice(0, 131072), truncated: text.length > 131072, ownerSessionId: sessionId, live: Boolean(assembly?.tasks().some(task => task.id === id)) }
+        return { text: text.slice(0, 131072), truncated: text.length > 131072, ownerSessionId: sessionId, live: Boolean((assembly?.tasks() ?? managed?.tasks())?.some(task => task.id === id)) }
       }) } catch (cause) {
         if (frames) return { kind: 'unavailable' as const, reason: (cause as { code?: string }).code ?? 'unavailable' }
         return unavailable((cause as { code?: string }).code ?? "unavailable")
@@ -152,19 +154,20 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: P
       const saved = savedShellJobs(context.index)
       for (const row of saved.slice(-200)) if (!row.conflict && context.index.select(row.jobId, row.nativeJob?.instanceId).kind === "selected") context.select(row.jobId, row.nativeJob?.instanceId)
       const jobs = new Map<string, JobView & { nativeJob?: NativeIdentity; outputDisposition?: AgentProcessesView["jobs"][number]["outputDisposition"] }>([...projectJobsDoc(context.document), ...foldJobs(session.events)].map(job => [job.kind + ":" + job.jobId, job]))
-      const tasks = assembly?.tasks() ?? []
-      const background = assembly?.backgroundJobs?.().filter(job => job.ownerSessionId === sessionId) ?? []
+      const managed = context.managedProcesses?.()
+      const tasks = assembly?.tasks() ?? managed?.tasks() ?? []
+      const background = (assembly?.backgroundJobs?.() ?? managed?.background ?? []).filter(job => job.ownerSessionId === sessionId)
       const savedPtys = savedTerminals(session.events, sessionId)
       for (const row of savedPtys.values()) context.selectTerminal(row.id, row.evidence)
       const terminals = new Map([...savedPtys.values()].map(({ text: _text, truncated: _truncated, dropped: _dropped, endOffset: _offset, evidence: _evidence, ...row }) => [row.id, row]))
       for (const row of assembly?.liveResources?.().terminals ?? []) if (row.ownerSessionId === sessionId) terminals.set(row.id, { ...row, live: true, canControl: row.status === "running", outputAvailable: true })
       for (const job of background) jobs.set(job.kind + ":" + job.id, { jobId: job.id, kind: job.kind, label: job.id, status: job.status, outputAvailable: Boolean(job.output), ...(job.kind === "shell" ? { nativeJob: job.nativeJob } : {}) })
-      return { sessionId, live: Boolean(assembly), terminals: [...terminals.values()].slice(-200),
+      return { sessionId, live: Boolean(assembly || managed), terminals: [...terminals.values()].slice(-200),
         jobs: [...jobs.values(), ...saved.filter(row => !row.nativeJob || !background.some(active => active.kind === "shell" && active.nativeJob?.instanceId === row.nativeJob?.instanceId))].slice(-200).map(job => {
           const task = job.kind === "shell" ? undefined : tasks.find(task => task.id === job.jobId); const active = background.find(row => row.id === job.jobId && row.kind === job.kind && (row.kind !== "shell" || "nativeJob" in job && job.nativeJob && row.nativeJob?.instanceId === (job.nativeJob as any).instanceId))
           const declaration = "declaration" in job ? job.declaration as SavedCall : undefined
           return { jobId: job.jobId, kind: job.kind, label: job.label, status: job.status, outputAvailable: job.outputAvailable, startedAt: job.startedAt, endedAt: job.endedAt,
-            ownerSessionId: sessionId, live: Boolean(task || active), canCancel: active ? active.status === "running" && (active.kind !== "shell" || !!active.nativeJob && assembly?.ctx.services.get<{ supportsNativeJobKill?: true }>("exec/service")?.supportsNativeJobKill === true) : task?.canCancel === true, backend: job.kind === "shell" ? "shell" : job.kind === "workflow" ? "workflow" : "child", ...("nativeJob" in job ? { nativeJob: job.nativeJob } : {}), ...("outputDisposition" in job ? { outputDisposition: job.outputDisposition } : {}), ...(declaration ? { declaration: { surface: declaration.surface, cellId: declaration.cellId, callId: declaration.callId, callIndex: declaration.callIndex, resultIndex: declaration.resultIndex, callSeq: declaration.callSeq, resultSeq: declaration.resultSeq } } : {}) }
+            ownerSessionId: sessionId, live: Boolean(task || active), canCancel: !!assembly && (active ? active.status === "running" && (active.kind !== "shell" || !!active.nativeJob && assembly.ctx.services.get<{ supportsNativeJobKill?: true }>("exec/service")?.supportsNativeJobKill === true) : task?.canCancel === true), backend: job.kind === "shell" ? "shell" : job.kind === "workflow" ? "workflow" : "child", ...("nativeJob" in job ? { nativeJob: job.nativeJob } : {}), ...("outputDisposition" in job ? { outputDisposition: job.outputDisposition } : {}), ...(declaration ? { declaration: { surface: declaration.surface, cellId: declaration.cellId, callId: declaration.callId, callIndex: declaration.callIndex, resultIndex: declaration.resultIndex, callSeq: declaration.callSeq, resultSeq: declaration.resultSeq } } : {}) }
         }) }
       })
     },
@@ -186,6 +189,7 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: P
       const fields = allowed[String(command.action)]
       if (!fields || Object.keys(command).some(key => !["action", "id", ...fields].includes(key))) throw new Error("Unsupported process command")
       const assembly = service.liveAssembly(sessionId)
+      if (!assembly && originalManagedExecutionFor(service, sessionId)) throw new Error("Process control is unavailable for this private runtime")
       if (!assembly) throw new Error("No live process owner; cold history cannot control a process")
       if (command.action === "job/cancel") {
         if (command.backend !== undefined && !['shell', 'child', 'workflow'].includes(String(command.backend))) throw new Error('Unsupported process command')

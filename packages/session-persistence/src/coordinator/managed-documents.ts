@@ -1,11 +1,11 @@
 import { retainManagedJournalCleanup, settleManagedJournalCleanup } from '../native-fact-writer-internal.ts'
 import {associateArtifactCurrentnessReader,createArtifactCurrentGuard,isArtifactCurrentGuard,withImmediateArtifactCurrentChecks} from './artifact-path-association.ts'
 import {runOriginalCurrentnessRead} from '../../../core-session/src/managed/currentness-guards.ts'
-import { hasArchiveHistoryPrefixReader } from '../archive-read-internal.ts'
+import { hasArchiveHistoryPrefixReader, originalColdArchiveHistoryReader } from '../archive-read-internal.ts'
 import { createManagedRestoredRead } from './managed-restored-read.ts'
 import type { ManagedRestoredContextRead } from '../restored-context-internal.ts'
 import type { Session, JournalPrefix, OwnedSessionHistoryPage, SessionHistoryPageOptions } from '@i-harness/core-session'
-import { FactRecoveryRequiredError, aggregateErrors } from '@i-harness/core-session'
+import { FactRecoveryRequiredError, aggregateErrors, freezeJsonData } from '@i-harness/core-session'
 import type { CoordinatorOptions, PersistenceBackend } from './types.ts'
 import type { Ownership } from './ownership.ts'
 import type { Mutations } from './mutations.ts'
@@ -265,10 +265,26 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       check()
       return captureManagedProcessRead(document, ownership, documentKeys, check)
     },
-    captureProcessReadById(id: string, documentKeys: readonly string[]) {
+    async captureProcessReadById(id: string, documentKeys: readonly string[]) {
       const entry = documents.get(id), document = entry?.document
       if (!entry || !document || entry.revoked || entry.bootstrap || resolved.get(id) !== document) throw new FactRecoveryRequiredError()
       const check = () => { if (documents.get(id) !== entry || entry.document !== document || entry.revoked || entry.bootstrap || resolved.get(id) !== document) throw new FactRecoveryRequiredError() }
+      if (executions.has(entry) && !Object.hasOwn(document, 'view')) {
+        return readPrivateExecution(id, entry, (original, assertCurrent) => original.captureProcess(documentKeys, check, async () => {
+          const read = originalColdArchiveHistoryReader(backend)
+          if (!read?.readSealedHistory) throw new FactRecoveryRequiredError()
+          const expected = original.core.prefix
+          const archive = await read.readSealedHistory(id)
+          assertCurrent()
+          const header = original.core.header
+          if (!archive || originalColdArchiveHistoryReader(backend) !== read || original.core.prefix !== expected
+            || archive.version !== original.core.formatVersion || archive.meta?.semanticSeed !== undefined
+            || archive.meta?.parentSession !== header?.parentSession || archive.meta?.seedLength !== header?.seedLength
+            || archive.prefix.eventCount !== expected.eventCount || archive.prefix.bodyBytes !== expected.bodyBytes
+            || archive.prefix.prefixDigest !== expected.prefixDigest || archive.events.some((event, ordinal) => event.seq !== ordinal)) throw new FactRecoveryRequiredError()
+          return freezeJsonData({ formatVersion: archive.version, ...(header ? { header } : {}), events: archive.events })
+        }), current => captureManagedProcessRead(current, ownership, documentKeys, check))
+      }
       return captureManagedProcessRead(document, ownership, documentKeys, check)
     },
     captureRequiredParent(owner:import('@i-harness/core-session/internal/execution').ManagedExecutionOwner,source:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>) {

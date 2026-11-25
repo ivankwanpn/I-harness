@@ -8,7 +8,7 @@ export function createManagedProcessReadOwner(storage: ProcessReadStorage, manag
   return { async run<T, U>(id: string, options: ProcessReadOptions, work: (observation: ProcessReadObservation) => Promise<T>, publish: (candidate: T, observation: ProcessReadObservation, last: ProcessReadUpdate) => Promise<U>, scope: ProcessReadScopeRunner = (_observation, _visibility, run) => run()): Promise<U> {
     const keys = [...new Set(options.documentKeys)].sort()
     if (keys.length > 32 || keys.some(key => typeof key !== 'string')) throw new TypeError('Invalid process read document keys')
-    const capture = managed.captureProcessReadById(id, keys)
+    const capture = await managed.captureProcessReadById(id, keys)
     let state: 'capturing' | 'active' | 'finishing' | 'verified' | 'failed' | 'retired' = 'capturing', checking = false
     try {
       const auxiliary = await storage.captureManagedAuxiliary(id, keys)

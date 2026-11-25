@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { ColdArchiveHistoryReader } from '@i-harness/session-persistence/internal/archive-read'
 import type { SessionMeta } from '@i-harness/session-persistence'
-import { SESSION_HISTORY_LIMIT } from '@i-harness/core-session'
+import { SESSION_HISTORY_LIMIT, type JournalPrefix } from '@i-harness/core-session'
 import type { createArchiveReadOwner } from './archive-read-owner.ts'
 import { readSessionArchive } from './archive-reader.ts'
 import { ArchiveEvidenceMismatch, type VerifiedArchiveBody } from './verified-archive-body.ts'
@@ -36,6 +36,23 @@ export function createColdArchiveHistoryReader(options: {
   }
 
   return Object.freeze({
+    async readSealedHistory(sessionId: string) {
+      const generation = currentGeneration()
+      await options.checkDeleted(sessionId)
+      assertCurrent(generation)
+      const history = await archive.runSealed(options.file(sessionId), async (handle, extent) => {
+        let prefix: Readonly<JournalPrefix> | undefined
+        const decoded = await readSessionArchive(handle, extent, false, value => options.qualify(sessionId, value),
+          undefined, false, value => { prefix = value })
+        await options.checkDeleted(sessionId)
+        assertCurrent(generation)
+        if (!prefix || decoded.header.sessionId !== sessionId) return undefined
+        return { version: decoded.header.formatVersion, meta: decoded.header, events: decoded.events, prefix }
+      }, sessionId)
+      assertCurrent(generation)
+      return history
+    },
+
     async readFull(sessionId: string) {
       const generation = currentGeneration()
       await options.checkDeleted(sessionId)

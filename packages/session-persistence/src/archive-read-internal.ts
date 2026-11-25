@@ -29,6 +29,10 @@ export function originalDecodedArchiveRead(backend: object): PersistenceBackend[
 /** The original archive owner lends only frame evidence and verified records. */
 export interface ColdArchiveHistoryReader {
   readFull(sessionId: string): Promise<Awaited<ReturnType<PersistenceBackend['read']>> & { evidence?: object }>
+  /** Complete decoded history and its exact prefix from one sealed descriptor. */
+  readSealedHistory?(sessionId: string): Promise<(Awaited<ReturnType<PersistenceBackend['read']>> & {
+    prefix: Readonly<JournalPrefix>
+  }) | undefined>
   /** Records are returned in increasing archive ordinal. */
   readWindow(sessionId: string, evidence: object, ordinals: ReadonlySet<number>): Promise<readonly SessionEvent[] | undefined>
 }

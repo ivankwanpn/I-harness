@@ -68,6 +68,26 @@ import { encodeFactBatch, factPrefixDigest, legacyPrefixDigest, readFactJournal,
 import { originalColdArchiveHistoryReader } from '@i-harness/session-persistence/internal/archive-read';
 async function managed(version = 14) { const f = await fixture(), previous = legacyPrefixDigest(0, Buffer.alloc(0)), journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: previous, separatorBytes: 0 as const }; const frame = Buffer.from(encodeFactBatch('one', previous, [{ type: 'plan/mode', mode: 'on', seq: 0 }]).bytes); await fs.writeFile(f.path, JSON.stringify({ formatVersion: version, sessionId: 'a', journal }) + '\n'); await fs.appendFile(f.path, frame); return { ...f, journal, frame }; }
 
+it.each(['empty', 'predecessor'] as const)('seals a complete %s history in the read-only descriptor lane', async kind => {
+    const f = await fixture();
+    const events = kind === 'empty' ? [] : [{ type: 'user/message', seq: 0, text: 'original predecessor' }];
+    const body = Buffer.from(events.map(event => JSON.stringify(event) + '\n').join(''));
+    const journal = {
+        version: 1, legacyBodyBytes: body.length, legacyEventCount: events.length,
+        legacyPrefixDigest: legacyPrefixDigest(events.length, body), separatorBytes: 0,
+    };
+    const header = Buffer.from(JSON.stringify({ sessionId: 'a', formatVersion: 14, journal }) + '\n');
+    const bytes = Buffer.concat([header, body]);
+    await fs.writeFile(f.path, bytes);
+    vi.mocked(fs.open).mockClear();
+    const reader = originalColdArchiveHistoryReader(f.backend)!;
+    expect(await reader.readSealedHistory!('a')).toMatchObject({
+        version: 14, events, prefix: { eventCount: events.length, bodyBytes: body.length, prefixDigest: journal.legacyPrefixDigest },
+    });
+    expect(vi.mocked(fs.open).mock.calls.filter(([path]) => path === f.path).map(([, flags]) => flags)).toEqual(['r']);
+    expect(await fs.readFile(f.path)).toEqual(bytes);
+});
+
 async function coldHistoryFixture() {
     const f = await managed();
     const bytes = (options: { title?: string; text?: string } = {}) => {

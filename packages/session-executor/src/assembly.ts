@@ -17,6 +17,7 @@ import { ownedContextReadiness } from "@i-harness/session-persistence"
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createPluginCapabilities, type PluginCapabilities } from "./plugin-capabilities.ts"
 import { createScopedExec, createScopedExecWithReservation, createScopedWorkflowExec } from "./scoped-exec.ts"
+import { projectSessionBackgroundJobs, type SessionBackgroundJob } from "./background-job-view.ts"
 import { createChildObservation } from "./child-observation.ts"
 import { createAssemblyExecutionRuntime } from "./execution-runtime.ts"
 import { inspectWslRuntime } from "@i-harness/sandbox-local"
@@ -380,7 +381,7 @@ export interface SessionAssembly {
   /** Cancels only an owned live cell without competing with its model observer. */
   stopCodeCell?(cellId: string): Promise<void>
   /** The real assembly-local exec registry and exact owner-filtered workflow store. */
-  backgroundJobs?(): { id: string; kind: "shell" | "workflow"; status: "running" | "completed" | "killed" | "error"; output: string; outputTruncated: boolean; ownerSessionId?: string; nativeJob?: import('@i-harness/exec').NativeJobIdentity }[]
+  backgroundJobs?(): SessionBackgroundJob[]
   /** Retry durable parent messages only after the host publishes its lane. */
   drainParentNotifications?(ordinaryOnly?: boolean): Promise<void>
   /** Original retained source settlement only: no recipient admission/wake. */
@@ -1644,10 +1645,6 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     })
     budgetRead = () => agent.contextBudget!()
 
-    const backgroundOutput = (stdout: string, stderr: string) => {
-      const first = stdout.slice(0, 131072)
-      return { output: first + stderr.slice(0, 131072 - first.length), outputTruncated: stdout.length + stderr.length > 131072 }
-    }
     constructionComplete = true
     if (!opts.residentActivation) residentActivation.activate()
     return {
@@ -1758,15 +1755,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         if (!codeModeMount?.terminateCell || !codeModeMount.liveCells?.().some(cell => cell.id === cellId)) throw new Error("Live cell unavailable for this owner")
         await codeModeMount.terminateCell(cellId)
       } } : {}),
-      backgroundJobs: () => [
-        ...assemblyExec.listJobViews().map(job => {
-          const output = backgroundOutput(job.stdout, job.stderr)
-          return { id: job.id, kind: "shell" as const, status: job.status, ...output,
-            outputTruncated: output.outputTruncated || !!job.truncated?.stdout || !!job.truncated?.stderr,
-            ownerSessionId: job.owner, nativeJob: job.nativeJob }
-        }),
-        ...workflowMount!.executor.listJobs().filter(job => job.owner === opts.sessionId).map(job => ({ id: job.id, kind: "workflow" as const, status: job.status, ...backgroundOutput(job.stdout, job.stderr), ownerSessionId: job.owner })),
-      ],
+      backgroundJobs: () => projectSessionBackgroundJobs(assemblyExec.listJobViews(), workflowMount!.executor.listJobs(), opts.sessionId),
       // M49 Task 12: the projection owns NO registry object — rows only. The
       // workflow group comes from THIS workflow executor's real store rows
       // (mounted unconditionally above — the non-null claim is the mount

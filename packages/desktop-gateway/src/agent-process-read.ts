@@ -5,11 +5,13 @@ import type { SessionCoordinator, SessionMeta, ProcessReadInitial, ProcessReadUp
 import type { SessionService, ResultPageQuery, ResultPageResult, ResultReadScopeResolver } from '@i-harness/session-executor'
 import { buildObservedSavedProcessIndex, createFixedSavedSelection, type FixedSavedSelection } from './saved-process-index.ts'
 import type { SessionManagementFence } from './session-management-fence.ts'
+import { originalManagedExecutionFor, originalManagedRuntimeFor, type OriginalManagedRuntime } from '../../session-executor/src/host-managed-execution.ts'
 
 export interface AgentProcessReadContext {
   index: ReturnType<typeof buildObservedSavedProcessIndex>
   session: SessionView
   document: unknown
+  managedProcesses?(): { background: ReturnType<OriginalManagedRuntime['processes']>; tasks(): ReturnType<SessionService['tasks']> } | undefined
   select(id: string, instanceId?: string): void
   selectTerminal(id: string, evidence: readonly SavedFactEvidence[]): void
   checkpoint(): Promise<void>
@@ -19,7 +21,7 @@ export interface AgentProcessReadContext {
 export type AgentProcessReadRunner = <T>(id: string, work: (context: AgentProcessReadContext) => Promise<T>) => Promise<T>
 /** Whole request lives inside the genuine original observation and host fence. */
 export function createAgentProcessReadRunner(options: {
-  coordinator: SessionCoordinator; service: Pick<SessionService, 'liveAssembly' | 'pendingAssemblyMount'>
+  coordinator: SessionCoordinator; service: SessionService
   isConversation(id: string, meta: SessionMeta): Promise<boolean>; fence: SessionManagementFence
   resultReadScopeFor?: ResultReadScopeResolver
   readResultPage?: (id: string, query: ResultPageQuery) => Promise<ResultPageResult>
@@ -32,10 +34,16 @@ export function createAgentProcessReadRunner(options: {
     const mounting = service.pendingAssemblyMount(id)
     if (mounting) await mounting.catch(() => {})
     const assembly = service.liveAssembly(id)
+    const execution = originalManagedExecutionFor(service, id)
+    // A private attachment can precede its runtime. Use only the runtime that
+    // existed at the start of this observation and let a later read see a mount.
+    const runtime = execution && !assembly ? originalManagedRuntimeFor(service, id) : undefined
+    if (runtime && runtime.execution !== execution) throw new Error('Process read owner changed')
     let getter: Awaited<ReturnType<ResultReadScopeResolver>>, revision: string | undefined, established = false
     const synchronous = () => {
       fence.assertOpen(id)
-      if (service.liveAssembly(id) !== assembly) throw new Error('Process read owner changed')
+      if (service.liveAssembly(id) !== assembly || originalManagedExecutionFor(service, id) !== execution) throw new Error('Process read owner changed')
+      runtime?.assertCurrent()
       if (established && getter?.().revision !== revision) throw new Error('Process project scope changed')
     }
     async function policy() {
@@ -60,6 +68,13 @@ export function createAgentProcessReadRunner(options: {
       const checkpoint = async () => { synchronous(); apply(await observation.check()); assert(); await policy(); assert() }
       const index = buildObservedSavedProcessIndex(initial, id)
       context = { index, session: initial.session, document: document?.kind === 'present' ? document.value : undefined,
+        managedProcesses() {
+          if (!runtime) return undefined
+          assert()
+          const background = runtime.processes()
+          assert()
+          return { background, tasks() { assert(); const tasks = service.tasks(id); assert(); return tasks } }
+        },
         select(jobId, instanceId) { const selected = createFixedSavedSelection(initial, id, jobId, instanceId, index); for (const update of delivered) selected.append(update.from, update.events); checks.push(selected); assert() },
         selectTerminal(terminalId, evidence) { const selected = createFixedFactSelection(initial.session, evidence, id, terminalId); for (const update of delivered) selected.append(update.from, update.events); facts.push(selected); assert() },
         assertCurrent: assert, checkpoint,

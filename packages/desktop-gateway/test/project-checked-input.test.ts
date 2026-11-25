@@ -129,6 +129,39 @@ it('announces a promoted private turn as running while its provider is held and 
   } finally { release.resolve(); await cancelling?.catch(() => {}); await f.close() }
 }, 45_000)
 
+it('reads Processes during and after a private turn without opening a compatibility assembly', async () => {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const f = await fixture(async () => {
+    entered.resolve()
+    await release.promise
+  })
+  try {
+    await f.succeed('initialize')
+    const { sessionId } = await f.succeed('session/create') as { sessionId: string }
+    const { sessionId: coldId } = await f.succeed('session/create') as { sessionId: string }
+    expect(await f.succeed('desktop/session/input/submit', submit(sessionId, 'private-process-read'))).toMatchObject({ accepted: true })
+    await entered.promise
+    const execution = originalManagedExecutionFor(f.service, sessionId)
+    expect(execution).toBeDefined()
+
+    const read = (id: string) => f.succeed('desktop/session/processes/read', { sessionId: id })
+    const privateView = { sessionId, live: true, terminals: [], jobs: [] }
+    expect(await read(sessionId)).toEqual(privateView)
+    expect(await read(coldId)).toEqual({ sessionId: coldId, live: false, terminals: [], jobs: [] })
+    expect(await f.call('desktop/session/processes/control', { sessionId, command: { action: 'close', id: 'missing-pty' } })).toMatchObject({
+      error: { message: expect.stringContaining('unavailable for this private runtime') },
+    })
+    release.resolve()
+    await f.finished(sessionId)
+    await f.idle()
+    expect(await read(sessionId)).toEqual(privateView)
+    expect(f.service.liveAssembly(sessionId)).toBeUndefined()
+    expect(f.service.liveAssembly(coldId)).toBeUndefined()
+    expect(Object.hasOwn(execution!.owner, 'view')).toBe(false)
+    expect(originalManagedExecutionFor(f.service, sessionId)).toBe(execution)
+  } finally { release.resolve(); await f.close() }
+}, 45_000)
+
 it('checks the original project root once before attaching public input and preserves durable retries', async () => {
   const f = await fixture()
   try {

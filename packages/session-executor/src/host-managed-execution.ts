@@ -3,8 +3,16 @@ import type {ManagedExecutionAttachment} from '../../session-persistence/src/exe
 import {isManagedExecutionAttachment} from '../../session-persistence/src/execution-internal.ts'
 import {createManagedExecutionDomain,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 import type {PluginContext} from '@i-harness/core-plugin'
+import type {SessionBackgroundJob} from './background-job-view.ts'
 
-export type OriginalManagedRuntime=Readonly<{execution:ManagedExecutionAttachment;domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain;tools:import('@i-harness/core-tools').ToolRegistry;assertCurrent():void}>
+export type OriginalManagedRuntime = Readonly<{
+  execution: ManagedExecutionAttachment
+  domain: ManagedExecutionDomain
+  tools: import('@i-harness/core-tools').ToolRegistry
+  /** Passive view from this runtime's owned registries. */
+  processes(): SessionBackgroundJob[]
+  assertCurrent(): void
+}>
 type Owner={read(id:string):ManagedExecutionAttachment|undefined;runtime(id:string):OriginalManagedRuntime|undefined;prepareRuntime(id:string):Promise<OriginalManagedRuntime|undefined>;retain(id:string,execution:ManagedExecutionAttachment,cleanup:()=>Promise<void>):void;acquireChild?(id:string):Promise<Readonly<{execution:ManagedExecutionAttachment;release():Promise<void>}>>}
 const owners=new WeakMap<SessionService,Owner>()
 /** Internal first-party lookup only; never constructs or publishes a runtime. */

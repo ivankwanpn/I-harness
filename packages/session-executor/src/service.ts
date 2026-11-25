@@ -6,6 +6,7 @@ import {types} from 'node:util'
 import {AsyncLocalStorage} from 'node:async_hooks'
 import {firstPartySelectionFor} from './first-party-selection.ts'
 import {associateOriginalManagedExecution} from './host-managed-execution.ts'
+import {projectSessionBackgroundJobs} from './background-job-view.ts'
 import {mountOwnedWorkflow} from './owned-workflow.ts'
 import {associateOriginalHostAssemblyObserver} from './host-assembly-observer.ts'
 import {managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
@@ -1991,7 +1992,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       let resources = false
       try {
         resources = (managedCodeMounts.get(sessionId)?.liveCells?.().length ?? 0) > 0
-        resources ||= managedShellOwners.get(sessionId)?.service.listJobs().some(job => job.status === 'running') ?? false
+        resources ||= managedShellOwners.get(sessionId)?.listJobViews().some(job => job.status === 'running') ?? false
         if (assembly) {
           const live = assembly.liveResources?.()
           resources ||= !!(live?.codeCells.length || live?.terminals.some(terminal => terminal.status === 'running') || live?.backgroundJobs?.length || assembly.backgroundJobs?.().some(job => job.status === 'running'))
@@ -2077,7 +2078,27 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     closeSession,
     close,
   }
-  const readOriginalRuntime=(id:string)=>{if(!privateEntries.has(id))return undefined;const runtime=managedRuntimes.get(id);if(!runtime||closed||closing.has(id))return undefined;const check=()=>{if(closed||closing.has(id)||managedRuntimes.get(id)!==runtime)throw Error('Original managed runtime retired');runtime.domain.assertCurrent()};check();return Object.freeze({execution:runtime.execution,domain:runtime.domain,tools:runtime.tools,assertCurrent:check})}
+  const readOriginalRuntime = (id: string) => {
+    if (!privateEntries.has(id)) return undefined
+    const runtime = managedRuntimes.get(id)
+    if (!runtime || closed || closing.has(id)) return undefined
+    const check = () => {
+      if (closed || closing.has(id) || managedRuntimes.get(id) !== runtime) throw Error('Original managed runtime retired')
+      runtime.domain.assertCurrent()
+    }
+    check()
+    return Object.freeze({
+      execution: runtime.execution, domain: runtime.domain, tools: runtime.tools, assertCurrent: check,
+      processes() {
+        check()
+        const shell = managedShellOwners.get(id)?.listJobViews() ?? []
+        const workflow = managedWorkflowOwners.get(id)?.list() ?? []
+        const jobs = projectSessionBackgroundJobs(shell.filter(job => job.owner === id), workflow, id)
+        check()
+        return jobs
+      },
+    })
+  }
   associateOriginalManagedExecution(service,{read(id){if(!privateEntries.has(id))return undefined;if(closed||closing.has(id)||!privateCache)throw Error('Original managed execution unavailable');const execution=privateCache.current(id);if(!execution)throw Error('Original managed execution unavailable');return execution},runtime:readOriginalRuntime,async acquireChild(id){if(closed||!privateCache)throw Error('Original managed execution unavailable');const entry=await privateCache.get(id);if(closed){await privateCache.close(id);throw Error('Original managed execution unavailable')}let released=false;return Object.freeze({execution:entry.execution,async release(){if(released)return;released=true;await privateCache!.close(id)}})},async prepareRuntime(id){await prepareFirstParty(id);if(!managedCompatible(id)){if(privateEntries.has(id))throw Error('Private entry cannot switch to Session-shaped compatibility');return undefined}await waitForFirstPartyRefresh(id);await getManagedRuntime(id);await waitForFirstPartyRefresh(id);return readOriginalRuntime(id)},retain(id,execution,cleanup){if(!privateEntries.has(id)||closed||closing.has(id)||!privateCache)throw Error('Original managed execution unavailable');privateCache.retain(id,execution,cleanup)}})
   associateOriginalManagedRewind(service,id=>{
     if(!privateEntries.has(id))return undefined

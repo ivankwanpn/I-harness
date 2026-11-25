@@ -1,4 +1,4 @@
-import {registerExecWithReservation,type ExecExecutionHost} from '@i-harness/exec'
+import {registerExecWithReservation,type ExecExecutionHost,type NativeExecService} from '@i-harness/exec'
 import {createShellTools,type ShellToolDeps} from '@i-harness/shell'
 import {resolveWslWorkingDirectory} from '@i-harness/sandbox'
 import {createContextOutputTools,type ContextOutputService,type ContextCapture,type LegacyReadObservationRunner} from '@i-harness/context-output'
@@ -21,7 +21,11 @@ export interface OwnedShellOutput {
  readonly sourceFor?:(sessionId:string)=>Promise<ContextCapture['source']>
  readonly withLegacyReadObservation?:LegacyReadObservationRunner
 }
-export interface OwnedShellMount {readonly service:import('@i-harness/exec').ExecService;readonly workflowSteps:import('@i-harness/exec/direct-reservation').WorkflowStepFactory}
+export interface OwnedShellMount {
+ readonly service:import('@i-harness/exec').ExecService
+ readonly workflowSteps:import('@i-harness/exec/direct-reservation').WorkflowStepFactory
+ listJobViews(): ReturnType<NativeExecService['listJobViews']>
+}
 
 export function mountOwnedShell(original:ManagedRegistryConstruction,workspace:string,options:OwnedShellOptions,output:OwnedShellOutput,approvalInstalled:boolean,acquiredExecution?:ExecExecutionHost):OwnedShellMount{
  original.assertCurrent()
@@ -42,5 +46,8 @@ export function mountOwnedShell(original:ManagedRegistryConstruction,workspace:s
  original.tools.promote(['context_output_read'])
  if(!approvalInstalled)createExecutionApprovalPolicy(original.ctx,original.tools,{workspace,workspaceRoots:()=>[workspace]})
  original.assertCurrent()
- return Object.freeze({service:scoped.service,workflowSteps:createScopedWorkflowExec(pair,workspace,()=>undefined)})
+ return Object.freeze({
+  service:scoped.service,workflowSteps:createScopedWorkflowExec(pair,workspace,()=>undefined),
+  listJobViews:pair.service.listJobViews.bind(pair.service),
+ })
 }

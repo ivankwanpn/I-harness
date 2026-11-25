@@ -1,11 +1,23 @@
 import { randomUUID } from 'node:crypto'
 import { assertResultPrepared,currentToolResultProducer, registerToolResultDependency, type ToolExec, type ToolResultDependency } from '@i-harness/core-tools'
 import { createExecFrameCapture } from '@i-harness/output-retention'
-import type { ContextOutputService, ResultArtifactScope } from '@i-harness/context-output'
+import type { ContextOutputService, ResultArtifactScope, ResultArtifactSink } from '@i-harness/context-output'
 import { resultPageFailure, summarizeExecFrames, type ExecFrameSummary } from '@i-harness/context-output'
 import { sameManagedArtifactRef, type ManagedArtifactRef } from '@i-harness/core-session'
 import type { ExecFrameCapture, ExecFrameObservation, ExecResultRetention } from '@i-harness/exec'
 import { resultSourceBinding } from './result-sources.ts'
+
+type FrameArtifactOpener = () => Promise<ResultArtifactSink>
+function openFrameArtifact(qualified: { service: ContextOutputService; scope: ResultArtifactScope } | { cause: unknown }): FrameArtifactOpener {
+  return 'cause' in qualified ? () => Promise.reject(qualified.cause) : () => qualified.service.beginResult(qualified.scope, 'exec-frames-v1')
+}
+
+function captureFrameStorage(captures: WeakSet<ExecFrameCapture>, sourceId: string, prepare: (current: () => boolean) => FrameArtifactOpener) {
+  const capture = createExecFrameCapture({ sourceId, async openArtifact() { return open() } })
+  captures.add(capture)
+  const open = prepare(() => captures.has(capture))
+  return capture
+}
 
 /** The actual native capture token outlives a promoted startup source; it owns
  * storage only and can never invoke a command or acquire new execution rights. */
@@ -129,15 +141,24 @@ export function createExecResultRetention(service: ContextOutputService | undefi
     },
     begin(input) {
       const exec = currentToolResultProducer(), binding = exec ? resultSourceBinding(exec) : undefined, operationId = randomUUID()
-      let scope: ResultArtifactScope | undefined
-      const capture = createExecFrameCapture({ sourceId: input.sourceId, async openArtifact() {
+      const prepareArtifact = (current: () => boolean): FrameArtifactOpener => {
         if (!service || !binding?.source || !binding.sessionId || binding.sessionId !== input.owner.sessionId) throw Object.assign(new Error('Native result owner unavailable'), { code: 'ARTIFACT_OWNER_UNSUPPORTED' })
         if(binding.domain){if(!binding.prepared||binding.prepared.exec!==exec)throw TypeError('Original private result preparation required');const original=assertResultPrepared(binding.prepared);if(original.domain!==binding.domain||original.source!==binding.source||binding.domain.sessionId!==binding.sessionId)throw TypeError('Original private result source required')}
         else if(!binding.view)throw Object.assign(new Error('Native result owner unavailable'),{code:'ARTIFACT_OWNER_UNSUPPORTED'})
-        scope ??= service.registerResultScope({ operationId, sessionId: binding.sessionId, callId: binding.callId!, ...(binding.descriptor ? { source: binding.descriptor } : {}) }, () => captures.has(capture))
-        return service.beginResult(scope, 'exec-frames-v1')
-      } })
-      captures.add(capture); origins.set(capture, input.owner.sessionId); startupTargets.set(capture, binding?.sessionId)
+        const scope = service.registerResultScope({ operationId, sessionId: binding.sessionId, callId: binding.callId!, ...(binding.descriptor ? { source: binding.descriptor } : {}) }, current)
+        return openFrameArtifact({ service, scope })
+      }
+      const capture = captureFrameStorage(captures, input.sourceId, current => {
+        // The first frame can arrive after the private tool call retires. Keep
+        // its original storage scope, without retaining the call or source.
+        if (binding?.domain) {
+          try { return prepareArtifact(current) }
+          catch (cause) { return openFrameArtifact({ cause }) }
+        }
+        let open: FrameArtifactOpener | undefined
+        return async () => (open ??= prepareArtifact(current))()
+      })
+      origins.set(capture, input.owner.sessionId); startupTargets.set(capture, binding?.sessionId)
       return capture
     },
     async settle(capture): Promise<ExecFrameObservation> {

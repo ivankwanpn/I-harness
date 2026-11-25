@@ -115,14 +115,43 @@ it('wakes the original private service after a background Shell receipt',async()
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-shell-wake-'))
  const backend=createJsonlBackend(join(root,'sessions')),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract);await coordinator.create({sessionId:'main'})
  const output=createContextOutputService({root:join(root,'results'),workspaceId:'fixture',config:{enabled:false}});let launches=0,releases=0
+ const outputReady=Promise.withResolvers<void>()
  const done=Promise.withResolvers<void>()
- const native:TransportExecutionBackend={async probe(){return{id:'controlled',availability:'available',assurance:'unverified',features:{writeIsolation:false,readIsolation:false,denyPaths:false,pipes:true,pty:false,retainedTree:true}}},async prepare(spec,policy){return {policy,async rollback(){},async commit(check){check();launches++;const lease=createExecutionLease({receipt:{executionId:'native-actual',backendId:'controlled',policyFingerprint:policy.fingerprint,owner:spec.owner,assurance:'unverified'},rootExited:done.promise.then(()=>({exitCode:0})),waitTreeEmpty:()=>done.promise,settleIo:async()=>{},async releaseResources(){releases++},async terminate(){done.resolve()}});return {...lease,get settled(){return lease.settled},pid:1,io:{async write(){},async endInput(){},output:(async function*(){yield {channel:'stdout' as const,data:Buffer.from('actual native output')};await done.promise})()}}}}}}
+ const native:TransportExecutionBackend={async probe(){return{id:'controlled',availability:'available',assurance:'unverified',features:{writeIsolation:false,readIsolation:false,denyPaths:false,pipes:true,pty:false,retainedTree:true}}},async prepare(spec,policy){return {policy,async rollback(){},async commit(check){check();launches++;const lease=createExecutionLease({receipt:{executionId:'native-actual',backendId:'controlled',policyFingerprint:policy.fingerprint,owner:spec.owner,assurance:'unverified'},rootExited:done.promise.then(()=>({exitCode:0})),waitTreeEmpty:()=>done.promise,settleIo:async()=>{},async releaseResources(){releases++},async terminate(){done.resolve()}});return {...lease,get settled(){return lease.settled},pid:1,io:{async write(){},async endInput(){},output:(async function*(){await outputReady.promise;yield {channel:'stdout' as const,data:Buffer.from('actual native output')};await done.promise})()}}}}}}
  const execution={defaultOwner:{sessionId:'main'},selectBackend:()=>native,resolvePolicy:(owner:Parameters<typeof compileExecutionPolicy>[0]['owner'])=>compileExecutionPolicy({mode:'danger-full-access',owner,authority:{kind:'unbound',revision:'fixture',workspaceRoot:root}}),validateAuthority(){}}
  const wire=(tool:boolean)=>`data: ${JSON.stringify({choices:[{delta:tool?{tool_calls:[{index:0,id:'shell-1',function:{name:'shell',arguments:JSON.stringify({command:'controlled',background:true})}}]}:{content:'done'},finish_reason:tool?'tool_calls':'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
  const woken=Promise.withResolvers<void>()
  const server=await createLoopbackProvider('/v1/chat/completions',[async r=>{r.end(wire(true))},async r=>{r.end(wire(false))},async (r,request)=>{const messages=request.body.messages as {content?:string}[],content=messages.find(m=>typeof m.content==='string'&&m.content.startsWith('<exec_result>'))?.content;if(!content)throw Error('Original receipt missing');const data=JSON.parse(content.split('\n')[1]!);const call={choices:[{delta:{tool_calls:[{index:0,id:'read-1',function:{name:'context_output_read',arguments:JSON.stringify({ref:data.frames.retention.ref,maxBytes:1000})}}]},finish_reason:'tool_calls'}]};r.end(`data: ${JSON.stringify(call)}\n\ndata: [DONE]\n\n`)},async r=>{woken.resolve();r.end(wire(false))}])
  const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[],ownedShell:{executionFor(id){return {...execution,defaultOwner:{sessionId:id}}},async acquireOutput(_id,retain){retain(()=>output.close());return {service:output}},agentShell:()=>({id:'controlled',label:'controlled',command:'controlled',dialect:'posix'})}},model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),contextWindow:4096,maxOutputTokens:128})
- try{await service.submit('main','run controlled',new AbortController().signal);expect(launches).toBe(1);expect(server.requests).toHaveLength(2);done.resolve();await Promise.race([woken.promise,new Promise((_,reject)=>setTimeout(()=>reject(Error('original receipt did not wake service')),35000))]);expect(server.requests).toHaveLength(4);expect(JSON.stringify(server.requests[2]!.body)).toContain('exec_result');expect(JSON.stringify(server.requests[3]!.body)).toContain(Buffer.from('actual native output').toString('base64'))}finally{done.resolve();await service.close();await coordinator.close();await server.close()}
+ try {
+  await service.submit('main','run controlled',new AbortController().signal)
+  expect(launches).toBe(1)
+  expect(server.requests).toHaveLength(2)
+  expect(service.liveAssembly('main')).toBeUndefined()
+  const runtime = originalManagedRuntimeFor(service, 'main')!
+  expect(runtime.processes()).toEqual([expect.objectContaining({ status: 'running', output: '' })])
+  outputReady.resolve()
+  await expect.poll(() => runtime.processes()).toEqual([expect.objectContaining({
+   id: expect.any(String), kind: 'shell', status: 'running', ownerSessionId: 'main',
+   nativeJob: expect.objectContaining({ instanceId: expect.any(String), sourceId: expect.any(String) }),
+   output: 'actual native output', outputTruncated: false,
+  })])
+  expect(service.inspectActivity?.('main')).toMatchObject({ active: true })
+  expect(originalManagedRuntimeFor(service, 'other')).toBeUndefined()
+  done.resolve()
+  await Promise.race([woken.promise,new Promise((_,reject)=>setTimeout(()=>reject(Error('original receipt did not wake service')),35000))])
+  expect(server.requests).toHaveLength(4)
+  expect(JSON.stringify(server.requests[2]!.body)).toContain('exec_result')
+  expect(JSON.stringify(server.requests[3]!.body)).toContain(Buffer.from('actual native output').toString('base64'))
+  await service.closeSession('main')
+  expect(() => runtime.processes()).toThrow('Original managed runtime retired')
+ } finally {
+  outputReady.resolve()
+  done.resolve()
+  await service.close()
+  await coordinator.close()
+  await server.close()
+ }
  expect(releases).toBe(1)
 },90000)
 

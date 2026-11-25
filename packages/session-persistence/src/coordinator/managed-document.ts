@@ -92,9 +92,10 @@ const managedTaskSourceReads=new WeakSet<object>();
 export function assertOriginalManagedTaskSourceRead(witness:ManagedTaskSourceRead):void {if(!managedTaskSourceReads.has(witness))throw new FactRecoveryRequiredError();witness.assertCurrent()}
 type ProcessUpdate = { kind: 'unchanged'; highWater: number } | { kind: 'suffix'; from: number; to: number; events: SessionView['events'] };
 type ManagedProcessCapture = { readonly initial: SessionView; take(): ProcessUpdate; assertHealthy(): void; assertDrained(): void; markVerified(): void; close(): void };
+type PrivateProcessReader = { append(before: JournalPrefix, after: JournalPrefix, events: Pending['events']): void; retire(): void };
 const executionStatuses = new WeakMap<ManagedDocument, () => 'available' | 'unavailable' | 'retired'>();
 type ExecutionState=Awaited<ReturnType<typeof restoreManagedExecutionState>>;
-const privateExecutionOwners=new WeakMap<object,{core:ExecutionState;held:HeldFactOwner;ownership:Ownership;assertCurrent():void;readOwnedPrefix():Promise<JournalPrefix>;retainTask(domain:ManagedExecutionDomain,history:object,onRevoke:()=>void):ManagedTaskSourceRead;materialize(events:readonly import('@i-harness/core-session').SessionEventView[]):ManagedDocument&{assertObservable():void};readDuringPreparation<T>(read:()=>Promise<T>):Promise<T>|undefined;invalidateMetadata(revision:object):void;beginTaskMetadata():TaskMetadataUpdate;captureTaskParent():Omit<TaskParentReadiness,'view'>;captureRequiredParent(source:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>):RequiredTaskParentReadiness;parent():{assertOriginal():void;assertCurrent():void;assertTask14Ready():void}}>();
+const privateExecutionOwners=new WeakMap<object,{core:ExecutionState;held:HeldFactOwner;ownership:Ownership;assertCurrent():void;readOwnedPrefix():Promise<JournalPrefix>;retainTask(domain:ManagedExecutionDomain,history:object,onRevoke:()=>void):ManagedTaskSourceRead;materialize(events:readonly import('@i-harness/core-session').SessionEventView[]):ManagedDocument&{assertObservable():void};readDuringPreparation<T>(read:()=>Promise<T>):Promise<T>|undefined;captureProcess(keys:readonly string[],checkEntry:()=>void,readInitial:()=>Promise<SessionView>):Promise<ManagedProcessCapture>;invalidateMetadata(revision:object):void;beginTaskMetadata():TaskMetadataUpdate;captureTaskParent():Omit<TaskParentReadiness,'view'>;captureRequiredParent(source:import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>):RequiredTaskParentReadiness;parent():{assertOriginal():void;assertCurrent():void;assertTask14Ready():void}}>();
 export function originalManagedExecution(document:ManagedDocument,ownership:Ownership){const original=privateExecutionOwners.get(document);if(!original||original.ownership!==ownership)throw TypeError('Original private execution owner required');return original}
 export function managedExecutionStatus(document: ManagedDocument): 'available' | 'unavailable' | 'retired' {
     return executionStatuses.get(document)?.() ?? 'unavailable';
@@ -195,6 +196,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
     const inputSources = new Set<ReturnType<typeof createReceivedInputSource>>();
     const actionControllers = new Set<AbortController>();
     const ownedActions = new WeakSet<object>();
+    let privateProcessReaders: Set<PrivateProcessReader> | undefined;
     const sourceDispositions = new WeakMap<CapturedFactGroup, FactOutcome>();
     const recoveryHolds = new Set<object>();
     const recoveryWitnesses = new Map<object, ReturnType<NonNullable<typeof processLatches>['beginMutation']>>();
@@ -329,6 +331,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                 if(entry.group)core?.acknowledge(entry.group,outcome);
                 return outcome;
             });
+            if (privateProcessReaders) for (const reader of privateProcessReaders) reader.append(current.prefix, prefix, current.events);
             return { results, observe: true, cleanupDiagnostic };
         }
         if (outcome.kind === 'unknown' || outcome.kind === 'conflict')
@@ -574,6 +577,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
         let outcome: 'settled' | 'unknown' = 'unknown';
         try {
             closing = true;
+            if (privateProcessReaders) for (const reader of privateProcessReaders) reader.retire();
             publishExecutionStatus();
             invalidateSelected();
             deliveryControl.retire();core?.stopNewWork();
@@ -1088,7 +1092,73 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
     executionStatuses.set(document, executionStatus);
     if(core){
       const originalReady=document.assertReady;
-      core.bindOwner(document);privateExecutionOwners.set(document,{core,held,ownership,assertCurrent:execution!.assertCurrent,readOwnedPrefix,retainTask(domain,history,onRevoke){
+      async function capturePrivateProcess(keys: readonly string[], checkEntry: () => void, readInitial: () => Promise<SessionView>): Promise<ManagedProcessCapture> {
+        if (!processLatches || !core) throw new FactRecoveryRequiredError();
+        const header = core.header;
+        const latch = processLatches.capture({ sessionId: id, documentKeys: keys, mode: 'managed', managedOwner: owner });
+        let delivered = prefix, received = prefix, failed = false, retired = false;
+        let suffix: SessionView['events'][number][] = [];
+        const fail = () => { failed = true; suffix = []; };
+        const reader: PrivateProcessReader = {
+          append(before, after, events) {
+            if (retired || failed) return;
+            try {
+              if (before !== received || after.eventCount !== before.eventCount + events.length || after.bodyBytes <= before.bodyBytes
+                  || events.some((event, i) => event.seq !== before.eventCount + i)) { fail(); return; }
+              for (const event of events) suffix.push(event);
+              received = after;
+            } catch { fail(); }
+          },
+          retire() {
+            if (retired) return;
+            retired = true; suffix = []; privateProcessReaders?.delete(reader);
+            if (privateProcessReaders?.size === 0) privateProcessReaders = undefined;
+            latch.retire();
+          },
+        };
+        const check = () => {
+          try {
+            if (metadataStale || failed || retired || !bootstrapReady || pending || queue.length || quarantined || sourceFault || recoveryHolds.size || closing || closed
+                || formatVersion !== CURRENT_FORMAT_VERSION || header?.semanticSeed !== undefined || (header?.seedLength !== undefined && header.seedLength !== 0)
+                || Object.hasOwn(document, 'view') || Object.getOwnPropertyDescriptor(document, 'assertReady')?.value !== originalReady
+                || received !== prefix || received.eventCount !== delivered.eventCount + suffix.length) throw new FactRecoveryRequiredError();
+            checkEntry(); latch.assertCurrent(); assertAuthorized(rootAuthorization);
+            const committed = core.prefix;
+            if (core.header !== header || core.formatVersion !== formatVersion || committed.eventCount !== prefix.eventCount
+                || committed.bodyBytes !== prefix.bodyBytes || committed.prefixDigest !== prefix.prefixDigest) throw new FactRecoveryRequiredError();
+          } catch (error) { fail(); throw error; }
+        };
+        try {
+          check();
+          const initial = await readInitial();
+          check();
+          if (initial.header !== header || initial.formatVersion !== formatVersion || initial.events.length !== delivered.eventCount) throw new FactRecoveryRequiredError();
+          // The existing entry lane owns the initial archive check and this
+          // enrollment. Only this reader holds later committed suffixes.
+          (privateProcessReaders ??= new Set()).add(reader);
+          const assertReceiver = (receiver: unknown) => {
+            if (receiver !== result) { fail(); throw new TypeError('Invalid process capture receiver'); }
+          };
+          const result: ManagedProcessCapture = Object.freeze({ initial,
+            assertHealthy() { assertReceiver(this); check(); },
+            take() {
+              assertReceiver(this); check();
+              if (received === delivered) return Object.freeze({ kind: 'unchanged' as const, highWater: delivered.eventCount });
+              const from = delivered.eventCount, to = received.eventCount, events = Object.freeze(suffix);
+              suffix = []; delivered = received;
+              return Object.freeze({ kind: 'suffix' as const, from, to, events });
+            },
+            assertDrained() {
+              assertReceiver(this); check();
+              if (received !== delivered) { fail(); throw new FactRecoveryRequiredError(); }
+            },
+            markVerified() { assertReceiver(this); result.assertDrained(); latch.markVerified(); },
+            close() { assertReceiver(this); reader.retire(); },
+          });
+          return result;
+        } catch (error) { reader.retire(); throw error; }
+      }
+      core.bindOwner(document);privateExecutionOwners.set(document,{core,held,ownership,assertCurrent:execution!.assertCurrent,readOwnedPrefix,captureProcess:capturePrivateProcess,retainTask(domain,history,onRevoke){
         if(selectedAdmissions||queue.length||scheduled)throw new FactRecoveryRequiredError();
         const revision=metadataRevision, capturedPrefix=prefix, header=core.header, artifacts=assertOriginalManagedTaskHistory(domain,history);let revoked=false
         const listener=()=>{if(revoked)return;revoked=true;onRevoke()}

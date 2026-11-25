@@ -13,7 +13,7 @@ type ArchiveBodyDecoder = { push(bytes: Buffer): void; finish(): {
 } };
 const incompleteBirth = () => Object.assign(new Error('bootstrap-incomplete'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' });
 /** IO chunks are bounded; complete decoded events and the largest record remain materialized. */
-export async function readSessionArchive(handle: FileHandle, extent: number, prefixOnly = false, qualifyPrefix?: (prefix: ArchivePrefix) => Promise<void>, dependency?: DependencySelection, captureColdFraming = false) {
+export async function readSessionArchive(handle: FileHandle, extent: number, prefixOnly = false, qualifyPrefix?: (prefix: ArchivePrefix) => Promise<void>, dependency?: DependencySelection, captureColdFraming = false, completePrefix?: (prefix: Readonly<JournalPrefix>) => void) {
     let header: SessionMeta | undefined, parts: Buffer[] = [], partBytes = 0, legacyStopped = false;
     let events: SessionEvent[] = [];
     const birth: Buffer[] = [];
@@ -68,7 +68,7 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
         }
         if (!prefixOnly) consume(record);
     }
-    let position = 0;
+    let position = 0, lastByte: number | undefined;
     while (position < extent) {
         const buffer = Buffer.allocUnsafe(Math.min(65536, extent - position));
         const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
@@ -76,6 +76,7 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
         if (!bytesRead) throw Error('Archive truncated during observation');
         position += bytesRead;
         const chunk = buffer.subarray(0, bytesRead);
+        if (completePrefix) lastByte = chunk.at(-1);
         let start = 0;
         while (start < chunk.length) {
             // The archive owner needs exact header and birth lines. After
@@ -119,6 +120,10 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
             if (decoded?.validatedEvents) events = decoded.validatedEvents(header);
             else validateConversationHistory(events, header.formatVersion, header);
             if (decoded?.verified && birth.length === 1 && decoded.prefix.bodyBytes === extent - birth[0]!.length) verified = decoded.verified;
+            if (completePrefix && decoded && !decoded.torn && birth[0]!.at(-1) === 10 && lastByte === 10
+                && decoded.prefix.eventCount === events.length && decoded.prefix.bodyBytes === extent - birth[0]!.length) {
+                completePrefix(Object.freeze({ ...decoded.prefix }));
+            }
         }
     }
     return { header, birth: Buffer.concat(birth), events, verified };
