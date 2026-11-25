@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { expect, it } from "vitest"
-import { ProjectionCounter, projectionFingerprint, semanticProjectionDigest } from "../src/index.ts"
+import { encodeSdkCommandData, ProjectionCounter, projectionFingerprint, semanticProjectionDigest } from "../src/index.ts"
 import { createAcceptedCalibration } from "../src/index.ts"
 import { createAnthropicClient } from "../../llm-anthropic/src/index.ts"
 
@@ -25,6 +25,47 @@ it("separates hash domains even for the same literal data", () => {
   expect(semanticProjectionDigest("unit", "same")).toBe(expected)
   for (const domain of ["binding", "shape", "input", "prefix-seed", "prefix-link"] as const) expect(semanticProjectionDigest(domain, "same")).not.toBe(expected)
 })
+
+it("preserves the v2 tagged bytes for sorted keys, sparse arrays and shared values", () => {
+  const text = "a".repeat(4095) + "🙂中文\ud800\n\""
+  const shared = { text }
+  const input = { "2": -0, "10": 3, left: shared, right: shared,
+    slots: [, undefined, null, false, new Date(0), Uint8Array.of(1, 2)] }
+  const taggedShared = ["object", [["text", ["string", text]]]]
+  const literal = JSON.stringify(["object", [
+    ["10", ["number", 3]], ["2", ["number", 0]], ["left", taggedShared], ["right", taggedShared],
+    ["slots", ["array", [["undefined"], ["undefined"], ["null"], ["boolean", false],
+      ["date", "1970-01-01T00:00:00.000Z"], ["bytes", "AQI="]]]],
+  ]])
+  expect(encodeSdkCommandData(input)).toBe(literal)
+  expect(semanticProjectionDigest("input", input)).toBe(createHash("sha256")
+    .update("i-harness:projection:v2:input\0").update(literal).digest("hex"))
+})
+
+it("reads sibling getters in reverse order before handling children", () => {
+  const reads: string[] = []
+  const reflection = { value: 1 }
+  const date = new Date(0)
+  Object.defineProperty(date, "toISOString", { value: () => { reads.push("date"); return reflection } })
+  const input = {
+    get z() { reads.push("z"); return { get edit() { reads.push("edit"); reflection.value = 2; return true } } },
+    get a() { reads.push("a"); return date },
+  }
+  expect(encodeSdkCommandData(input)).toBe('["object",[["a",["date",{"value":2}]],["z",["object",[["edit",["boolean",true]]]]]]]')
+  expect(reads).toEqual(["z", "a", "date", "edit"])
+})
+
+it("keeps tagged data stack-safe and rejects cycles or non-finite numbers", () => {
+  const count = 12_000
+  let nested: unknown = null
+  for (let depth = 0; depth < count; depth++) nested = [nested]
+  expect(encodeSdkCommandData(nested)).toBe('["array",['.repeat(count) + '["null"]' + ']]'.repeat(count))
+  const cyclic: unknown[] = []
+  cyclic.push(cyclic)
+  expect(() => encodeSdkCommandData(cyclic)).toThrow("SDK command identity requires acyclic data")
+  expect(() => encodeSdkCommandData([Infinity])).toThrow("SDK command identity requires finite data")
+})
+
 it("does not convert v1 projection prices or changed reasoning into v2 identity", async () => {
   const client = createAnthropicClient({ apiKey: "controlled", model: "m" })
   const request = { systemPrompt: "sys", messages: [{ role: "user" as const, content: "中" }], tools: [] }
