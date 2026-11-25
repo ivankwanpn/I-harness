@@ -5,5 +5,5 @@ export type { OriginalConversationRestorationSource } from './conversation/resto
 export {previewRestoredConversationCandidate} from './managed/restored-view.ts'
 export { captureRestoredConversationData, readRestoredRuntimeContext } from './managed/restored-view.ts'
 export { captureData, isCapturedData, UnsupportedData, type Captured, type ImmutableJson } from './serialization/context-data.ts'
-export { readManagedConversationAuditAdvance, readManagedConversationFrontier } from './managed/view.ts'
+export { readManagedConversationAuditAdvance, readManagedConversationFrontier, readManagedConversationObservationFrontier } from './managed/view.ts'
 export { projectManagedConversation } from './conversation/project.ts'

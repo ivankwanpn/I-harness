@@ -1,4 +1,4 @@
-import { captureRestoredConversationData, projectManagedConversation, readManagedConversationAuditAdvance, readManagedConversationFrontier, type PreparedConversationArchive } from '@i-harness/core-session/internal/restoration'
+import { captureRestoredConversationData, projectManagedConversation, readManagedConversationAuditAdvance, readManagedConversationObservationFrontier, type PreparedConversationArchive } from '@i-harness/core-session/internal/restoration'
 import { projectConversation, readConversationState, type ConversationPayloadCapture, type SessionView as Session } from "@i-harness/core-session"
 import type { ContextCapture, ContextCaptureInput, ContextCoordinateRead, ContextCoordinates, ContextSnapshotIdentityRead, CapturedRequestSurface, UnsupportedContext } from "../contracts/snapshot.ts"
 import { captureData } from "./data.ts"
@@ -12,22 +12,11 @@ function unsupported(component: UnsupportedContext["component"], sourceIds: read
 // Only scalar evidence survives the capture. The prepared request remains
 // the owner of the conversation projection and its message bodies.
 const managedCoordinates = new WeakMap<Session, { frontier: number; coordinates: ContextCoordinates }>()
-const originalStringify = JSON.stringify
-const objectPrototype = Object.prototype
-const arrayPrototype = Array.prototype
-
-function managedFrontier(session: Session, ownerSessionId: string): number | undefined {
-  // An embedder may replace the serialization environment. Let the ordinary
-  // reader construct the digest again in that case.
-  if (JSON.stringify !== originalStringify || Object.getPrototypeOf(arrayPrototype) !== objectPrototype
-      || Object.hasOwn(objectPrototype, 'toJSON') || Object.hasOwn(arrayPrototype, 'toJSON')) return undefined
-  return readManagedConversationFrontier(session, ownerSessionId)
-}
 
 function captureConversation(session: Session, ownerSessionId: string) {
   let sourceIds: readonly string[] = []
   try {
-    const frontier = managedFrontier(session, ownerSessionId)
+    const frontier = readManagedConversationObservationFrontier(session, ownerSessionId)
     const capturePayload: ConversationPayloadCapture = (value, source) => {
       sourceIds = [source.id]
       return captureData(value)
@@ -37,7 +26,7 @@ function captureConversation(session: Session, ownerSessionId: string) {
     const projection = ownedProjection ?? projectConversation(session, options)
     const state = readConversationState(session, projection)
     const captured = finishConversationCapture(projection, state, ownerSessionId)
-    if (captured.kind === "available" && frontier !== undefined && managedFrontier(session, ownerSessionId) === frontier) {
+    if (captured.kind === "available" && frontier !== undefined && readManagedConversationObservationFrontier(session, ownerSessionId) === frontier) {
       managedCoordinates.set(session, { frontier, coordinates: captured.coordinates })
     }
     return captured
@@ -47,7 +36,7 @@ function captureConversation(session: Session, ownerSessionId: string) {
 function conversationCoordinates(session: Session, ownerSessionId: string) {
   const cached = managedCoordinates.get(session)
   if (cached?.coordinates.ownerSessionId === ownerSessionId) {
-    const frontier = managedFrontier(session, ownerSessionId)
+    const frontier = readManagedConversationObservationFrontier(session, ownerSessionId)
     if (frontier === cached.frontier) return { kind: "available" as const, coordinates: cached.coordinates }
     if (frontier !== undefined) {
       const archive = readManagedConversationAuditAdvance(session, ownerSessionId, cached.frontier)
@@ -79,7 +68,7 @@ export function readContextCoordinates(session: Session, input: { ownerSessionId
 /** The exact immutable owner can recheck conversation coordinates without
  * recapturing its payload. The caller supplies the freshly observed surface. */
 export function readManagedContextSnapshotIdentity(session: Session, input: ContextCaptureInput): ContextSnapshotIdentityRead | undefined {
-  if (managedFrontier(session, input.ownerSessionId) === undefined) return undefined
+  if (readManagedConversationObservationFrontier(session, input.ownerSessionId) === undefined) return undefined
   let surface: CapturedRequestSurface
   try { surface = captureData(input.surface) } catch { return unsupported("surface") }
   const captured = conversationCoordinates(session, input.ownerSessionId)

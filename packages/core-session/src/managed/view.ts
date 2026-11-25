@@ -77,10 +77,25 @@ function immutableFactoryFor(view: SessionView, sessionId: string) {
   if (factory && managedFactOwners.has(view) && originalSourceSessions.get(view) === sessionId && originalIndexes.get(view) === factory.index) return factory
 }
 
+function qualifiedProjectionFactoryFor(view: SessionView, sessionId: string) {
+  const factory = immutableFactoryFor(view, sessionId)
+  if (factory?.hasProjectionProof() && factory.hasContiguousSeq() && originalProjectionEnvironment()) return factory
+}
+
 /** Exact installed frontier for this view and session. Passive data identity
  * only. Callers still verify current work admission independently. */
 export function readManagedConversationFrontier(view: SessionView, sessionId: string): number | undefined {
   const factory = immutableFactoryFor(view, sessionId)
+  if (!factory) return undefined
+  const count = factory.index.eventCount
+  factory.assertFrontier(count)
+  return count
+}
+
+/** The same original data and environment proof used by an owned projection.
+ * Consumers may reuse their derived conversation observations at this cut. */
+export function readManagedConversationObservationFrontier(view: SessionView, sessionId: string): number | undefined {
+  const factory = qualifiedProjectionFactoryFor(view, sessionId)
   if (!factory) return undefined
   const count = factory.index.eventCount
   factory.assertFrontier(count)
@@ -93,8 +108,8 @@ export function readManagedConversationAuditAdvance(view: SessionView, ownerSess
   eventCount: number; lastSeq?: number
 } | undefined {
   if (!Number.isSafeInteger(fromFrontier) || fromFrontier < 0) return undefined
-  const factory = immutableFactoryFor(view, ownerSessionId)
-  if (!factory || view.formatVersion !== CURRENT_FORMAT_VERSION || !factory.hasContiguousSeq()) return undefined
+  const factory = qualifiedProjectionFactoryFor(view, ownerSessionId)
+  if (!factory) return undefined
   const eventCount = factory.index.eventCount
   if (eventCount <= fromFrontier) return undefined
   factory.assertFrontier(eventCount)
@@ -106,7 +121,7 @@ export function readManagedConversationAuditAdvance(view: SessionView, ownerSess
     if (event.type === 'context/attempt' && event.version === 1 && event.op === 'reserve' && event.ownerSessionId === ownerSessionId) continue
     return undefined
   }
-  if (immutableFactoryFor(view, ownerSessionId) !== factory || factory.index.eventCount !== eventCount) return undefined
+  if (qualifiedProjectionFactoryFor(view, ownerSessionId) !== factory || factory.index.eventCount !== eventCount) return undefined
   factory.assertFrontier(eventCount)
   return Object.freeze({ eventCount, lastSeq: eventCount - 1 })
 }
@@ -114,12 +129,12 @@ export function readManagedConversationAuditAdvance(view: SessionView, ownerSess
 /** Read only the original ordinary factory's logical history at its installed
  * frontier. The caller renders through the same view and rechecks before use. */
 export function readManagedProjectionHistory(view: SessionView, ownerSessionId: string) {
-  const factory = immutableFactoryFor(view, ownerSessionId)
-  if (!factory?.hasProjectionProof() || !factory.hasContiguousSeq() || !originalProjectionEnvironment()) return undefined
+  const factory = qualifiedProjectionFactoryFor(view, ownerSessionId)
+  if (!factory) return undefined
   const count = factory.index.eventCount
   const assertCurrent = () => {
-    if (immutableFactoryFor(view, ownerSessionId) !== factory || factory.index.eventCount !== count
-        || !factory.hasProjectionProof() || !originalProjectionEnvironment()) throw new TypeError('Original managed projection changed')
+    if (qualifiedProjectionFactoryFor(view, ownerSessionId) !== factory || factory.index.eventCount !== count)
+      throw new TypeError('Original managed projection changed')
     factory.assertFrontier(count)
   }
   assertCurrent()

@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest"
-import { append, createManagedSessionState, createSession, renderConversation, type ConversationProjection, type Session } from "@i-harness/core-session"
+import { append, createManagedSessionState, createSession, CURRENT_FORMAT_VERSION, renderConversation, type ConversationProjection, type Session, type SessionEvent } from "@i-harness/core-session"
 import { captureContextPayload, captureContextSnapshot, readContextCoordinates, readManagedContextSnapshotIdentity } from "../src/index.ts"
 import { contextRevision, semanticContextRevision } from "../src/snapshot/revision.ts"
 import type { ModelBudgetBinding } from "@i-harness/llm-seam"
@@ -43,6 +43,58 @@ it('reuses only the original managed frontier and reads each live surface', () =
   expect(after.identity.coordinates).toEqual(expected.snapshot.coordinates)
   expect(after.identity.coordinates.archive.eventCount).toBe(first.snapshot.coordinates.archive.eventCount + 1)
   expect(after.identity.surfaceRevision).toBe(expected.snapshot.surfaceRevision)
+})
+
+it('requires the same encoding proof for cached coordinates and a full capture', () => {
+  const managed = createManagedSessionState({ formatVersion: CURRENT_FORMAT_VERSION, events: [
+    { type: 'conversation/semantics', version: 1, mode: 'accepted-exchange-v1', seq: 0 },
+    { type: 'step/start', actionId: 'action', attemptId: 'attempt', seq: 1 },
+    { type: 'assistant/message', text: 'complete reply', seq: 2 },
+    { type: 'model/exchange-accepted', version: 1, exchangeId: 'exchange', actionId: 'action', attemptId: 'attempt',
+      stepStartSeq: 1, assistantSeq: 2, callSeqs: [], seq: 3 },
+    { type: 'step/end', seq: 4 },
+  ] }, { sessionId: 'owner' })
+  managed.bindOwner({})
+  const input = { ownerSessionId: 'owner', surface: { systemPrompt: 'instructions', tools: [] } }
+  const original = captureContextSnapshot(managed.view, input)
+  if (original.kind !== 'captured') throw Error('Expected original snapshot')
+  expect(readManagedContextSnapshotIdentity(managed.view, input)).toMatchObject({ kind: 'captured' })
+
+  const encode = TextEncoder.prototype.encode
+  try {
+    TextEncoder.prototype.encode = function(value?: string) {
+      if (value?.includes('model/exchange-accepted')) return new Uint8Array(4097)
+      return encode.call(this, value)
+    }
+    const rejected = captureContextSnapshot(managed.view, input)
+    expect(rejected.kind).toBe('unsupported')
+    expect(readManagedContextSnapshotIdentity(managed.view, input)).toBeUndefined()
+    expect(readContextCoordinates(managed.view, input)).toEqual(rejected)
+  } finally { TextEncoder.prototype.encode = encode }
+  const restored = readManagedContextSnapshotIdentity(managed.view, input)
+  if (restored?.kind !== 'captured') throw Error('Expected restored snapshot identity')
+  expect(restored.identity.coordinates).toBe(original.snapshot.coordinates)
+})
+
+it('recaptures mutable data nested in an installed shallow-frozen event', () => {
+  const managed = createManagedSessionState(createSession(), { sessionId: 'owner' })
+  managed.bindOwner({})
+  const provenance: NonNullable<Extract<SessionEvent, { type: 'user/message' }>['provenance']> = {
+    kind: 'human', authority: 'request', scope: 'turn', producer: 'fixture',
+  }
+  managed.stage([{ type: 'user/message', text: 'request', seq: 0,
+    input: Object.freeze({ inputId: 'user-input', intent: 'user', provenance }) }]).install()
+  const input = { ownerSessionId: 'owner', surface: { systemPrompt: 'instructions', tools: [] } }
+  const original = captureContextSnapshot(managed.view, input)
+  if (original.kind !== 'captured') throw Error('Expected full snapshot')
+  provenance.scope = 'session'
+
+  expect(readManagedContextSnapshotIdentity(managed.view, input)).toBeUndefined()
+  const current = readContextCoordinates(managed.view, input)
+  const expected = captureContextSnapshot(managed.view, input)
+  if (current.kind !== 'available' || expected.kind !== 'captured') throw Error('Expected current coordinates')
+  expect(current.coordinates).toEqual(expected.snapshot.coordinates)
+  expect(current.coordinates.semanticRevision).not.toBe(original.snapshot.coordinates.semanticRevision)
 })
 
 it('advances archive coordinates across a managed audit append and still checks current content and surface', () => {

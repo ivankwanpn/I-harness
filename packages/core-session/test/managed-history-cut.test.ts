@@ -3,7 +3,7 @@ import {createManagedSessionState,createManagedIndexedView,captureManagedHistory
 import {createConversationIndex} from '../src/conversation/validation.ts'
 import {projectConversation} from '../src/conversation/project.ts'
 import {readConversationState} from '../src/conversation/state.ts'
-import {readManagedConversationAuditAdvance,readManagedConversationFrontier} from '../src/restoration-internal.ts'
+import {readManagedConversationAuditAdvance,readManagedConversationFrontier,readManagedConversationObservationFrontier} from '../src/restoration-internal.ts'
 import {CURRENT_FORMAT_VERSION,type Session,type SessionEvent} from '../src/events/types.ts'
 
 it('the original immutable factory retains an append-tolerant nominal cut without source replay',()=>{
@@ -105,6 +105,14 @@ it('advances only the raw archive for original bind, budget and reservation book
   next.install()
   const advance = readManagedConversationAuditAdvance(state.view, 'source', 2)
   expect(advance).toEqual({ eventCount: 5, lastSeq: 4 })
+  expect(readManagedConversationObservationFrontier(state.view, 'source')).toBe(5)
+  const encode = TextEncoder.prototype.encode
+  try {
+    TextEncoder.prototype.encode = new Proxy<typeof encode>(encode, { apply: Reflect.apply })
+    expect(readManagedConversationFrontier(state.view, 'source')).toBe(5)
+    expect(readManagedConversationObservationFrontier(state.view, 'source')).toBeUndefined()
+    expect(readManagedConversationAuditAdvance(state.view, 'source', 2)).toBeUndefined()
+  } finally { TextEncoder.prototype.encode = encode }
   expect(readManagedConversationAuditAdvance(state.view, 'source', 1)).toBeUndefined()
   expect(readManagedConversationAuditAdvance(state.view, 'different-source', 2)).toBeUndefined()
   for (const frontier of [-1, 1.5, 5, 6]) expect(readManagedConversationAuditAdvance(state.view, 'source', frontier)).toBeUndefined()
@@ -127,5 +135,6 @@ it('declines an ordinal-shaped append when the original prefix has a colliding s
   state.bindOwner({})
   state.stage([budget(1)]).install()
   expect(readManagedConversationFrontier(state.view, 'source')).toBe(2)
+  expect(readManagedConversationObservationFrontier(state.view, 'source')).toBeUndefined()
   expect(readManagedConversationAuditAdvance(state.view, 'source', 1)).toBeUndefined()
 })
