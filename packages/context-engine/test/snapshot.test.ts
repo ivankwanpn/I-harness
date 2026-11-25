@@ -45,6 +45,42 @@ it('reuses only the original managed frontier and reads each live surface', () =
   expect(after.identity.surfaceRevision).toBe(expected.snapshot.surfaceRevision)
 })
 
+it('advances archive coordinates across a managed audit append and still checks current content and surface', () => {
+  const session = createSession()
+  append(session, { type: 'user/message', text: 'original context', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'fixture' } })
+  append(session, { type: 'context/action', version: 1, op: 'open', ownerSessionId: 'owner', actionId: 'generation',
+    purpose: 'main', origin: { kind: 'input', seq: 0 }, startedAt: 100, expiresAt: 3_600_100, trustedAt: 100 })
+  const managed = createManagedSessionState(session, { sessionId: 'owner' })
+  managed.bindOwner({})
+  const input = { ownerSessionId: 'owner', surface: { systemPrompt: 'first instructions', tools: [] } }
+  const first = captureContextSnapshot(managed.view, input)
+  if (first.kind !== 'captured') throw new Error('Original snapshot required')
+
+  const digest = 'a'.repeat(64)
+  managed.stage([
+    { type: 'context/action', version: 1, op: 'bind', executionDomain: 'physical', ownerSessionId: 'owner',
+      actionId: 'generation', retry: { mode: 'normal', maxRetries: 5 }, limits: { total: 20, main: 6, recovery: 6, summary: 8 }, trustedAt: 100, seq: 2 },
+    { type: 'context/attempt', version: 1, op: 'reserve', ownerSessionId: 'owner', actionId: 'generation',
+      attemptId: 'physical-1', ordinal: 1, lane: 'main', cause: 'initial', incarnation: 'owner-1',
+      semanticId: digest, payloadId: digest, payloadKind: 'http-json-body', trustedAt: 100, seq: 3 },
+  ]).install()
+  const changed = { ...input, surface: { ...input.surface, systemPrompt: 'updated instructions' } }
+  const advanced = readManagedContextSnapshotIdentity(managed.view, changed)
+  const expected = captureContextSnapshot(managed.view, changed)
+  if (advanced?.kind !== 'captured' || expected.kind !== 'captured') throw new Error('Advanced snapshot required')
+  expect(advanced.identity.coordinates).toEqual({ ...first.snapshot.coordinates, archive: { eventCount: 4, lastSeq: 3 } })
+  expect(advanced.identity.coordinates).toEqual(expected.snapshot.coordinates)
+  expect(advanced.identity.surfaceRevision).toBe(expected.snapshot.surfaceRevision)
+  expect(advanced.identity.surfaceRevision).not.toBe(first.snapshot.surfaceRevision)
+
+  managed.stage([{ type: 'assistant/message', text: 'different content', seq: 4 }]).install()
+  const next = readManagedContextSnapshotIdentity(managed.view, changed)
+  const nextFull = captureContextSnapshot(managed.view, changed)
+  if (next?.kind !== 'captured' || nextFull.kind !== 'captured') throw new Error('Current snapshot required')
+  expect(next.identity.coordinates).toEqual(nextFull.snapshot.coordinates)
+  expect(next.identity.coordinates.semanticRevision).not.toBe(advanced.identity.coordinates.semanticRevision)
+})
+
 it('keeps the semantic v1 digest for sealed projections with Unicode and omitted optional fields', () => {
   const owner = 'owner-香港-\uD800'
   const call = { id: 'call-🐟', eventIndex: 1, seq: 1, part: 'call', addressable: true }

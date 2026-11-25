@@ -1,5 +1,5 @@
 import { validateDeliveryFrame } from '../conversation/delivery.ts'
-import type { Session, SessionEvent } from '../events/types.ts'
+import { CURRENT_FORMAT_VERSION, type Session, type SessionEvent } from '../events/types.ts'
 import { createConversationIndex, createBootstrapConversationIndex, readConversationDeliveries, readConversationGenerations, conversationScopeKey, type ConversationValidationIndex } from '../conversation/validation.ts'
 import { managedSessions, managedFactOwners, subscribers } from '../events/state.ts'
 import { captureLegacyFact, freezeJsonData } from './capture.ts'
@@ -10,7 +10,7 @@ const originalIndexes = new WeakMap<SessionView, ConversationValidationIndex>()
 const originalSourceSessions = new WeakMap<SessionView, string | undefined>()
 // Only managedSessionState enrolls: its initial copy and every appended row
 // are immutable. Other view factories must qualify their own invariants.
-const immutableFactories = new WeakMap<SessionView, {index:ConversationValidationIndex;assertFrontier(count:number):void}>()
+const immutableFactories = new WeakMap<SessionView, {index:ConversationValidationIndex;assertFrontier(count:number):void;hasContiguousSeq():boolean}>()
 
 function immutableFactoryFor(view: SessionView, sessionId: string) {
   const factory = immutableFactories.get(view)
@@ -25,6 +25,30 @@ export function readManagedConversationFrontier(view: SessionView, sessionId: st
   const count = factory.index.eventCount
   factory.assertFrontier(count)
   return count
+}
+
+/** Advance archive coordinates only across installed bookkeeping facts.
+ * Original admission, recovery and request-surface checks remain live. */
+export function readManagedConversationAuditAdvance(view: SessionView, ownerSessionId: string, fromFrontier: number): {
+  eventCount: number; lastSeq?: number
+} | undefined {
+  if (!Number.isSafeInteger(fromFrontier) || fromFrontier < 0) return undefined
+  const factory = immutableFactoryFor(view, ownerSessionId)
+  if (!factory || view.formatVersion !== CURRENT_FORMAT_VERSION || !factory.hasContiguousSeq()) return undefined
+  const eventCount = factory.index.eventCount
+  if (eventCount <= fromFrontier) return undefined
+  factory.assertFrontier(eventCount)
+  for (let ordinal = fromFrontier; ordinal < eventCount; ordinal++) {
+    const event = view.events[ordinal]
+    if (!event || event.seq !== ordinal) return undefined
+    if (event.type === 'context/budget' && event.version === 2 && event.snapshot.ownerSessionId === ownerSessionId) continue
+    if (event.type === 'context/action' && event.version === 1 && event.op === 'bind' && event.ownerSessionId === ownerSessionId) continue
+    if (event.type === 'context/attempt' && event.version === 1 && event.op === 'reserve' && event.ownerSessionId === ownerSessionId) continue
+    return undefined
+  }
+  if (immutableFactoryFor(view, ownerSessionId) !== factory || factory.index.eventCount !== eventCount) return undefined
+  factory.assertFrontier(eventCount)
+  return Object.freeze({ eventCount, lastSeq: eventCount - 1 })
 }
 
 export interface ManagedHistoryCut {readonly kind:'original-managed-history-cut'}
@@ -80,6 +104,8 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
   const captured = captureLegacyFact(source)
   if (captured.kind !== 'captured') throw new TypeError('FACT_CAPTURE_FAILED')
   const events: SessionEvent[] = [...captured.value.events] as SessionEvent[]
+  // A repeated sequence could change the addressability of an earlier fact.
+  let contiguousSeq = events.every((event, ordinal) => event.seq === ordinal)
   const index = createIndex(events, position => events[position], source.formatVersion, { ...source.header, ...scope })
   const intake=createManagedIntakeIndex()
   intake.stage(events,false).commit()
@@ -94,7 +120,7 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
   managedSessions.add(view)
   originalIndexes.set(view, index)
   originalSourceSessions.set(view, scope?.sessionId)
-  immutableFactories.set(view,{index,assertFrontier(count){
+  immutableFactories.set(view,{index,hasContiguousSeq:()=>contiguousSeq,assertFrontier(count){
     // The private array has no replacement path, only frozen-row append.
     // Index and array publication are one synchronous original installation.
     if(events.length<count||index.eventCount!==events.length)throw TypeError('Original immutable history frontier unavailable')
@@ -121,7 +147,10 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
         // stage is non-mutating. Both operations below are synchronous and use
         // only owned data; observers are explicitly outside this capability.
         staged.commit()
-        for (const event of prepared) events.push(event)
+        for (const event of prepared) {
+          contiguousSeq &&= event.seq === events.length
+          events.push(event)
+        }
         inputs.commit()
         installed = true
       } })

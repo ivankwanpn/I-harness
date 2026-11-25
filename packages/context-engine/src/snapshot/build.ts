@@ -1,4 +1,4 @@
-import { captureRestoredConversationData, readManagedConversationFrontier, type PreparedConversationArchive } from '@i-harness/core-session/internal/restoration'
+import { captureRestoredConversationData, readManagedConversationAuditAdvance, readManagedConversationFrontier, type PreparedConversationArchive } from '@i-harness/core-session/internal/restoration'
 import { projectConversation, readConversationState, type SessionView as Session } from "@i-harness/core-session"
 import type { ContextCapture, ContextCaptureInput, ContextCoordinateRead, ContextCoordinates, ContextSnapshotIdentityRead, CapturedRequestSurface, UnsupportedContext } from "../contracts/snapshot.ts"
 import { captureData } from "./data.ts"
@@ -43,9 +43,17 @@ function captureConversation(session: Session, ownerSessionId: string) {
 
 function conversationCoordinates(session: Session, ownerSessionId: string) {
   const cached = managedCoordinates.get(session)
-  if (cached?.coordinates.ownerSessionId === ownerSessionId &&
-      managedFrontier(session, ownerSessionId) === cached.frontier) {
-    return { kind: "available" as const, coordinates: cached.coordinates }
+  if (cached?.coordinates.ownerSessionId === ownerSessionId) {
+    const frontier = managedFrontier(session, ownerSessionId)
+    if (frontier === cached.frontier) return { kind: "available" as const, coordinates: cached.coordinates }
+    if (frontier !== undefined) {
+      const archive = readManagedConversationAuditAdvance(session, ownerSessionId, cached.frontier)
+      if (archive?.eventCount === frontier) {
+        const coordinates = Object.freeze({ ...cached.coordinates, archive })
+        managedCoordinates.set(session, { frontier, coordinates })
+        return { kind: "available" as const, coordinates }
+      }
+    }
   }
   return captureConversation(session, ownerSessionId)
 }
