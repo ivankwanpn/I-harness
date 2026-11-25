@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest'
-import { append, createSession, createNondurableFactOwner, projectConversation, projectConversationCandidate, renderConversation, toJSONL, fromJSONL, exportConversationSeed, validRuntimeContextRecord } from '../src/index.ts'
+import { append, createSession, createManagedSessionState, createNondurableFactOwner, projectConversation, projectConversationCandidate, projectCurrentContext, renderConversation, toJSONL, fromJSONL, exportConversationSeed, validRuntimeContextRecord } from '../src/index.ts'
+import { readManagedRuntimeContext } from '../src/restoration-internal.ts'
 import { captureContextSnapshot } from '../../context-engine/src/index.ts'
 
 const record = (text = 'rule') => ({ type: 'runtime/context' as const, version: 1 as const, sections: [{ name: 'instructions', text }] })
@@ -57,6 +58,52 @@ it('uses branch visibility and exact legacy metadata, including explicit clears'
   append(session, { type: 'runtime/context', version: 1, sections: [] })
   expect(renderConversation(projectConversation(session)).map(message => message.content)).toEqual(['ordinary feedback'])
   expect(renderConversation(projectConversation(session, { throughSeq: 1 })).map(message => message.content)).toEqual(['old runtime', 'ordinary feedback'])
+})
+
+it('reads the original installed runtime floor, including qualified absence, rewinds and an explicit clear', () => {
+  const managed = createManagedSessionState(createSession(), { sessionId: 'document' })
+  expect(readManagedRuntimeContext(managed.view, 'document')).toBeUndefined()
+  managed.bindOwner({})
+  function installedFloorDigest() {
+    const owned = readManagedRuntimeContext(managed.view, 'document')
+    const projected = projectCurrentContext(managed.view)
+    expect(owned).toEqual({ current: projected && { semanticDigest: projected.semanticDigest } })
+    return owned?.current?.semanticDigest
+  }
+
+  expect(installedFloorDigest()).toBeUndefined()
+  const pending = managed.stage([{ ...record('first'), seq: 0 }])
+  expect(installedFloorDigest()).toBeUndefined()
+  pending.install()
+  const first = installedFloorDigest()
+  expect(first).toBeDefined()
+  managed.stage([{ ...record('second'), seq: 1 }]).install()
+  const second = installedFloorDigest()
+  expect(second).toBeDefined()
+  expect(second).not.toBe(first)
+
+  managed.stage([{ type: 'rewind/point', version: 1, targetTurn: 0, anchorSeq: 1, mode: 'conversation', fileOps: [], seq: 2 }]).install()
+  expect(installedFloorDigest()).toBe(first)
+  managed.stage([{ type: 'rewind/point', version: 1, targetTurn: 0, anchorSeq: 0, mode: 'conversation', fileOps: [], seq: 3 }]).install()
+  expect(installedFloorDigest()).toBeUndefined()
+  managed.stage([{ type: 'runtime/context', version: 1, sections: [], seq: 4 }]).install()
+  expect(installedFloorDigest()).toBeDefined()
+  expect(projectCurrentContext(managed.view)?.sections).toEqual([])
+})
+
+it('declines unqualified runtime floor sources while the public projection remains available', () => {
+  const session = createSession()
+  append(session, record())
+  const original = createManagedSessionState(session, { sessionId: 'document' })
+  const lineage = createManagedSessionState({ ...session, header: { parentSession: 'parent', seedLength: 0 } }, { sessionId: 'document' })
+  original.bindOwner({})
+  lineage.bindOwner({})
+
+  expect(readManagedRuntimeContext(original.view, 'other')).toBeUndefined()
+  for (const view of [session, { ...original.view }, lineage.view]) {
+    expect(readManagedRuntimeContext(view, 'document')).toBeUndefined()
+    expect(projectCurrentContext(view)?.sections).toEqual(record().sections)
+  }
 })
 
 it('retains seeded legacy session observations instead of treating them as the target floor', () => {

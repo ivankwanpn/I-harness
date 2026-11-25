@@ -1,5 +1,6 @@
 import type { PluginContext } from "@i-harness/core-plugin"
-import { deriveMessages } from "@i-harness/core-session"
+import { deriveMessages, selectConversationMessages } from "@i-harness/core-session"
+import { projectManagedConversation } from "@i-harness/core-session/internal/restoration"
 import { activeTokens, normalizeInputUsage } from "@i-harness/token-meter"
 import type { AgentDeps, AgentResult, TurnLifecycle } from "./types.ts"
 import type { AgentContext } from "./context.ts"
@@ -136,9 +137,11 @@ export async function closeStep(deps: Pick<AgentDeps, "telemetry" | 'facts' | 's
   return emptyThisStep
 }
 
-export async function finishTurn(ctx: PluginContext, deps: TurnFinalizationDeps, lifecycle: TurnLifecycle, getSteps: () => number, reasoning: string[]): Promise<AgentResult> {
+export async function finishTurn(ctx: PluginContext, deps: TurnFinalizationDeps & Pick<AgentDeps, 'sessionId'>, lifecycle: TurnLifecycle, getSteps: () => number, reasoning: string[]): Promise<AgentResult> {
   return finishObservedTurn(deps,lifecycle,getSteps,reasoning,{tokens:()=>activeTokens(deps.session),finalText(){
-    const last=deriveMessages(deps.session).at(-1)
+    const projection = deps.sessionId === undefined ? undefined : projectManagedConversation(deps.session, { ownerSessionId: deps.sessionId })
+    const messages = projection ? selectConversationMessages(projection) : deriveMessages(deps.session)
+    const last = messages.at(-1)
     return typeof last?.content==='string'?last.content:Array.isArray(last?.content)?last.content.filter(p=>p.type==='text').map(p=>p.text).join(''):''
   },stop:finalText=>ctx.emit('agent/stop',{session:deps.session,turns:getSteps(),finalText})})
 }

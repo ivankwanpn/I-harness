@@ -1,6 +1,7 @@
 import { Buffer as NodeBuffer } from 'node:buffer'
 import { TextEncoder as NodeTextEncoder, types } from 'node:util'
 import { validateDeliveryFrame } from '../conversation/delivery.ts'
+import { digestRuntimeContextEvent } from '../conversation/render.ts'
 import { CURRENT_FORMAT_VERSION, type Session, type SessionEvent } from '../events/types.ts'
 import { createConversationIndex, createBootstrapConversationIndex, readConversationDeliveries, readConversationGenerations, conversationScopeKey, type ConversationValidationIndex } from '../conversation/validation.ts'
 import { managedSessions, managedFactOwners, subscribers } from '../events/state.ts'
@@ -126,9 +127,7 @@ export function readManagedConversationAuditAdvance(view: SessionView, ownerSess
   return Object.freeze({ eventCount, lastSeq: eventCount - 1 })
 }
 
-/** Read only the original ordinary factory's logical history at its installed
- * frontier. The caller renders through the same view and rechecks before use. */
-export function readManagedProjectionHistory(view: SessionView, ownerSessionId: string) {
+function openManagedProjection(view: SessionView, ownerSessionId: string) {
   const factory = qualifiedProjectionFactoryFor(view, ownerSessionId)
   if (!factory) return undefined
   const count = factory.index.eventCount
@@ -138,9 +137,34 @@ export function readManagedProjectionHistory(view: SessionView, ownerSessionId: 
     factory.assertFrontier(count)
   }
   assertCurrent()
-  const history = factory.index.history()
-  assertCurrent()
-  return { history, assertCurrent }
+  return { index: factory.index, assertCurrent }
+}
+
+/** Read only the original ordinary factory's logical history at its installed
+ * frontier. The caller renders through the same view and rechecks before use. */
+export function readManagedProjectionHistory(view: SessionView, ownerSessionId: string) {
+  const original = openManagedProjection(view, ownerSessionId)
+  if (!original) return undefined
+  const history = original.index.history()
+  original.assertCurrent()
+  return { history, assertCurrent: original.assertCurrent }
+}
+
+/** A successful read owns the absence of a visible floor as well as a digest. */
+export function readManagedRuntimeContext(view: SessionView, ownerSessionId: string): {
+  readonly current: { readonly semanticDigest: string } | undefined
+} | undefined {
+  const original = openManagedProjection(view, ownerSessionId)
+  if (!original) return undefined
+  const selected = original.index.currentRuntimeContext()
+  let current: { semanticDigest: string } | undefined
+  if (selected) {
+    const semanticDigest = digestRuntimeContextEvent(view.events[selected.index])
+    if (semanticDigest === undefined) throw new TypeError('Invalid managed runtime context descriptor')
+    current = { semanticDigest }
+  }
+  original.assertCurrent()
+  return { current }
 }
 
 export interface ManagedHistoryCut {readonly kind:'original-managed-history-cut'}

@@ -7,3 +7,4 @@ export { captureRestoredConversationData, readRestoredRuntimeContext } from './m
 export { captureData, isCapturedData, UnsupportedData, type Captured, type ImmutableJson } from './serialization/context-data.ts'
 export { readManagedConversationAuditAdvance, readManagedConversationFrontier, readManagedConversationObservationFrontier } from './managed/view.ts'
 export { projectManagedConversation } from './conversation/project.ts'
+export { readManagedRuntimeContext } from './managed/view.ts'

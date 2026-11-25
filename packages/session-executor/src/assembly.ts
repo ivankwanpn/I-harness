@@ -1079,7 +1079,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // Main logical admission reconciles instructions and publishes this full
   // component after its step hooks/claims. Register sections in their stable
   // instructions → skills → subagents order; construction does not publish.
-  const runtimeContext = createRuntimeContext(session, createRuntimeContextSource(factOwner))
+  const runtimeContext = createRuntimeContext(session, createRuntimeContextSource(factOwner), managedDocument && opts.sessionId)
   let instructionEnvironment: InstructionEnvironment | undefined
   let instructionManager: ReturnType<typeof createMainInstructionManager> | undefined
   let childInstructionHost: ReturnType<typeof createChildInstructionHost> | undefined

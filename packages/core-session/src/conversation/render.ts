@@ -1,5 +1,6 @@
 import type { LLMMessage } from "../projection/types.ts"
-import type { DeepMutable } from '../managed/types.ts'
+import type { DeepMutable, SessionEventView } from '../managed/types.ts'
+import { runtimeContextDigest } from '../events/runtime-context.ts'
 type ReadonlyData<T> = T extends readonly (infer E)[] ? readonly ReadonlyData<E>[] : T extends object ? { readonly [K in keyof T]: ReadonlyData<T[K]> } : T
 type ReadonlyMessage = ReadonlyData<LLMMessage>
 
@@ -27,6 +28,11 @@ export function copyConversationData<T>(input: T): DeepMutable<T> {
     for (const [key, child] of Object.entries(value).reverse()) stack.push({ value: child, put: owned => Object.defineProperty(copy, key, { value: owned, enumerable: true, configurable: true, writable: true }) })
   }
   return result as DeepMutable<T>
+}
+
+/** Resolve only the already-selected runtime fact from an original archive. */
+export function digestRuntimeContextEvent(event: SessionEventView | undefined): string | undefined {
+  return event?.type === 'runtime/context' ? runtimeContextDigest(copyConversationData(event.sections)) : undefined
 }
 
 type ConversationMessageSource = {

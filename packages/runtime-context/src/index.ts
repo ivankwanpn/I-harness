@@ -1,6 +1,6 @@
 import type { SessionView as Session, RuntimeContextFactSource, RuntimeContextRecordV1, CapturedActionFact, ProducerFactOutcome } from '@i-harness/core-session'
 import { committedFactSeqs, createNondurableFactOwner, isNondurableSession, projectCurrentContext, runtimeContextDigest, renderRuntimeContext, validRuntimeContextRecord } from '@i-harness/core-session'
-import { readRestoredRuntimeContext, type PreparedConversationArchive } from '@i-harness/core-session/internal/restoration'
+import { readManagedRuntimeContext, readRestoredRuntimeContext, type PreparedConversationArchive } from '@i-harness/core-session/internal/restoration'
 import {types as utilTypes} from 'node:util'
 
 export const RUNTIME_CONTEXT_SOURCE_PLUGIN = 'i-harness/runtime-context'
@@ -17,8 +17,11 @@ export interface RuntimeContextService {
 
 /** The source retains one original capture until its real disposition is known.
  * Complete observations enter the existing owner in invocation order. */
-export function createRuntimeContext(session: Session, source?: RuntimeContextFactSource): RuntimeContextService {
-  return createRuntimeContextEngine(()=>projectCurrentContext(session),source,!source&&isNondurableSession(session)?createNondurableFactOwner(session):undefined)
+export function createRuntimeContext(session: Session, source?: RuntimeContextFactSource, ownerSessionId?: string): RuntimeContextService {
+  return createRuntimeContextEngine(() => {
+    const owned = ownerSessionId === undefined ? undefined : readManagedRuntimeContext(session, ownerSessionId)
+    return owned ? owned.current : projectCurrentContext(session)
+  }, source, !source && isNondurableSession(session) ? createNondurableFactOwner(session) : undefined)
 }
 export interface PreparedRuntimeContextReader {
   readonly ownerSessionId: string
@@ -95,8 +98,8 @@ function createRuntimeContextEngine(readCurrent:()=>{readonly semanticDigest:str
   function publish(record: RuntimeContextRecordV1, flight: Flight, signal?: AbortSignal, retain?: () => RuntimeContextPublicationLease, current=readCurrent, guard?:()=>void): Promise<void> {
     signal?.throwIfAborted()
     const latest = current()
-    if ((prepared||flights.size === 1 && flights.has(flight)) && latest?.semanticDigest === runtimeContextDigest(record.sections)) return Promise.resolve()
     const digest = runtimeContextDigest(record.sections)
+    if ((prepared||flights.size === 1 && flights.has(flight)) && latest?.semanticDigest === digest) return Promise.resolve()
     const action = source ? source(signal) : adjacent && adjacent.signal === signal ? adjacent.action : memory?.beginAction(signal)
     if (!action) throw Object.assign(new Error('Managed runtime context requires its owned source'), { code: 'FACT_OWNER_UNSUPPORTED' })
     if (adjacent?.digest === digest && adjacent.signal === signal && adjacent.action === action) return adjacent.work

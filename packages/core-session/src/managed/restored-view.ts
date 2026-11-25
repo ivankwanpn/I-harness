@@ -13,8 +13,7 @@ import type { SessionEventView, EncodedFactBatch, FactReceipt } from './types.ts
 import type { ConversationPayloadCapture } from '../conversation/payload.ts';
 import type { ConversationEventArchive } from '../conversation/archive.ts';
 import { captureData } from '../serialization/context-data.ts';
-import { copyConversationData } from '../conversation/render.ts';
-import { runtimeContextDigest } from '../events/runtime-context.ts';
+import { digestRuntimeContextEvent } from '../conversation/render.ts';
 import { preparePrunedResultProjection } from '../conversation/payload.ts';
 import type { ConversationProjection } from '../conversation/types.ts';
 import type { PreparedConversationArchive, PreparedPrunedResult, PreparedResultProjection } from '../conversation/restoration-types.ts';
@@ -488,9 +487,8 @@ export function readRestoredRuntimeContext(lease: PreparedConversationArchive, o
     if (ownerSessionId !== prepared.candidate.sessionId) failure('CONVERSATION_RESTORATION_OWNER_MISMATCH');
     const current = prepared.candidate.index.currentRuntimeContext();
     if (!current) return undefined;
-    const event = prepared.archive.get(current.index);
-    if (event.type !== 'runtime/context') failure('CONVERSATION_RESTORATION_DEPENDENCY_MISMATCH');
-    const semanticDigest = runtimeContextDigest(copyConversationData(event.sections));
+    const semanticDigest = digestRuntimeContextEvent(prepared.archive.get(current.index));
+    if (semanticDigest === undefined) failure('CONVERSATION_RESTORATION_DEPENDENCY_MISMATCH');
     prepared.current();
     return { semanticDigest };
 }

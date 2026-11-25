@@ -40,7 +40,7 @@ async function fixture(disposition: 'committed' | 'absent' | 'install') {
   const rc = createRuntimeContext(document.view, signal => {
     factories++; const action = document.beginAction(signal)
     return { finish() { finishes++; action.finish() }, captureRuntimeContext(record, check) { captures++; return action.captureRuntimeContext(record, check) } }
-  })
+  }, id)
   rc.registerSection('instructions', () => { getters++; return text })
   const retain = () => { retains++; return { async release() { releases++ } } }
   return { rc, retain, get counts() { return { issues, getters, factories, captures, finishes, retains, releases } }, get key() { return key },
