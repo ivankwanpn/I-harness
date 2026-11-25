@@ -1,11 +1,13 @@
 import {
   decodeFrame,
+  encodeFrame,
   INTERNAL_ERROR,
   INVALID_PARAMS,
   INVALID_REQUEST,
   isRpcRequest,
   isRpcSuccess,
   makeFailure,
+  makeRequest,
   makeSuccess,
   METHOD_NOT_FOUND,
   type RpcRequest,
@@ -134,11 +136,17 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
   const forkSources = new Map<string, { identity: string; flight: Promise<unknown> }>()
   const surfaces = handlers.executionObservation ? createSurfaceSubscriptions(handlers.executionObservation, notice => send({jsonrpc:'2.0',method:'desktop/surface/changed',params:notice})) : undefined
 
+  function dispatchSdk(message: RpcRequest, line?: string, controls?: Parameters<SdkServer["handleLine"]>[1]) {
+    if (base.handleRequestFrame) return base.handleRequestFrame(message, controls)
+    const encoded = line ?? encodeFrame(message)
+    const reply = controls === undefined ? base.handleLine(encoded) : base.handleLine(encoded, controls)
+    return reply.then(value => value === null ? null : decodeFrame(value) ?? null)
+  }
+
   async function dispatch(line: string, message: RpcRequest) {
       if (message.method === "initialize") {
-        const replyLine = await base.handleLine(line)
-        const reply = replyLine === null ? undefined : decodeFrame(replyLine)
-        if (isRpcSuccess(reply)) initialized = true
+        const reply = await dispatchSdk(message, line)
+        if (reply && isRpcSuccess(reply)) initialized = true
         return
       }
 
@@ -148,7 +156,7 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
           'session/fork/results/prepare', 'session/fork/results/begin', 'session/fork/results/retry',
         ].includes(message.method)) {
           const request = { active: true }
-          try { await forkRequestContext.run(request, () => base.handleLine(line, { fork: { async withNewWork<T>(sourceSessionId: string, _operationId: string, use: () => Promise<T>): Promise<T> {
+          try { await forkRequestContext.run(request, () => dispatchSdk(message, line, { fork: { async withNewWork<T>(sourceSessionId: string, _operationId: string, use: () => Promise<T>): Promise<T> {
             if (closed) throw new ForkAdmissionError('cancelled')
             // Base SDK validates the complete operation before invoking this
             // host-only callback. Identity here restricts concurrent admission.
@@ -192,7 +200,7 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
         }
         if (message.method === "session/model/set" && typeof scopedSessionId === "string") {
           if (activePrompts.has(scopedSessionId)) { send(makeFailure(message.id, INVALID_REQUEST, "session is busy", { reason: "session_busy" })); return }
-          const job = Promise.resolve().then(() => base.handleLine(line))
+          const job = Promise.resolve().then(() => dispatchSdk(message, line))
           modelSwitches.set(scopedSessionId, job)
           try { await job } finally { modelSwitches.delete(scopedSessionId) }
           return
@@ -204,7 +212,7 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
             return
           }
           if (typeof sessionId === "string" && sessionId !== "") activePrompts.set(sessionId, (activePrompts.get(sessionId) ?? 0) + 1)
-          try { await base.handleLine(line) }
+          try { await dispatchSdk(message, line) }
           finally {
             if (typeof sessionId === "string") {
               const remaining = (activePrompts.get(sessionId) ?? 1) - 1
@@ -214,7 +222,7 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
           }
           return
         }
-        await base.handleLine(line)
+        await dispatchSdk(message, line)
         if (message.method === "session/cancel") {
           const sessionId = asRecord(message.params)?.sessionId
           if (typeof sessionId === "string" && sessionId !== "") { handlers.interaction?.cancelSession?.(sessionId); await handlers.workflow?.cancel(sessionId) }
@@ -839,7 +847,7 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
         for (const sessionId of activePrompts.keys()) {
           const id = `desktop-internal-${randomUUID()}`
           internalIds.add(id)
-          try { await base.handleLine(JSON.stringify({ jsonrpc: "2.0", id, method: "session/cancel", params: { sessionId } })) }
+          try { await dispatchSdk(makeRequest(id, "session/cancel", { sessionId })) }
           catch (cause) { failures.push(cause) }
           finally { internalIds.delete(id) }
         }

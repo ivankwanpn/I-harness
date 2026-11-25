@@ -104,6 +104,7 @@ import {
   INTERNAL_ERROR,
   PROTOCOL_VERSION,
   type RpcMessage,
+  type RpcRequest,
   type RpcNotification,
   type SessionListResult,
   type RewindPointsResponse,
@@ -192,6 +193,8 @@ export interface RewindServiceSurface {
   ): Promise<RewindExecuteResponse>
 }
 
+type SdkRequestControls = { fork?: ForkExecutionControl }
+
 export interface SdkServer {
   /** In-memory process liveness for hosts deciding whether to shut down. */
   hasActiveWork?(): boolean
@@ -199,7 +202,9 @@ export interface SdkServer {
    * produced no response — malformed lines, notifications, fire-and-forget).
    * Async methods (session/prompt) resolve their response late; notifications
    * are pushed as they happen via onNotify. */
-  handleLine(line: string, controls?: { fork?: ForkExecutionControl }): Promise<string | null>
+  handleLine(line: string, controls?: SdkRequestControls): Promise<string | null>
+  /** Host entry for an already decoded request. The transport owns encoding. */
+  handleRequestFrame?(message: RpcRequest, controls?: SdkRequestControls): Promise<RpcMessage | null>
   /** M68 batch B (v3): the connection identity captured at the FIRST
    * `initialize` — `{ name?, version? }`, absent when the client sent none (or
    * sent garbage, which warns instead of rejecting). Captured ONCE: a second
@@ -1031,6 +1036,18 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
     }
   }
 
+  async function handleRequestFrame(message: RpcRequest, controls?: SdkRequestControls): Promise<RpcMessage | null> {
+    if (closed) return null
+    let reply: RpcMessage
+    try {
+      reply = await handleRequest(message.method, message.params, message.id, controls?.fork)
+    } catch (error) {
+      reply = hostMethodFailure(message.id, message.method, error)
+    }
+    emitMessage(reply)
+    return reply
+  }
+
   return {
     hasActiveWork() {
       if (closed || ownedRequestActivity() || preparingSessions.size || preparingHistorySessions.size) return true
@@ -1045,15 +1062,10 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
       if (message === undefined) return null // malformed → ignored
       if (isRpcNotification(message)) return null // client → server notifications are accepted-and-ignored in v1
       if (!isRpcRequest(message)) return null
-      let reply: RpcMessage
-      try {
-        reply = await handleRequest(message.method, message.params, message.id, controls?.fork)
-      } catch (error) {
-        reply = hostMethodFailure(message.id, message.method, error)
-      }
-      emitMessage(reply)
-      return encodeFrame(reply)
+      const reply = await handleRequestFrame(message, controls)
+      return reply === null ? null : encodeFrame(reply)
     },
+    handleRequestFrame,
     clientInfo() {
       // a COPY: the capture is the server's own state — a caller must not be
       // able to mutate it through the accessor

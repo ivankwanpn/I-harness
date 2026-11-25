@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
+import { append, createSession } from "@i-harness/core-session"
 import { createSessionService } from "@i-harness/session-executor"
 import { createSdkServer } from "@i-harness/sdk/server"
 import type { SdkServer } from "@i-harness/sdk/server"
@@ -14,6 +15,35 @@ import {
 } from "@i-harness/sdk"
 import { createDesktopRouter, createGatewayWrite } from "../src/router.ts"
 import type { DesktopHandlers } from "../src/types.ts"
+
+it("dispatches a decoded history request and emits its reply once using the SDK frame entry", async () => {
+  const frames: RpcMessage[] = []
+  const send = (frame: RpcMessage) => { frames.push(frame) }
+  const session = createSession()
+  append(session, { type: "turn/start" })
+  append(session, { type: "user/message", text: "large draft ".repeat(10_000) })
+  append(session, { type: "turn/end" })
+  const service = createSessionService({ workspace: process.cwd(), modelPolicy: "required" })
+  const handlers: DesktopHandlers = {}
+  const base = createSdkServer({
+    ...service,
+    liveSession: id => id === "saved" ? session : undefined,
+  }, { onWrite: createGatewayWrite(send, handlers) })
+  const lineEntry = vi.spyOn(base, "handleLine")
+  const router = createDesktopRouter(base, send, handlers)
+  try {
+    await router.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
+    const history = makeRequest(2, "session/history", { sessionId: "saved", beforeSeq: 4, limit: 3 })
+    await router.handleLine(encodeFrame(history))
+    expect(lineEntry).not.toHaveBeenCalled()
+    const response = makeSuccess(2, { events: session.events, nextSeq: 3, startSeq: 0, headSeq: 3 })
+    expect(frames.filter(frame => "id" in frame && frame.id === 2)).toEqual([response])
+    expect(await base.handleLine(encodeFrame(history))).toBe(encodeFrame(response))
+  } finally {
+    await router.close()
+    await service.close()
+  }
+})
 
 it("observes overlapping Gateway requests and background work without listing saved sessions", async () => {
   const frames: RpcMessage[] = []
