@@ -40,7 +40,14 @@ export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry
  const held=heldFactOwner(token,ports.ownership,assertOriginal)
  const source:OriginalConversationRestorationSource={
   get formatVersion(){if(formatVersion===undefined)throw new FactRecoveryRequiredError();return formatVersion},get header(){return header},get prefix(){if(!prefix)throw new FactRecoveryRequiredError();return prefix},assertCurrent,
-  async consume(accept){assertCurrent();if(!initial)throw new FactRecoveryRequiredError();for(const event of initial.events){await accept([event]);assertCurrent()}},
+  async consume(accept){
+   assertCurrent()
+   if(!initial)throw new FactRecoveryRequiredError()
+   // This source already owns one immutable history under a held proof.
+   // Stage its projection indexes once instead of copying their prefixes per event.
+   if(initial.events.length)await accept(initial.events)
+   assertCurrent()
+  },
   async readEvent(ordinal){
    assertCurrent()
    // Initialization walks the frozen events of the original held history proof.

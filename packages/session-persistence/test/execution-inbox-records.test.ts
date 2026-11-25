@@ -97,7 +97,16 @@ async function persistedExchanges() {
 
 it('reuses the verified archive for cold validation and opens the held reader for later dependencies',async()=>{
  const root=await persistedExchanges()
- const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ const restoredBatches:{first:number; ordinals:(number|undefined)[]}[]=[]
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{
+  lock:{enabled:true},
+  originalExecutionFoldFactory:()=>({
+   appendValidated(unit,first){restoredBatches.push({first,ordinals:unit.map(event=>event.seq)})},
+   finishRestore(){},
+   snapshot(){return {}},
+   validateSnapshot(){return true},
+  }),
+ },taskDocumentStorageContract)
  coordinators.push(coordinator)
  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
  probe.settleHistory=async()=>{entered.resolve();await release.promise}
@@ -115,6 +124,7 @@ it('reuses the verified archive for cold validation and opens the held reader fo
  expect(probe.legacyReads-reads).toBe(0)
  expect(probe.ordinals).toEqual([])
  const observation=execution.observe(),admission=await observation.inbox.admitted('saved')
+ expect(restoredBatches).toEqual([{first:0,ordinals:Array.from({length:observation.eventCount},(_,ordinal)=>ordinal)}])
  expect(admission).toMatchObject({text:'original input body'})
  expect(probe.ordinals).toEqual([admission?.seq])
  const lease=await execution.prepare()
