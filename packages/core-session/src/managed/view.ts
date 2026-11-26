@@ -7,6 +7,7 @@ import { managedSessions, managedFactOwners, subscribers } from '../events/state
 import { captureLegacyFact, freezeJsonData } from './capture.ts'
 import type { SessionView } from './types.ts'
 import { prepareSessionEvent } from '../events/intake.ts'
+import { hasOriginalImageMediaTypeLookup } from '../images.ts'
 import { createManagedIntakeIndex } from './intake-index.ts'
 import { canFoldPruneProjection } from '../projection/pruning.ts'
 import { isOriginalArchiveValidationEnvironment } from '../serialization/validation-environment.ts'
@@ -222,7 +223,8 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
     && (!captured.value.header || !Object.hasOwn(captured.value.header, 'sessionId'))
     && isOriginalArchiveValidationEnvironment() && isImmutableProjectionData(captured.value) && events.every(canFoldPruneProjection)
   const readEvent = (position: number) => events[position]
-  const index = projectionProof && contiguousSeq && typeof indexHeader.sessionId === 'string' && indexHeader.sessionId.length > 0 && unchangedDataPrototypes()
+  const index = projectionProof && contiguousSeq && typeof indexHeader.sessionId === 'string' && indexHeader.sessionId.length > 0
+    && unchangedDataPrototypes() && hasOriginalImageMediaTypeLookup()
     ? createImmutableManagedConversationIndex(events, readEvent, indexHeader)
     : createIndex(events, readEvent, formatVersion, indexHeader)
   const intake=createManagedIntakeIndex()

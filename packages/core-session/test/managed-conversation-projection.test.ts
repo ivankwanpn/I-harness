@@ -3,6 +3,7 @@ import { projectConversation } from '../src/conversation/project.ts'
 import { createConversationIndex } from '../src/conversation/validation.ts'
 import * as conversationEvents from '../src/events/conversation.ts'
 import { CURRENT_FORMAT_VERSION, type Session, type SessionEvent } from '../src/events/types.ts'
+import { IMAGE_MEDIA_TYPES } from '../src/images.ts'
 import { createBootstrapManagedSessionState, createManagedIndexedView, createManagedSessionState } from '../src/managed/view.ts'
 import { projectManagedConversation } from '../src/restoration-internal.ts'
 
@@ -102,6 +103,27 @@ it('keeps the original shape checks when frozen rows can see an inherited getter
   }
   expect(failure).toMatchObject({ message: expect.stringContaining('invalid input provenance') })
   expect(createManagedSessionState(session, { sessionId: ownerSessionId }).view.events).toHaveLength(1)
+})
+
+it('keeps the original shape checks when the public media type lookup is customized', () => {
+  const original = fixture()
+  original.events[5] = { type: 'tool/result', callId: 'read', name: 'read', seq: 5,
+    envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: '',
+      media: [{ mediaType: 'image/png', dataBase64: 'AA==' }],
+      retention: { kind: 'inline', value: 'ok', encodedBytes: 4 } },
+  }
+  expect(createManagedSessionState(original, { sessionId: ownerSessionId }).view.events).toHaveLength(8)
+  const lookup = IMAGE_MEDIA_TYPES.has
+  const prior = Object.getOwnPropertyDescriptor(IMAGE_MEDIA_TYPES, 'has')
+  let checks = 0
+  try {
+    IMAGE_MEDIA_TYPES.has = mediaType => ++checks === 1 && lookup.call(IMAGE_MEDIA_TYPES, mediaType)
+    expect(() => createManagedSessionState(original, { sessionId: ownerSessionId })).toThrow('Invalid result envelope or session format')
+    expect(checks).toBe(2)
+  } finally {
+    if (prior) Object.defineProperty(IMAGE_MEDIA_TYPES, 'has', prior)
+    else Reflect.deleteProperty(IMAGE_MEDIA_TYPES, 'has')
+  }
 })
 
 it('projects an installed original with exactly the generic payload transformations and source order', () => {

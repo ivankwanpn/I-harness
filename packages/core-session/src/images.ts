@@ -25,6 +25,16 @@ export interface ImageSummary {
 // C5 (web-host attachment routes reuse the same capacity rules as a log
 // append — one source of truth): exported for the HTTP upload validation.
 export const IMAGE_MEDIA_TYPES = new Set<ImageMediaType>(["image/png", "image/jpeg", "image/webp", "image/gif"])
+const mediaTypePrototype = Set.prototype
+const originalMediaTypeLookup = Object.getOwnPropertyDescriptor(mediaTypePrototype, 'has')?.value
+
+/** The set can be extended. A custom lookup can change between observations. */
+export function hasOriginalImageMediaTypeLookup(): boolean {
+  return typeof originalMediaTypeLookup === 'function' && Object.getPrototypeOf(IMAGE_MEDIA_TYPES) === mediaTypePrototype
+    && !Object.hasOwn(IMAGE_MEDIA_TYPES, 'has')
+    && Object.getOwnPropertyDescriptor(mediaTypePrototype, 'has')?.value === originalMediaTypeLookup
+}
+
 const MAX_IMAGES_PER_MESSAGE = 20
 export const MAX_IMAGE_BYTES_PER_MESSAGE = 200 * 1024 * 1024
 
