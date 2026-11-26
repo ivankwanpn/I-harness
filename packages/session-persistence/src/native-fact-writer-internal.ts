@@ -1,8 +1,14 @@
 import { FactRecoveryRequiredError } from '@i-harness/core-session'
 import type { EncodedFactBatch } from '@i-harness/core-session'
 import type { HeldFactOwner, IssuingFactOwner } from './coordinator/fact-types.ts'
+export { readOriginalHeldArchivePrefix } from './coordinator/fact-owner.ts'
 
 export type NativeJournalCleanup = Readonly<{ settle(): Promise<void>; hasDebt(): boolean }>
+/** A changed archive before any truncate or append. Cleanup still owns any
+ * outstanding descriptor, independently of this known mismatch. */
+export class RecoveryArchiveMismatch extends Error {
+  constructor() { super('Managed recovery archive mismatch') }
+}
 type JournalCleanupFactory = (id: string, held: HeldFactOwner) => NativeJournalCleanup
 
 type NativeRequest = { id: string; owner: IssuingFactOwner }

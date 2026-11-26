@@ -5,7 +5,7 @@ import { createArchiveReadOwner } from './backend/archive-read-owner.ts'
 import { readSessionArchive } from './backend/archive-reader.ts'
 import { createColdArchiveHistoryReader } from './backend/cold-archive-history.ts'
 import { associateArtifactPaths, createOriginalJsonlPathResolution } from '@i-harness/session-persistence/internal/artifact-path'
-import { createOriginalNativePrewriteOwner } from '@i-harness/session-persistence/internal/native-fact-writer'
+import { createOriginalNativePrewriteOwner, readOriginalHeldArchivePrefix } from '@i-harness/session-persistence/internal/native-fact-writer'
 import { createOriginalTaskNativeStage } from '@i-harness/session-persistence/internal/task-document-operations'
 import {associateOwnedExecutionReader} from './backend/owned-execution-read.ts'
 import { decodeFactBatch } from '@i-harness/core-session'
@@ -326,7 +326,10 @@ export function createJsonlBackend(root: string, options?: {
     return serializeHeader({ ...meta, journal }) + '\n'
   }
   const { trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth, ...bootstrapBackend } = createBootstrapHeaderBackend(filePath, assertLegacyNativeAdmission, rootPath, captureIO, publication)
-  const factJournal = createFactJournalBackend(filePath, assertLegacyNativeAdmission, Object.freeze({ filePath, assertNotDeleted: assertLegacyNativeAdmission, enter: (id, owner, batch) => nativePrewrite.enter(id, owner, batch) }), publication, captureIO)
+  const factJournal = createFactJournalBackend(filePath, assertLegacyNativeAdmission, Object.freeze({ filePath, assertNotDeleted: assertLegacyNativeAdmission, enter: (id, owner, batch) => nativePrewrite.enter(id, owner, batch) }), publication, captureIO, (id, held) => {
+    const prefix = readOriginalHeldArchivePrefix(held)
+    if (prefix) return capability.openCleanWriterPrefix(id, prefix, held.assertHeld)
+  })
   const wrappedAppend = options?.wrapOwnedBatch !== undefined && factJournal.appendOwnedBatch !== undefined
     ? options.wrapOwnedBatch(factJournal.appendOwnedBatch) : undefined
   const wrappedReconcile = options?.wrapOwnedReconcile !== undefined && factJournal.reconcileOwnedBatch !== undefined
@@ -747,9 +750,10 @@ export function createJsonlBackend(root: string, options?: {
       events.every((event, index) => event.seq === index) &&
       repairTurnTail(events, { appendOnly: true }).length === events.length,
   })
-  const capability = Object.freeze(createJsonlProcessReadCapability({ assertOriginal, root: rootPath, file: filePath, document: docPath, checkDeleted: assertNotDeleted,
+  const hasOrdinaryNamespace = async (id: string) => (await bootstrapNamespace(filePath(id))).length === 0
+  const capability = Object.freeze(createJsonlProcessReadCapability({ assertOriginal, root: rootPath, file: filePath, document: docPath, checkDeleted: assertNotDeleted, hasOrdinaryNamespace,
     isOriginalCleanCheck: check => check === cleanHistory && hasOriginalArchiveRead(),
-    async checkNamespace(id) { if ((await bootstrapNamespace(filePath(id))).length) throw new Error('PROCESS_READ_UNAVAILABLE') } }))
+    async checkNamespace(id) { if (!await hasOrdinaryNamespace(id)) throw new Error('PROCESS_READ_UNAVAILABLE') } }))
   associateArchiveHistoryPrefixReader(backend,proof=>{assertOriginal();return capability.qualifiedHistoryPrefix(proof)})
   function openOwnedTask(scope: HeldTaskDocumentScope, initialize: boolean): TaskDocumentBackendSession {
     assertOriginal(); const original = createTaskDocumentObservation(rootPath, docPath(scope.key), scope, undefined, available, createOriginalTaskNativeStage(scope, available, assertOriginal))

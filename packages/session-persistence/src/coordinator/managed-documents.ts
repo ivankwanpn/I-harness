@@ -1,4 +1,4 @@
-import { retainManagedJournalCleanup, settleManagedJournalCleanup } from '../native-fact-writer-internal.ts'
+import { RecoveryArchiveMismatch, retainManagedJournalCleanup, settleManagedJournalCleanup } from '../native-fact-writer-internal.ts'
 import {associateArtifactCurrentnessReader,createArtifactCurrentGuard,isArtifactCurrentGuard,withImmediateArtifactCurrentChecks} from './artifact-path-association.ts'
 import {runOriginalCurrentnessRead} from '../../../core-session/src/managed/currentness-guards.ts'
 import { hasArchiveHistoryPrefixReader, originalColdArchiveHistoryReader } from '../archive-read-internal.ts'
@@ -24,9 +24,6 @@ import type { LoadOwnedExecution } from './load.ts'
 
 /** The writer proves its own durable prefix. A native load can also identify
  * which prefix supplied the bodies that are about to be attached. */
-class RecoveryArchiveMismatch extends Error {
-  constructor() { super('Managed recovery archive mismatch') }
-}
 function assertRecoveryArchive(session: Session, observed: Readonly<JournalPrefix> | undefined, actual: JournalPrefix) {
   if (actual.eventCount !== session.events.length || observed && !sameArchivePrefix(observed, actual)) throw new RecoveryArchiveMismatch()
 }
@@ -443,18 +440,25 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
           if (documents.get(id) !== entry || entry.revoked) throw new FactRecoveryRequiredError()
           ownership.assertHeld(id)
           const incarnation = restored ? 'restored-compatibility' : 'cold-recovery'
-          const held = heldFactOwner({ sessionId: id, incarnation }, ownership, () => {})
+          const held = heldFactOwner({ sessionId: id, incarnation }, ownership, createArtifactCurrentGuard(() => {
+            if (documents.get(id) !== entry || entry.revoked) throw new FactRecoveryRequiredError()
+          }), archivePrefix)
           retainManagedJournalCleanup(entry.journalCleanup ??= new Map(),backend,id,held)
-          const prefix=await backend.readJournalPrefix!(id,held)
-          try { assertRecoveryArchive(session, archivePrefix, prefix) }
-          catch (error) {
-            if (!entry.journalCleanup?.get(held.owner)?.hasDebt()) entry.journalCleanup?.delete(held.owner)
+          let prefix: JournalPrefix
+          try {
+            prefix = await backend.readJournalPrefix!(id, held)
+            held.assertHeld()
+            assertRecoveryArchive(session, archivePrefix, prefix)
+          } catch (error) {
+            if (error instanceof RecoveryArchiveMismatch && !entry.journalCleanup?.get(held.owner)?.hasDebt())
+              entry.journalCleanup?.delete(held.owner)
             throw error
           }
           if (!restoredEntries.has(entry)) {
             const birth = await backend.bootstrapRoutes?.resolveBirth?.(id)
             if (birth) entry.route = captureBootstrapRoute(birth.route)
           }
+          held.assertHeld()
           return attach(id,entry,session,prefix)
         })
       })()
@@ -462,8 +466,8 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
         finishJournalMutation(entry,token,'settled')
         return document
       }, error => {
-        // A successful prefix read followed by a local mismatch has no
-        // uncertain writer disposition. A new load may observe the new file.
+        // A verified mismatch with no issued change has a known disposition.
+        // A new load may observe the new file after its descriptor settles.
         finishJournalMutation(entry, token, error instanceof RecoveryArchiveMismatch ? 'settled' : 'unknown')
         if (documents.get(id) === entry && !hasJournalDebt(entry)) {
           if (!restoredEntries.has(entry)) {

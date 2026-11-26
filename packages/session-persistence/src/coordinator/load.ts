@@ -50,8 +50,9 @@ async function materializeHistory(backend: object, proof: HistoryProof, retainAr
     throw Object.assign(new Error('Session events exceed the supported nesting depth', { cause: error }), { code: 'SESSION_EVENTS_TOO_DEEP' })
   }
   const formatVersion = proof.initial.formatVersion
+  const qualifiedClone = clean && formatVersion === CURRENT_FORMAT_VERSION && recognizesOriginalCleanHistoryMaterialization(backend, proof)
   let events: SessionEvent[]
-  if (clean && formatVersion === CURRENT_FORMAT_VERSION && recognizesOriginalCleanHistoryMaterialization(backend, proof)) {
+  if (qualifiedClone) {
     // The exact current-format data survived the unchanged JSON copy. Recheck
     // the local registry and operational payloads on the detached events.
     preflightDecodedFactHistory(formatVersion, physical)
@@ -60,7 +61,11 @@ async function materializeHistory(backend: object, proof: HistoryProof, retainAr
   const session = buildSession(meta, events)
   if (retainArchivePrefix && formatVersion === CURRENT_FORMAT_VERSION && originalDecodedArchiveRead(backend)) {
     const observed = readArchiveHistoryPrefix(backend, proof)
-    if (observed.kind === 'available') return { session, archivePrefix: observed.prefix }
+    if (observed.kind === 'available') {
+      // A detached fallback copy can still compare prefix values. Only the
+      // exact qualified clone forwards the decoder's original witness key.
+      return { session, archivePrefix: qualifiedClone ? observed.prefix : Object.freeze({ ...observed.prefix }) }
+    }
   }
   return { session }
 }

@@ -3,7 +3,7 @@ import { isUtf8 } from 'node:buffer';
 import type { BigIntStats } from 'node:fs';
 import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { CURRENT_FORMAT_VERSION, freezeJsonData, readFactJournal, type SessionEvent, type SessionView } from '@i-harness/core-session';
+import { CURRENT_FORMAT_VERSION, freezeJsonData, readFactJournal, type JournalPrefix, type SessionEvent, type SessionView } from '@i-harness/core-session';
 import { createArchiveJournalHistoryDecoder, isOriginalArchiveValidationEnvironment } from '@i-harness/core-session/internal/archive';
 import { parseHeader } from '../format.ts';
 import { isHeldTaskDocumentScope, SessionFormatUnsupportedError, type HeldTaskDocumentScope } from '@i-harness/session-persistence';
@@ -14,8 +14,10 @@ type DirectoryChain = { root: Identity; rootAncestry: string; pathAncestry: stri
 type Witness = { path: string; identity: Identity; digest: string; parents: DirectoryChain };
 type ColdTranscript = { id: string; witness: Witness; initial: SessionView; reusableInitial?: true };
 export type CleanHistoryCheck = Readonly<{ before(id: string): Promise<void>; isCanonical(events: SessionEvent[]): boolean }>;
-type Ports = { assertOriginal(): void; root: string; file(id: string): string; document(key: string): string; checkNamespace(id: string): Promise<void>; checkDeleted(kind: string, id: string): Promise<void>; isOriginalCleanCheck?(check: CleanHistoryCheck): boolean };
+type Ports = { assertOriginal(): void; root: string; file(id: string): string; document(key: string): string; checkNamespace(id: string): Promise<void>; checkDeleted(kind: string, id: string): Promise<void>; isOriginalCleanCheck?(check: CleanHistoryCheck): boolean; hasOrdinaryNamespace?(id: string): Promise<boolean> };
 const bad = (): never => { throw new Error('PROCESS_READ_UNAVAILABLE'); };
+class HistoryLocationChanged extends Error {}
+const changedLocation = (): never => { throw new HistoryLocationChanged(); };
 const identity = (stat: BigIntStats): Identity => {
     if (typeof stat.dev !== 'bigint' || typeof stat.ino !== 'bigint' || stat.ino <= 0n || stat.size < 0n || stat.size > BigInt(Number.MAX_SAFE_INTEGER)) return bad();
     return { dev: stat.dev, ino: stat.ino, size: Number(stat.size), mtimeNs: stat.mtimeNs, ctimeNs: stat.ctimeNs };
@@ -25,6 +27,7 @@ const same = (a: Identity, b: Identity) => a.dev === b.dev && a.ino === b.ino &&
 // directory chain. Absence must remain tied to that original parent as well.
 const sameRoot = (a: DirectoryChain, b: DirectoryChain) => same(a.root, b.root) && a.rootAncestry === b.rootAncestry;
 const sameParents = (a: DirectoryChain, b: DirectoryChain) => sameRoot(a, b) && a.pathAncestry === b.pathAncestry;
+const stableParents = (a: DirectoryChain, b: DirectoryChain) => a.root.dev === b.root.dev && a.root.ino === b.root.ino && a.rootAncestry === b.rootAncestry && a.pathAncestry === b.pathAncestry;
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 const MAX_REUSABLE_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
 const MAX_REUSABLE_TRANSCRIPT_EVENTS = 16384;
@@ -51,6 +54,7 @@ function decodeCleanHistory(body: Buffer, meta: ReturnType<typeof parseHeader>) 
 export function createJsonlProcessReadCapability(ports: Ports) {
     const freshOwners = new WeakMap<object, HeldTaskDocumentScope>();
     const historyOwners = new WeakMap<object, { scope: HeldTaskDocumentScope; bytes: Buffer; identity: Identity; prefix?: Readonly<import('@i-harness/core-session').JournalPrefix>; cleanGeneration?: object; assertPrefixCurrent():void }>();
+    const cleanWriterHistory = new WeakMap<Readonly<JournalPrefix>, { id: string; witness: Witness; generation: object }>();
     const decodedProcessHistory = new WeakMap<SessionView, { id: string; generation: object }>();
     let coldTranscript: ColdTranscript | undefined, coldGeneration = {};
     function retireColdTranscript() { coldGeneration = {}; coldTranscript = undefined; }
@@ -63,19 +67,19 @@ export function createJsonlProcessReadCapability(ports: Ports) {
         if (meta.formatVersion !== CURRENT_FORMAT_VERSION || meta.semanticSeed || !meta.journal) bad();
         return meta;
     }
-    async function ancestors(path: string) {
+    async function ancestors(path: string, unavailable: () => never = bad) {
         let parent = dirname(path), root: Identity | undefined;
         const rootAncestry: string[] = [], pathAncestry: string[] = [];
         for (;;) {
             const info = await lstat(parent, { bigint: true });
-            if (!info.isDirectory() || info.isSymbolicLink()) bad();
+            if (!info.isDirectory() || info.isSymbolicLink()) unavailable();
             const current = identity(info), entry = `${current.dev}/${current.ino}`;
             pathAncestry.push(entry);
             if (parent === ports.root) root = current;
             if (root) rootAncestry.push(entry);
             const next = dirname(parent); if (next === parent) break; parent = next;
         }
-        if (!root) return bad();
+        if (!root) return unavailable();
         return { root, rootAncestry: rootAncestry.join(':'), pathAncestry: pathAncestry.join(':') };
     }
     async function file(path: string, parents: DirectoryChain): Promise<{ bytes: Buffer; witness: Witness }> {
@@ -108,6 +112,55 @@ export function createJsonlProcessReadCapability(ports: Ports) {
     }
     async function verify(w: Witness, stableDirectories = false) {
         if (!await digestMatches(w, stableDirectories)) bad();
+    }
+
+    /** New writer authority supplies its own descriptor. The prior owner lent
+     * just the exact header/body byte witness, with no surviving Task scope. */
+    function openCleanWriterPrefix(id: string, prefix: Readonly<JournalPrefix>, assertWriter: () => void) {
+        const original = cleanWriterHistory.get(prefix), hasOrdinaryNamespace = ports.hasOrdinaryNamespace;
+        if (!original || original.id !== id || original.generation !== coldGeneration ||
+            !hasOrdinaryNamespace || !cleanDecodeEnvironment()) return undefined;
+        const { witness, generation } = original;
+        const current = () => {
+            assertWriter(); ports.assertOriginal();
+            if (generation !== coldGeneration) bad();
+        };
+        async function sameFile(handle: FileHandle): Promise<boolean> {
+            current();
+            if (ports.file(id) !== witness.path) return false;
+            await ports.checkDeleted('session', id);
+            let intact = false;
+            try {
+                if (await hasOrdinaryNamespace!(id)) {
+                    const parents = await ancestors(witness.path, changedLocation);
+                    const opened = await handle.stat({ bigint: true });
+                    const path = await lstat(witness.path, { bigint: true });
+                    intact = opened.isFile() && path.isFile() && !path.isSymbolicLink() && stableParents(witness.parents, parents)
+                        && same(witness.identity, identity(opened)) && same(witness.identity, identity(path));
+                }
+            } catch (error) {
+                if (!(error instanceof HistoryLocationChanged) && !['ENOENT', 'ENOTDIR', 'ELOOP'].includes((error as NodeJS.ErrnoException)?.code ?? '')) throw error;
+            }
+            current();
+            return intact;
+        }
+        const sameEnvironment = (): true | undefined => cleanDecodeEnvironment() ? true : undefined;
+        return Object.freeze({ prefix, async seal(handle: FileHandle): Promise<boolean | undefined> {
+            return await sameFile(handle) ? sameEnvironment() : false;
+        }, async verify(handle: FileHandle): Promise<boolean | undefined> {
+            if (!await sameFile(handle)) return false;
+            if (!sameEnvironment()) return undefined;
+            const limit = witness.identity.size + 1, digest = createHash('sha256'), buffer = Buffer.allocUnsafe(Math.min(65536, limit));
+            let offset = 0;
+            while (offset < limit) {
+                if (generation !== coldGeneration) bad();
+                const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, limit - offset), offset);
+                if (!bytesRead) break;
+                digest.update(buffer.subarray(0, bytesRead)); offset += bytesRead;
+            }
+            if (!await sameFile(handle) || offset !== witness.identity.size || digest.digest('hex') !== witness.digest) return false;
+            return sameEnvironment();
+        } });
     }
     async function captureTranscript(id: string, path: string, parents: DirectoryChain, decoder: TextDecoder, generation: object): Promise<ColdTranscript> {
         const prior = coldTranscript, native = nativeTranscriptDecoding();
@@ -345,7 +398,6 @@ export function createJsonlProcessReadCapability(ports: Ports) {
             if (expected && observedDigest !== expected.digest) bad();
             return result;
         }
-        const stableParents = (a: DirectoryChain, b: DirectoryChain) => a.root.dev === b.root.dev && a.root.ino === b.root.ino && a.rootAncestry === b.rootAncestry && a.pathAncestry === b.pathAncestry;
         async function observeOriginal(clean?: CleanHistoryCheck) {
             scope.assertActive(); ports.assertOriginal(); await ports.checkDeleted('session', id);
             await clean?.before(id);
@@ -426,7 +478,14 @@ export function createJsonlProcessReadCapability(ports: Ports) {
             const prefix=decoded?Object.freeze({eventCount:decoded.prefix.eventCount,bodyBytes:decoded.prefix.bodyBytes,prefixDigest:decoded.prefix.prefixDigest}):undefined;
             historyOwners.set(proof, { scope, bytes: captured.bytes, identity: captured.witness.identity, prefix,
                 cleanGeneration: validatedClean && cleanDecodeEnvironment() ? generation : undefined,
-                assertPrefixCurrent(){if(retiring||checking||resources.size)bad();scope.assertActive();ports.assertOriginal()} }); await proof.assertCurrent(); return proof;
+                assertPrefixCurrent(){if(retiring||checking||resources.size)bad();scope.assertActive();ports.assertOriginal()} });
+            await proof.assertCurrent();
+            if (!retiring && prefix && validatedClean && generation === coldGeneration && cleanDecodeEnvironment()) {
+                scope.assertActive(); ports.assertOriginal();
+                const witness = Object.freeze({ ...captured.witness, identity: Object.freeze({ ...captured.witness.identity }) });
+                cleanWriterHistory.set(prefix, { id, witness, generation });
+            }
+            return proof;
         }
         function settle(retire: boolean) {
             if (retire) retiring = true; if (cleanup) return cleanup;
@@ -443,7 +502,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
         return session;
     }
     return {
-        openTaskHistory, observeFreshTaskParent, observeReservedTaskParent, observePublishedTaskParent, retireColdTranscript,
+        openTaskHistory, observeFreshTaskParent, observeReservedTaskParent, observePublishedTaskParent, retireColdTranscript, openCleanWriterPrefix,
         recognizesDecodedProcessHistory(id: string, initial: SessionView): boolean {
             const proof = decodedProcessHistory.get(initial);
             return !!proof && proof.id === id && proof.generation === coldGeneration && nativeTranscriptDecoding();

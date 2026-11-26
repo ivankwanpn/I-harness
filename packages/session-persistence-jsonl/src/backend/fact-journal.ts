@@ -1,4 +1,6 @@
 import { createBootstrapCaptureIO, type CaptureResource } from './bootstrap-capture-io.ts'
+import { readWriterPrefix, type CleanWriterPrefix } from './writer-prefix.ts'
+export type { CleanWriterPrefix } from './writer-prefix.ts'
 import { readFile, type FileHandle } from 'node:fs/promises'
 import { CURRENT_FORMAT_VERSION, canonicalJsonData, decodeFactBatch, readFactJournal, validJournalMetadata, validJournalPrefix, type EncodedFactBatch, type FactReceipt, type JournalPrefix, type SessionEvent } from '@i-harness/core-session'
 import type { BackendFactOutcome, HeldFactOwner, OwnedFactBackend, SessionMeta } from '@i-harness/session-persistence'
@@ -106,7 +108,7 @@ async function checkPrefix(handle: FileHandle, h: { meta: SessionMeta; bytes: nu
 
 /** Only the coordinator creates owner contexts. This leaf owns complete writes,
  * fsync evidence and same-issued-batch reconciliation; no write-behind retry. */
-export function createFactJournalBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>, nativePrewrite?: Readonly<{ filePath: typeof filePath; assertNotDeleted: typeof assertNotDeleted; enter(id: string, owner: import('@i-harness/session-persistence').IssuingFactOwner, batch: EncodedFactBatch): () => void }>, publication?: PublicationOwner, captureIO = createBootstrapCaptureIO()): OwnedFactBackend & Pick<BootstrapBackend,'confirmBootstrapFrames'> {
+export function createFactJournalBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>, nativePrewrite?: Readonly<{ filePath: typeof filePath; assertNotDeleted: typeof assertNotDeleted; enter(id: string, owner: import('@i-harness/session-persistence').IssuingFactOwner, batch: EncodedFactBatch): () => void }>, publication?: PublicationOwner, captureIO = createBootstrapCaptureIO(), readCleanPrefix?: (id: string, held: HeldFactOwner) => CleanWriterPrefix | undefined): OwnedFactBackend & Pick<BootstrapBackend,'confirmBootstrapFrames'> {
   if (nativePrewrite && (nativePrewrite.filePath !== filePath || nativePrewrite.assertNotDeleted !== assertNotDeleted)) throw new TypeError('Changed original native writer prerequisites')
   const receipt = (owner: HeldFactOwner, batch: EncodedFactBatch, prefixDigest: string): FactReceipt => ({
     owner: { ...owner.owner }, key: { ...batch.key }, lastSeq: batch.key.firstSeq + batch.key.count - 1, prefixDigest,
@@ -135,20 +137,9 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
       return captureIO.tracked<Awaited<ReturnType<OwnedFactBackend['readJournalPrefix']>>>(id, owner, async ledger => {
         scope(id, owner)
         await assertNotDeleted('session', id)
-        const path = filePath(id), bytes = await readFile(path)
-        const end = bytes.indexOf(0x0a)
-        const meta = parseHeader(bytes.subarray(0, end).toString('utf8'))
-        if (meta.semanticSeed?.version === 3) throw new TypeError('Legacy owned prefix cannot repair selected results')
-        if (![6, 7, 8, 9, 10, 11, 12, 13, 14].includes(meta.formatVersion) || !validJournalMetadata(meta.journal)) throw new TypeError('Managed journal format required')
-        const decoded = readFactJournal(bytes.subarray(end + 1), meta.journal, meta.formatVersion, meta)
-        const resource = await captureIO.acquire(ledger, path, 'r+'), handle = resource.handle
-        try {
-          scope(id, owner)
-          if (decoded.torn) await handle.truncate(end + 1 + decoded.prefix.bodyBytes)
-          await handle.sync()
-          scope(id, owner)
-        } finally { await captureIO.close(ledger, resource!) }
-        return decoded.prefix
+        scope(id, owner)
+        return readWriterPrefix(filePath(id), captureIO, ledger, () => scope(id, owner),
+          () => assertNotDeleted('session', id), readCleanPrefix?.(id, owner))
       })
     },
     async appendOwnedBatch(id, owner, prefix, batch) {
