@@ -18,6 +18,7 @@
 
 import { randomUUID } from "node:crypto"
 import { isStrictFactData } from '@i-harness/core-session'
+import { readManagedWorkflowEvents } from '@i-harness/core-session/internal/restoration'
 import type {
   GoalOperation,
   GoalPhase,
@@ -25,6 +26,7 @@ import type {
   GoalSnapshot,
   SessionEvent,
   SessionEventView,
+  SessionView,
 } from "@i-harness/core-session"
 
 /** Projected view of the current goal — GET /api/sessions/:id/goal response. */
@@ -160,6 +162,10 @@ export function foldGoal(events: readonly SessionEventView[]): GoalView | null {
   let view: GoalView | null = null
   for (const ev of events) view = applyGoalProjection(view, ev)
   return view
+}
+
+export function deriveGoal(session: SessionView): GoalView | null {
+  return foldGoal(readManagedWorkflowEvents(session, 'goal/change') ?? session.events)
 }
 
 /** Incremental form of the original projection for validated stream owners. */

@@ -14,9 +14,14 @@ afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { rec
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "ih-agent-shell-")); roots.push(root)
   const path = join(root, "settings.json")
+  const probes: string[] = []
   const installed = new Set(["C:/Program Files/Git/bin/bash.exe", "C:/Windows/System32/cmd.exe", "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe", "D:/PowerShell/pwsh.exe"])
-  const settings = createAgentShellSettings(path, { platform: "win32", env: { SystemRoot: "C:\\Windows", PATH: "D:\\PowerShell" }, exists: (candidate) => installed.has(candidate.replaceAll("\\", "/")) })
-  return { settings, path, installed }
+  const settings = createAgentShellSettings(path, { platform: "win32", env: { SystemRoot: "C:\\Windows", PATH: "D:\\PowerShell" }, exists(candidate) {
+    const command = candidate.replaceAll("\\", "/")
+    probes.push(command)
+    return installed.has(command)
+  } })
+  return { settings, path, installed, probes }
 }
 it("saves detected Agent shells separately and resolves changed disk preferences for subsequent commands", async () => {
   const { settings, path } = await fixture()
@@ -39,6 +44,80 @@ it("prefers detected native Windows shells for Agent auto and falls back in orde
   expect(settings.resolve()).toMatchObject({ id: "auto", command: "C:\\Windows\\System32\\cmd.exe", dialect: "cmd" })
   installed.delete("C:/Windows/System32/cmd.exe")
   expect(() => settings.resolve()).toThrow(/auto.*unavailable/i)
+})
+it("resolves the selected Agent shell through only its required probes and keeps the full UI profiles", async () => {
+  const { settings, path, probes, installed } = await fixture()
+  const { validate, ...automatic } = settings.resolve()
+  const pwsh = "D:/PowerShell/pwsh.exe"
+  expect(new Set(probes)).toEqual(new Set([pwsh]))
+  expect(automatic).toEqual({ id: "auto", label: "自動選擇（主機）", command: "D:\\PowerShell\\pwsh.exe", dialect: "powershell", executionTarget: "host" })
+
+  const catalogue = await settings.state()
+  expect(catalogue).toEqual({ executionTarget: "host", selected: "auto", resolved: automatic, options: [
+    automatic,
+    { id: "git-bash", label: "Git Bash（主機）", command: "C:\\Program Files\\Git\\bin\\bash.exe", dialect: "posix", executionTarget: "host" },
+    { id: "pwsh", label: "PowerShell 7（主機）", command: "D:\\PowerShell\\pwsh.exe", dialect: "powershell", executionTarget: "host" },
+    { id: "powershell", label: "Windows PowerShell（主機）", command: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", dialect: "powershell", executionTarget: "host" },
+    { id: "cmd", label: "CMD（主機）", command: "C:\\Windows\\System32\\cmd.exe", dialect: "cmd", executionTarget: "host" },
+  ] })
+
+  const cmd = "C:/Windows/System32/cmd.exe"
+  await writeFile(path, JSON.stringify({ agentShell: "cmd" }))
+  probes.length = 0
+  const { validate: validateCmd, ...explicit } = settings.resolve()
+  expect(new Set(probes)).toEqual(new Set([cmd]))
+  expect(explicit).toEqual(catalogue.options.at(-1))
+  expect(validateCmd).not.toThrow()
+
+  // A captured request keeps its executable and refuses if it vanishes.
+  installed.delete(pwsh)
+  probes.length = 0
+  expect(validate).toThrow(/auto.*unavailable/i)
+  expect(probes).toEqual([pwsh])
+})
+it("preserves Terminal Auto eligibility for a nonstandard Windows ComSpec", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-agent-shell-comspec-")); roots.push(root)
+  const path = join(root, "settings.json")
+  const custom = "D:\\Shell\\custom.exe", pwsh = "D:\\PowerShell\\pwsh.exe"
+  const installed = new Set([custom, pwsh])
+  const settings = createAgentShellSettings(path, { platform: "win32", env: { ComSpec: custom, PATH: "D:\\PowerShell" }, exists: file => installed.has(file) })
+  expect(() => settings.resolve()).toThrow(/auto.*unavailable/i)
+  await expect(settings.state()).resolves.toMatchObject({ selected: "auto", options: [expect.objectContaining({ id: "pwsh" })], error: expect.stringMatching(/auto.*unavailable/i) })
+  installed.delete(custom)
+  expect(settings.resolve()).toMatchObject({ id: "auto", command: pwsh })
+  await expect(settings.state()).resolves.toMatchObject({ selected: "auto", resolved: { id: "auto", command: pwsh } })
+})
+it("keeps PATH Bash distinct from the Git Bash discovered beside Git", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-agent-shell-path-bash-")); roots.push(root)
+  const path = join(root, "settings.json")
+  const env = { PATH: "D:\\Git\\cmd;D:\\Git\\bin;D:\\Bash\\bin" }
+  const installed = new Set(["D:\\Git\\cmd\\git.exe", "D:\\Git\\bin\\bash.exe", "D:\\Bash\\bin\\bash.exe"])
+  const settings = createAgentShellSettings(path, { platform: "win32", env, exists: file => installed.has(file) })
+  await writeFile(path, JSON.stringify({ agentShell: "git-bash" }))
+  expect(settings.resolve()).toMatchObject({ id: "git-bash", command: "D:\\Git\\bin\\bash.exe" })
+
+  await writeFile(path, JSON.stringify({ agentShell: "bash" }))
+  expect(() => settings.resolve()).toThrow(/bash.*unavailable/i)
+  expect((await settings.state()).options.map(option => option.id)).toEqual(["git-bash"])
+
+  env.PATH = "D:\\Bash\\bin;D:\\Git\\cmd;D:\\Git\\bin"
+  expect(settings.resolve()).toMatchObject({ id: "bash", command: "D:\\Bash\\bin\\bash.exe" })
+  expect((await settings.state()).options.map(option => option.id)).toEqual(["git-bash", "bash"])
+})
+it("uses only the selected POSIX lookup and keeps the settings catalogue ordered", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-agent-shell-posix-")); roots.push(root)
+  const path = join(root, "settings.json"), probes: string[] = []
+  const settings = createAgentShellSettings(path, { platform: "linux", env: { SHELL: "/bin/bash", PATH: "/bin" }, exists(file) {
+    probes.push(file)
+    return ["/bin/bash", "/bin/zsh", "/bin/sh"].includes(file)
+  } })
+  await writeFile(path, JSON.stringify({ agentShell: "zsh" }))
+  const { validate, ...selected } = settings.resolve()
+  expect(new Set(probes)).toEqual(new Set(["/bin/zsh"]))
+  expect(validate).not.toThrow()
+  const catalogue = await settings.state()
+  expect(catalogue.options.map(option => option.id)).toEqual(["auto", "bash", "zsh", "sh"])
+  expect(catalogue.resolved).toEqual(selected)
 })
 it("keeps an execution alias explicit while auto selects a native Windows executable", async () => {
   const root=await mkdtemp(join(tmpdir(),"ih-agent-shell-native-"));roots.push(root)

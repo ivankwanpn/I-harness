@@ -4,6 +4,8 @@ import { resolvePwshExe } from "@i-harness/shell"
 
 export type ShellProfile = { id: string; label: string; command: string; args: string[] }
 export type ShellEnvironment = { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; exists: (path: string) => boolean }
+export const AUTO_SHELL_LABEL = "自動選擇"
+const posixShells = ["bash", "zsh", "sh"]
 
 function envValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
   const name = Object.keys(env).find((entry) => entry.toLowerCase() === key.toLowerCase())
@@ -21,45 +23,82 @@ function onPath(name: string, options: ShellEnvironment): string | undefined {
   return undefined
 }
 
-export function shellProfiles(options: ShellEnvironment): ShellProfile[] {
-  if (options.platform !== "win32") {
+function posixShellProfile(options: ShellEnvironment, id: string): ShellProfile | undefined {
+  if (id === "auto") {
     const defaultShell = envValue(options.env, "SHELL")
     const fallback = defaultShell && posix.isAbsolute(defaultShell) && options.exists(defaultShell) ? defaultShell : "/bin/sh"
-    const profiles: ShellProfile[] = [{ id: "auto", label: "自動選擇", command: fallback, args: ["-i"] }]
-    for (const name of ["bash", "zsh", "sh"]) {
-      const command = onPath(name, options)
-      if (command) profiles.push({ id: name, label: name, command, args: ["-i"] })
-    }
-    return profiles
+    return { id, label: AUTO_SHELL_LABEL, command: fallback, args: ["-i"] }
   }
-  const root = envValue(options.env, "SystemRoot") ?? "C:\\Windows"
-  const powerShell = win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-  const resolvedPowerShell = resolvePwshExe(options.env, options.platform, options.exists)
-  const pwsh = win32.basename(resolvedPowerShell).toLowerCase() === "pwsh.exe" ? resolvedPowerShell : undefined
-  const gitExe = onPath("git.exe", options)
-  const gitBash = [
+  if (!posixShells.includes(id)) return undefined
+  const command = onPath(id, options)
+  return command ? { id, label: id, command, args: ["-i"] } : undefined
+}
+
+function windowsRoot(options: ShellEnvironment): string {
+  return envValue(options.env, "SystemRoot") ?? "C:\\Windows"
+}
+
+export function windowsCommandPath(options: ShellEnvironment): string {
+  return envValue(options.env, "ComSpec") ?? win32.join(windowsRoot(options), "System32", "cmd.exe")
+}
+
+function windowsGitBash(options: ShellEnvironment): string | undefined {
+  const installed = [
     win32.join(envValue(options.env, "ProgramFiles") ?? "C:\\Program Files", "Git", "bin", "bash.exe"),
     win32.join(envValue(options.env, "ProgramFiles(x86)") ?? "C:\\Program Files (x86)", "Git", "bin", "bash.exe"),
-    ...(gitExe ? [
-      win32.resolve(win32.dirname(gitExe), "..", "bin", "bash.exe"),
-      win32.resolve(win32.dirname(gitExe), "..", "..", "bin", "bash.exe"),
-    ] : []),
   ].find(options.exists)
-  const pathBash = onPath("bash.exe", options)
-  const cmdCandidate = envValue(options.env, "ComSpec") ?? win32.join(root, "System32", "cmd.exe")
-  const cmd = options.exists(cmdCandidate) ? cmdCandidate : undefined
-  const profiles: ShellProfile[] = []
-  if (gitBash) profiles.push({ id: "git-bash", label: "Git Bash", command: gitBash, args: ["-i"] })
-  if (pathBash && pathBash.toLowerCase() !== gitBash?.toLowerCase()) profiles.push({ id: "bash", label: "Bash (PATH)", command: pathBash, args: ["-i"] })
-  if (pwsh) profiles.push({ id: "pwsh", label: "PowerShell 7", command: pwsh, args: ["-NoLogo", "-NoProfile"] })
-  if (options.exists(powerShell)) profiles.push({ id: "powershell", label: "Windows PowerShell", command: powerShell, args: ["-NoLogo", "-NoProfile"] })
-  if (cmd) profiles.push({ id: "cmd", label: "CMD", command: cmd, args: [] })
-  const defaultProfile = profiles.find((profile) => profile.id === "git-bash")
-    ?? profiles.find((profile) => profile.id === "cmd")
-    ?? profiles.find((profile) => profile.id === "pwsh")
-    ?? profiles.find((profile) => profile.id === "powershell")
-    ?? profiles[0]
-  return defaultProfile ? [{ ...defaultProfile, id: "auto", label: "自動選擇" }, ...profiles] : []
+  if (installed) return installed
+  const gitExe = onPath("git.exe", options)
+  if (!gitExe) return undefined
+  return [
+    win32.resolve(win32.dirname(gitExe), "..", "bin", "bash.exe"),
+    win32.resolve(win32.dirname(gitExe), "..", "..", "bin", "bash.exe"),
+  ].find(options.exists)
+}
+
+function windowsShellProfile(options: ShellEnvironment, id: string, gitBash = () => windowsGitBash(options)): ShellProfile | undefined {
+  switch (id) {
+    case "git-bash": {
+      const command = gitBash()
+      return command ? { id, label: "Git Bash", command, args: ["-i"] } : undefined
+    }
+    case "bash": {
+      const command = onPath("bash.exe", options)
+      return command && command.toLowerCase() !== gitBash()?.toLowerCase() ? { id, label: "Bash (PATH)", command, args: ["-i"] } : undefined
+    }
+    case "pwsh": {
+      const command = resolvePwshExe(options.env, options.platform, options.exists)
+      return win32.basename(command).toLowerCase() === "pwsh.exe" ? { id, label: "PowerShell 7", command, args: ["-NoLogo", "-NoProfile"] } : undefined
+    }
+    case "powershell": {
+      const command = win32.join(windowsRoot(options), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+      return options.exists(command) ? { id, label: "Windows PowerShell", command, args: ["-NoLogo", "-NoProfile"] } : undefined
+    }
+    case "cmd": {
+      const command = windowsCommandPath(options)
+      return command && options.exists(command) ? { id, label: "CMD", command, args: [] } : undefined
+    }
+    default: return undefined
+  }
+}
+
+/** Resolve one explicit profile, or the POSIX default, using the live host. */
+export function shellProfile(options: ShellEnvironment, id: string): ShellProfile | undefined {
+  return options.platform === "win32" ? windowsShellProfile(options, id) : posixShellProfile(options, id)
+}
+
+export function shellProfiles(options: ShellEnvironment): ShellProfile[] {
+  if (options.platform !== "win32") {
+    return ["auto", ...posixShells].map(id => posixShellProfile(options, id)).filter(profile => profile !== undefined)
+  }
+  const pwsh = windowsShellProfile(options, "pwsh")
+  const gitBash = windowsShellProfile(options, "git-bash")
+  const bash = windowsShellProfile(options, "bash", () => gitBash?.command)
+  const cmd = windowsShellProfile(options, "cmd")
+  const powershell = windowsShellProfile(options, "powershell")
+  const profiles = [gitBash, bash, pwsh, powershell, cmd].filter(profile => profile !== undefined)
+  const defaultProfile = gitBash ?? cmd ?? pwsh ?? powershell ?? bash
+  return defaultProfile ? [{ ...defaultProfile, id: "auto", label: AUTO_SHELL_LABEL }, ...profiles] : []
 }
 
 export function listDesktopTerminalShellOptions(environment: Partial<ShellEnvironment> = {}) {

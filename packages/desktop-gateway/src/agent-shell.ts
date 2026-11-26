@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { powerShellExecutableAvailable, resolveWslAgentShell } from "@i-harness/shell"
 import { AGENT_SHELL_CHOICES, type SettingsAgentShell } from "@i-harness/settings"
-import { shellProfiles, type ShellEnvironment } from "./terminal-shells.ts"
+import { AUTO_SHELL_LABEL, shellProfile, shellProfiles, windowsCommandPath, type ShellEnvironment, type ShellProfile } from "./terminal-shells.ts"
 import { withDesktopSettings } from "./settings-file.ts"
 
 export interface AgentShellOption {
@@ -33,26 +33,40 @@ function dialect(command: string): AgentShellOption["dialect"] | undefined {
   return undefined
 }
 
+function windowsNativeAuto(get: (shell: SettingsAgentShell) => AgentShellOption | undefined): AgentShellOption | undefined {
+  // Native Job creation cannot execute WindowsApps aliases. Explicit choices
+  // still use the same availability check as the settings list.
+  const pwsh = get("pwsh")
+  const native = pwsh && !/[\\/]Microsoft[\\/]WindowsApps[\\/]/i.test(pwsh.command) ? pwsh : get("powershell") ?? get("cmd")
+  return native && { ...native, id: "auto", label: `${AUTO_SHELL_LABEL}（主機）` }
+}
+
 /** Uses the PTY's executable discovery, with a separate durable Agent preference.
  * Resolution reads the saved choice at each command boundary. No startup
  * snapshot can silently replace a selected executable that was removed. */
 export function createAgentShellSettings(path: string, environment: Partial<ShellEnvironment> = {}) {
   const env: ShellEnvironment = { env: environment.env ?? process.env, platform: environment.platform ?? process.platform, exists: environment.exists ?? existsSync }
+  const isAvailable = (command: string, kind: AgentShellOption["dialect"] | undefined) =>
+    kind === "powershell" ? powerShellExecutableAvailable(command, env.exists) : env.exists(command)
+  function hostOption(profile: ShellProfile | undefined): AgentShellOption | undefined {
+    if (!profile) return undefined
+    const kind = dialect(profile.command)
+    const available = isAvailable(profile.command, kind)
+    return kind && available ? { id: choice(profile.id), label: `${profile.label}（主機）`, command: profile.command, dialect: kind, executionTarget: "host" } : undefined
+  }
   function options(): AgentShellOption[] {
-    const available = shellProfiles(env).flatMap((profile) => {
-      const kind = dialect(profile.command)
-      const available = kind === "powershell" ? powerShellExecutableAvailable(profile.command, env.exists) : env.exists(profile.command)
-      return kind && available ? [{ id: choice(profile.id), label: `${profile.label}（主機）`, command: profile.command, dialect: kind, executionTarget: "host" as const }] : []
-    })
+    const available = shellProfiles(env).map(hostOption).filter(option => option !== undefined)
     if (env.platform !== "win32") return available
-    const automatic = available.find((option) => option.id === "auto")
-    // Native Job creation cannot execute WindowsApps aliases. Preserve explicit
-    // choices, but bind auto to a regular native executable before command capture.
-    const native = available.find((option) => option.id === "pwsh" && !/[\\/]Microsoft[\\/]WindowsApps[\\/]/i.test(option.command))
-      ?? available.find((option) => option.id === "powershell")
-      ?? available.find((option) => option.id === "cmd")
+    const native = windowsNativeAuto(id => available.find(option => option.id === id))
     return available.flatMap((option) => option.id !== "auto" ? [option]
-      : native ? [{ ...native, id: "auto" as const, label: automatic!.label }] : [])
+      : native ? [native] : [])
+  }
+  function selectedOption(shell: SettingsAgentShell): AgentShellOption | undefined {
+    if (env.platform !== "win32" || shell !== "auto") return hostOption(shellProfile(env, shell))
+    // With a custom ComSpec the Terminal Auto row can name an unsupported
+    // executable. Keep the settings-list compatibility rule for that host.
+    if (dialect(windowsCommandPath(env)) !== "cmd") return options().find(option => option.id === shell)
+    return windowsNativeAuto(id => hostOption(shellProfile(env, id)))
   }
   function selected(): SettingsAgentShell {
     let document: unknown
@@ -61,14 +75,14 @@ export function createAgentShellSettings(path: string, environment: Partial<Shel
     if (!document || typeof document !== "object" || Array.isArray(document)) throw new Error("Invalid Agent shell settings")
     return choice((document as Record<string, unknown>).agentShell ?? "auto")
   }
-  function resolveChoice(shell: SettingsAgentShell, available: AgentShellOption[]): AgentShellOption {
-    const result = available.find((option) => option.id === shell)
-    if (!result) throw new Error(`Agent Shell '${shell}' is unavailable on this host. Choose an installed shell in settings.`)
+  const unavailable = (shell: SettingsAgentShell) => new Error(`Agent Shell '${shell}' is unavailable on this host. Choose an installed shell in settings.`)
+  function requireOption(shell: SettingsAgentShell, result: AgentShellOption | undefined): AgentShellOption {
+    if (!result) throw unavailable(shell)
     return result
   }
   function snapshot(shell: SettingsAgentShell): AgentShellSettingsState {
     const available = options()
-    try { return { selected: shell, options: available, resolved: resolveChoice(shell, available) } }
+    try { return { selected: shell, options: available, resolved: requireOption(shell, available.find(option => option.id === shell)) } }
     catch (error) { return { selected: shell, options: available, error: error instanceof Error ? error.message : String(error) } }
   }
   return {
@@ -79,9 +93,10 @@ export function createAgentShellSettings(path: string, environment: Partial<Shel
       return { selected: "bash" as const, nativeSelected: selected(), executionTarget: "wsl" as const, options: [binding], resolved: binding }
     }),
     resolve: (): AgentShellOption & { validate(): void } => {
-      const resolved = resolveChoice(selected(), options())
+      const shell = selected()
+      const resolved = requireOption(shell, selectedOption(shell))
       return { ...resolved, validate() {
-        if (!(resolved.dialect === "powershell" ? powerShellExecutableAvailable(resolved.command, env.exists) : env.exists(resolved.command))) throw new Error(`Agent Shell '${resolved.id}' is unavailable on this host. Choose an installed shell in settings.`)
+        if (!isAvailable(resolved.command, resolved.dialect)) throw unavailable(resolved.id)
       } }
     },
     async configure(value: unknown): Promise<AgentShellSettingsState> {
@@ -91,7 +106,7 @@ export function createAgentShellSettings(path: string, environment: Partial<Shel
       const shell = choice(command.shell)
       return withDesktopSettings(path, async (store) => {
         if (store.get().windowsSandboxBackend === "wsl") throw new Error("WSL uses Linux Bash for new assemblies. Select a native backend to configure a host Agent Shell.")
-        resolveChoice(shell, options())
+        requireOption(shell, options().find(option => option.id === shell))
         await store.set({ agentShell: shell })
         return snapshot(shell)
       })

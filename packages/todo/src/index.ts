@@ -5,6 +5,7 @@
 // (deriveTodoList) is a pure function and persistence mirrors it for free.
 import type { SessionView as Session, SessionEventView, TodoItem, MetadataFactSource } from "@i-harness/core-session"
 import { committedFactSeqs, isStrictFactData, metadataFactsFor } from "@i-harness/core-session"
+import { readManagedWorkflowEvents } from '@i-harness/core-session/internal/restoration'
 import type { Tool } from "@i-harness/core-tools"
 
 export type TodoToolDeps = ({ session: Session; metadata?: MetadataFactSource } | { session?: never; metadata: MetadataFactSource }) & {
@@ -78,7 +79,7 @@ export function createTodoTool(deps: TodoToolDeps): Tool<{ todos: TodoItem[] }, 
 
 export function deriveTodoList(session: Session): readonly TodoItem[] | null {
   let last: readonly TodoItem[] | null = null
-  for (const ev of session.events) last = applyTodoProjection(last, ev)
+  for (const ev of readManagedWorkflowEvents(session, 'todo/write') ?? session.events) last = applyTodoProjection(last, ev)
   return last
 }
 

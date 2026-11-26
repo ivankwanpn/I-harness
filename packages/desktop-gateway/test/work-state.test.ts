@@ -9,11 +9,53 @@ import { taskDocumentStorageContract } from "../../subagent/src/task/storage-con
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createDurableSessionLoader, createSessionService } from "@i-harness/session-executor"
 import type { SessionService } from "@i-harness/session-executor"
-import type { Session } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, createManagedSessionState, derivePlanMode, type Session } from "@i-harness/core-session"
+import { readManagedWorkflowEvents } from '@i-harness/core-session/internal/restoration'
+import { deriveGoal, renderGoalContext } from '@i-harness/goal'
+import { renderTodoContext } from '@i-harness/todo'
 import { createDesktopWorkState } from "../src/work-state.ts"
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+
+it('projects the original committed workflow facts across durable prompt reads', () => {
+  const original: Session = { formatVersion: CURRENT_FORMAT_VERSION, events: [
+    { type: 'user/message', text: 'start', seq: 0 },
+    { type: 'plan/mode', mode: 'on', proposal: 'examine the workspace', seq: 1 },
+    { type: 'todo/write', version: 1, items: [{ content: 'review files', status: 'pending' }], seq: 2 },
+    { type: 'goal/change', version: 1, operation: 'create', goal: { id: 'goal', revision: 1, phase: 'active', objective: 'complete review' }, seq: 3 },
+    { type: 'goal/change', version: 1, operation: 'edit', goal: { id: 'goal', revision: 2, phase: 'active', objective: '' }, seq: 4 },
+  ] }
+  const state = createManagedSessionState(original, { sessionId: 'workflow-owner' })
+  expect(readManagedWorkflowEvents(state.view, 'goal/change')).toBeUndefined()
+  state.bindOwner({})
+  const current = (session: Parameters<typeof derivePlanMode>[0]) => ({
+    plan: derivePlanMode(session), todos: renderTodoContext(session), goal: renderGoalContext(deriveGoal(session)),
+  })
+  const compare = () => expect(current(state.view)).toEqual(current({ ...state.view, events: [...state.view.events] }))
+  expect(readManagedWorkflowEvents(state.view, 'plan/mode')).toEqual([state.view.events[1]])
+  expect(readManagedWorkflowEvents(state.view, 'goal/change')).toEqual([state.view.events[3], state.view.events[4]])
+  expect(deriveGoal(state.view)?.revision).toBe(1)
+  compare()
+  const staged = state.stage([
+    { type: 'plan/mode', mode: 'off', seq: 5 },
+    { type: 'todo/write', version: 1, items: [], seq: 6 },
+    { type: 'goal/change', version: 1, operation: 'clear', cleared: { id: 'goal', revision: 1 }, seq: 7 },
+  ])
+  expect(current(state.view)).toMatchObject({ plan: { active: true }, goal: expect.stringContaining('complete review') })
+  staged.install()
+  expect(current(state.view)).toMatchObject({ plan: { active: false }, todos: expect.stringContaining('"todos":[]'), goal: '' })
+  compare()
+
+  original.events[1] = { type: 'plan/mode', mode: 'off', seq: 1 }
+  expect(readManagedWorkflowEvents(original, 'plan/mode')).toBeUndefined()
+  expect(derivePlanMode(original)).toMatchObject({ active: false })
+  try {
+    Object.defineProperty(Object.prototype, 'workflowFixtureMarker', { configurable: true, value: true })
+    expect(readManagedWorkflowEvents(state.view, 'goal/change')).toBeUndefined()
+    compare()
+  } finally { Reflect.deleteProperty(Object.prototype, 'workflowFixtureMarker') }
+})
 
 it("reads latest Todo and Goal snapshots from a cold saved session without a model", async () => {
   const root = mkdtempSync(join(tmpdir(), "desktop-work-state-")); roots.push(root)

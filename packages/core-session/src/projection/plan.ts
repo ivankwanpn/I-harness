@@ -1,10 +1,13 @@
 import type { SessionView as Session } from "../managed/types.ts"
+import { readManagedWorkflowEvents } from '../managed/workflow-events.ts'
 
 export interface PlanModeView { active: boolean; proposal?: string; eventSeq?: number }
 
 /** Latest-wins plan-mode projection (last-wins: an "off" resets). */
 export function derivePlanMode(session: Session): PlanModeView {
-  const index=createPlanModeIndex();index.stage(session.events).commit();return index.read()
+  const index = createPlanModeIndex()
+  index.stage(readManagedWorkflowEvents(session, 'plan/mode') ?? session.events).commit()
+  return index.read()
 }
 /** Same latest-wins projection, staged by the original managed context fold. */
 export function createPlanModeIndex(){

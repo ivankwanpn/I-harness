@@ -16,7 +16,7 @@ import {createUsageHandlers} from './usage-host.ts'
 import { createUsageObservationSink } from './usage-observation-sink.ts'
 import { safeCompactionDiagnostic } from "./context-diagnostics.ts"
 import { deriveSessionTitle, rewindCuts, semanticSeedResultRefs } from "@i-harness/core-session"
-import { foldGoal } from "@i-harness/goal"
+import { deriveGoal, renderGoalContext } from "@i-harness/goal"
 import { createIsolatedReviewerPool, type GuardianIsolatedConfig } from "@i-harness/guard-approval"
 import { isOwnedTitleSnapshot, maybeAutoTitle } from "@i-harness/session-title"
 import { createForkSessionController, createSessionCoordinator } from "@i-harness/session-persistence"
@@ -460,8 +460,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
     jobStatusEvents: true,
     codeMode: () => codeSettings.resolve(),
     additionalSystemPrompt(session) {
-      const goal = foldGoal(session.events)
-      return goal ? `Current goal (${goal.phase}, id ${goal.id}, revision ${goal.revision}): ${goal.objective}. ${goal.phase === "active" ? "Continue until fully achieved and verified, then call goal_complete with its current id/revision." : "Do not continue a paused or completed goal unless the user explicitly asks."}` : ""
+      return renderGoalContext(deriveGoal(session))
     },
     roleSelectionFor: subagents.selectionFor,
     roleToolsFor: (role) => settings.get().agents.roleTools?.[role],
