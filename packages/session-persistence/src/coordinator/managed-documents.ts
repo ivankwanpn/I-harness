@@ -1,4 +1,5 @@
-import { RecoveryArchiveMismatch, retainManagedJournalCleanup, settleManagedJournalCleanup } from '../native-fact-writer-internal.ts'
+import { RecoveryArchiveMismatch, retainManagedJournalCleanup, settleManagedJournalCleanup, takeOriginalMatchedWriterPrefix } from '../native-fact-writer-internal.ts'
+import type { ManagedSessionClone } from '@i-harness/core-session/internal/restoration'
 import {associateArtifactCurrentnessReader,createArtifactCurrentGuard,isArtifactCurrentGuard,withImmediateArtifactCurrentChecks} from './artifact-path-association.ts'
 import {runOriginalCurrentnessRead} from '../../../core-session/src/managed/currentness-guards.ts'
 import { hasArchiveHistoryPrefixReader, originalColdArchiveHistoryReader } from '../archive-read-internal.ts'
@@ -20,7 +21,7 @@ import type { createProcessReadLatches } from './process-read-latches.ts'
 import type { createColdExecutionWrites } from './cold-execution-writes.ts'
 import { captureColdObservationEntry, type ColdSelectedObservation } from './cold-selected-target.ts'
 import type { createTaskDocumentTransitions } from './task-document-transition.ts'
-import type { LoadOwnedExecution } from './load.ts'
+import type { LoadOwned, LoadOwnedExecution } from './load.ts'
 
 /** The writer proves its own durable prefix. A native load can also identify
  * which prefix supplied the bodies that are about to be attached. */
@@ -30,7 +31,7 @@ function assertRecoveryArchive(session: Session, observed: Readonly<JournalPrefi
 
 /** Sole opening/ready registry. A failed public call cannot evict issued work. */
 export function createManagedDocuments(backend: PersistenceBackend, ownership: Ownership,
-  loadOwned: (id: string, retainArchivePrefix?: boolean) => Promise<{ session: Session; readonly archivePrefix?: Readonly<JournalPrefix> }>, options: CoordinatorOptions | undefined,
+  loadOwned: LoadOwned, options: CoordinatorOptions | undefined,
   report: (error: unknown) => void, mutations: Mutations, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: (id: string) => void = () => {}, revokeTaskOperations: (id: string) => Promise<void> = async () => {}, transitions?: ReturnType<typeof createTaskDocumentTransitions>, executionChanges?: ReturnType<typeof createColdExecutionWrites>, loadOwnedExecution?: LoadOwnedExecution) {
   const foldFactory = options?.originalExecutionFoldFactory
   for (const value of [options?.maxPendingGroups, options?.coalesceTargetBytes]) {
@@ -75,10 +76,10 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     original.finished = true
     entry.journalMutation = undefined
   }
-  function attach(id:string,entry:ManagedEntry,session:Session|undefined,prefix:JournalPrefix,execution?:Parameters<typeof createManagedDocument>[11],selectedOperationId?:string) {
+  function attach(id:string,entry:ManagedEntry,session:Session|undefined,prefix:JournalPrefix,execution?:Parameters<typeof createManagedDocument>[11],selectedOperationId?:string,managedClone?:ManagedSessionClone) {
     if(entry.document)return entry.document
     const document=createManagedDocument(id,session,prefix,backend,ownership,options,report,
-      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : entry.selected ? {operationId:entry.selected.route.request.invocation.operationId,selected:true,bind(control){entry.control=control}} : selectedOperationId!==undefined ? {operationId:selectedOperationId,selected:true,bind(control){entry.control=control}} : undefined, processLatches, () => assertTaskOutside(id), executionChanges,execution,entry.journalCleanup ??= new Map())
+      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : entry.selected ? {operationId:entry.selected.route.request.invocation.operationId,selected:true,bind(control){entry.control=control}} : selectedOperationId!==undefined ? {operationId:selectedOperationId,selected:true,bind(control){entry.control=control}} : undefined, processLatches, () => assertTaskOutside(id), executionChanges,execution,entry.journalCleanup ??= new Map(),managedClone)
     entry.document=document
     if(!execution)bindRestored(entry,document)
     documentEntries.set(document,{id,entry})
@@ -428,7 +429,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       let token=transitions ? undefined : beginJournalMutation(id,entry)
       const operation=(async()=>{
         if (prior) await prior
-        const { session, archivePrefix } = await loadOwned(id, true)
+        const { session, archivePrefix, managedClone } = await loadOwned(id, true)
         // Retire any previous reader of a replaced log before the writer
         // takes the session lane. Retain its mapping if cleanup does not settle.
         if (archivePrefix && restored && !restored.matchesPrefix(archivePrefix)) {
@@ -459,7 +460,8 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
             if (birth) entry.route = captureBootstrapRoute(birth.route)
           }
           held.assertHeld()
-          return attach(id,entry,session,prefix)
+          const adoption = managedClone && takeOriginalMatchedWriterPrefix(backend, held, prefix) ? managedClone : undefined
+          return attach(id, entry, session, prefix, undefined, undefined, adoption)
         })
       })()
       const tracked = operation.then(document => {

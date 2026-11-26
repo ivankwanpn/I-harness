@@ -8,7 +8,7 @@ import { associateArtifactPaths, createOriginalJsonlPathResolution } from '@i-ha
 import { createOriginalNativePrewriteOwner, readOriginalHeldArchivePrefix } from '@i-harness/session-persistence/internal/native-fact-writer'
 import { createOriginalTaskNativeStage } from '@i-harness/session-persistence/internal/task-document-operations'
 import {associateOwnedExecutionReader} from './backend/owned-execution-read.ts'
-import { decodeFactBatch } from '@i-harness/core-session'
+import { decodeFactBatch, type JournalPrefix } from '@i-harness/core-session'
 import { HEADER_READ_MAX_BYTES, assertHeaderLineReadable } from './backend/header-limit.ts'
 import { lstat, mkdir, open, readFile, readdir, stat, unlink } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
@@ -326,9 +326,18 @@ export function createJsonlBackend(root: string, options?: {
     return serializeHeader({ ...meta, journal }) + '\n'
   }
   const { trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth, ...bootstrapBackend } = createBootstrapHeaderBackend(filePath, assertLegacyNativeAdmission, rootPath, captureIO, publication)
+  const writerMatches = new WeakMap<HeldFactOwner, { actual?: JournalPrefix }>()
   const factJournal = createFactJournalBackend(filePath, assertLegacyNativeAdmission, Object.freeze({ filePath, assertNotDeleted: assertLegacyNativeAdmission, enter: (id, owner, batch) => nativePrewrite.enter(id, owner, batch) }), publication, captureIO, (id, held) => {
+    writerMatches.delete(held)
     const prefix = readOriginalHeldArchivePrefix(held)
-    if (prefix) return capability.openCleanWriterPrefix(id, prefix, held.assertHeld)
+    if (!prefix) return
+    const witness = capability.openCleanWriterPrefix(id, prefix, held.assertHeld)
+    if (!witness) return
+    // Scope the acknowledgment to this read; a late completion cannot
+    // install itself over another attempt made by the same holder.
+    const match: { actual?: JournalPrefix } = {}
+    writerMatches.set(held, match)
+    return { ...witness, matched(actual: JournalPrefix) { match.actual = actual } }
   })
   const wrappedAppend = options?.wrapOwnedBatch !== undefined && factJournal.appendOwnedBatch !== undefined
     ? options.wrapOwnedBatch(factJournal.appendOwnedBatch) : undefined
@@ -733,7 +742,20 @@ export function createJsonlBackend(root: string, options?: {
       qualify: assertReadableBootstrapNamespace,
     }))
   }
-  nativePrewrite.associate(backend, assertOriginal, captureIO.retainCleanup)
+  nativePrewrite.associate(backend, assertOriginal, captureIO.retainCleanup, (held, actual) => {
+    const match = writerMatches.get(held)
+    if (!match?.actual || match.actual !== actual) return false
+    writerMatches.delete(held)
+    const observed = readOriginalHeldArchivePrefix(held)
+    if (!observed || !capability.openCleanWriterPrefix(held.owner.sessionId, observed, held.assertHeld)) return false
+    // The regular API returns a mutable prefix. Only its original data
+    // fields can carry the acknowledgment across the final attachment checks.
+    return Object.getPrototypeOf(actual) === Object.prototype && Reflect.ownKeys(actual).length === 3
+      && (['eventCount', 'bodyBytes', 'prefixDigest'] as const).every(key => {
+        const field = Object.getOwnPropertyDescriptor(actual, key)
+        return field?.enumerable === true && Object.hasOwn(field, 'value') && field.value === observed[key]
+      })
+  })
   associateOwnedExecutionReader(backend,{assertOriginal,filePath,assertNotDeleted,archive:archiveReads,
     register(id,held){trackHeaderOwner(id,held);if(hasTrackedHeaderDebt(id,held))throw Error('Owned dependency birth cleanup unresolved')},
     qualify:(id,held,prefix)=>assertPublicBootstrap(id,false,prefix,trackedStageIO(id,held)),

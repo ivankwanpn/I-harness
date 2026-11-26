@@ -1,6 +1,7 @@
 import { FactRecoveryRequiredError } from '@i-harness/core-session'
-import type { EncodedFactBatch } from '@i-harness/core-session'
+import type { EncodedFactBatch, JournalPrefix } from '@i-harness/core-session'
 import type { HeldFactOwner, IssuingFactOwner } from './coordinator/fact-types.ts'
+import { isHeldFactOwner } from './coordinator/fact-owner.ts'
 export { readOriginalHeldArchivePrefix } from './coordinator/fact-owner.ts'
 
 export type NativeJournalCleanup = Readonly<{ settle(): Promise<void>; hasDebt(): boolean }>
@@ -10,9 +11,10 @@ export class RecoveryArchiveMismatch extends Error {
   constructor() { super('Managed recovery archive mismatch') }
 }
 type JournalCleanupFactory = (id: string, held: HeldFactOwner) => NativeJournalCleanup
+type TakeMatchedPrefix = (held: HeldFactOwner, actual: JournalPrefix) => boolean
 
 type NativeRequest = { id: string; owner: IssuingFactOwner }
-const originals = new WeakMap<object, { check(): void; cleanup?: JournalCleanupFactory; requests: WeakMap<EncodedFactBatch, NativeRequest> }>()
+const originals = new WeakMap<object, { check(): void; cleanup?: JournalCleanupFactory; takeMatchedPrefix?: TakeMatchedPrefix; requests: WeakMap<EncodedFactBatch, NativeRequest> }>()
 
 /** Constructor-private scheduling observation. It grants neither issue nor ACK. */
 export function createOriginalNativePrewriteOwner() {
@@ -24,7 +26,7 @@ export function createOriginalNativePrewriteOwner() {
       requests.set(batch, request)
       return () => { if (requests.get(batch) === request) requests.delete(batch) }
     },
-    associate(backend: object, assertOriginal: () => void, cleanup?: JournalCleanupFactory) {
+    associate(backend: object, assertOriginal: () => void, cleanup?: JournalCleanupFactory, takeMatchedPrefix?: TakeMatchedPrefix) {
       if (this !== result || originals.has(backend)) throw new TypeError('Invalid native prewrite constructor')
       const descriptors = Object.getOwnPropertyDescriptors(backend)
       const check = () => {
@@ -34,7 +36,7 @@ export function createOriginalNativePrewriteOwner() {
         }
         assertOriginal()
       }
-      check(); originals.set(backend, { check, requests, cleanup })
+      check(); originals.set(backend, { check, requests, cleanup, takeMatchedPrefix })
     },
   })
   return result
@@ -53,6 +55,15 @@ export function hasOriginalNativeWriter(backend: object): boolean {
   const original=originals.get(backend)
   if(!original)return false
   try{original.check();return true}catch{return false}
+}
+
+/** Only the original writer can acknowledge its completed whole-file match. */
+export function takeOriginalMatchedWriterPrefix(backend: object, held: HeldFactOwner, actual: JournalPrefix): boolean {
+  const original = originals.get(backend)
+  if (!original?.takeMatchedPrefix || !isHeldFactOwner(held)) return false
+  try { original.check() } catch { return false }
+  held.assertHeld()
+  return original.takeMatchedPrefix(held, actual)
 }
 
 /** Enrollment verifies the original backend; retained disposal never re-enters public methods. */

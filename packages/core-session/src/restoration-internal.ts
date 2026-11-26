@@ -8,3 +8,4 @@ export { captureData, isCapturedData, UnsupportedData, type Captured, type Immut
 export { readManagedConversationAuditAdvance, readManagedConversationFrontier, readManagedConversationObservationFrontier } from './managed/view.ts'
 export { projectManagedConversation } from './conversation/project.ts'
 export { readManagedRuntimeContext } from './managed/view.ts'
+export { prepareManagedSessionClone, createManagedSessionStateFromClone, type ManagedSessionClone } from './managed/view.ts'

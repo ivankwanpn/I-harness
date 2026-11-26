@@ -9,6 +9,7 @@ import { canJoinOriginalNativePrewrite } from '../native-fact-writer-internal.ts
 import { createDeliveryControl,createOwnerDeliveryControl } from '../../../core-session/src/managed/delivery-control.ts';
 import {assertOriginalManagedTaskHistory,isManagedExecutionDomain,type ManagedExecutionDomain,type restoreManagedExecutionState,type OriginalExecutionCaptureHooks} from '@i-harness/core-session/internal/execution';
 import { createBootstrapManagedSessionState } from '@i-harness/core-session/internal/bootstrap';
+import { createManagedSessionStateFromClone, type ManagedSessionClone } from '@i-harness/core-session/internal/restoration';
 import type { BootstrapDocumentControl } from './bootstrap-types.ts';
 import { randomUUID } from 'node:crypto';
 import { CURRENT_FORMAT_VERSION, captureFactGroup, createManagedSessionState, encodeFactBatch, FactRecoveryRequiredError, resolveFactGroup, stringifyJsonData, bindFactSettlementSource, type CapturedFactGroup, type FactGroupDraft, type FactOutcome, type FactReceipt, type JournalPrefix, type Session, type SessionView } from '@i-harness/core-session';
@@ -176,11 +177,17 @@ export function captureManagedTaskParentReadiness(document:object,ownership:Owne
 export function beginManagedTaskMetadataUpdate(document:ManagedDocument,ownership:Ownership){const execution=privateExecutionOwners.get(document);if(execution){if(execution.ownership!==ownership)throw new FactRecoveryRequiredError();return execution.beginTaskMetadata()}const original=readyOwners.get(document);if(!original||original.ownership!==ownership)throw new FactRecoveryRequiredError();return original.beginTaskMetadata()}
 /** One owned document, one staged suffix, one private Session/index. All disk
  * mutations join the coordinator's existing session operation lane. */
-export function createManagedDocument(id: string, source: Session|undefined, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void, bootstrap?: { operationId: string; selected?:boolean; bind(control: BootstrapDocumentControl): void }, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: () => void = () => {}, executionChanges?: ReturnType<typeof createColdExecutionWrites>, execution?:{state:Awaited<ReturnType<typeof restoreManagedExecutionState>>;held:HeldFactOwner;assertCurrent():void}, journalScopes: Map<object, NativeJournalCleanup> = new Map()): ManagedDocument & {
+export function createManagedDocument(id: string, source: Session|undefined, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void, bootstrap?: { operationId: string; selected?:boolean; bind(control: BootstrapDocumentControl): void }, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: () => void = () => {}, executionChanges?: ReturnType<typeof createColdExecutionWrites>, execution?:{state:Awaited<ReturnType<typeof restoreManagedExecutionState>>;held:HeldFactOwner;assertCurrent():void}, journalScopes: Map<object, NativeJournalCleanup> = new Map(), managedClone?: ManagedSessionClone): ManagedDocument & {
     assertObservable(): void;
 } {
     const core=execution?.state;
-    let state = source ? (bootstrap ? createBootstrapManagedSessionState : createManagedSessionState)(source, { sessionId: id }) : undefined, incarnation = execution?.held.owner.incarnation??randomUUID();
+    let state: ReturnType<typeof createManagedSessionState> | undefined;
+    if (source) {
+        if (bootstrap) state = createBootstrapManagedSessionState(source, { sessionId: id });
+        else if (managedClone) state = createManagedSessionStateFromClone(source, id, managedClone);
+        else state = createManagedSessionState(source, { sessionId: id });
+    }
+    let incarnation = execution?.held.owner.incarnation ?? randomUUID();
     if(!state&&!core)throw TypeError('Original managed state required');
     const originalDelivery=core?createOwnerDeliveryControl(core.delivery,()=>prefix.eventCount):undefined;
     const deliveryControl = originalDelivery?.port??createDeliveryControl(state!.view);

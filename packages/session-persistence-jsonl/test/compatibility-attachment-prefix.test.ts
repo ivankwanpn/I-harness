@@ -2,12 +2,16 @@ import { mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
-import { encodeFactBatch, readFactJournal, type JournalMetadata } from '@i-harness/core-session'
+import { encodeFactBatch, readFactJournal, type JournalMetadata, type SessionView } from '@i-harness/core-session'
 import { acquireRestoredContext } from '../../session-persistence/src/restored-context-internal.ts'
 import { createJsonlBackend } from '../src/index.ts'
 import { createSessionCoordinator } from './helpers/composed.ts'
 
-const betweenReaders = vi.hoisted(() => ({ replace: undefined as ((id: string, incarnation: string) => Promise<void>) | undefined }))
+const betweenReaders = vi.hoisted(() => ({
+  replace: undefined as ((id: string, incarnation: string) => Promise<void>) | undefined,
+  copyReturnedPrefix: false,
+  observeClone: undefined as ((source: SessionView) => void) | undefined,
+}))
 vi.mock('node:fs/promises', async load => {
   const native = await load<typeof import('node:fs/promises')>()
   return { ...native, open: vi.fn(native.open) }
@@ -22,10 +26,57 @@ vi.mock('../src/backend/fact-journal.ts', async load => {
         ...journal,
         async readJournalPrefix(...args: Parameters<typeof journal.readJournalPrefix>) {
           await betweenReaders.replace?.(args[0], args[1].owner.incarnation)
-          return journal.readJournalPrefix(...args)
+          const prefix = await journal.readJournalPrefix(...args)
+          return betweenReaders.copyReturnedPrefix ? { ...prefix } : prefix
         },
       }
     },
+  }
+})
+
+vi.mock('@i-harness/core-session/internal/restoration', async load => {
+  const original = await load<typeof import('@i-harness/core-session/internal/restoration')>()
+  return {
+    ...original,
+    prepareManagedSessionClone(...args: Parameters<typeof original.prepareManagedSessionClone>) {
+      const clone = original.prepareManagedSessionClone(...args)
+      if (clone) betweenReaders.observeClone?.(args[0])
+      return clone
+    },
+  }
+})
+
+it.each(['matched', 'copied prefix', 'wrapped backend'] as const)('adopts only the exact checked writer handoff (%s)', async mode => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-adopt-history-'))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root, mode === 'wrapped backend' ? { wrap() {} } : undefined), { lock: { enabled: true } })
+  const clones: SessionView[] = []
+  betweenReaders.observeClone = source => clones.push(source)
+  try {
+    const { id } = await coordinator.create()
+    await coordinator.append(id, [{ type: 'user/message', text: 'original history',
+      provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'fixture' } }])
+    const detached = (await coordinator.loadOwned(id)).session.events[0]!
+    expect(clones).toHaveLength(0)
+    if (detached.type !== 'user/message') throw Error('Expected detached public history')
+    expect(Reflect.set(detached.provenance!, 'scope', 'session')).toBe(true)
+    expect(Reflect.set(detached, 'text', 'detached edit')).toBe(true)
+
+    betweenReaders.copyReturnedPrefix = mode === 'copied prefix'
+    const document = await coordinator.openManagedDocument(id)
+    const event = document.view.events[0]!
+    expect(event).toMatchObject({ text: 'original history', provenance: { scope: 'turn' } })
+    expect(Object.isFrozen(event)).toBe(true)
+    expect(clones).toHaveLength(mode === 'wrapped backend' ? 0 : 1)
+    if (mode === 'matched') expect(event).toBe(clones[0]!.events[0])
+    if (mode === 'copied prefix') expect(event).not.toBe(clones[0]!.events[0])
+    expect((await document.metadata.admit({ type: 'plan/mode', mode: 'on' })).kind).toBe('committed')
+    expect(document.view.events).toHaveLength(2)
+    if (clones.length) expect(clones[0]!.events).toHaveLength(1)
+  } finally {
+    betweenReaders.observeClone = undefined
+    betweenReaders.copyReturnedPrefix = false
+    await coordinator.close()
+    await rm(root, { recursive: true, force: true })
   }
 })
 

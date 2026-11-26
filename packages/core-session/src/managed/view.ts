@@ -47,25 +47,70 @@ function ordinaryProjectionHeader(header: SessionView['header']) {
 
 /** Direct staging also supports legacy payloads. A frozen caller-owned parent
  * alone cannot prove its descendants are frozen data for a later observation. */
-function isImmutableProjectionData(value: unknown): boolean {
+function isImmutableProjectionData(value: unknown, exactJson = false): boolean {
   const pending = [value], seen = new Set<object>()
   while (pending.length) {
     const node = pending.pop()
-    if (node === null || node === undefined || typeof node === 'boolean' || typeof node === 'string' || typeof node === 'number' && Number.isFinite(node)) continue
+    if (node === null || typeof node === 'boolean' || typeof node === 'string') continue
+    if (!exactJson && node === undefined) continue
+    if (typeof node === 'number' && Number.isFinite(node) && (!exactJson || !Object.is(node, -0))) continue
     if (typeof node !== 'object' || types.isProxy(node) || !Object.isFrozen(node)) return false
     if (seen.has(node)) return false
     seen.add(node)
-    const prototype = Object.getPrototypeOf(node)
-    if (Array.isArray(node) ? prototype !== originalArrayPrototype : prototype !== originalObjectPrototype && prototype !== null) return false
-    const fields = Object.getOwnPropertyDescriptors(node)
-    for (const key of Reflect.ownKeys(fields)) {
+    const prototype = Object.getPrototypeOf(node), array = Array.isArray(node)
+    if (array ? prototype !== originalArrayPrototype : prototype !== originalObjectPrototype && (exactJson || prototype !== null)) return false
+    const fields = Object.getOwnPropertyDescriptors(node), keys = Reflect.ownKeys(fields)
+    if (exactJson && array && keys.length !== node.length + 1) return false
+    for (const key of keys) {
       if (typeof key !== 'string') return false
       const field = fields[key]!
       if (!('value' in field)) return false
+      if (exactJson && (!array || key !== 'length')) {
+        if (!field.enumerable) return false
+        if (array) {
+          const position = Number(key)
+          if (!Number.isSafeInteger(position) || position < 0 || position >= node.length || String(position) !== key) return false
+        }
+      }
       pending.push(field.value)
     }
   }
   return true
+}
+
+declare const managedSessionCloneBrand: unique symbol
+export type ManagedSessionClone = { readonly [managedSessionCloneBrand]: true }
+const managedSessionClones = new WeakMap<SessionView, { sessionId: string; clone?: ManagedSessionClone }>()
+const originalManagedCloneEnvironment = () => isOriginalArchiveValidationEnvironment() && unchangedDataPrototypes() && hasOriginalImageMediaTypeLookup()
+
+/** The original compatibility loader's private, already frozen native clone
+ * qualifies when another JSON round-trip would preserve every field. */
+export function prepareManagedSessionClone(source: SessionView, sessionId: string): ManagedSessionClone | undefined {
+  if (!source || typeof source !== 'object' || typeof sessionId !== 'string' || !sessionId
+    || managedSessionClones.has(source) || !originalManagedCloneEnvironment()
+    || !isImmutableProjectionData(source, true)) return undefined
+  const { header, events, formatVersion } = source
+  if (formatVersion !== CURRENT_FORMAT_VERSION || !ordinaryProjectionHeader(header)
+    || header !== undefined && (header === null || typeof header !== 'object' || Array.isArray(header) || Object.hasOwn(header, 'sessionId'))
+    || !Array.isArray(events) || !events.every((event, ordinal) => event !== null && typeof event === 'object'
+      && !Array.isArray(event) && event.seq === ordinal && canFoldPruneProjection(event))) return undefined
+  const clone = Object.freeze({}) as ManagedSessionClone
+  managedSessionClones.set(source, { sessionId, clone })
+  return clone
+}
+
+/** The caller still owns archive and writer admission. The exact clone
+ * capability is consumed here, even when its environment or scope changed. */
+export function createManagedSessionStateFromClone(source: Session, sessionId: string, clone?: ManagedSessionClone) {
+  let adopted: SessionView | undefined
+  if (clone) {
+    const original = managedSessionClones.get(source)
+    if (original?.clone === clone) {
+      original.clone = undefined
+      if (original.sessionId === sessionId && originalManagedCloneEnvironment()) adopted = source
+    }
+  }
+  return managedSessionState(source, { sessionId }, createConversationIndex, adopted)
 }
 
 function immutableFactoryFor(view: SessionView, sessionId: string) {
@@ -211,17 +256,21 @@ export function createManagedSessionState(source: Session, scope?: { sessionId: 
 export function createBootstrapManagedSessionState(source: Session, scope?: { sessionId: string }) {
   return managedSessionState(source, scope, createBootstrapConversationIndex)
 }
-function managedSessionState(source: Session, scope: { sessionId: string } | undefined, createIndex: typeof createBootstrapConversationIndex) {
-  const captured = captureLegacyFact(source)
-  if (captured.kind !== 'captured') throw new TypeError('FACT_CAPTURE_FAILED')
-  const events: SessionEvent[] = [...captured.value.events] as SessionEvent[]
+function managedSessionState(source: Session, scope: { sessionId: string } | undefined, createIndex: typeof createBootstrapConversationIndex, adopted?: SessionView) {
+  let captured = adopted
+  if (!captured) {
+    const result = captureLegacyFact(source)
+    if (result.kind !== 'captured') throw new TypeError('FACT_CAPTURE_FAILED')
+    captured = result.value
+  }
+  const events: SessionEvent[] = [...captured.events] as SessionEvent[]
   // A repeated sequence could change the addressability of an earlier fact.
-  let contiguousSeq = events.every((event, ordinal) => event.seq === ordinal)
+  let contiguousSeq = adopted !== undefined || events.every((event, ordinal) => event.seq === ordinal)
   const formatVersion = source.formatVersion, indexHeader = { ...source.header, ...scope }
   let projectionProof = createIndex === createConversationIndex && formatVersion === CURRENT_FORMAT_VERSION
-    && ordinaryProjectionHeader(indexHeader) && ordinaryProjectionHeader(captured.value.header)
-    && (!captured.value.header || !Object.hasOwn(captured.value.header, 'sessionId'))
-    && isOriginalArchiveValidationEnvironment() && isImmutableProjectionData(captured.value) && events.every(canFoldPruneProjection)
+    && ordinaryProjectionHeader(indexHeader) && ordinaryProjectionHeader(captured.header)
+    && (!captured.header || !Object.hasOwn(captured.header, 'sessionId'))
+    && isOriginalArchiveValidationEnvironment() && (adopted !== undefined || isImmutableProjectionData(captured) && events.every(canFoldPruneProjection))
   const readEvent = (position: number) => events[position]
   const index = projectionProof && contiguousSeq && typeof indexHeader.sessionId === 'string' && indexHeader.sessionId.length > 0
     && unchangedDataPrototypes() && hasOriginalImageMediaTypeLookup()
@@ -235,7 +284,7 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
   })
   const view: SessionView = Object.freeze({
     formatVersion: source.formatVersion, events: facade,
-    ...(captured.value.header ? { header: captured.value.header } : {}),
+    ...(captured.header ? { header: captured.header } : {}),
   })
   const sessionId = scope?.sessionId
   projectionProof &&= view.formatVersion === formatVersion && typeof sessionId === 'string'

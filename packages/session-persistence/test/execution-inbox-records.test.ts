@@ -9,6 +9,10 @@ vi.mock('@i-harness/core-session',async load=>{
  return {...original,createManagedSessionState(){probe.views++;throw Error('Inbox lookup constructed a complete view')},
   validateConversationHistory(...args:Parameters<typeof original.validateConversationHistory>){probe.compatibilityValidations++;return original.validateConversationHistory(...args)}}
 })
+vi.mock('@i-harness/core-session/internal/restoration', async load => {
+ const original = await load<typeof import('@i-harness/core-session/internal/restoration')>()
+ return { ...original, createManagedSessionStateFromClone() { probe.views++; throw Error('Inbox lookup constructed a complete view') } }
+})
 vi.mock('../../session-persistence-jsonl/src/backend/archive-reader.ts',async load=>{const original=await load<typeof import('../../session-persistence-jsonl/src/backend/archive-reader.ts')>();return {...original,async readSessionArchive(...args:Parameters<typeof original.readSessionArchive>){const result=await original.readSessionArchive(...args);if(args[4]){probe.ordinals.push(...args[4].ordinals);probe.batches.push([...args[4].ordinals]);const gate=probe.gate;if(gate){probe.gate=undefined;gate.entered();await gate.wait}}else if(!args[2])probe.legacyReads++;return result}}})
 vi.mock('../../session-persistence-jsonl/src/backend/process-read.ts',async load=>{
  const original=await load<typeof import('../../session-persistence-jsonl/src/backend/process-read.ts')>()

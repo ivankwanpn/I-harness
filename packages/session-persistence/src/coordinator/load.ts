@@ -1,5 +1,6 @@
-import { CURRENT_FORMAT_VERSION, stringifyJsonData, validateSubagentHeader, type JournalPrefix, type Session, type SessionEvent, type SessionEventView, type SessionHistoryPageOptions } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, freezeJsonData, stringifyJsonData, validateSubagentHeader, type JournalPrefix, type Session, type SessionEvent, type SessionEventView, type SessionHistoryPageOptions } from "@i-harness/core-session"
 import { materializeSessionHistoryPage, planSessionHistoryPage, sessionHistoryFact, type SessionHistoryFact } from '@i-harness/core-session/internal/archive'
+import { prepareManagedSessionClone, type ManagedSessionClone } from '@i-harness/core-session/internal/restoration'
 import { repairTurnTail } from "../repair.ts"
 import { preflightSessionFormat, preflightBatchShape, preflightDecodedFactHistory, migrate, guardIgnorable, buildSession } from "../format/validation.ts"
 import { originalColdArchiveHistoryReader, originalDecodedArchiveRead, readArchiveHistoryPrefix, recognizesOriginalCleanHistoryMaterialization, type ColdArchiveHistoryReader } from '../archive-read-internal.ts'
@@ -14,8 +15,9 @@ import type { createColdExecutionWrites } from './cold-execution-writes.ts'
 import type { createTaskDocumentTransitions, HistoryProof } from './task-document-transition.ts'
 
 export type LoadOwnedExecution = ReturnType<typeof createLoads>['loadOwnedExecution']
+export type LoadOwned = ReturnType<typeof createLoads>['loadOwned']
 type AfterTransition = (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>
-type MaterializedHistory = { session: Session; readonly archivePrefix?: Readonly<JournalPrefix> }
+type MaterializedHistory = { session: Session; readonly archivePrefix?: Readonly<JournalPrefix>; readonly managedClone?: ManagedSessionClone }
 
 const MAX_COLD_HISTORY_SESSIONS = 2
 const MAX_COLD_HISTORY_FACTS = 16_384
@@ -62,6 +64,10 @@ async function materializeHistory(backend: object, proof: HistoryProof, retainAr
   if (retainArchivePrefix && formatVersion === CURRENT_FORMAT_VERSION && originalDecodedArchiveRead(backend)) {
     const observed = readArchiveHistoryPrefix(backend, proof)
     if (observed.kind === 'available') {
+      if (qualifiedClone && meta && typeof meta.sessionId === 'string') {
+        const managedClone = prepareManagedSessionClone(freezeJsonData(session), meta.sessionId)
+        if (managedClone) return { session, archivePrefix: observed.prefix, managedClone }
+      }
       // A detached fallback copy can still compare prefix values. Only the
       // exact qualified clone forwards the decoder's original witness key.
       return { session, archivePrefix: qualifiedClone ? observed.prefix : Object.freeze({ ...observed.prefix }) }
@@ -310,7 +316,7 @@ export function createLoads(
         return { session: buildSession(meta, canonical) }
       }))
     },
-    async loadOwned(sessionId: string, retainArchivePrefix = false) {
+    async loadOwned(sessionId: string, retainArchivePrefix = false): Promise<MaterializedHistory> {
       // A clean original history proof can also populate the compatibility
       // writer. Keep the same materialization and historical recovery fallback.
       if (transitions) return loadThroughTransition(sessionId, proof => materializeHistory(backend, proof, retainArchivePrefix), undefined, false, true)

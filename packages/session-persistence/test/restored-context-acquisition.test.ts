@@ -104,7 +104,12 @@ vi.mock('../../core-session/src/conversation/state.ts', async (load) => {
 vi.mock('@i-harness/core-session/internal/restoration', async (load) => {
     const actual = await load<typeof import('@i-harness/core-session/internal/restoration')>();
     return {
-        ...actual, async restoreManagedConversation(...args: Parameters<typeof actual.restoreManagedConversation>) {
+        ...actual, createManagedSessionStateFromClone(...args: Parameters<typeof actual.createManagedSessionStateFromClone>) {
+            probe.views++;
+            if (!probe.allowPublic)
+                throw Error('hidden public view construction');
+            return actual.createManagedSessionStateFromClone(...args);
+        }, async restoreManagedConversation(...args: Parameters<typeof actual.restoreManagedConversation>) {
             probe.sources.push(args[0]);
             return actual.restoreManagedConversation(...args);
         }

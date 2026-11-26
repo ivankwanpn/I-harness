@@ -9,6 +9,7 @@ export type CleanWriterPrefix = Readonly<{
   prefix: Readonly<JournalPrefix>
   verify(handle: FileHandle): Promise<boolean | undefined>
   seal(handle: FileHandle): Promise<boolean | undefined>
+  matched?(actual: JournalPrefix): void
 }>
 
 function changed(repaired = false): never {
@@ -75,6 +76,7 @@ export async function readWriterPrefix(path: string, io: BootstrapCaptureIO, led
   })
   const handle = resource.handle
   let expected = before, repaired = false, primary: { cause: unknown } | undefined
+  let matched = false
   let prefix: JournalPrefix | undefined
   async function checkDescriptor() {
     assertHeld()
@@ -94,7 +96,10 @@ export async function readWriterPrefix(path: string, io: BootstrapCaptureIO, led
         await checkDescriptor()
         const sealed = await witness.seal(handle)
         if (sealed === false) changed()
-        if (sealed === true) prefix = { ...witness.prefix }
+        if (sealed === true) {
+          prefix = { ...witness.prefix }
+          matched = true
+        }
       }
     }
     if (!prefix) {
@@ -133,5 +138,6 @@ export async function readWriterPrefix(path: string, io: BootstrapCaptureIO, led
   }
   await checkName(path, expected, repaired)
   assertHeld()
+  if (matched) witness!.matched?.(prefix)
   return prefix
 }

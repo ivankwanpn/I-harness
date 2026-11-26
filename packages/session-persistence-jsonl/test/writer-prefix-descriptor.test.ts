@@ -8,6 +8,7 @@ import { createOwnership } from '../../session-persistence/src/coordinator/owner
 import { heldFactOwner } from '../../session-persistence/src/coordinator/fact-owner.ts'
 import { createJsonlBackend } from '../src/backend-factory.ts'
 import { createFactJournalBackend } from '../src/backend/fact-journal.ts'
+import { createBootstrapCaptureIO } from '../src/backend/bootstrap-capture-io.ts'
 
 type Trace = {
   path: string
@@ -20,6 +21,7 @@ type Trace = {
   closeError?: Error
   disappearAtOpen?: boolean
   afterTruncate?: () => Promise<void>
+  afterClose?: () => Promise<void>
 }
 const probe = vi.hoisted(() => ({ trace: undefined as Trace | undefined }))
 vi.mock('node:fs/promises', async load => {
@@ -46,6 +48,7 @@ vi.mock('node:fs/promises', async load => {
         trace.closes.push(target.fd)
         if (trace.closeError) { const error = trace.closeError; delete trace.closeError; throw error }
         await target.close()
+        await trace.afterClose?.()
       }
       const value = Reflect.get(target, key, target)
       return typeof value === 'function' ? value.bind(target) : value
@@ -157,3 +160,43 @@ it('refuses disappearance between lstat and writable acquisition before issuing 
     expect(f.trace.reads).toEqual([]); expect(f.trace.syncs).toEqual([]); expect(f.trace.truncates).toEqual([])
   } finally { await f.close() }
 })
+
+it.each(['matched', 'verify fallback', 'seal fallback', 'close failure', 'changed after close'] as const)(
+  'acknowledges exact verified bytes only after sync, close and final pathname check (%s)', async mode => {
+    const f = await fixture(), io = createBootstrapCaptureIO()
+    try {
+      // Establish the expected bytes and exercise the ordinary API on this holder.
+      const expected = await f.read()
+      f.trace.closes.length = 0
+      f.trace.syncs.length = 0
+      const matched = vi.fn((actual: typeof expected) => {
+        expect(f.trace.syncs).toHaveLength(1)
+        expect(f.trace.closes).toHaveLength(1)
+        expect(actual).not.toBe(expected)
+      })
+      const witnessed = createFactJournalBackend(() => f.path, async () => {}, undefined, undefined, io,
+        () => ({
+          prefix: expected,
+          async verify(handle) { return mode === 'verify fallback' ? undefined : (await handle.readFile()).equals(f.committed) },
+          async seal() { return mode === 'seal fallback' ? undefined : true },
+          matched,
+        }))
+      if (mode === 'close failure') f.trace.closeError = Error('controlled close failure')
+      if (mode === 'changed after close') f.trace.afterClose = () => appendFile(f.path, 'x')
+      const result = witnessed.readJournalPrefix('target', f.held)
+      if (mode === 'close failure') await expect(result).rejects.toThrow('controlled close failure')
+      else if (mode === 'changed after close') await expect(result).rejects.toBeInstanceOf(RecoveryArchiveMismatch)
+      else {
+        const actual = await result
+        expect(actual).toEqual(expected)
+        if (mode === 'matched') {
+          expect(matched).toHaveBeenCalledTimes(1)
+          expect(matched.mock.calls[0]?.[0]).toBe(actual)
+        }
+      }
+      if (mode !== 'matched') expect(matched).not.toHaveBeenCalled()
+    } finally {
+      await io.settleBootstrapCaptureIO('target', f.held)
+      await f.close()
+    }
+  })
