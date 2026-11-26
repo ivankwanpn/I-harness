@@ -2,7 +2,7 @@ import { types } from 'node:util'
 import { validateDeliveryFrame } from '../conversation/delivery.ts'
 import { digestRuntimeContextEvent } from '../conversation/render.ts'
 import { CURRENT_FORMAT_VERSION, type Session, type SessionEvent } from '../events/types.ts'
-import { createConversationIndex, createBootstrapConversationIndex, readConversationDeliveries, readConversationGenerations, conversationScopeKey, type ConversationValidationIndex } from '../conversation/validation.ts'
+import { createConversationIndex, createImmutableManagedConversationIndex, createBootstrapConversationIndex, readConversationDeliveries, readConversationGenerations, conversationScopeKey, type ConversationValidationIndex } from '../conversation/validation.ts'
 import { managedSessions, managedFactOwners, subscribers } from '../events/state.ts'
 import { captureLegacyFact, freezeJsonData } from './capture.ts'
 import type { SessionView } from './types.ts'
@@ -16,6 +16,28 @@ const originalSourceSessions = new WeakMap<SessionView, string | undefined>()
 // are immutable. Other view factories must qualify their own invariants.
 const immutableFactories = new WeakMap<SessionView, {index:ConversationValidationIndex;assertFrontier(count:number):void;hasContiguousSeq():boolean;hasProjectionProof():boolean}>()
 const originalObjectPrototype = Object.prototype, originalArrayPrototype = Array.prototype
+const originalDataPrototypes = [originalObjectPrototype, originalArrayPrototype].map(prototype => {
+  const keys = Reflect.ownKeys(prototype)
+  return { prototype, keys, fields: keys.map(key => Object.getOwnPropertyDescriptor(prototype, key)!) }
+})
+
+function unchangedDataPrototypes(): boolean {
+  // Freezing own fields does not freeze inherited optional fields or methods.
+  // A custom prototype keeps the original repeat validation behavior.
+  for (let index = 0; index < originalDataPrototypes.length; index++) {
+    const { prototype, keys, fields } = originalDataPrototypes[index]!
+    if (Reflect.ownKeys(prototype).length !== keys.length) return false
+    for (let position = 0; position < keys.length; position++) {
+      const expected = fields[position]!, actual = Object.getOwnPropertyDescriptor(prototype, keys[position]!)
+      if (!actual || actual.configurable !== expected.configurable || actual.enumerable !== expected.enumerable) return false
+      if (Object.hasOwn(expected, 'value')) {
+        if (!Object.hasOwn(actual, 'value') || !Object.is(actual.value, expected.value) || actual.writable !== expected.writable) return false
+      } else if (prototype !== originalObjectPrototype || keys[position] !== '__proto__'
+        || !Object.hasOwn(actual, 'get') || actual.get !== expected.get || actual.set !== expected.set) return false
+    }
+  }
+  return true
+}
 
 function ordinaryProjectionHeader(header: SessionView['header']) {
   return header?.semanticSeed === undefined && header?.parentSession === undefined && header?.seedLength === undefined
@@ -199,7 +221,10 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
     && ordinaryProjectionHeader(indexHeader) && ordinaryProjectionHeader(captured.value.header)
     && (!captured.value.header || !Object.hasOwn(captured.value.header, 'sessionId'))
     && isOriginalArchiveValidationEnvironment() && isImmutableProjectionData(captured.value) && events.every(canFoldPruneProjection)
-  const index = createIndex(events, position => events[position], formatVersion, indexHeader)
+  const readEvent = (position: number) => events[position]
+  const index = projectionProof && contiguousSeq && typeof indexHeader.sessionId === 'string' && indexHeader.sessionId.length > 0 && unchangedDataPrototypes()
+    ? createImmutableManagedConversationIndex(events, readEvent, indexHeader)
+    : createIndex(events, readEvent, formatVersion, indexHeader)
   const intake=createManagedIntakeIndex()
   intake.stage(events,false).commit()
   const deny = (): never => { throw new TypeError('Managed Session is readonly') }

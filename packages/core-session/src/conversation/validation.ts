@@ -55,6 +55,8 @@ export interface ConversationValidationIndex {
 const deliveryObservations = new WeakMap<ConversationValidationIndex, DeliveryReadIndex>();
 const generationObservations = new WeakMap<ConversationValidationIndex, () => readonly GenerationActionState[]>();
 const archiveShapePreflight = Symbol('archive shape preflight');
+const immutableManagedInitialShapes = Symbol('immutable managed initial shapes');
+type InitialShapeProof = typeof archiveShapePreflight | typeof immutableManagedInitialShapes;
 const callObservations=new WeakMap<ConversationValidationIndex,(id:string)=>boolean>();
 export function hasConversationToolCall(index:ConversationValidationIndex,id:string):boolean{const read=callObservations.get(index);if(!read)throw TypeError('Original conversation call index required');return read(id)}
 type PreparedConversationAppend=ReturnType<ConversationValidationIndex['stage']>&{discard():void};
@@ -85,6 +87,11 @@ export function createConversationValidationIndex(events: readonly SessionEvent[
 export function createConversationIndex(events: readonly SessionEvent[], read?: (index: number) => SessionEvent | undefined, formatVersion = CURRENT_FORMAT_VERSION, header: GenerationHistoryScope = {}): ConversationValidationIndex {
     return conversationIndex(events, read, formatVersion, header);
 }
+/** Package-private constructor for the original managed factory's already owned
+ * ordinary initial rows. The outer validator still checks every shape. */
+export function createImmutableManagedConversationIndex(events: readonly SessionEvent[], read: (index: number) => SessionEvent | undefined, header: GenerationHistoryScope): ConversationValidationIndex {
+    return conversationIndex(events, read, CURRENT_FORMAT_VERSION, header, undefined, undefined, immutableManagedInitialShapes);
+}
 /** Package-private composition entry; never exported by the public facade. */
 export function createBootstrapConversationIndex(events: readonly SessionEvent[], read: ((index: number) => SessionEvent | undefined) | undefined, formatVersion: number, header: GenerationHistoryScope): ConversationValidationIndex {
     return conversationIndex(events, read, formatVersion, header, bootstrapStaging);
@@ -92,7 +99,7 @@ export function createBootstrapConversationIndex(events: readonly SessionEvent[]
 export function createSemanticSourceConversationIndex(events: readonly SessionEvent[], formatVersion: number, header: GenerationHistoryScope = {}): ConversationValidationIndex {
     return conversationIndex(events, undefined, formatVersion, header, semanticSourceStructure);
 }
-function conversationIndex(events: readonly SessionEvent[], read: ((index: number) => SessionEvent | undefined) | undefined, formatVersion: number, header: GenerationHistoryScope, capability?: typeof bootstrapStaging | typeof semanticSourceStructure, scan?: (begin: ConversationScanBegin) => void, initialShapeProof?: typeof archiveShapePreflight): ConversationValidationIndex {
+function conversationIndex(events: readonly SessionEvent[], read: ((index: number) => SessionEvent | undefined) | undefined, formatVersion: number, header: GenerationHistoryScope, capability?: typeof bootstrapStaging | typeof semanticSourceStructure, scan?: (begin: ConversationScanBegin) => void, initialShapeProof?: InitialShapeProof): ConversationValidationIndex {
     const restoredSource = scan !== undefined;
     const validateShape = capability === semanticSourceStructure ? validateSemanticSourceEventShape : validateConversationEventShape;
     const acceptances = new Map<number, AcceptanceFact>();
@@ -123,9 +130,9 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
             || actual.type === "tool/call" && actual.callId !== target.callId)
             fail("referenced structure was mutated");
     };
-    function beginStage(readCurrent?: (index: number) => SessionEvent | undefined, readStaged = readCurrent ?? (() => undefined), shapeProof?: typeof archiveShapePreflight): ConversationScanStage {
+    function beginStage(readCurrent?: (index: number) => SessionEvent | undefined, readStaged = readCurrent ?? (() => undefined), shapeProof?: InitialShapeProof): ConversationScanStage {
         const shapeValidated = shapeProof === archiveShapePreflight;
-        const stagedHistory = history.stage(readCurrent, shapeValidated);
+        const stagedHistory = history.stage(readCurrent, shapeValidated || shapeProof === immutableManagedInitialShapes);
         const stagedDelivery = delivery.stage();
         deliveryOrigins = stagedDelivery;
         const stagedGeneration = generation.stage();
@@ -359,7 +366,7 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
             }
         };
     }
-    function stage(suffix: readonly SessionEvent[], options?: StageOptions, shapeProof?: typeof archiveShapePreflight) {
+    function stage(suffix: readonly SessionEvent[], options?: StageOptions, shapeProof?: InitialShapeProof) {
         // Own the staged sequence for bootstrap checks and dependency lookup.
         const proposed = Array.from(suffix);
         for (const event of proposed)

@@ -1,6 +1,7 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { projectConversation } from '../src/conversation/project.ts'
 import { createConversationIndex } from '../src/conversation/validation.ts'
+import * as conversationEvents from '../src/events/conversation.ts'
 import { CURRENT_FORMAT_VERSION, type Session, type SessionEvent } from '../src/events/types.ts'
 import { createBootstrapManagedSessionState, createManagedIndexedView, createManagedSessionState } from '../src/managed/view.ts'
 import { projectManagedConversation } from '../src/restoration-internal.ts'
@@ -13,6 +14,95 @@ const fixture = (): Session => ({ formatVersion: CURRENT_FORMAT_VERSION, events:
   { type: 'tool/result', callId: 'read', name: 'read', output: { text: 'contents' }, seq: 5 },
   { type: 'step/end', seq: 6 }, { type: 'turn/end', seq: 7 },
 ] })
+
+it('uses one shape check per original initial row and independently validates later staging', () => {
+  const shape = vi.spyOn(conversationEvents, 'validateConversationEventShape')
+  try {
+    const original = fixture()
+    const state = createManagedSessionState(original, { sessionId: ownerSessionId })
+    expect(shape.mock.calls.map(([event]) => event.seq)).toEqual(original.events.map(event => event.seq))
+    state.bindOwner({})
+    shape.mockClear()
+
+    const staged = state.stage([{ type: 'user/message', text: 'following request', seq: 8 }])
+    expect(shape.mock.calls.map(([event]) => event.seq)).toEqual([8, 8, 8])
+    expect(state.view.events).toHaveLength(original.events.length)
+    staged.install()
+    expect(projectManagedConversation(state.view, { ownerSessionId })).toEqual(projectConversation(state.view, { ownerSessionId }))
+  } finally { shape.mockRestore() }
+})
+
+it('keeps both initial shape checks for lineage, legacy and bootstrap construction', () => {
+  const shape = vi.spyOn(conversationEvents, 'validateConversationEventShape')
+  try {
+    const original = fixture(), expected = original.events.flatMap(event => [event.seq, event.seq])
+    for (const make of [
+      () => createManagedSessionState({ ...original, header: { parentSession: 'parent', seedLength: 1 } }, { sessionId: ownerSessionId }),
+      () => createManagedSessionState({ ...original, formatVersion: 13 }, { sessionId: ownerSessionId }),
+      () => createBootstrapManagedSessionState(original, { sessionId: ownerSessionId }),
+    ]) {
+      shape.mockClear()
+      make()
+      expect(shape.mock.calls.map(([event]) => event.seq)).toEqual(expected)
+    }
+  } finally { shape.mockRestore() }
+})
+
+it('keeps the second acceptance shape check for a substituted UTF-8 encoder', () => {
+  const session: Session = { formatVersion: CURRENT_FORMAT_VERSION, events: [
+    { type: 'conversation/semantics', version: 1, mode: 'accepted-exchange-v1', seq: 0 },
+    { type: 'step/start', actionId: 'action', attemptId: 'attempt', seq: 1 },
+    { type: 'assistant/message', text: 'complete reply', seq: 2 },
+    { type: 'model/exchange-accepted', version: 1, exchangeId: 'exchange', actionId: 'action', attemptId: 'attempt',
+      stepStartSeq: 1, assistantSeq: 2, callSeqs: [], seq: 3 },
+    { type: 'step/end', seq: 4 },
+  ] }
+  expect(createManagedSessionState(session, { sessionId: ownerSessionId }).view.events).toHaveLength(5)
+  const encode = TextEncoder.prototype.encode
+  let acceptanceChecks = 0
+  try {
+    TextEncoder.prototype.encode = function(value?: string) {
+      if (value?.includes('model/exchange-accepted') && ++acceptanceChecks === 2) return new Uint8Array(4097)
+      return encode.call(this, value)
+    }
+    expect(() => createManagedSessionState(session, { sessionId: ownerSessionId })).toThrow('invalid acceptance payload')
+    expect(acceptanceChecks).toBe(2)
+  } finally { TextEncoder.prototype.encode = encode }
+})
+
+it('checks initial shape and graph errors in row order', () => {
+  const fence = { type: 'conversation/semantics', version: 1, mode: 'accepted-exchange-v1', seq: 0 } as const
+  const malformed = { type: 'user/message', seq: 2, text: 'invalid',
+    provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: '' } } as const
+  const create = (events: SessionEvent[]) => createManagedSessionState({ formatVersion: CURRENT_FORMAT_VERSION, events }, { sessionId: ownerSessionId })
+  expect(() => create([fence, { ...fence, seq: 1 }, malformed])).toThrow('duplicate semantics fence')
+  expect(() => create([fence, { ...fence, seq: 1 },
+    { type: 'runtime/context', version: 1, seq: 2, sections: [{ name: '', text: 'invalid' }] },
+  ])).toThrow('Invalid runtime/context record or format')
+  expect(() => create([fence, { ...malformed, seq: 1 }])).toThrow('invalid input provenance')
+  expect(create([fence, { type: 'user/message', seq: 1, text: 'valid request' }]).view.events).toHaveLength(2)
+})
+
+it('keeps the original shape checks when frozen rows can see an inherited getter', () => {
+  const session: Session = { formatVersion: CURRENT_FORMAT_VERSION, events: [{ type: 'user/message', text: 'request', seq: 0 }] }
+  const prior = Object.getOwnPropertyDescriptor(Object.prototype, 'provenance')
+  let reads = 0
+  let failure: unknown
+  try {
+    Object.defineProperty(Object.prototype, 'provenance', { configurable: true, get() {
+      if (Object.getOwnPropertyDescriptor(this, 'type')?.value === 'user/message' && ++reads >= 5)
+        return 'changed inherited data'
+    } })
+    createManagedSessionState(session, { sessionId: ownerSessionId })
+  } catch (error) {
+    failure = error
+  } finally {
+    if (prior) Object.defineProperty(Object.prototype, 'provenance', prior)
+    else Reflect.deleteProperty(Object.prototype, 'provenance')
+  }
+  expect(failure).toMatchObject({ message: expect.stringContaining('invalid input provenance') })
+  expect(createManagedSessionState(session, { sessionId: ownerSessionId }).view.events).toHaveLength(1)
+})
 
 it('projects an installed original with exactly the generic payload transformations and source order', () => {
   const state = createManagedSessionState(fixture(), { sessionId: ownerSessionId })
