@@ -4,6 +4,7 @@ import { restoreManagedExecutionState } from '@i-harness/core-session/internal/e
 import type { OriginalConversationRestorationSource } from '@i-harness/core-session/internal/restoration'
 import type { CommitLog } from '@i-harness/session-commit-log'
 import type { ManagedExecutionAttachment } from '../execution-internal.ts'
+import type { ManagedDocument } from '../coordinator/fact-types.ts'
 import { commitPrefix, createCommitManagedContext, openCommitExecutionDocument, type CommitManagedContext, type CommitManagedDeps } from './managed.ts'
 
 const closed = () => Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' })
@@ -39,7 +40,10 @@ function executionSource(log: CommitLog, context: CommitManagedContext, control:
 /** One execution attachment over the commit log: restore the execution state
  *  from the folded history, then construct the document FROM that state so its
  *  delivery observation belongs to the execution fence. */
-export async function openCommitExecution(sessionId: string, log: CommitLog, deps: CommitManagedDeps, foldFactory?: Parameters<typeof restoreManagedExecutionState>[2]): Promise<ManagedExecutionAttachment> {
+export async function openCommitExecution(sessionId: string, log: CommitLog, deps: CommitManagedDeps, lifecycle: {
+  revoke(document: ManagedDocument): void
+  close(document: ManagedDocument): Promise<void>
+}, foldFactory?: Parameters<typeof restoreManagedExecutionState>[2]): Promise<ManagedExecutionAttachment> {
   const control = { suspended: false }
   const context = createCommitManagedContext(sessionId, log, deps, control)
   const token = Object.freeze({ sessionId, incarnation: randomUUID() })
@@ -77,7 +81,7 @@ export async function openCommitExecution(sessionId: string, log: CommitLog, dep
     prepare: () => state.prepare(),
     observe: () => state.observe(),
     prepareRequest: (action: Parameters<typeof state.prepareRequest>[0]) => state.prepareRequest(action),
-    revokeNewWork: () => document.revokeNewWork(),
-    close: async () => { await state.close() },
+    revokeNewWork: () => lifecycle.revoke(document),
+    close: () => lifecycle.close(document),
   }) as ManagedExecutionAttachment
 }

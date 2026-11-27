@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isRpcSuccess, type RpcMessage } from '@i-harness/sdk'
@@ -7,11 +7,6 @@ import { controlledModel } from '../../session-executor/test/controlled-model.ts
 import { createJsonlCommitCoordinator } from '../../session-persistence-jsonl/src/commit-coordinator.ts'
 import { createDesktopHost } from '../src/host.ts'
 
-// Repro for Plan 10: a host-level model turn still hits a managed-write
-// conflict ("Fact admission requires recovery or was cancelled") plus private
-// delivery reconciliation failures, while the composed-owned surface test
-// without the host plugins runs the same kind of turn. Kept skipped so the
-// reproduction is available without a red suite.
 it('runs a full prompt turn through the desktop host on the commit log', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-gateway-scl-turn-')), workspace = join(root, 'workspace'), sessionDir = join(root, 'sessions')
   await mkdir(workspace)
@@ -97,10 +92,11 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
     await writeFile(join(workspace, 'big.txt'), 'x'.repeat(200 * 1024))
     await call('session/prompt', { sessionId: created.sessionId, prompt: 'read big' })
     expect(toolCalls).toBe(2)
+    expect(await call('desktop/session/input/state', { sessionId: created.sessionId })).toEqual({ items: [], resumable: false })
     await expect(call('desktop/session/execution/stop', { sessionId: created.sessionId })).rejects.toThrow(/Execution unavailable/)
     await expect(call('desktop/session/execution/stop', { sessionId: created.sessionId, cellId: 'missing-cell' })).rejects.toThrow(/cold history cannot be stopped/)
     await expect(call('desktop/session/processes/control', { sessionId: created.sessionId, command: { action: 'job/cancel', backend: 'shell', id: 'missing-process' } })).rejects.toThrow(/requires a job instance/)
-    await expect(call('desktop/session/processes/control', { sessionId: created.sessionId, command: { action: 'close', id: 'missing-process' } })).rejects.toThrow(/unavailable for this private runtime/)
+    await expect(call('desktop/session/processes/control', { sessionId: created.sessionId, command: { action: 'close', id: 'missing-process' } })).rejects.toThrow(/Terminal has no live process owner in this session/)
     const observer = createJsonlCommitCoordinator(sessionDir, { lock: { enabled: true, lockRoot: sessionDir } })
     try {
       const { session } = await observer.load(created.sessionId)
@@ -127,10 +123,104 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
       expect(await call('session/result/read', { sessionId: 'missing-session', ref, maxBytes: 4096 })).toMatchObject({ kind: 'unavailable' })
     } finally { await observer.close() }
     await call('desktop/session/reload', { sessionId: created.sessionId })
+    expect(await call('desktop/session/input/state', { sessionId: created.sessionId })).toEqual({ items: [], resumable: false })
     expect(await call('desktop/session/processes/read', { sessionId: created.sessionId })).toMatchObject({ live: false, terminals: [], jobs: [] })
     expect(await call('desktop/session/execution/read', { sessionId: created.sessionId })).toMatchObject({ live: false, cells: [] })
     await expect(call('desktop/session/processes/control', { sessionId: created.sessionId, command: { action: 'job/cancel', backend:'shell', id:'missing-process', instanceId:'retired-instance' } })).rejects.toThrow(/cold history cannot control a process/)
+
+    const recovery = createJsonlCommitCoordinator(sessionDir, { lock: { enabled: true, lockRoot: sessionDir }, acquireDeadlineMs: 1_000 })
+    try {
+      // A different coordinator must be able to claim the retired writer's lease.
+      const inputId = 'committed-while-cold', text = 'resume after reloading'
+      await recovery.append(created.sessionId, [{
+        type: 'agent/input/admitted', version: 1, inputId, text, delivery: 'queue', intent: 'user', preparationPolicy: 'human-host',
+        provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'desktop.input' },
+      }])
+      const beforeResume = requests
+      expect(await call('desktop/session/input/state', { sessionId: created.sessionId })).toMatchObject({
+        items: [{ id: inputId, text, state: 'queued' }], resumable: true,
+      })
+      expect(requests).toBe(beforeResume)
+      expect(await call('desktop/session/input/resume', { sessionId: created.sessionId })).toEqual({ resumed: true })
+      await expect.poll(async () => {
+        const failure = frames.findLast(frame => 'method' in frame && frame.method === 'session/status' && (frame.params as { status?: string })?.status === 'error')
+        const { session } = await recovery.snapshot(created.sessionId)
+        const promoted = session.events.filter(event => event.type === 'agent/input/promoted' && event.inputId === inputId)
+        const message = session.events.find(event => event.type === 'user/message' && event.text === text)
+        return { failure, promotions: promoted.length, ended: message !== undefined && session.events.some(event => event.type === 'turn/end' && event.seq! > message.seq!) }
+      }, { timeout: 10_000 }).toEqual({ failure: undefined, promotions: 1, ended: true })
+      expect(requests).toBe(beforeResume + 1)
+      expect(await call('desktop/session/input/state', { sessionId: created.sessionId })).toEqual({ items: [], resumable: false })
+    } finally { await recovery.close() }
   } finally {
     await host.close()
+    await rm(root, { recursive: true, force: true })
   }
 }, 60000)
+
+it('keeps a successor commit writer live when an earlier attachment finishes closing again', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-gateway-scl-retirement-'))
+  const coordinator = createJsonlCommitCoordinator(root, { lock: { enabled: true, lockRoot: root } })
+  try {
+    await coordinator.create({ sessionId: 'session' })
+    const failure = new Error('Fixture pin release failed')
+    const ownership = coordinator.capabilities().ownership, pin = ownership.pinOwnershipRetained
+    let failRelease = true
+    ownership.pinOwnershipRetained = (id, retain) => pin(id, original => retain({
+      assertSettled: () => original.assertSettled(),
+      async close() {
+        if (failRelease) { failRelease = false; throw failure }
+        await original.close()
+      },
+    }))
+    const original = await coordinator.acquireExecution('session')
+    const append = coordinator.append('session', [{ type: 'plan/mode', mode: 'on' }])
+    await expect(original.close()).rejects.toBe(failure)
+    await append
+    expect((await coordinator.snapshot('session')).session.events).toEqual([{ type: 'plan/mode', mode: 'on', seq: 0 }])
+    await expect(coordinator.acquireExecution('session')).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    await expect(coordinator.append('session', [{ type: 'plan/mode', mode: 'off' }])).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+
+    const retiring = original.close()
+    const reopening = coordinator.acquireExecution('session')
+    const duplicateRetirement = original.close()
+    const [, successor] = await Promise.all([retiring, reopening, duplicateRetirement])
+    expect(successor.owner).not.toBe(original.owner)
+    expect(() => successor.observe().assertCurrent()).not.toThrow()
+    expect(coordinator.ownerOf('session')).toBe(true)
+    await successor.close()
+    expect(coordinator.ownerOf('session')).toBe(false)
+    expect(coordinator.hasManagedDocument?.('session')).toBe(false)
+  } finally {
+    await coordinator.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+it.each([false, true])('releases failed commit restoration resources with a prior writer = %s', async preOwned => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-gateway-scl-mount-failure-'))
+  const failure = new Error('Fixture fold restore failed')
+  let failRestore = true
+  const coordinator = createJsonlCommitCoordinator(root, {
+    lock: { enabled: true, lockRoot: root },
+    originalExecutionFoldFactory() {
+      if (failRestore) throw failure
+      return { appendValidated() {}, finishRestore() {}, snapshot: () => ({}), validateSnapshot: () => true }
+    },
+  })
+  try {
+    await coordinator.create({ sessionId: 'session' })
+    if (preOwned) await coordinator.adoptOwnership('session')
+    await expect(coordinator.acquireExecution('session')).rejects.toBe(failure)
+    expect(coordinator.ownerOf('session')).toBe(preOwned)
+    expect(coordinator.hasManagedDocument?.('session')).toBe(false)
+    failRestore = false
+    const replacement = await coordinator.acquireExecution('session')
+    expect(() => replacement.observe().assertCurrent()).not.toThrow()
+    await replacement.close()
+    expect(coordinator.ownerOf('session')).toBe(false)
+  } finally {
+    await coordinator.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})

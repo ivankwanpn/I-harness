@@ -1,6 +1,7 @@
 import { createCoordinatorAdmission } from '../coordinator/public-admission.ts'
 import { createHash } from 'node:crypto'
-import { CURRENT_FORMAT_VERSION, validateSemanticBootstrapHistory, canonicalJsonData, decodeFactBatch, encodeFactBatch, legacyPrefixDigest, stringifyJsonData, type FactReceipt, type Session, type SessionEvent } from '@i-harness/core-session'
+import { CURRENT_FORMAT_VERSION, FactRecoveryRequiredError, validateSemanticBootstrapHistory, canonicalJsonData, decodeFactBatch, encodeFactBatch, legacyPrefixDigest, readInbox, stringifyJsonData, type FactReceipt, type Session, type SessionEvent } from '@i-harness/core-session'
+import { pendingInputSummary, type PendingInputSummary } from '../coordinator/types.ts'
 import { COMMIT_LOG_GENERATION, CommitLogConflictError, CommitLogClosedError, CommitLogCleanupError, createCommitLog as createStoredCommitLog, openCommitLog, CommitLogNotFoundError, type CommitLog, type CommitLogMode, type CommitLogCleanup } from '@i-harness/session-commit-log'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -17,9 +18,11 @@ import { openCommitManagedDocument } from './managed.ts'
 import { captureTaskSnapshot } from '../coordinator/task-document-snapshot.ts'
 import { originalManagedDocumentOwner } from '../coordinator/managed-document.ts'
 import { openCommitExecution } from './execution.ts'
+import type { ManagedExecutionAttachment } from '../execution-internal.ts'
 import { withCommitProcessReadObservation } from './process-read.ts'
 import { createCommitOwnershipPorts, type CommitOwnershipPorts } from './capabilities.ts'
 import { createRetainedCleanupOperation, finishRetainedCleanupOperation } from '../coordinator/retained-cleanup.ts'
+import type { OwnershipCleanup } from '../coordinator/ownership.ts'
 
 /**
  * v1 commit-log coordinator: the session view is a fold of one commit log.
@@ -67,6 +70,7 @@ export type CommitCoordinator = {
   intents(sessionId: string): Promise<ReadonlyMap<string, CommitIntent>>
   load(sessionId: string): Promise<{ session: Session }>
   snapshot(sessionId: string): Promise<{ session: Session }>
+  readPendingInputs(sessionId: string): Promise<readonly PendingInputSummary[]>
   loadOwned(sessionId: string): Promise<{ session: Session }>
   append(sessionId: string, events: SessionEvent[]): Promise<void>
   openManagedDocument(sessionId: string): Promise<ManagedDocument>
@@ -200,7 +204,18 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     return track(ownedWork, work)
   }
   const pending = new Map<string, Set<Promise<void>>>()
-  const managed = new Map<string, ManagedDocument>()
+  type ManagedEntry = { document: ManagedDocument; log: CommitLog; execution?: ManagedExecutionAttachment; retiring?: true }
+  const managed = new Map<string, ManagedEntry>()
+  const failedMounts = new Map<string, () => Promise<void>>()
+  const ownershipFlights = new Map<string, Promise<unknown>>()
+  const publicationQueues = new Map<string, Promise<unknown>>()
+  const serialize = <T>(queues: Map<string, Promise<unknown>>, id: string, work: () => Promise<T>): Promise<T> => {
+    const queued = (queues.get(id)?.catch(() => undefined) ?? Promise.resolve()).then(work)
+    queues.set(id, queued)
+    void queued.finally(() => { if (queues.get(id) === queued) queues.delete(id) }).catch(() => {})
+    return queued
+  }
+  const serializeOwnership = <T>(id: string, work: () => Promise<T>): Promise<T> => serialize(ownershipFlights, id, work)
   const documentSessions = new WeakMap<object, string>()
   const deletedListeners = new Set<(sessionId: string, manifest: { documents: string[]; files?: string[] }) => Promise<void>>()
 
@@ -316,6 +331,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
   }
 
   const withWrite = <T>(sessionId: string, work: (log: CommitLog) => Promise<T>): Promise<T> => track(writes, async () => {
+    if (managed.get(sessionId)?.retiring || failedMounts.has(sessionId)) throw new FactRecoveryRequiredError()
     const held = owned.get(sessionId)
     if (held) return work(held)
     const log = await ensureWritable(sessionId)
@@ -325,14 +341,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
   // Publication needs a real per-target queue: `withWrite` tracks flights but
   // does not serialize them, so two concurrent callers could both read pending
   // and each append a published record. Queue the read-inside-write transition.
-  const publicationQueues = new Map<string, Promise<unknown>>()
-  const serializePublication = <T>(sessionId: string, work: () => Promise<T>): Promise<T> => {
-    const previous = publicationQueues.get(sessionId) ?? Promise.resolve()
-    const next = previous.catch(() => undefined).then(work)
-    publicationQueues.set(sessionId, next)
-    void next.finally(() => { if (publicationQueues.get(sessionId) === next) publicationQueues.delete(sessionId) }).catch(() => {})
-    return next
-  }
+  const serializePublication = <T>(id: string, work: () => Promise<T>): Promise<T> => serialize(publicationQueues, id, work)
 
   const documentLog = async (): Promise<CommitLog> => {
     try { return await open(DOCUMENT_SESSION, 'write') }
@@ -405,16 +414,58 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     getDocument(key) { assertContinuation(); return getDocumentOf(key) },
     profile(id) { assertContinuation(); return profileOf(id) },
   })
-  const ownershipPins = new Map<string, { release(): Promise<void> }>()
-  const pinSession = async (sessionId: string) => {
-    if (ownershipPins.has(sessionId)) return
-    ownershipPins.set(sessionId, await ownershipPorts.ownership.pinOwnership(sessionId))
-  }
-  const unpinSession = async (sessionId: string) => {
-    const pin = ownershipPins.get(sessionId)
+  const ownershipPins = new Map<string, OwnershipCleanup>()
+  const unpinSession = async (sessionId: string, pin = ownershipPins.get(sessionId)) => {
     if (!pin) return
-    await pin.release()
-    ownershipPins.delete(sessionId)
+    await pin.close()
+    pin.assertSettled()
+    if (ownershipPins.get(sessionId) === pin) ownershipPins.delete(sessionId)
+  }
+  async function settleFailedMount(sessionId: string, cleanup = failedMounts.get(sessionId)) {
+    if (!cleanup || failedMounts.get(sessionId) !== cleanup) return
+    await cleanup()
+    failedMounts.delete(sessionId)
+  }
+  async function mountManaged<T>(sessionId: string, mount: (log: CommitLog) => T | Promise<T>): Promise<T> {
+    await settleFailedMount(sessionId)
+    const heldLog = owned.get(sessionId)
+    let newLog: CommitLog | undefined, newPin: OwnershipCleanup | undefined
+    try {
+      const log = heldLog ?? (newLog = await ensureWritable(sessionId))
+      owned.set(sessionId, log)
+      if (!ownershipPins.has(sessionId)) {
+        await ownershipPorts.ownership.pinOwnershipRetained(sessionId, original => { newPin = original })
+        if (!newPin) throw new Error('Commit managed ownership cleanup unavailable')
+        ownershipPins.set(sessionId, newPin)
+      }
+      return await mount(log)
+    } catch (error) {
+      if (newLog || newPin) {
+        failedMounts.set(sessionId, async () => {
+          if (newLog) {
+            await newLog.close()
+            if (owned.get(sessionId) === newLog) owned.delete(sessionId)
+          }
+          if (newPin) await unpinSession(sessionId, newPin)
+        })
+        try { await settleFailedMount(sessionId) }
+        catch (cleanup) { throw new AggregateError([error, cleanup], 'Commit managed attachment acquisition cleanup unresolved') }
+      }
+      throw error
+    }
+  }
+  function revokeManaged(entry: ManagedEntry) {
+    entry.retiring = true
+    entry.document.revokeNewWork()
+  }
+  async function retireManaged(sessionId: string, entry: ManagedEntry) {
+    if (managed.get(sessionId) !== entry) return
+    entry.retiring = true
+    await entry.document.close()
+    await entry.log.close()
+    await unpinSession(sessionId)
+    if (owned.get(sessionId) === entry.log) owned.delete(sessionId)
+    managed.delete(sessionId)
   }
   const observations = createCommitObservations({ profile: profileOf, getDocument: getDocumentOf })
 
@@ -570,14 +621,36 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       try { return new Map(log.view().intents) } finally { await log.close() }
     },
     async snapshot(sessionId) { return { session: await readSession(sessionId) } },
+    async readPendingInputs(sessionId) {
+      const current = () => {
+        const entry = managed.get(sessionId)
+        if (!entry || entry.retiring) return undefined
+        if (entry.execution) {
+          const observation = entry.execution.observe()
+          const pending = observation.inbox.pending()
+          observation.assertCurrent()
+          return pending
+        }
+        entry.document.assertReady()
+        return readInbox(entry.document.view).pending()
+      }
+      let inputs = current()
+      if (inputs === undefined) {
+        const session = await readSession(sessionId)
+        inputs = current() ?? readInbox(session).pending()
+      }
+      return inputs.map(pendingInputSummary)
+    },
     loadOwned(sessionId) {
-      return ownedOperation(async () => {
+      return ownedOperation(() => serializeOwnership(sessionId, async () => {
+        if (managed.get(sessionId)?.retiring) throw new FactRecoveryRequiredError()
+        await settleFailedMount(sessionId)
         const held = owned.get(sessionId)
         if (held) return { session: build(held) }
         const log = await ensureWritable(sessionId)
         owned.set(sessionId, log)
         return { session: build(log) }
-      })
+      }))
     },
     async append(sessionId, events) {
       const captured = structuredClone(events)
@@ -593,20 +666,17 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       })
     },
     openManagedDocument(sessionId) {
-      return ownedOperation(async () => {
+      return ownedOperation(() => serializeOwnership(sessionId, async () => {
         const existing = managed.get(sessionId)
-        if (existing) return existing
-        let log = owned.get(sessionId)
-        if (!log) {
-          log = await ensureWritable(sessionId)
-          owned.set(sessionId, log)
-        }
-        await pinSession(sessionId)
-        const document = openCommitManagedDocument(sessionId, log, { logs: owned, metaOf, ownership: ownershipPorts.ownership })
-        documentSessions.set(document as object, sessionId)
-        managed.set(sessionId, document)
-        return document
-      })
+        if (existing?.retiring) throw new FactRecoveryRequiredError()
+        if (existing) return existing.document
+        return mountManaged(sessionId, log => {
+          const document = openCommitManagedDocument(sessionId, log, { logs: owned, metaOf, ownership: ownershipPorts.ownership })
+          documentSessions.set(document, sessionId)
+          managed.set(sessionId, { document, log })
+          return document
+        })
+      }))
     },
     sessionOfDocument(document) { return documentSessions.get(document) },
     hasManagedDocument(sessionId) { return managed.has(sessionId) },
@@ -624,26 +694,38 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       } catch (error) { await log.close().catch(() => {}); throw error }
     },
     acquireExecution(sessionId) {
-      return ownedOperation(async () => {
-        let log = owned.get(sessionId)
-        if (!log) { log = await ensureWritable(sessionId); owned.set(sessionId, log) }
-        await pinSession(sessionId)
-        const attachment = await openCommitExecution(sessionId, log, { logs: owned, metaOf, ownership: ownershipPorts.ownership }, options.originalExecutionFoldFactory)
-        documentSessions.set(attachment.owner as object, sessionId)
-        managed.set(sessionId, attachment.owner as unknown as ManagedDocument)
-        return attachment
-      })
+      return ownedOperation(() => serializeOwnership(sessionId, async () => {
+        const existing = managed.get(sessionId)
+        if (existing?.retiring) throw new FactRecoveryRequiredError()
+        if (existing?.execution) return existing.execution
+        if (existing) throw Object.assign(new Error('Original execution attachment requires its original entry construction'), { code: 'FACT_OWNER_UNSUPPORTED' })
+        return mountManaged(sessionId, async log => {
+          const attachment = await openCommitExecution(sessionId, log, { logs: owned, metaOf, ownership: ownershipPorts.ownership }, {
+            revoke(document) {
+              const entry = managed.get(sessionId)
+              if (entry?.document === document) revokeManaged(entry)
+            },
+            close(document) {
+              return serializeOwnership(sessionId, async () => {
+                const entry = managed.get(sessionId)
+                if (entry?.document === document) await retireManaged(sessionId, entry)
+              })
+            },
+          }, options.originalExecutionFoldFactory)
+          const document = attachment.owner as unknown as ManagedDocument
+          documentSessions.set(document, sessionId)
+          managed.set(sessionId, { document, log, execution: attachment })
+          return attachment
+        })
+      }))
     },
-    async closeManagedDocument(sessionId) {
-      const document = managed.get(sessionId)
-      if (!document) return
-      await document.close()
-      managed.delete(sessionId)
-      const log = owned.get(sessionId)
-      if (log) { await log.close(); owned.delete(sessionId) }
-      await unpinSession(sessionId)
+    closeManagedDocument(sessionId) {
+      const entry = managed.get(sessionId)
+      if (entry) return serializeOwnership(sessionId, () => retireManaged(sessionId, entry))
+      const cleanup = failedMounts.get(sessionId)
+      return cleanup ? serializeOwnership(sessionId, () => settleFailedMount(sessionId, cleanup)) : Promise.resolve()
     },
-    revokeManagedDocumentNewWork(sessionId) { managed.get(sessionId)?.revokeNewWork() },
+    revokeManagedDocumentNewWork(sessionId) { const entry = managed.get(sessionId); if (entry) revokeManaged(entry) },
     async list(onUnreadable, onlyId) {
       const ids = new Set<string>()
       const entries = await readdir(root, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
@@ -755,19 +837,26 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       return () => { deletedListeners.delete(listener) }
     },
     adoptOwnership(sessionId) {
-      return ownedOperation(async () => {
+      return ownedOperation(() => serializeOwnership(sessionId, async () => {
+        if (managed.get(sessionId)?.retiring) throw new FactRecoveryRequiredError()
+        await settleFailedMount(sessionId)
         if (owned.has(sessionId)) return
         const log = await ensureWritable(sessionId)
 
         owned.set(sessionId, log)
-      })
+      }))
     },
-    async releaseOwnership(sessionId) {
-      if (managed.has(sessionId)) await this.closeManagedDocument(sessionId)
+    releaseOwnership(sessionId) {
+      const entry = managed.get(sessionId)
       const log = owned.get(sessionId)
-      if (!log) return
-      await log.close()
-      owned.delete(sessionId)
+      const cleanup = failedMounts.get(sessionId)
+      return serializeOwnership(sessionId, async () => {
+        if (entry) return retireManaged(sessionId, entry)
+        if (cleanup) await settleFailedMount(sessionId, cleanup)
+        if (!log || owned.get(sessionId) !== log || managed.has(sessionId)) return
+        await log.close()
+        if (owned.get(sessionId) === log) owned.delete(sessionId)
+      })
     },
     close() {
       return admission.retire(async () => {
@@ -779,17 +868,18 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
         // host may close with an execution still attached (a cold management
         // write), and a leaked pin keeps the capability-store lock held.
         for (const sessionId of [...managed.keys()]) await this.closeManagedDocument(sessionId).catch(error => { failures.push(error) })
+        for (const sessionId of [...failedMounts.keys()]) await this.closeManagedDocument(sessionId).catch(error => { failures.push(error) })
         const cleanup = createRetainedCleanupOperation()
         try { await ownershipPorts.observations.closeRetained(cleanup).catch(error => { failures.push(error) }) } finally { finishRetainedCleanupOperation(cleanup) }
         for (const sessionId of [...ownershipPins.keys()]) {
-          if (managed.has(sessionId)) continue
+          if (managed.has(sessionId) || failedMounts.has(sessionId)) continue
           try { await unpinSession(sessionId) } catch (error) { failures.push(error) }
         }
         for (const [id, handle] of owned) {
-          if (managed.has(id)) continue // Failed document cleanup still owns this lease.
+          if (managed.has(id) || failedMounts.has(id)) continue // The original cleanup still owns this lease.
           try { await handle.close(); owned.delete(id) } catch (error) { failures.push(error) }
         }
-        const retainedDocuments = new Set([...managed.keys()].map(id => owned.get(id)))
+        const retainedDocuments = new Set([...managed.keys(), ...failedMounts.keys()].map(id => owned.get(id)))
         for (const resource of [...openResources]) {
           if (retainedDocuments.has(resource as CommitLog)) continue
           try { await resource.close(); openResources.delete(resource) } catch (error) { failures.push(error) }
@@ -800,7 +890,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     },
   }
   return admission.expose(continuation, new Set([
-    'sessionOfDocument', 'ownerOf', 'hasLiveOwnership', 'flush', 'closeManagedDocument',
+    'sessionOfDocument', 'ownerOf', 'hasLiveOwnership', 'hasManagedDocument', 'flush', 'closeManagedDocument',
     'releaseOwnership', 'revokeManagedDocumentNewWork', 'close',
   ]), new Set(['capabilities', 'enqueue', 'onDocumentDeleted']))
 }
