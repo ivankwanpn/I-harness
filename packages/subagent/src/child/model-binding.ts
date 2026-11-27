@@ -30,6 +30,8 @@ export interface RoleModelHost {
   modelActionTimeoutMs?: number
   modelActionMaxAttempts?: number
   summaryFactory?: import('@i-harness/core-agent').AgentDeps['summaryFactory']
+  /** Installed parent model and limits read together for a restored child. */
+  readInheritedModelBinding?(): Extract<RoleModelState, { status: 'ready' }>['binding']
   inheritedBindingForStep?: () => import("@i-harness/core-agent").ModelContextBindingDescriptor
   codeMode?: CodeModeConfig
   codeModeFactory?: CodeModeFactory

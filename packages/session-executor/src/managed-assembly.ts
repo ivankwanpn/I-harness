@@ -209,6 +209,18 @@ function finish(options:ManagedExecutionRuntimeOptions,prepared:ReturnType<typeo
  const originalLane=lane
  const runtime=Object.freeze({instructionDiagnostics:prepared.manager?.diagnostics,startSchedule,prepareInput:surface?async(text:string)=>{await surface.reconcileAuthority();return surface.prepareInput(text)}:options.prepareInput,reconcileAuthority:surface?()=>surface.reconcileAuthority():undefined,execution,domain:origin.domain,ctx,tools:pair.registry,agent,lane:originalLane,inbox:inputs.inbox,
   selectedModelBinding(){if(this!==runtime||closed||closeFlight)throw TypeError('Original open managed runtime required');origin.domain.assertCurrent();const budgetBinding=typeof selectedBinding.budgetBinding==='function'?selectedBinding.budgetBinding():selectedBinding.budgetBinding,contextMetadata=typeof selectedBinding.contextMetadata==='function'?selectedBinding.contextMetadata():selectedBinding.contextMetadata;if(closed||closeFlight)throw TypeError('Original open managed runtime required');origin.domain.assertCurrent();return {...selectedBinding,budgetBinding,contextMetadata}},
+  /** A child inherits the installed binding, even while the parent is writing
+   * its own next fact. Its own execution still admits and verifies the request. */
+  committedTaskModelBinding(){
+   if(this!==runtime||closed||closeFlight)throw TypeError('Original open managed runtime required')
+   const observation=execution.observe(), binding=selectedBinding
+   observation.assertCurrent()
+   const budgetBinding=typeof binding.budgetBinding==='function'?binding.budgetBinding():binding.budgetBinding
+   const contextMetadata=typeof binding.contextMetadata==='function'?binding.contextMetadata():binding.contextMetadata
+   observation.assertCurrent()
+   if(closed||closeFlight||binding!==selectedBinding)throw TypeError('Original Task model binding changed')
+   return {...binding,budgetBinding,contextMetadata}
+  },
   setModelBinding(binding:ManagedExecutionModelBinding,compactRequest?:CompactionRequest){
    if(this!==runtime||closed||closeFlight)throw TypeError('Original open managed runtime required')
    origin.domain.assertCurrent()

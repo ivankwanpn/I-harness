@@ -19,7 +19,7 @@ export function createOwnedGatewayTaskOptions(options:{
  roleToolsFor?:RegisterSubagentOptions['roleToolsFor']
  allowSubagentModelSelection:NonNullable<RegisterSubagentOptions['allowSubagentModelSelection']>
  autoCompactionEnabled:NonNullable<RegisterSubagentOptions['autoCompactionEnabled']>
- childOptions:Pick<RegisterSubagentOptions,'generationFactoryFor'|'modelActionTimeoutMs'|'modelActionMaxAttempts'|'summaryFactory'|'inheritedBindingForStep'|'codeModeFactory'|'inheritedSystemContext'|'contextWindow'|'budgetBinding'|'contextMetadata'|'reasoningEffort'|'maxOutputTokens'>
+ childOptions:Pick<RegisterSubagentOptions,'generationFactoryFor'|'modelActionTimeoutMs'|'modelActionMaxAttempts'|'summaryFactory'|'readInheritedModelBinding'|'inheritedBindingForStep'|'codeModeFactory'|'inheritedSystemContext'|'contextWindow'|'budgetBinding'|'contextMetadata'|'reasoningEffort'|'maxOutputTokens'>
  childShellFactory?:RegisterSubagentOptions['childShellFactory']
 }) {
  return async (original:ManagedRegistryConstruction,live:{shell?:ExecService;output?:OwnedShellOutput;codeConfig?:import('../../code-mode/src/index.ts').CodeModeConfig}):Promise<TaskOptions> => {
@@ -39,7 +39,7 @@ export function createOwnedGatewayTaskOptions(options:{
    roleSelectionFor:options.roleSelectionFor,...(options.roleToolsFor?{roleToolsFor:options.roleToolsFor}:{}),allowSubagentModelSelection:options.allowSubagentModelSelection,autoCompactionEnabled:options.autoCompactionEnabled,
    persist:{coordinator:options.coordinator,stateId:original.domain.sessionId,parentSessionId:original.domain.sessionId}}
   if(types.isProxy(options.childOptions)||![null,Object.prototype].includes(Object.getPrototypeOf(options.childOptions)))throw TypeError('Original child options required')
-  const descriptors=Object.getOwnPropertyDescriptors(options.childOptions),allowed=new Set(['generationFactoryFor','modelActionTimeoutMs','modelActionMaxAttempts','summaryFactory','inheritedBindingForStep','codeModeFactory','inheritedSystemContext','contextWindow','budgetBinding','contextMetadata','reasoningEffort','maxOutputTokens'])
+  const descriptors=Object.getOwnPropertyDescriptors(options.childOptions),allowed=new Set(['generationFactoryFor','modelActionTimeoutMs','modelActionMaxAttempts','summaryFactory','readInheritedModelBinding','inheritedBindingForStep','codeModeFactory','inheritedSystemContext','contextWindow','budgetBinding','contextMetadata','reasoningEffort','maxOutputTokens'])
   if(Reflect.ownKeys(descriptors).some(key=>typeof key!=='string'||!allowed.has(key)))throw TypeError('Unknown child option')
   for(const field of Object.values(descriptors))if(field.get){const get=field.get;field.get=()=>Reflect.apply(get,options.childOptions,[])}
   if(live.codeConfig)Object.defineProperty(configured,'codeMode',{value:live.codeConfig,enumerable:true})

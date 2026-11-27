@@ -408,6 +408,10 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   const ownedSelection=createOwnedGatewaySelectionOwner({plugins,mcp,workspace:options.workspace,configDir:dirname(settingsPath)})
   const ownedBindings=new Map<string,()=>import('../../session-executor/src/managed-assembly.ts').ManagedExecutionModelBinding>(),ownedHookContexts=new Map<string,()=>string>(),ownedTaskInputs=new Map<string,Awaited<ReturnType<NonNullable<NonNullable<SessionServiceOptions['managedRuntime']>['ownedTask']>['options']>>>()
   const ownedChildHosts=new Map<string,ReturnType<typeof import('../../session-executor/src/context/instructions/child-host.ts').createChildInstructionHost>>()
+  const inheritedModelBinding = (value: import('../../session-executor/src/managed-assembly.ts').ManagedExecutionModelBinding) => ({
+    identity:value.model,executionIdentity:value.model.executionIdentity,contextMetadata:value.contextMetadata,budgetBinding:value.budgetBinding,
+    contextWindow:value.contextWindow,maxOutputTokens:value.maxOutputTokens,reasoningEffort:value.reasoningEffort,
+  })
   const ownedTaskOptions:NonNullable<NonNullable<SessionServiceOptions['managedRuntime']>['ownedTask']>['options']=async(original,live)=>{
     const id=original.domain.sessionId,binding=()=>{const read=ownedBindings.get(id);if(!read)throw Error('Original model binding unavailable');return read()},hook=()=>{const read=ownedHookContexts.get(id);if(!read)throw Error('Original hook context unavailable');return read()}
     if(!original.instructions)throw Error('Original instruction binding unavailable')
@@ -441,7 +445,8 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
         }
       },
       childOptions:{generationFactoryFor:(owner,sessionId,selected)=>(action,deps)=>createGenerationLifecycle(owner.view,sessionId,action,{enabled:false,selectedClient:selected},usageObservations?{...deps,beforeDrain:deps?.beforeDrain??(async()=>{}),passiveGeneration:usageObservations.observer}:deps),summaryFactory,
-       inheritedBindingForStep:()=>{const value=binding();return {identity:value.model,executionIdentity:value.model.executionIdentity,contextMetadata:value.contextMetadata,budgetBinding:value.budgetBinding,contextWindow:value.contextWindow,maxOutputTokens:value.maxOutputTokens,reasoningEffort:value.reasoningEffort}},
+       readInheritedModelBinding(){const {model,...metadata}=binding();return {client:model,...metadata}},
+       inheritedBindingForStep:()=>inheritedModelBinding(binding()),
        get contextWindow(){return binding().contextWindow},get budgetBinding(){return binding().budgetBinding},get contextMetadata(){return binding().contextMetadata},get reasoningEffort(){return binding().reasoningEffort},get maxOutputTokens(){return binding().maxOutputTokens},
        inheritedSystemContext:child=>[parts.project(),hook(),...(ownedNative.agentShellFor(id).executionTarget==='wsl'?[agentShellPrompt(ownedNative.agentShellFor(id))]:[]),child?renderNativeContextRecovery(nativeContext.contextOutput,child):''].filter(Boolean).join('\n\n'),
        codeModeFactory:(ctx,tools,mountOptions)=>registerCodeMode(ctx,tools,{retainText:createCodeTextRetention({service:nativeContext.contextOutput,sessionId:mountOptions.sessionId,sourceFor:nativeContext.sourceFor}),...mountOptions,config:codeSettings.resolve()})}})(original,live)
@@ -544,11 +549,11 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
         if(!live.task||!live.output||!live.shell||!live.parentNotify||!original.instructions)throw Error('Original Gateway owners unavailable')
         const task=live.task,output=live.output,instructions=original.instructions
         if(ownedBindings.has(id))throw Error('Original model binding already installed')
-        original.retain(()=>{if(ownedBindings.get(id)===live.modelBinding)ownedBindings.delete(id)})
-        ownedBindings.set(id,live.modelBinding)
+        original.retain(()=>{if(ownedBindings.get(id)===live.taskModelBinding)ownedBindings.delete(id)})
+        ownedBindings.set(id,live.taskModelBinding)
         const parts=createOwnedGatewayPromptParts(original,{workspace:options.workspace,rewindEnabled:true,mode:observation=>ownedNative.modeFor(id,observation),authority:instructions.authority,project:()=>projectContexts.get(id)?.(),shell:()=>ownedNative.agentShellFor(id)})
-        const taskOptions=ownedTaskInputs.get(id);if(!taskOptions)throw Error('Original Task options unavailable')
-        await mountOwnedGatewayGuardian(original,task,{get parentModel(){return live.modelBinding().model},get contextWindow(){return live.modelBinding().contextWindow},get budgetBinding(){return live.modelBinding().budgetBinding},get contextMetadata(){return live.modelBinding().contextMetadata},get reasoningEffort(){return live.modelBinding().reasoningEffort},get maxOutputTokens(){return live.modelBinding().maxOutputTokens},inheritedBindingForStep:taskOptions.inheritedBindingForStep,summaryFactory,resolveModel:selection=>runtime.resolveModel({sessionSelection:selection}),roleSelectionFor:subagents.selectionFor,allowSubagentModelSelection:()=>true,autoCompactionEnabled:()=>autoCompactionEnabled,policyText:DESKTOP_GUARDIAN_POLICY,enabled:()=>approvalMode==='delegate',fallbackToHumanOnFailure:true,isolated:isolatedGuardianFor(id),breaker:{coordinator,sessionId:id},childSessions:{coordinator,parentSessionId:id}})
+        if(!ownedTaskInputs.has(id))throw Error('Original Task options unavailable')
+        await mountOwnedGatewayGuardian(original,task,{get parentModel(){return live.modelBinding().model},get contextWindow(){return live.modelBinding().contextWindow},get budgetBinding(){return live.modelBinding().budgetBinding},get contextMetadata(){return live.modelBinding().contextMetadata},get reasoningEffort(){return live.modelBinding().reasoningEffort},get maxOutputTokens(){return live.modelBinding().maxOutputTokens},inheritedBindingForStep:()=>inheritedModelBinding(live.modelBinding()),summaryFactory,resolveModel:selection=>runtime.resolveModel({sessionSelection:selection}),roleSelectionFor:subagents.selectionFor,allowSubagentModelSelection:()=>true,autoCompactionEnabled:()=>autoCompactionEnabled,policyText:DESKTOP_GUARDIAN_POLICY,enabled:()=>approvalMode==='delegate',fallbackToHumanOnFailure:true,isolated:isolatedGuardianFor(id),breaker:{coordinator,sessionId:id},childSessions:{coordinator,parentSessionId:id}})
         return composeOwnedGatewayDefault(original,{
           task,indexJobs:ownedIndexJobs,selection:ownedSelection,bindings:ownedApprovalBindings,output:output.service,subagentStaleAfterMs:600000,
           bindHookContext(read){if(ownedHookContexts.has(id))throw Error('Original hook context already installed');original.retain(()=>{if(ownedHookContexts.get(id)===read)ownedHookContexts.delete(id)});ownedHookContexts.set(id,read)},

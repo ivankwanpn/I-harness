@@ -278,6 +278,39 @@ describe("ensureResidentAgent", () => {
     expect(entry.modelLabel).toBe("gw:big")
   }, 10_000)
 
+  it("restores a declared model without observing an unrelated parent write", async () => {
+    const { deps, table } = setup(), entry = restoredEntry("declared-only", "general")
+    const client = createMockClient([{ role: "assistant", text: "own route" }])
+    deps.allowSubagentModelSelection = true
+    deps.roleSelectionFor = () => ({ provider: "fixture", model: "own" })
+    deps.resolveModel = async () => ({ status: "ready", binding: { client } })
+    deps.readInheritedModelBinding = () => { throw Error("Unexpected inherited snapshot") }
+    for (const field of ["parentModel", "reasoningEffort", "budgetBinding", "contextMetadata", "contextWindow", "maxOutputTokens"]) {
+      Object.defineProperty(deps, field, { get() { throw Error("Parent binding is busy") } })
+    }
+    table.add(entry.path, entry)
+    try {
+      expect(await ensureResidentAgent(deps, entry, new AbortController())).toBe(true)
+      expect(entry.executionModel?.()).toBe(client)
+    } finally { await entry.dispose?.() }
+  })
+
+  it("rebuilds an inheriting child from a single host binding observation", async () => {
+    const { deps, table } = setup(), entry = restoredEntry("inherited-snapshot", "general")
+    const client = createMockClient([{ role: "assistant", text: "from parent" }])
+    const read = vi.fn(() => ({ client, contextWindow: 128000, maxOutputTokens: 2000 }))
+    deps.readInheritedModelBinding = read
+    for (const field of ["parentModel", "reasoningEffort", "budgetBinding", "contextMetadata", "contextWindow", "maxOutputTokens"]) {
+      Object.defineProperty(deps, field, { get() { throw Error("Unexpected independent binding read") } })
+    }
+    table.add(entry.path, entry)
+    try {
+      expect(await ensureResidentAgent(deps, entry, new AbortController())).toBe(true)
+      expect(entry.executionModel?.()).toBe(client)
+      expect(read).toHaveBeenCalledTimes(1)
+    } finally { await entry.dispose?.() }
+  })
+
   // The rebuild resolves through the HOST's resolver, so the binding's OTHER
   // fields must land on the rebuilt child too: keeping only `client` would run
   // the same model at the adapter default — a declared reasoning effort that

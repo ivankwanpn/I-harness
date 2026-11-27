@@ -3,7 +3,7 @@ import { createAgentModelOriginOwner } from '@i-harness/core-agent/model-origin'
 import { isNondurableSession } from '@i-harness/core-session'
 import { ownedContextReadiness } from "@i-harness/session-persistence"
 import { createToolRegistry, registerContextRemaining } from "@i-harness/core-tools"
-import { createAgent, type ReasoningEffort } from "@i-harness/core-agent"
+import { createAgent } from "@i-harness/core-agent"
 import type { ChildAgentEntry } from "../agent-table.ts"
 import type { SubagentToolDeps } from "../tools/types.ts"
 import type { FollowupDeps } from "./drive.ts"
@@ -88,25 +88,19 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   // parent model. The binding's `reasoningEffort` rides along for the same
   // reason it does at spawn: a rebuild that kept only the client would run the
   // same model at the adapter default.
-  let model = deps.parentModel
-  let reasoningEffort: ReasoningEffort | undefined = deps.reasoningEffort
-  let budgetBinding = deps.budgetBinding
-  let contextMetadata = deps.contextMetadata
-  // M73: the same two numbers spawnChild carries, from the same two sources —
-  // a rebuild is a spawn with a restored log, and a budget that appeared only
-  // on the first one would vanish on every resume.
-  let contextWindow = deps.contextWindow
-  let maxOutputTokens = deps.maxOutputTokens
-  if (declared !== undefined) {
-    const state = await invokeOriginal(record, () => resolveModel(declared))
-    if (state.status !== "ready") return false
-    model = state.binding.client
-    reasoningEffort = state.binding.reasoningEffort
-    contextWindow = state.binding.contextWindow
-    maxOutputTokens = state.binding.maxOutputTokens
-    budgetBinding = state.binding.budgetBinding
-    contextMetadata = state.binding.contextMetadata
-  }
+  // A declared route supplies its complete binding, including intentionally
+  // absent limits. Only an inheriting child observes the parent's live state.
+  const selection = declared === undefined ? undefined : await invokeOriginal(record, () => resolveModel(declared))
+  if (selection && selection.status !== "ready") return false
+  const binding = declared !== undefined ? selection?.binding : invokeOriginal(record, () => {
+    if (deps.readInheritedModelBinding) return deps.readInheritedModelBinding()
+    return {
+      client: deps.parentModel, reasoningEffort: deps.reasoningEffort, budgetBinding: deps.budgetBinding,
+      contextMetadata: deps.contextMetadata, contextWindow: deps.contextWindow, maxOutputTokens: deps.maxOutputTokens,
+    }
+  })
+  if (!binding) return false
+  const { client: model, reasoningEffort, budgetBinding, contextMetadata, contextWindow, maxOutputTokens } = binding
   if (!executionCurrent() || !record.current()) {
     return false
   }

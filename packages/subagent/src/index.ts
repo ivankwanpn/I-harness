@@ -174,6 +174,7 @@ export interface RegisterSubagentResult {
 // subagent/job tools, and registers them on the parent registry.
 export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistry, opts: RegisterSubagentOptions): RegisterSubagentResult {
   const parentModel=opts.parentModel,modelAccessor=opts.getParentModel?.bind(opts)
+  const inheritedModelAccessor=opts.readInheritedModelBinding?.bind(opts)
   if(!parentModel&&!modelAccessor)throw TypeError('Original parent model required')
   const managed=opts.managedParent
   if(opts.deferRestoredWork&&!managed)throw TypeError('Managed staged subagent construction required')
@@ -392,6 +393,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     // deps object is what createSubagentTools reads, so a value not copied
     // onto it does not exist for the tool. Absent stays absent.
     get contextWindow() { return opts.contextWindow },
+    ...(inheritedModelAccessor ? { readInheritedModelBinding: inheritedModelAccessor } : {}),
     inheritedBindingForStep: opts.inheritedBindingForStep,
     get budgetBinding() { return opts.budgetBinding },
     get contextMetadata() { return opts.contextMetadata },
