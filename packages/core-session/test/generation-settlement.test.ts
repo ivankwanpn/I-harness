@@ -83,10 +83,16 @@ it('uses the existing committed-then-staged settlement order for a repeated lega
 
 it('continues to use legacy result accessors without keeping their event objects as pending references', () => {
   const { append, index, successor, nextSeq } = predecessor([toolCall(5, 'original')])
-  let reads = 0
-  const result = Object.defineProperty(toolResult(nextSeq, 'unread'), 'callId', { get() { reads++; return 'original' } })
-  append(result, successor)
-  expect(reads).toBe(2)
+  let readable = true
+  const result = Object.defineProperty(toolResult(nextSeq, 'unread'), 'callId', {
+    get() {
+      if (!readable) throw new Error('The result is no longer available')
+      return 'original'
+    },
+  })
+  append(result)
+  readable = false
+  append(successor)
   expect(index.read().at(-1)?.opened).toBe(successor)
 })
 
