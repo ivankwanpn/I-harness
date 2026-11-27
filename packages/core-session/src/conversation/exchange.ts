@@ -4,6 +4,7 @@ import type { LegacyStep } from "./legacy.ts"
 import { copyConversationMessage } from "./render.ts"
 import type { ConversationSources } from "./sources.ts"
 import { exchangeCompletion } from './unit-state.ts'
+import { createCapturedConversationItemAddress } from '../serialization/context-data.ts'
 
 /** Mutable builders are local to one projection, never returned to a caller. */
 export interface ItemBuilder {
@@ -36,13 +37,14 @@ export function addItemSource(item: Pick<ItemBuilder, 'sources'>, source: Conver
   if (!item.sources.some(existing => existing.id === source.id)) item.sources.push(source)
 }
 
-export function finishItem(item: ItemBuilder): ConversationItem {
+export function finishItem(item: Omit<ItemBuilder, 'sources'> & { sources: readonly ConversationSourceRef[] }, captureClosed = false): ConversationItem {
   const state = exchangeCompletion(item)
   return Object.freeze({
-    id: item.id, kind: item.kind, sources: Object.freeze(item.sources), provenance: item.provenance,
+    id: item.id, kind: item.kind, sources: captureClosed ? item.sources : Object.freeze(item.sources), provenance: item.provenance,
     ...(item.unitInfo ? { unit: item.unitInfo } : {}),
     ...(item.kind !== 'legacy-fragment' && item.establishment.addressable && [...item.sources, ...item.provenance.evidence].every(source => source.addressable)
-      ? { ref: Object.freeze({ kind: item.kind, at: Object.freeze({ seq: item.establishment.seq!, part: item.establishment.part }) }) } : {}),
+      ? { ref: captureClosed ? createCapturedConversationItemAddress(item.kind, item.establishment.seq!, item.establishment.part)
+        : Object.freeze({ kind: item.kind, at: Object.freeze({ seq: item.establishment.seq!, part: item.establishment.part }) }) } : {}),
     messages: Object.freeze(item.messages.map(copyConversationMessage)),
     ...(item.kind === "exchange" ? { exchange: Object.freeze({ id: item.step?.acceptance?.exchangeId ?? `${item.id}:exchange`, ...(item.stepSource ? { step: item.stepSource } : {}), acceptance: item.step?.acceptance ? "explicit" as const : "legacy-inferred" as const, state, calls: Object.freeze(item.calls.map(call => Object.freeze(call))) }) } : {}),
   })

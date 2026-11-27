@@ -155,6 +155,41 @@ it('keeps the semantic v1 digest for sealed projections with Unicode and omitted
   expect(() => semanticContextRevision(owner, conversation)).toThrow('CONTEXT_SNAPSHOT_UNSUPPORTED')
 })
 
+it('keeps captured evidence detached from foreign wrappers and rejects corrupt coordinates', () => {
+  const input = { ownerSessionId: 'owner', surface: { systemPrompt: 'system', tools: [] } }
+  const state = createManagedSessionState(createSession(), { sessionId: input.ownerSessionId })
+  state.bindOwner({})
+  state.stage([{ type: 'user/message', text: 'question', seq: 0 }]).install()
+  const captured = captureContextSnapshot(state.view, input)
+  if (captured.kind !== 'captured') throw Error('Expected a managed snapshot')
+  expect(captureContextSnapshot({ ...state.view }, input)).toEqual(captured)
+  const provenance = captured.snapshot.conversation.items[0]!.provenance
+  expect(Object.hasOwn(provenance, 'producer')).toBe(false)
+  expect(Object.hasOwn(provenance, 'originSessionId')).toBe(false)
+
+  const mutable = { ...provenance.evidence[0]! }
+  const foreign = Object.freeze({ ...provenance, evidence: Object.freeze([mutable]), producer: undefined })
+  const copied = captureContextPayload(foreign)
+  expect(copied).not.toBe(foreign)
+  expect(copied.evidence[0]).not.toBe(mutable)
+  expect(Object.hasOwn(copied, 'producer')).toBe(false)
+  mutable.part = 'foreign edit'
+  expect(copied.evidence).toEqual(provenance.evidence)
+
+  let reads = 0
+  const accessor = Object.freeze({ ...mutable, get seq() { reads++; return 0 } })
+  for (const evidence of [[accessor], [undefined]]) {
+    expect(() => captureContextPayload(Object.freeze({ ...provenance, evidence: Object.freeze(evidence) }))).toThrow('CONTEXT_SNAPSHOT_UNSUPPORTED')
+  }
+  expect(reads).toBe(0)
+
+  const invalid = createManagedSessionState(createSession(), { sessionId: input.ownerSessionId })
+  invalid.bindOwner({})
+  invalid.stage([{ type: 'user/message', text: 'unrepresentable coordinate', seq: -0 }]).install()
+  const rejected = captureContextSnapshot(invalid.view, input)
+  expect(rejected).toMatchObject({ kind: 'unsupported', component: 'conversation' })
+})
+
 it('owns physical unit DTOs without exposing private membership or changing source events', () => {
   const session = createSession()
   append(session, { type: 'step/start' }); append(session, { type: 'user/message', text: 'H' }); append(session, { type: 'step/end' })

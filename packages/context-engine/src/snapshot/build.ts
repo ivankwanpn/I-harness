@@ -1,5 +1,5 @@
-import { captureRestoredConversationData, projectManagedConversation, readManagedConversationAuditAdvance, readManagedConversationObservationFrontier, type PreparedConversationArchive } from '@i-harness/core-session/internal/restoration'
-import { projectConversation, readConversationState, type ConversationPayloadCapture, type SessionView as Session } from "@i-harness/core-session"
+import { captureRestoredConversationData, prepareManagedConversationCapture, readManagedConversationAuditAdvance, readManagedConversationObservationFrontier, type PreparedConversationArchive } from '@i-harness/core-session/internal/restoration'
+import { projectConversation, readConversationState, type SessionView as Session } from "@i-harness/core-session"
 import type { ContextCapture, ContextCaptureInput, ContextCoordinateRead, ContextCoordinates, ContextSnapshotIdentityRead, CapturedRequestSurface, UnsupportedContext } from "../contracts/snapshot.ts"
 import { captureData } from "./data.ts"
 import { contextRevision, semanticContextRevision } from "./revision.ts"
@@ -14,23 +14,18 @@ function unsupported(component: UnsupportedContext["component"], sourceIds: read
 const managedCoordinates = new WeakMap<Session, { frontier: number; coordinates: ContextCoordinates }>()
 
 function captureConversation(session: Session, ownerSessionId: string) {
-  let sourceIds: readonly string[] = []
+  const capture = prepareManagedConversationCapture()
   try {
     const frontier = readManagedConversationObservationFrontier(session, ownerSessionId)
-    const capturePayload: ConversationPayloadCapture = (value, source) => {
-      sourceIds = [source.id]
-      return captureData(value)
-    }
-    const options = { ownerSessionId, capturePayload }
-    const ownedProjection = frontier === undefined ? undefined : projectManagedConversation(session, options)
-    const projection = ownedProjection ?? projectConversation(session, options)
+    const ownedProjection = frontier === undefined ? undefined : capture.project(session, ownerSessionId)
+    const projection = ownedProjection ?? projectConversation(session, { ownerSessionId, capturePayload: capture.capturePayload })
     const state = readConversationState(session, projection)
     const captured = finishConversationCapture(projection, state, ownerSessionId)
     if (captured.kind === "available" && frontier !== undefined && readManagedConversationObservationFrontier(session, ownerSessionId) === frontier) {
       managedCoordinates.set(session, { frontier, coordinates: captured.coordinates })
     }
     return captured
-  } catch { return unsupported("conversation", sourceIds) }
+  } catch { return unsupported("conversation", capture.sourceIds()) }
 }
 
 function conversationCoordinates(session: Session, ownerSessionId: string) {

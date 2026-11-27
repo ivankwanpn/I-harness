@@ -28,7 +28,7 @@ const originalDataPrototypes = [originalObjectPrototype, originalArrayPrototype]
   return { prototype, keys, fields: keys.map(key => Object.getOwnPropertyDescriptor(prototype, key)!) }
 })
 
-function unchangedDataPrototypes(): boolean {
+export function unchangedDataPrototypes(): boolean {
   // Freezing own fields does not freeze inherited optional fields or methods.
   // A custom prototype keeps the original repeat validation behavior.
   for (let index = 0; index < originalDataPrototypes.length; index++) {

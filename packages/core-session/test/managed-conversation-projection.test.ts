@@ -5,7 +5,10 @@ import * as conversationEvents from '../src/events/conversation.ts'
 import { CURRENT_FORMAT_VERSION, type Session, type SessionEvent } from '../src/events/types.ts'
 import { IMAGE_MEDIA_TYPES } from '../src/images.ts'
 import { createBootstrapManagedSessionState, createManagedIndexedView, createManagedSessionState } from '../src/managed/view.ts'
-import { projectManagedConversation } from '../src/restoration-internal.ts'
+import { prepareManagedConversationCapture, projectManagedConversation } from '../src/restoration-internal.ts'
+import type { ConversationItem } from '../src/conversation/types.ts'
+import { captureData, isCapturedData } from '../src/serialization/context-data.ts'
+import { canonicalJsonData } from '../src/serialization/json-data.ts'
 
 const ownerSessionId = 'owner'
 const fixture = (): Session => ({ formatVersion: CURRENT_FORMAT_VERSION, events: [
@@ -145,6 +148,66 @@ it('projects an installed original with exactly the generic payload transformati
   expect(read(projectManagedConversation)).toEqual(read(projectConversation))
   expect(read(projectManagedConversation).sources).toContain('["owner",8,"message"]')
   expect(projectConversation(state.view, { ownerSessionId, throughSeq: 7 }).items).toHaveLength(read(projectManagedConversation).projection!.items.length - 1)
+})
+
+it('uses ordinary snapshot copies when the descriptor reader is replaced', () => {
+  const state = createManagedSessionState(fixture(), { sessionId: ownerSessionId })
+  state.bindOwner({})
+  const capture = prepareManagedConversationCapture()
+  const descriptors = Object.getOwnPropertyDescriptors
+  let projection: ReturnType<typeof capture.project>
+  try {
+    Object.getOwnPropertyDescriptors = new Proxy(descriptors, {})
+    projection = capture.project(state.view, ownerSessionId)
+  } finally { Object.getOwnPropertyDescriptors = descriptors }
+  if (!projection) throw Error('Expected a managed projection')
+  const copied = captureData(projection)
+  expect(copied.items[0]!.sources).toEqual(projection.items[0]!.sources)
+  expect(copied.items[0]!.sources).not.toBe(projection.items[0]!.sources)
+  expect(copied.items[0]!.provenance).not.toBe(projection.items[0]!.provenance)
+})
+
+it('shares only closed source metadata inside a qualified managed capture', () => {
+  const session = fixture()
+  const provenance = { kind: 'human', authority: 'request', scope: 'turn', producer: '使用者 🧭\ud800', originSessionId: '原會話' } as const
+  session.events.push(
+    { type: 'agent/input/admitted', version: 1, inputId: 'next', text: '問題', delivery: 'queue', intent: 'user', provenance, seq: 8 },
+    { type: 'user/message', text: '問題', input: { inputId: 'next', intent: 'user' }, seq: 9 },
+  )
+  const state = createManagedSessionState(session, { sessionId: ownerSessionId })
+  state.bindOwner({})
+  const capture = prepareManagedConversationCapture()
+  const options = { ownerSessionId, capturePayload: capture.capturePayload }
+  const original = capture.project(state.view, ownerSessionId)
+  const ordinary = projectConversation(state.view, options)
+  const unqualified = projectManagedConversation(state.view, options)
+  if (!original || !unqualified) throw Error('Expected qualified view and ordinary managed projection')
+  const frozen = captureData(original)
+  const baseline = captureData(ordinary)
+  expect(frozen).toEqual(baseline)
+  expect(canonicalJsonData(frozen)).toBe(canonicalJsonData(baseline))
+
+  const closedMetadata = (item: Pick<ConversationItem, 'sources' | 'provenance' | 'ref'>) => {
+    if (!item.ref) throw Error('Expected an addressable item')
+    return [item.sources, item.provenance, item.provenance.evidence, item.ref, item.ref.at]
+  }
+  for (let index = 0; index < original.items.length; index++) {
+    const metadata = closedMetadata(original.items[index]!)
+    const copied = closedMetadata(frozen.items[index]!)
+    for (const [slot, value] of metadata.entries()) {
+      expect(Object.isFrozen(value)).toBe(true)
+      expect(isCapturedData(value)).toBe(true)
+      expect(copied[slot]).toBe(value)
+    }
+    expect(closedMetadata(ordinary.items[index]!).some(isCapturedData)).toBe(false)
+    expect(closedMetadata(unqualified.items[index]!).some(isCapturedData)).toBe(false)
+    expect(frozen.items[index]).not.toBe(original.items[index])
+    expect(frozen.items[index]!.messages).not.toBe(original.items[index]!.messages)
+  }
+  expect(frozen.items.at(-1)?.provenance).toMatchObject(provenance)
+  expect(frozen.items.at(-1)?.provenance.evidence.map(({ seq, part }) => [seq, part])).toEqual([[9, 'message'], [8, 'admission']])
+  original.items[0]!.messages[0]!.content = 'renderer edit'
+  expect(frozen.items[0]!.messages[0]!.content).toBe('request')
 })
 
 it('only enrolls the exact bound ordinary view, with indexed, lineage and bootstrap readers left to strict replay', () => {

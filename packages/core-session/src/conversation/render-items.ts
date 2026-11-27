@@ -13,10 +13,11 @@ import { createConversationPayloadReader, projectToolResult, projectPrunedResult
 import { archivePruneSubstitutes } from '../projection/pruning.ts'
 import { resultIsError } from '../results/projection.ts'
 import { validatePreparedInputText } from './input-preparation.ts'
+import { createCapturedConversationSources } from '../serialization/context-data.ts'
 
 /** Payload-only rendering consumes the sole history owner's complete recipes.
  * It never establishes groups, closure, source unions, order or visibility. */
-export function renderConversationItems(archive: ConversationEventArchive, history: { items: HistoryItem[]; diagnostics: ConversationDiagnostic[]; current?: import('./history/types.ts').HistoryCurrent }, options: { ownerSessionId?: string; throughSeq?: number; capturePayload?: ConversationPayloadCapture; header?: SessionView['header']; candidate?: { id: string; baseCount: number }; sourceCoordinates?: ConversationSourceCoordinateView; pruneSubstitutes?: ReadonlyMap<string,PruneRecord>; prunedResults?: ReadonlyMap<number,PreparedPrunedResult> } = {}): ConversationProjection {
+export function renderConversationItems(archive: ConversationEventArchive, history: { items: HistoryItem[]; diagnostics: ConversationDiagnostic[]; current?: import('./history/types.ts').HistoryCurrent }, options: { ownerSessionId?: string; throughSeq?: number; capturePayload?: ConversationPayloadCapture; header?: SessionView['header']; candidate?: { id: string; baseCount: number }; sourceCoordinates?: ConversationSourceCoordinateView; pruneSubstitutes?: ReadonlyMap<string,PruneRecord>; prunedResults?: ReadonlyMap<number,PreparedPrunedResult> } = {}, captureClosed = false): ConversationProjection {
   const diagnostics: ConversationDiagnostic[] = []
   const readPayload = createConversationPayloadReader(options.capturePayload)
   const sources = archiveConversationSources(archive, options.ownerSessionId, diagnostics, { ...options, coordinates:options.sourceCoordinates, ...(options.capturePayload ? { readPayload } : {}) })
@@ -96,13 +97,16 @@ export function renderConversationItems(archive: ConversationEventArchive, histo
     const own = options.prunedResults?.has(item.establishmentIndex) ? undefined : archive.get(item.establishmentIndex)
     const seedRecipe = item.recipes.find(recipe => recipe.kind === 'seed-item')
     const seedItem = own?.type === 'conversation/seed-group' && seedRecipe ? own.group.items[seedRecipe.item!] : undefined
-    const rendered = finishItem({ ...item, id: `${establishment.id}:${item.kind}`, establishment, sources: item.sources.map(source), provenance: sources.provenance(item.establishmentIndex, item.establishment.part, item.admissionIndex),
+    const captureItem = captureClosed && item.kind !== 'legacy-fragment' && !seedItem
+    const rendered = finishItem({ ...item, id: `${establishment.id}:${item.kind}`, establishment,
+      sources: captureItem ? createCapturedConversationSources(item.sources.length, index => source(item.sources[index]!)) : item.sources.map(source),
+      provenance: sources.provenance(item.establishmentIndex, item.establishment.part, item.admissionIndex, captureItem),
       ...(item.stepSource ? { stepSource: source(item.stepSource) } : {}),
       ...(item.unitInfo ? { unitInfo: Object.freeze({ source: source(item.unitInfo.source), state: item.unitInfo.state }) } : {}),
       calls: item.calls.map(call => ({ ...call, ...(call.call ? { call: source(call.call) } : {}), ...(call.result ? { result: source(call.result) } : {}), ...(call.dispatch ? { dispatch: source(call.dispatch) } : {}) })),
       receivedResults: new Set([...item.receivedResults].map(id => { const ref = item.sources.find(candidate => candidate.id === id); return ref ? source(ref).id : id })),
       messages: seedItem ? readPayload(seedItem, 'messages', sources.ref(item.establishmentIndex, item.establishment.part)).map(copyConversationMessage) : item.recipes.map(recipe => render(recipe, item)),
-    })
+    }, captureItem)
     return Object.freeze({ ...rendered, extent: item.extent === undefined ? undefined : { ...item.extent },
       ...(seedItem?.kind === 'exchange' ? { exchange: Object.freeze({ ...rendered.exchange!, acceptance: 'inherited-observation' as const }) } : {}),
       ...(own?.type === 'compaction/replacement' ? { replacement: Object.freeze({ replacementId: own.replacementId, coverage: own.coverage, insertBefore: own.insertBefore }) } : {}) })

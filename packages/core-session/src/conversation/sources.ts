@@ -2,7 +2,7 @@ import { eventArchive, type ConversationEventArchive } from './archive.ts'
 import type { SessionView as Session } from "../managed/types.ts"
 import type { ConversationDiagnostic, ConversationProvenance, ConversationSourceRef } from "./types.ts"
 import type { ConversationPayloadReader } from './payload.ts'
-import { createConversationSourceRef } from '../serialization/context-data.ts'
+import { createCapturedConversationProvenance, createConversationSourceRef } from '../serialization/context-data.ts'
 
 const indexedChecks = new WeakMap<object, { ref: ConversationSources['ref']; check(eventIndex: number): void }>()
 
@@ -49,7 +49,7 @@ export function archiveConversationSources(archive: ConversationEventArchive, ow
     const code = seq === undefined ? "missing-source-seq" : !valid(seq) ? "invalid-source-seq" : counts.get(seq)! > 1 ? "duplicate-source-seq" : undefined
     if (code && !(options.candidate && index >= options.candidate.baseCount)) diagnostics.push({ code, sourceIds: [ref(index, "event").id] })
   }
-  const provenance = (eventIndex: number, part: string, admissionIndex?: number): ConversationProvenance => {
+  const provenance = (eventIndex: number, part: string, admissionIndex?: number, captureClosed = false): ConversationProvenance => {
     assertCurrent()
     const selected = options.prunedResults?.get(eventIndex)
     if (selected) {
@@ -61,14 +61,15 @@ export function archiveConversationSources(archive: ConversationEventArchive, ow
     }
     const event = archive.get(eventIndex)
     const source = ref(eventIndex, part)
-    const evidence = [source]
     if (event.type === 'conversation/seed-group') {
       const match = /^item:(0|[1-9][0-9]*)$/.exec(part), item = match && event.group.items[Number(match[1])]
       if (!item) throw new TypeError('Invalid seed item source')
       return Object.freeze({ kind: 'inherited', authority: 'observation', scope: item.scope, evidence: Object.freeze([source, ref(eventIndex, 'group')]), ...(item.producer === undefined ? {} : { producer: item.producer }) })
     }
+    const evidence = captureClosed ? undefined : [source]
     const admission = admissionIndex === undefined ? undefined : archive.get(admissionIndex)
-    if (admissionIndex !== undefined) evidence.push(ref(admissionIndex, "admission"))
+    const admissionSource = admissionIndex === undefined ? undefined : ref(admissionIndex, "admission")
+    if (admissionSource) evidence?.push(admissionSource)
     let kind: ConversationProvenance["kind"] = "unknown"
     let authority: ConversationProvenance["authority"] = "unknown"
     let scope: ConversationProvenance["scope"] = "turn"
@@ -96,7 +97,9 @@ export function archiveConversationSources(archive: ConversationEventArchive, ow
       if (event.input && !matching) diagnostics.push({ code: "missing-admission", sourceIds: [source.id] })
     }
     const inherited = isInherited(eventIndex) || admissionIndex !== undefined && isInherited(admissionIndex) && admission?.type === "agent/input/admitted" && admission.provenance !== undefined
-    return Object.freeze({ kind: inherited ? "inherited" : kind, authority: inherited ? "observation" : authority, scope, evidence: Object.freeze(evidence), ...(producer === undefined ? {} : { producer }), ...(inherited ? { originSessionId: options.header!.parentSession } : originSessionId === undefined ? {} : { originSessionId }) })
+    if (captureClosed && !inherited) return createCapturedConversationProvenance(kind, authority, scope, source, admissionSource, producer, originSessionId)
+    const sourceEvidence = evidence ?? (admissionSource === undefined ? [source] : [source, admissionSource])
+    return Object.freeze({ kind: inherited ? "inherited" : kind, authority: inherited ? "observation" : authority, scope, evidence: Object.freeze(sourceEvidence), ...(producer === undefined ? {} : { producer }), ...(inherited ? { originSessionId: options.header!.parentSession } : originSessionId === undefined ? {} : { originSessionId }) })
   }
   function isInherited(index: number): boolean {
     return (options.header?.parentSession !== undefined || options.header?.semanticSeed !== undefined) && index < (options.header.seedLength ?? 0)
