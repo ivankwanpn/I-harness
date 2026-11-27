@@ -48,7 +48,7 @@ export async function createOwnedDefaultSurface(original:ManagedRegistryConstruc
  }
  const systemPrompt=()=>readProjection(prompt)
  const modelToolSchemas=()=>readProjection(()=>options.schemas())
- const modelSurface=()=>readProjection(observation=>({systemPrompt:prompt(observation),tools:options.schemas()}))
+ const modelSurface=()=>readProjection(observation=>({systemPrompt:prompt(observation),baseInstructions:base,tools:options.schemas()}))
  const modelOverheadTokens=()=>{
   if(options.overheadTokens!==undefined)return options.overheadTokens
   const {systemPrompt,tools}=modelSurface()

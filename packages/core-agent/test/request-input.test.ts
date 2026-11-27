@@ -17,7 +17,7 @@ function capture() {
     providerContinuation: { kind: 'anthropic', model: 'm', contentOrder: [{ kind: 'reasoning', index: 0 }, { kind: 'text', text: 'answer' }, { kind: 'tool', index: 0 }] } })
   append(session, { type: 'tool/result', callId: 'c', name: 'probe', output: 'result' })
   append(session, { type: 'step/end' })
-  const captured = captureContextSnapshot(session, { ownerSessionId: 'owner', surface: { systemPrompt: 'system',
+  const captured = captureContextSnapshot(session, { ownerSessionId: 'owner', surface: { systemPrompt: 'system\n\ncurrent policy', baseInstructions: 'system',
     tools: [{ name: 'probe', description: 'probe', inputSchema: { type: 'object', properties: { nested: { type: 'array' } } } }],
     maxOutputTokens: 600, reasoningEffort: 'high' } })
   if (captured.kind !== 'captured') throw Error('capture required')
@@ -36,7 +36,7 @@ it('builds exact ordered captured text, image, tool and native data without effe
         providerContinuation: { kind: 'anthropic', model: 'm', contentOrder: [{ kind: 'reasoning', index: 0 }, { kind: 'text', text: 'answer' }, { kind: 'tool', index: 0 }] } },
       { role: 'tool', toolCallId: 'c', content: '"result"' },
     ], tools: [{ name: 'probe', description: 'probe', inputSchema: { type: 'object', properties: { nested: { type: 'array' } } } }],
-    systemPrompt: 'system', maxOutputTokens: 600, reasoningEffort: 'high',
+    systemPrompt: 'system\n\ncurrent policy', baseInstructions: 'system', maxOutputTokens: 600, reasoningEffort: 'high',
     promptCache: { key: 'ih_4c1029697ee358715d3a14a2add817c4b01651440de80837' }, signal })
   expect(first.signal).toBe(signal)
   expect(first.requestScope).toBe(requestScope)
@@ -53,6 +53,7 @@ it('accepts only captured conversation/surface and preserves absent optional fie
   expect(request).not.toHaveProperty('sessionId'); expect(request).not.toHaveProperty('promptCache')
   expect(request).not.toHaveProperty('maxOutputTokens'); expect(request).not.toHaveProperty('reasoningEffort')
   expect(request).not.toHaveProperty('signal')
+  expect(request).not.toHaveProperty('baseInstructions')
 })
 
 it('preserves the neutral fingerprint when selecting immutable messages', () => {

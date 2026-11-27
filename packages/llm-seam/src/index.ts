@@ -200,6 +200,9 @@ export interface LLMRequest {
   messages: LLMMessage[]
   tools: ToolSchema[]
   systemPrompt: string
+  /** Exact reusable leading section of systemPrompt, supplied by its author.
+   * The full prompt remains authoritative for routes which use a single string. */
+  baseInstructions?: string
   model?: string
   /** M32: per-request reasoning effort; undefined → do not send (provider default). */
   reasoningEffort?: ReasoningEffort

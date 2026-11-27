@@ -37,7 +37,7 @@ function captureDependencies(host: ManagedAgentHost): ManagedAgentHost {
         Object.defineProperty(deps, key, { enumerable: true, value: typeof value === 'function' ? value.bind(host) : value });
     }
     Object.defineProperty(deps, 'sessionId', { enumerable: true, value: host.domain.sessionId });
-    for (const key of ['model', 'systemPrompt', 'signal', 'budget', 'compact', 'reasoningEffort', 'maxOutputTokens', 'modelActionTimeoutMs', 'modelActionMaxAttempts', 'autoCompactionEnabled', 'executionIdentity', 'bindingForStep', 'modelBindingIdentity', 'budgetBinding', 'contextMetadata', 'modelToolSchemas', 'modelOverheadTokens', 'modelSurface', 'prepareModelSurface', 'isSubagent', 'telemetry', 'flush', 'stepInputs', 'sandboxMode'] as const)
+    for (const key of ['model', 'systemPrompt', 'baseInstructions', 'signal', 'budget', 'compact', 'reasoningEffort', 'maxOutputTokens', 'modelActionTimeoutMs', 'modelActionMaxAttempts', 'autoCompactionEnabled', 'executionIdentity', 'bindingForStep', 'modelBindingIdentity', 'budgetBinding', 'contextMetadata', 'modelToolSchemas', 'modelOverheadTokens', 'modelSurface', 'prepareModelSurface', 'isSubagent', 'telemetry', 'flush', 'stepInputs', 'sandboxMode'] as const)
         Object.defineProperty(deps, key, { enumerable: true, get() { const value = host[key]; return typeof value === 'function' ? value.bind(host) : value; } });
     return deps;
 }

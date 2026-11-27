@@ -9,7 +9,7 @@ type Dependencies = ExecutionDependencies
 export function createExecutionDependencies(host: Dependencies): Dependencies {
   const deps = {} as Dependencies
   const live = [
-    'model', 'tools', 'systemPrompt', 'signal', 'budget', 'compact',
+    'model', 'tools', 'systemPrompt', 'baseInstructions', 'signal', 'budget', 'compact',
     'reasoningEffort', 'maxOutputTokens', 'modelActionTimeoutMs', 'modelActionMaxAttempts',
     'autoCompactionEnabled', 'generationFactory', 'inputPreparationFactory', 'summaryFactory',
     'sharedGeneration', 'ensureWritableContext', 'executionIdentity', 'bindingForStep',

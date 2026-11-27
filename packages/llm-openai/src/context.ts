@@ -2,6 +2,7 @@ import { ProjectionCounter } from "@i-harness/token-meter"
 import type { LLMRequest } from "@i-harness/llm-seam"
 import type { OpenAIConfig } from "./types.ts"
 import type { GeneratedAffinity } from "./request/cache-evidence.ts"
+import { isOfficialOpenAIResponses } from "./request/route.ts"
 export function describeContext(actualBody: Record<string, unknown>, config: OpenAIConfig, subscription: boolean, generatedAffinity?: GeneratedAffinity) {
   const body = { ...actualBody }
   // Only the affinity producer's exact insertion is cache metadata. Caller,
@@ -12,7 +13,7 @@ export function describeContext(actualBody: Record<string, unknown>, config: Ope
   if (ownedKey) counter.cacheMetadataBytes += Buffer.byteLength(JSON.stringify(generatedAffinity!.value))
   counter.metadata(body)
   let referencedInput = false
-  if (!subscription && config.baseUrl !== undefined && !/^https:\/\/api\.openai\.com\/?$/.test(config.baseUrl))
+  if (!subscription && !isOfficialOpenAIResponses(config.baseUrl))
     counter.uncertainties.add("route-output-floor-unverified")
   counter.text("system", body.instructions)
   counter.structured("toolSchemas", body.tools)
@@ -107,6 +108,6 @@ export function outputFacts(body: Record<string, unknown>, request: LLMRequest, 
     capSupport: subscription ? "unsupported" as const : "supported" as const,
     configuredCap: request.maxOutputTokens ?? (typeof config.options?.max_output_tokens === "number" ? config.options.max_output_tokens : undefined),
     effectiveCap: !subscription && typeof body.max_output_tokens === "number" ? body.max_output_tokens : undefined,
-    minimumCap: !subscription && (config.baseUrl === undefined || /^https:\/\/api\.openai\.com\/?$/.test(config.baseUrl)) ? 16 : 1, source: request.maxOutputTokens !== undefined ? "request" as const : config.options?.max_output_tokens !== undefined ? "route" as const : "provider-default" as const
+    minimumCap: !subscription && isOfficialOpenAIResponses(config.baseUrl) ? 16 : 1, source: request.maxOutputTokens !== undefined ? "request" as const : config.options?.max_output_tokens !== undefined ? "route" as const : "provider-default" as const
   }
 }

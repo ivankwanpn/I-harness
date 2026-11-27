@@ -23,6 +23,7 @@ export function buildContextRequest(
     messages,
     tools: surface.tools.map(tool => ({ ...tool, inputSchema: copyConversationData<unknown>(tool.inputSchema) })),
     systemPrompt: surface.systemPrompt,
+    ...(surface.baseInstructions === undefined ? {} : { baseInstructions: surface.baseInstructions }),
     ...(sessionId === undefined ? {} : { promptCache: { key: `ih_${createHash('sha256').update(sessionId).digest('hex').slice(0, 48)}` } }),
     // Preserve the host ceiling until actual adapter preparation and admission.
     ...(surface.maxOutputTokens !== undefined ? { maxOutputTokens: surface.maxOutputTokens } : {}),

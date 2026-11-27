@@ -1,7 +1,7 @@
 import type { CompactionConfig, CompactionResult, CompactionRunOptions } from "@i-harness/compaction"
 import type { ImageInput, SessionView as Session, BudgetRead, ContextBindingMetadata, InputProvenance, FactOwner, FactPorts, ProducerFactOutcome, SettlementFacts } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
-import type { ModelClient, ToolSchema, ReasoningEffort } from "@i-harness/llm-seam"
+import type { LLMRequest, ModelClient, ToolSchema, ReasoningEffort } from "@i-harness/llm-seam"
 import type { Telemetry } from "@i-harness/telemetry"
 
 // Prepared admission reserves output and headroom under the owned model window.
@@ -16,7 +16,7 @@ export interface AgentBudgetConfig {
   overheadTokens?: number
 }
 
-export interface AgentConfig {
+export interface AgentConfig extends Pick<LLMRequest, "baseInstructions"> {
   modelActionTimeoutMs?: number
   modelActionMaxAttempts?: number
   /** Prompt for every request. A STRING is read from the live host dependency;

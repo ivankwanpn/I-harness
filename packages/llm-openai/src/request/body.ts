@@ -3,6 +3,7 @@ import type { OpenAIConfig } from "../types.ts"
 import { mapMessages, withoutCacheBreakpoints } from "./messages.ts"
 import type { GeneratedAffinity } from "./cache-evidence.ts"
 import { isDeepSeekResponses } from "./deepseek.ts"
+import { isOfficialOpenAIResponses } from "./route.ts"
 
 /**
  * M32 openai-family translation table (Responses | Chat | DeepSeek — ONE
@@ -16,21 +17,42 @@ export function translateReasoning(_model: string, effort: ReasoningEffort | und
   return { reasoning: effort === "off" ? { effort: "none" } : { effort, summary: "auto" } }
 }
 
+function splitDeveloperInstructions(
+  model: string,
+  options: OpenAIConfig["options"],
+  request: Pick<LLMRequest, "systemPrompt" | "baseInstructions">,
+): { base: string; tail: string } | undefined {
+  if (model !== "gpt-6.2-astra" && model !== "gpt-6.2-sol") return undefined
+  // Explicit native bodies take precedence. Referenced conversations may
+  // already carry their own developer message and its original ordering.
+  if (options && ["model", "instructions", "input", "previous_response_id", "conversation", "prompt"].some(key => Object.hasOwn(options, key))) return undefined
+  const { systemPrompt, baseInstructions } = request
+  if (typeof systemPrompt !== "string" || typeof baseInstructions !== "string" || !baseInstructions.trim()) return undefined
+  if (systemPrompt === baseInstructions) return { base: baseInstructions, tail: "" }
+  const prefix = baseInstructions + "\n\n"
+  return systemPrompt.startsWith(prefix) ? { base: baseInstructions, tail: systemPrompt.slice(prefix.length) } : undefined
+}
+
 /** Body precedence, cache policy, and account-bound wire restrictions. */
 export function createRequestBody(
   config: Pick<OpenAIConfig, "model" | "providerId" | "baseUrl" | "options" | "promptCache">,
-  request: Pick<LLMRequest, "systemPrompt" | "tools" | "reasoningEffort" | "maxOutputTokens" | "promptCache">,
+  request: Pick<LLMRequest, "systemPrompt" | "baseInstructions" | "tools" | "reasoningEffort" | "maxOutputTokens" | "promptCache">,
   messages: LLMRequest["messages"],
   codexSubscription: boolean,
   subscriptionCacheKey?: () => string,
 ) {
   const reasoning = translateReasoning(config.model, request.reasoningEffort)
   if (reasoning && isDeepSeekResponses(config)) delete reasoning.reasoning.summary
+  const cacheMode = resolvePromptCacheMode(config.promptCache, request.promptCache)
+  const firstPartyResponses = codexSubscription || isOfficialOpenAIResponses(config.baseUrl)
+  const instructions = firstPartyResponses && cacheMode !== "off" ? splitDeveloperInstructions(config.model, config.options, request) : undefined
+  const input = mapMessages(messages, config, codexSubscription)
+  if (instructions) input.unshift({ role: "developer", content: [{ type: "input_text", text: instructions.base }] })
   const body: Record<string, unknown> = {
     ...(codexSubscription ? config.options ?? {} : {}),
     model: config.model,
-    instructions: request.systemPrompt,
-    input: mapMessages(messages, config, codexSubscription),
+    ...(instructions?.tail === "" ? {} : { instructions: instructions?.tail ?? request.systemPrompt }),
+    input,
     tools: request.tools.map((t) => ({ type: "function", name: t.name, description: t.description, parameters: t.inputSchema })),
     stream: true,
     ...(!codexSubscription ? config.options ?? {} : {}),
@@ -40,7 +62,6 @@ export function createRequestBody(
     // same precedence rule the reasoning line above documents).
     ...(request.maxOutputTokens !== undefined ? { max_output_tokens: request.maxOutputTokens } : {}),
   }
-  const cacheMode = resolvePromptCacheMode(config.promptCache, request.promptCache)
   let generatedAffinity: GeneratedAffinity | undefined
   if (cacheMode === "off") {
     delete body.prompt_cache_key

@@ -2,6 +2,7 @@ import { subscriptionFields, publicFields } from './fields.ts'
 import { validationCollector, type FinalValidator } from '@i-harness/llm-seam'
 import type { OpenAIConfig } from '../types.ts'
 import { isDeepSeekResponses } from './deepseek.ts'
+import { isOfficialOpenAIResponses } from './route.ts'
 
 type Checks = ReturnType<typeof validationCollector>
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -173,7 +174,7 @@ export function responsesValidator(config: Pick<OpenAIConfig, 'model' | 'baseUrl
     if (subscription) subscriptionBody(body, check)
     else {
       if (Object.keys(body).some(key => !publicFields.has(key))) check.gap('extension-unchecked')
-      const official = config.baseUrl === undefined || /^https:\/\/api\.openai\.com\/?$/.test(config.baseUrl)
+      const official = isOfficialOpenAIResponses(config.baseUrl)
       if (!official) check.gap('limit-unverified')
       if (body.max_output_tokens !== undefined && (!Number.isSafeInteger(body.max_output_tokens) || (body.max_output_tokens as number) < (official ? 16 : 1))) check.issue('output-range', 'generation', 'output-limit')
     }

@@ -48,7 +48,7 @@ function splitToolContent(content: string | LLMContentPart[]): { text: string; i
 }
 
 /** Map projected history, preserving native continuation ordering and tool images. */
-export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenAIConfig, "model" | "providerId" | "baseUrl">, codexSubscription: boolean): unknown {
+export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenAIConfig, "model" | "providerId" | "baseUrl">, codexSubscription: boolean): unknown[] {
   const deepSeek = !codexSubscription && isDeepSeekResponses(config)
   return messages
     .map((m) => {

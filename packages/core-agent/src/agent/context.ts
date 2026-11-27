@@ -52,7 +52,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
   const reasoningEffort = () => inherited ? inherited.reasoningEffort : deps.reasoningEffort
   // Pure live request surface, shared by admission and scalar freshness. History
   // has its own accepted fingerprint so output does not require a shadow prepare.
-  const requestSurfaceFingerprint = () => projectionFingerprint({ system: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
+  const requestSurfaceFingerprint = () => projectionFingerprint({ system: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt, baseInstructions: deps.baseInstructions,
     tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(), effort: reasoningEffort(), binding: metadata(), budgetBinding: budgetBinding(), rewrite: projectionRevision() })
   const candidateInput = () => {
     const selected = { model: deps.model, bindingIdentity: deps.modelBindingIdentity?.(), executionIdentity: inherited?.executionIdentity ?? deps.executionIdentity?.() ?? deps.model.executionIdentity }
@@ -60,6 +60,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
     if (currentCompact) resolveCompactSpec(currentCompact, binding?.providerId, binding?.modelId)
     const surface = {
       systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
+      ...(deps.baseInstructions === undefined ? {} : { baseInstructions: deps.baseInstructions }),
       tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(), reasoningEffort: reasoningEffort(),
       maxOutputTokens: deps.sharedBudget ? Math.min((inherited ? inherited.maxOutputTokens : updated ? outputCap : deps.maxOutputTokens) ?? 2048, 2048) : inherited ? inherited.maxOutputTokens : updated ? outputCap : deps.maxOutputTokens,
       contextWindow: inherited ? inherited.contextWindow : binding ? binding.contextWindow : budgetCfg?.contextWindow ?? currentCompact?.contextWindow,

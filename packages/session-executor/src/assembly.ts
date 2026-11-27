@@ -1539,7 +1539,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // authoritative (parsePreset validates name/systemPrompt/tools — a host
     // preset must satisfy the same contract). Plan-mode/sandbox fragments are
     // composed ON TOP (the default prompt never overrides those).
-    let baseSystemPrompt = opts.preset !== undefined
+    const baseSystemPrompt = opts.preset !== undefined
       ? parsePreset(opts.preset).systemPrompt
       : DEFAULT_AGENT_PRESET.systemPrompt
     // The fragment says "Current", so it must BE current. Both the guards and
@@ -1633,6 +1633,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       modelToolSchemas,
       ...(codeModeMount ? { modelOverheadTokens } : {}),
       systemPrompt: systemPromptNow,
+      baseInstructions: baseSystemPrompt,
       ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
       ...(compactForAgent !== undefined ? { compact: compactForAgent } : {}),
       // M31 T3: AgentBudgetConfig.contextWindow is required — supply only when

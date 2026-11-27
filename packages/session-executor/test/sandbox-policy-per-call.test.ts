@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { createMockClient } from "@i-harness/llm-mock"
+import { DEFAULT_AGENT_PRESET } from "@i-harness/preset"
 import type { LLMRequest } from "@i-harness/llm-seam"
 import { createSession, append } from "@i-harness/core-session"
 import { createSessionExecutor } from "@i-harness/core-agent"
@@ -123,6 +124,8 @@ describe("sandbox policy is resolved per call", () => {
     const inner = modelWritingTargets([first, second])
     const model = {
       stream: (req: LLMRequest) => {
+        expect(req.baseInstructions).toBe(DEFAULT_AGENT_PRESET.systemPrompt)
+        expect(req.systemPrompt.startsWith(DEFAULT_AGENT_PRESET.systemPrompt + "\n\n")).toBe(true)
         prompts.push(req.systemPrompt)
         return inner.stream(req)
       },

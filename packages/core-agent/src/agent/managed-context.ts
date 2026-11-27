@@ -29,11 +29,12 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
     const metadata = () => binding()?.contextMetadata ?? (hasMetadataOverride ? metadataOverride : typeof host.contextMetadata === 'function' ? host.contextMetadata() : host.contextMetadata);
     const surface = () => {
         const inherited = binding(), bindingMetadata = metadata();
-        const { systemPrompt, tools } = host.modelSurface?.() ?? {
+        const { systemPrompt, baseInstructions, tools } = host.modelSurface?.() ?? {
             systemPrompt: typeof host.systemPrompt === 'function' ? host.systemPrompt() : host.systemPrompt,
+            baseInstructions: host.baseInstructions,
             tools: host.modelToolSchemas?.() ?? host.tools.schemas(),
         };
-        return { systemPrompt, tools, reasoningEffort: inherited ? inherited.reasoningEffort : host.reasoningEffort, maxOutputTokens: inherited ? inherited.maxOutputTokens : config.maxOutputTokens, contextWindow: inherited ? inherited.contextWindow : bindingMetadata?.contextWindow ?? config.budget?.contextWindow ?? config.compact?.contextWindow, binding: bindingMetadata, budgetBinding: inherited ? inherited.budgetBinding : hasBudgetOverride ? budgetOverride : typeof host.budgetBinding === 'function' ? host.budgetBinding() : host.budgetBinding };
+        return { systemPrompt, ...(baseInstructions === undefined ? {} : { baseInstructions }), tools, reasoningEffort: inherited ? inherited.reasoningEffort : host.reasoningEffort, maxOutputTokens: inherited ? inherited.maxOutputTokens : config.maxOutputTokens, contextWindow: inherited ? inherited.contextWindow : bindingMetadata?.contextWindow ?? config.budget?.contextWindow ?? config.compact?.contextWindow, binding: bindingMetadata, budgetBinding: inherited ? inherited.budgetBinding : hasBudgetOverride ? budgetOverride : typeof host.budgetBinding === 'function' ? host.budgetBinding() : host.budgetBinding };
     };
     const selected = () => ({ model: host.model, bindingIdentity: host.modelBindingIdentity?.(), executionIdentity: binding()?.executionIdentity ?? host.executionIdentity?.() ?? host.model.executionIdentity });
     const current = (evidence: RequestEvidence, admitNewWork = true, requireArchive = false) => {

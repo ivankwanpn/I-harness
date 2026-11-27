@@ -1,5 +1,5 @@
 import type { ContextBindingMetadata, ConversationProjection } from "@i-harness/core-session"
-import type { ReasoningEffort, ToolSchema } from "@i-harness/llm-seam"
+import type { LLMRequest, ReasoningEffort, ToolSchema } from "@i-harness/llm-seam"
 import type { Captured } from '@i-harness/core-session/internal/restoration'
 export type { Captured, ImmutableJson } from '@i-harness/core-session/internal/restoration'
 
@@ -18,8 +18,7 @@ export interface ContextProtection {
   readonly pendingInputIds: readonly string[]
   readonly unsettledDelegationIds: readonly string[]
 }
-export interface RequestSurfaceInput {
-  systemPrompt: string
+export interface RequestSurfaceInput extends Pick<LLMRequest, "systemPrompt" | "baseInstructions"> {
   tools: readonly ToolSchema[]
   reasoningEffort?: ReasoningEffort
   maxOutputTokens?: number

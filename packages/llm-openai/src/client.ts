@@ -9,20 +9,27 @@ import { decodeResponseStream } from "./stream/decode.ts"
 
 import { describeContext, outputFacts } from "./context.ts"
 import { responsesValidator } from './request/validate.ts'
+import { isOfficialOpenAIResponses } from './request/route.ts'
 
 export function createOpenAIClient(config: OpenAIConfig): ModelClient {
   const codexSubscription = config.codexSubscription === true
-  if (codexSubscription && config.baseUrl !== undefined && !/^https:\/\/chatgpt\.com\/backend-api\/codex\/?$/.test(config.baseUrl)) {
+  const baseUrl = config.baseUrl
+  if (codexSubscription && baseUrl !== undefined && !/^https:\/\/chatgpt\.com\/backend-api\/codex\/?$/.test(baseUrl)) {
     throw new Error("Codex subscription credentials require the official Codex Responses endpoint")
   }
   if (codexSubscription && Object.keys(config.headers ?? {}).length > 0) {
     throw new Error("Codex subscription requests do not support configurable headers")
   }
-  const endpoint = codexSubscription ? "https://chatgpt.com/backend-api/codex/responses" : `${config.baseUrl ?? "https://api.openai.com"}/v1/responses`
+  const endpoint = codexSubscription ? "https://chatgpt.com/backend-api/codex/responses"
+    : isOfficialOpenAIResponses(baseUrl) ? "https://api.openai.com/v1/responses"
+    : `${baseUrl}/v1/responses`
   const affinity = codexSubscription ? createSubscriptionAffinity() : undefined
   return preparedModelClient(async originalRequest => {
     const request = snapshotModelData(originalRequest)
-    const capturedConfig = snapshotModelData(config)
+    // The transport destination is fixed here. Later route policy checks and
+    // request accounting must use the same endpoint seen by the transport.
+    const capturedConfig = snapshotModelData(config, ["baseUrl"])
+    capturedConfig.baseUrl = baseUrl
     request.signal?.throwIfAborted()
     const scope = request.requestScope
     // A raw JS caller can mutate despite readonly types. Keep this attempt's
