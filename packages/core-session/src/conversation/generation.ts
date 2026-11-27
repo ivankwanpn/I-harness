@@ -1,3 +1,4 @@
+import { types } from 'node:util'
 import { CURRENT_FORMAT_VERSION } from '../events/types.ts'
 import { createDeliveryIndex, validateDeliveryFrame, type DeliveryOriginLookup } from './delivery.ts'
 import { generationLimits, isGenerationEventType, type GenerationActionEvent, type GenerationAttemptEvent, type GenerationEvent } from '../events/generation.ts'
@@ -33,6 +34,29 @@ interface Reference {
 }
 export type GenerationHistoryScope = { sessionId?: string; parentSession?: string; seedLength?: number; semanticSeed?: import('../events/bootstrap.ts').SeedHeader }
 type Action = GenerationActionState
+type CallKind = 'tool/call' | 'code/call'
+type PendingCalls = Record<CallKind, Map<string, Set<number>>>
+const pendingCalls = (): PendingCalls => ({ 'tool/call': new Map(), 'code/call': new Map() })
+const ownField = Object.getOwnPropertyDescriptor, hasOwn = Object.hasOwn
+function ownDataValue(object: object, key: string): unknown {
+  const descriptor = ownField(object, key)
+  return descriptor && hasOwn(descriptor, 'value') ? descriptor.value : undefined
+}
+function unsettledCall(reference: Reference | undefined): reference is Reference & { type: CallKind; callId: string } {
+  return !!reference && (reference.type === 'tool/call' || reference.type === 'code/call')
+    && typeof reference.callId === 'string' && ownDataValue(reference, 'settled') !== true
+}
+function addPending(index: PendingCalls, seq: number, reference: Reference): void {
+  if (!unsettledCall(reference)) return
+  const calls = index[reference.type], id = reference.callId, bucket = calls.get(id)
+  if (bucket) bucket.add(seq)
+  else calls.set(id, new Set([seq]))
+}
+function removePending(index: PendingCalls, seq: number, reference: Reference | undefined): void {
+  if (!unsettledCall(reference)) return
+  const calls = index[reference.type], id = reference.callId, bucket = calls.get(id)
+  if (bucket?.delete(seq) && !bucket.size) calls.delete(id)
+}
 function source(event: SessionEventView): Reference {
   const reference: Reference = { type: event.type }
   if (event.type === 'user/message') reference.actionable = !event.internal && !event.input?.synthetic
@@ -177,13 +201,30 @@ function attemptTransition(action: Action, event: GenerationAttemptEvent): Actio
 /** Part of the one conversation transition. Staging never mutates committed facts. */
 export function createGenerationIndex(scope: GenerationHistoryScope = {}, deliveryOrigins?:DeliveryOriginLookup) {
   const actions = new Map<string, Action>(), origins = new Set<string>(), references = new Map<number, Reference>()
+  const pending = pendingCalls()
+  let referenceRevision = 0
   let document: string | undefined = scope.sessionId
   return {
     read: () => Object.freeze([...actions.values()]),
     stage() {
       const next = new Map<string, Action>(), seen = new Set<string>(), refs = new Map<number, Reference>()
+      const stagedCalls = pendingCalls(), settledBuckets = new Set<Set<number>>()
+      const baseRevision = referenceRevision
+      let overlappingOrdinal = false
       const getAction = (id: string) => next.get(id) ?? actions.get(id)
       const getRef = (seq: number) => refs.get(seq) ?? references.get(seq)
+      const clearStagedCalls = () => {
+        stagedCalls['tool/call'].clear()
+        stagedCalls['code/call'].clear()
+        settledBuckets.clear()
+      }
+      const settleBucket = (bucket: Set<number>, expected: CallKind, id: string) => {
+        for (const seq of bucket) {
+          const reference = getRef(seq)
+          if (reference?.type === expected && reference.callId === id && ownDataValue(reference, 'settled') !== true)
+            refs.set(seq, { ...reference, settled: true })
+        }
+      }
       const needsLink = new Set<number>()
       let owner = document, preceding: SessionEventView | undefined
       return {
@@ -209,16 +250,49 @@ export function createGenerationIndex(scope: GenerationHistoryScope = {}, delive
           }
           if (event.type === 'model/exchange-accepted' && getAction(event.actionId)) needsLink.add(event.seq!)
           if (event.type === 'tool/result' || event.type === 'code/result') {
-            for (const [seq, value] of [...references, ...refs]) if (value.type === (event.type === 'tool/result' ? 'tool/call' : 'code/call') && value.callId === event.callId) refs.set(seq, { ...value, settled: true })
+            const direct = !overlappingOrdinal && baseRevision === referenceRevision && !types.isProxy(event)
+            const id = direct ? ownDataValue(event, 'callId') : undefined
+            const type = direct ? ownDataValue(event, 'type') : undefined
+            if (typeof id === 'string' && (type === 'tool/result' || type === 'code/result')) {
+              const kind = type === 'tool/result' ? 'tool/call' : 'code/call'
+              const committed = pending[kind].get(id)
+              if (committed && !settledBuckets.has(committed)) {
+                settleBucket(committed, kind, id)
+                settledBuckets.add(committed)
+              }
+              const staged = stagedCalls[kind].get(id)
+              if (staged) {
+                settleBucket(staged, kind, id)
+                stagedCalls[kind].delete(id)
+              }
+            } else {
+              // Legacy references can shadow an earlier ordinal or use an opaque
+              // selector. Apply the original committed-then-staged settlement.
+              for (const [seq, value] of [...references, ...refs]) if (value.type === (event.type === 'tool/result' ? 'tool/call' : 'code/call') && value.callId === event.callId) refs.set(seq, { ...value, settled: true })
+            }
           }
-          if (event.seq !== undefined) refs.set(event.seq, source(event))
+          if (event.seq !== undefined) {
+            const seq = event.seq, reference = source(event)
+            if (!overlappingOrdinal && (references.has(seq) || refs.has(seq))) {
+              overlappingOrdinal = true
+              clearStagedCalls()
+            }
+            refs.set(seq, reference)
+            if (!overlappingOrdinal && baseRevision === referenceRevision) addPending(stagedCalls, seq, reference)
+          }
           preceding = event
         },
         commit() {
           if (needsLink.size) fail('generation acceptance requires paired physical linkage')
           for (const [id, action] of next) actions.set(id, action)
           for (const key of seen) origins.add(key)
-          for (const [seq, reference] of refs) references.set(seq, reference)
+          for (const [seq, reference] of refs) {
+            removePending(pending, seq, references.get(seq))
+            references.set(seq, reference)
+            addPending(pending, seq, reference)
+          }
+          clearStagedCalls()
+          if (refs.size) referenceRevision++
           document = owner
         },
         validate() { if (needsLink.size) fail('generation acceptance requires paired physical linkage') },
