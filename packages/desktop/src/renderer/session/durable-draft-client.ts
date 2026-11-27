@@ -38,7 +38,14 @@ export class DurableDraftClient {
           if (this.editVersion !== initialEdit && !this.scope.identity.startsWith("new-task:")) merged.metadata = current.metadata
           this.apply(merged); this.dirty = true
         }
-      } else this.dirty = true
+      } else if (!this.dirty) {
+        // A missing native record only needs migration when the renderer
+        // actually has something to retain. An untouched composer can unmount
+        // without writing a blank draft or waking its standby workspace.
+        const local = this.read()
+        this.dirty = Boolean(local.prompt || local.references.length || local.images.length || local.texts.length ||
+          local.contextRefs.length || local.metadata)
+      }
       this.status()
     }).catch((error) => { this.loading = undefined; this.report(error); throw error })
     return this.loading

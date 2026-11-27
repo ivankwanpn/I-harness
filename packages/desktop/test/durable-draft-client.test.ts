@@ -4,6 +4,47 @@ import type { DurableDraft, UnsentDraft, DraftRequest } from "../src/shared/atta
 const draft = (prompt: string): UnsentDraft => ({ prompt, references: [], images: [], texts: [], contextRefs: [] })
 const scope = { workspaceId: "w", identity: "s" }
 describe("durable draft client admission races", () => {
+  it("does not save an untouched missing draft on unmount and still persists edits and erasure", async () => {
+    let current = draft(""), record: DurableDraft = { revision: null, draft: null }
+    const calls: DraftRequest[] = []
+    const request = async (value: DraftRequest): Promise<DurableDraft> => {
+      calls.push(value)
+      if (value.kind === "desktop/draft/load") return record
+      if (value.kind !== "desktop/draft/save") throw new Error("unexpected explicit clear")
+      expect(value.expectedRevision).toBe(record.revision)
+      return record = { revision: String(calls.length), draft: value.draft }
+    }
+    const client = new DurableDraftClient(scope, request, () => current, value => { current = value }, () => {})
+    await client.restore()
+    await client.flush()
+    expect(calls.map(call => call.kind)).toEqual(["desktop/draft/load"])
+
+    current = draft("typed draft")
+    client.changed()
+    await client.flush()
+    expect(record).toEqual({ revision: "2", draft: draft("typed draft") })
+    current = draft("")
+    client.changed()
+    await client.flush()
+    expect(record).toEqual({ revision: "3", draft: draft("") })
+  })
+
+  it.each([
+    { ...draft(""), metadata: "migration metadata" },
+    { ...draft(""), images: [{ id: 1, mediaType: "image/png" as const, dataBase64: "AQID" }] },
+  ])("migrates a substantive local draft even if the durable record is missing", async current => {
+    const saves: UnsentDraft[] = []
+    const client = new DurableDraftClient(scope, async request => {
+      if (request.kind === "desktop/draft/load") return { revision: null, draft: null }
+      if (request.kind !== "desktop/draft/save") throw new Error("unexpected clear")
+      saves.push(request.draft)
+      return { revision: "migration", draft: request.draft }
+    }, () => current, () => {}, () => {})
+    await client.restore()
+    await client.flush()
+    expect(saves).toEqual([current])
+  })
+
   it("retirement discards a pending restore and prevents an unmount flush or admission from saving", async () => {
     let finish!: (record: DurableDraft) => void, current = draft(""), writes = 0
     const request = async (value: DraftRequest): Promise<DurableDraft> => { if (value.kind === "desktop/draft/load") return new Promise(resolve => { finish = resolve }); writes++; return { revision: "late", draft: null } }
