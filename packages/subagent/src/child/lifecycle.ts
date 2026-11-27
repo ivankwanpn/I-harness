@@ -33,7 +33,7 @@ export async function publishChild(
   retireInstruction?: () => void,
   onEntryPublished?: (entry: ChildAgentEntry) => void,
   assertSetupLive?: () => void,
-  original?: { unmount(): void; revokeDocument?(): void; closeDocument?(): Promise<void>; closeInitial?(): Promise<void>; cancelMount?(reason?: string): Promise<void>; disposeMount?(): Promise<void> },
+  original?: { unmount(): void; revokeDocument?(): void; closeDocument?(): Promise<void>; closeInitial?(): Promise<void>; cancelMount?(reason?: string): Promise<void>; disposeMount?(): Promise<void>; closeTools?(): Promise<void> },
   captured?: CapturedHostChildData,
   retention?: { readonly results?: SpawnOptions['results'] },
 ): Promise<{ path: string; jobId: string; sessionId?: string; modelLabel?: string }> {
@@ -107,6 +107,7 @@ export async function publishChild(
         const failures: unknown[] = retirementFailed ? [retirementFailure] : []
         if (!mountCancelled) try { await cancelMount?.("Subagent closed"); mountCancelled = true } catch (error) { failures.push(error) }
         if (!mountDisposed) try { await disposeMount?.(); mountDisposed = true } catch (error) { failures.push(error) }
+        try { await original?.closeTools?.() } catch (error) { failures.push(error) }
         if (!chainSettled) { await entry.followupChain?.catch(() => {}); chainSettled = true }
         if (failures.length) throw new AggregateError(failures, 'Original child producer cleanup incomplete')
         await settleInitial()

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { createChildNativeToolMount } from '../child/native-tool-mount.ts'
 import type { ChildAgentEntry } from '../agent-table.ts'
 import type { SubagentToolDeps } from '../tools/types.ts'
 import { isNondurableSession } from '@i-harness/core-session'
@@ -154,6 +155,7 @@ export function residentOwnerFor(deps: SubagentToolDeps): ResidentLifetime {
 /** Only resources actually obtained by the original resident setup. */
 export class ResidentPreparation implements RetainedResidentResource {
   readonly kind = 'resident' as const
+  readonly nativeTools = createChildNativeToolMount()
   readonly setupExit = Promise.withResolvers<void>()
   readonly view: ChildAgentEntry['session']
   factOwner: ChildAgentEntry['factOwner']
@@ -293,6 +295,7 @@ export class ResidentPreparation implements RetainedResidentResource {
         try { await this.disposeMount?.(); this.mountDisposed = true } catch (error) { failures.push(error) }
       }
       try { await residentOwnerFor(this.deps).closeGenerations(this.entry) } catch (error) { failures.push(error) }
+      try { await this.nativeTools.close() } catch (error) { failures.push(error) }
       if (failures.length) throw new AggregateError(failures, 'Original resident producer cleanup incomplete')
       await residentOwnerFor(this.deps).settleEntryResult(this.entry)
       if (this.instruction && !this.instructionClosed) { await this.closeInstruction?.(); this.instructionClosed = true }

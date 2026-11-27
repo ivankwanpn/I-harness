@@ -192,6 +192,43 @@ describe("fork.ts", () => {
 })
 
 describe("spawnChild", () => {
+  it("awaits native tool cleanup when construction fails before publication", async () => {
+    const f = spawnFixture(), cleanupStarted = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    let settled = false
+    const birth = spawnChild({
+      ...f, taskName: "native-failure", parentPath: "root", message: "work", parentRegistry: f.parentReg,
+      role: f.roles.get("general")!, resolveModel: noRoleModel,
+      async childShellFactory({ retainCleanup }) {
+        retainCleanup(async () => { cleanupStarted.resolve(); await release.promise })
+        throw new Error("native mount failed")
+      },
+    }).finally(() => { settled = true })
+    const failed = expect(birth).rejects.toThrow("native mount failed")
+    try {
+      await cleanupStarted.promise
+      expect(settled).toBe(false)
+      expect(f.table.entries().size).toBe(0)
+    } finally { release.resolve(); await failed }
+  })
+
+  it("retries the outstanding native disposer after the child has been published", async () => {
+    const f = spawnFixture(), order: string[] = []
+    let attempts = 0
+    const { path } = await spawnChild({
+      ...f, taskName: "native-retry", parentPath: "root", message: "work", parentRegistry: f.parentReg,
+      role: f.roles.get("general")!, resolveModel: noRoleModel,
+      async childShellFactory({ retainCleanup }) {
+        retainCleanup(async () => { order.push("host"); if (++attempts === 1) throw new Error("retry release") })
+        retainCleanup(async () => { order.push("process") })
+      },
+    })
+    const entry = f.table.get(path)!
+    await entry.followupChain
+    await expect(entry.dispose!()).rejects.toThrow("producer cleanup incomplete")
+    await entry.dispose!()
+    expect(order).toEqual(["process", "host", "host"])
+  })
+
   it("spawns a background child with a role and resolves completion", async () => {
     const parentCtx = createContext()
     const parentReg = createToolRegistry(parentCtx)

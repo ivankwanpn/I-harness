@@ -11,9 +11,10 @@ import type { ModelClient } from "@i-harness/llm-seam"
 import type { SpawnOptions } from "./types.ts"
 import { composeSubagentPrompt, estimateChildOverhead } from "./prompt.ts"
 import { resolveRoleTools } from "./role-tools.ts"
+import type { createChildNativeToolMount } from "./native-tool-mount.ts"
 
 export async function assembleChild(
-  opts: SpawnOptions, childCtx: PluginContext, childSession: SessionView, factOwner: FactOwner,
+  opts: SpawnOptions, nativeTools: ReturnType<typeof createChildNativeToolMount>, childCtx: PluginContext, childSession: SessionView, factOwner: FactOwner,
   sessionId: string | undefined, childPath: string, model: ModelClient,
   reasoningEffort: ReasoningEffort | undefined, contextWindow: number | undefined, maxOutputTokens: number | undefined,
   contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata,
@@ -39,9 +40,14 @@ export async function assembleChild(
   // The host factory mounts the child's OWN shell tools (its own execution
   // context). Without it, resolveRoleTools falls back to the legacy inherited
   // tools, whose parent-bound direct entry cannot run in a child context.
-  if (opts.childShellFactory) await opts.childShellFactory({ ctx: childCtx, tools: childReg, session: childSession, factOwner, ...(sessionId !== undefined ? { sessionId } : {}) })
-  resolveRoleTools(role.name, role.tools, opts.parentRegistry, childReg)
-  const codeModeMount = role.tools.length === 0 ? undefined : opts.codeModeFactory?.(childCtx, childReg, {
+  const allowedTools = Object.freeze([...role.tools])
+  const current = opts.isRoleToolAllowed
+  if (opts.childShellFactory) await nativeTools.mount(opts.childShellFactory, {
+    ctx: childCtx, tools: childReg, session: childSession, factOwner, ...(sessionId !== undefined ? { sessionId } : {}),
+    allowedTools, isToolAllowed: name => allowedTools.includes(name) && !!opts.parentRegistry.get(name) && (current?.(name) ?? true),
+  })
+  resolveRoleTools(role.name, allowedTools, opts.parentRegistry, childReg)
+  const codeModeMount = allowedTools.length === 0 ? undefined : opts.codeModeFactory?.(childCtx, childReg, {
     session: childSession, factOwner, sessionId, config: opts.codeMode,
   })
   // The initial setup owns original cleanup before ready can await or fail.

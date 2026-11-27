@@ -1,5 +1,6 @@
 import { assertInitialTaskAdmission } from '../task/cold-bindings.ts'
 import { publishChildResult } from "../child/result.ts"
+import { selectChildRoleTools } from "../child/role-tools.ts"
 import type { Tool } from "@i-harness/core-tools"
 import type { SubagentToolDeps } from "./types.ts"
 import { subagentFactOwner } from '../facts.ts'
@@ -194,6 +195,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
         originalSlot?.acknowledgeStart(startReceipt)
         if (preparation?.kind === 'bound' && delivery === 'tool') source.bindHandoff(deps.tasks.bindForegroundHandoff(task.id))
         const birth=originalSlot?await bootstrapTaskChild(originalSlot,deps,declared,host!):undefined
+        const access = selectChildRoleTools(role, deps)
         const executed = await spawnChild({
           ...(birth?{childStart:{kind:'committed-child-birth' as const,birth}}:{}),
           signal: exec.abortSignal,
@@ -206,8 +208,8 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
           parentRegistry: deps.parentRegistry,
           parentSession: deps.parentSession,
           parentCtx: deps.parentCtx,
-          ...(deps.childShellFactory ? { childShellFactory: deps.childShellFactory } : {}),
-          role: deps.roleToolsFor?.(role.name) === undefined ? role : { ...role, tools: deps.roleToolsFor!(role.name)! },
+          ...(deps.childShellFactory ? { childShellFactory: deps.childShellFactory, isRoleToolAllowed: access.isToolAllowed } : {}),
+          role: { ...role, tools: [...access.allowedTools] },
           parentModel: deps.parentModel,
           codeMode: deps.codeMode, codeModeFactory: deps.codeModeFactory,
           createInstructionContext: deps.createInstructionContext,

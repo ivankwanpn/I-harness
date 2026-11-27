@@ -9,6 +9,7 @@ import type { SubagentToolDeps } from "../tools/types.ts"
 import type { FollowupDeps } from "./drive.ts"
 import { composeSubagentPrompt, declaredRoleModel, estimateChildOverhead, modelLabelOf, resolveRoleTools, subagentModelSelectionGated } from "../child.ts"
 import { childFactOwner } from '../child/document.ts'
+import { selectChildRoleTools } from '../child/role-tools.ts'
 import { captureFollowupGenerationIntent, openFollowupGeneration } from './generation.ts'
 import { ResidentPreparation, residentOwnerFor, invokeOriginal } from './resident-lifetime.ts'
 
@@ -47,6 +48,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   const record = new ResidentPreparation(deps, entry)
   const createInstructionContext = deps.createInstructionContext
   const resolveModel = deps.resolveModel.bind(deps), mountCodeMode = deps.codeModeFactory?.bind(deps)
+  const mountShell = deps.childShellFactory?.bind(deps)
   entry.dispose = record.dispose
   let installed = false, codeModeMount: import('@i-harness/code-mode').CodeModeMount | undefined
   try {
@@ -55,6 +57,8 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   // Nonintegrated embedders may obtain their nondurable owner at this boundary.
   if (!executionCurrent() || !record.current()) return false
   executionController.signal.throwIfAborted()
+  const access = invokeOriginal(record, () => selectChildRoleTools(role, deps))
+  if (!executionCurrent() || !record.current()) return false
   const childCtx = record.ctx = invokeOriginal(record, () => deps.parentCtx.scope.mount())
   if (!executionCurrent() || !record.current()) return false
   executionController.signal.throwIfAborted()
@@ -68,8 +72,17 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   const childReg = modelPair?.registry ?? createToolRegistry(childCtx, { inheritResultRetention: deps.parentRegistry, executionOwner: {view:record.view,factOwner,context:childCtx,...entry.sessionId!==undefined?{sessionId:entry.sessionId}:{}} })
   const modelCallOrigin = modelPair && modelOrigins!.bind(childReg, modelPair.driver)
   record.registry = childReg
+  if (mountShell) {
+    await invokeOriginal(record, () => record.nativeTools.mount(mountShell, {
+      ctx: childCtx, tools: childReg, session: record.view, factOwner,
+      ...(entry.sessionId !== undefined ? { sessionId: entry.sessionId } : {}), allowedTools: access.allowedTools,
+      isToolAllowed: name => !!deps.parentRegistry.get(name) && access.isToolAllowed(name),
+    }))
+    if (!executionCurrent() || !record.current()) return false
+    executionController.signal.throwIfAborted()
+  }
   // Same resolution as spawnChild — a declared-but-unmounted tool is reported.
-  resolveRoleTools(role.name, role.tools, deps.parentRegistry, childReg)
+  resolveRoleTools(role.name, access.allowedTools, deps.parentRegistry, childReg)
   // model resolution identical to spawnChild (child.ts): the declared selection
   // (settings first, then role.model) → the host's resolver; else inherit the
   // parent model. The binding's `reasoningEffort` rides along for the same
@@ -108,7 +121,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   const modelLabel = declared !== undefined ? modelLabelOf(declared) : undefined
   const childCoordinator = deps.childSessions?.coordinator
   const childSessionId = entry.sessionId
-  codeModeMount = record.mount = role.tools.length === 0 ? undefined : invokeOriginal(record, () => mountCodeMode?.(childCtx, childReg, {
+  codeModeMount = record.mount = access.allowedTools.length === 0 ? undefined : invokeOriginal(record, () => mountCodeMode?.(childCtx, childReg, {
     session: entry.session, factOwner, sessionId: childSessionId, config: deps.codeMode,
   }))
   await invokeOriginal(record, () => record.readyMount?.())

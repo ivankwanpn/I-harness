@@ -72,6 +72,59 @@ function restoredEntry(sessionId: string, roleName: string | undefined): ChildAg
 }
 
 describe("ensureResidentAgent", () => {
+  it("restores native tools under the current role override and the child's own registry", async () => {
+    const { deps, table } = setup(), entry = restoredEntry("native-resume", "general")
+    const original = { name: "grep", description: "parent", inputSchema: {}, exposure: "deferred" as const, execute: async () => "parent" }
+    const local = { ...original, description: "child", execute: async () => "child" }
+    deps.parentRegistry.register(original)
+    let configured = ["grep"]
+    deps.roleToolsFor = () => configured
+    let check: ((name: string) => boolean) | undefined
+    deps.childShellFactory = async input => {
+      expect(input.sessionId).toBe(entry.sessionId)
+      expect(input.session).toBe(entry.session)
+      expect(input.allowedTools).toEqual(["grep"])
+      check = input.isToolAllowed
+      input.tools.register(local)
+    }
+    table.add(entry.path, entry)
+    try {
+      expect(await ensureResidentAgent(deps, entry, new AbortController())).toBe(true)
+      expect(entry.toolRegistry?.get("grep")).toBe(local)
+      expect(entry.toolRegistry?.get("read")).toBeUndefined()
+      expect(check!("grep")).toBe(true)
+      configured = ["read"]
+      expect(check!("grep")).toBe(false)
+      expect(check!("read")).toBe(false)
+      configured = ["grep"]
+      deps.roles.remove("general")
+      expect(check!("grep")).toBe(false)
+    } finally { await entry.dispose?.() }
+  })
+
+  it("releases the local native mount if the resident changes during asynchronous setup", async () => {
+    const { deps, table, agents } = setup(), original = restoredEntry("old-native", "general")
+    const started = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>()
+    let closed = 0, nativeClosed = 0
+    deps.childShellFactory = async ({ ctx, retainCleanup }) => {
+      retainCleanup(async () => { nativeClosed++ })
+      ctx.mount({ name: "native-resume-fixture", mount() {}, unmount() { closed++ } })
+      started.resolve()
+      await resume.promise
+    }
+    table.add(original.path, original)
+    const rebuilding = ensureResidentAgent(deps, original, new AbortController())
+    try {
+      await started.promise
+      table.add(original.path, restoredEntry("new-native", "general"))
+      resume.resolve()
+      expect(await rebuilding).toBe(false)
+      expect(agents.get("old-native")).toBeUndefined()
+      expect(closed).toBe(1)
+      expect(nativeClosed).toBe(1)
+    } finally { resume.resolve(); await rebuilding }
+  })
+
   it("S18: resident prompts read the current host callback with the restored child session on every turn", async () => {
     const { deps, table, agents } = setup(), entry = restoredEntry("live-prompt", "general")
     const prompts: string[] = [], sessions: SessionView[] = []

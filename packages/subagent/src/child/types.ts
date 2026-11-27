@@ -27,6 +27,8 @@ export interface SpawnOptions extends RoleModelHost {
   parentSession?: SessionView
   parentCtx: PluginContext
   role: SubagentRole
+  /** Recheck the role registration and live settings before a child-scoped native operation. */
+  isRoleToolAllowed?(name: string): boolean
   parentModel: ModelClient
   /** Host-supplied child execution factory (child-exec L2): when present the
    * child gets its own shell tools instead of the parent's context-bound ones. */
@@ -36,6 +38,9 @@ export interface SpawnOptions extends RoleModelHost {
     readonly session: SessionView
     readonly factOwner: import('@i-harness/core-session').FactOwner
     readonly sessionId?: string
+    readonly allowedTools: readonly string[]
+    isToolAllowed(name: string): boolean
+    retainCleanup(close: () => Promise<void>): void
   }) => Promise<void>
   /** Resolve a selection to a live client through the HOST's provider plane —
    * the same one the session's own model went through, so a role gets the same

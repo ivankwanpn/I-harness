@@ -1,5 +1,24 @@
 import type { ToolRegistry } from "@i-harness/core-tools"
+import { isOriginalLocalExecTool } from "@i-harness/core-tools/internal/scoped-exec-origin"
+import type { RoleRegistry, SubagentRole } from "../roles.ts"
 import { d } from "./diagnostics.ts"
+
+export function selectChildRoleTools(role: SubagentRole, host: { roles: RoleRegistry; roleToolsFor?(role: string): string[] | undefined }) {
+  const name = role.name, revision = host.roles.revision(name)
+  const selected = (registered: SubagentRole) => {
+    const configured = host.roleToolsFor?.(name)
+    return configured === undefined ? registered.tools : configured
+  }
+  const allowedTools = Object.freeze([...selected(role)])
+  return {
+    allowedTools,
+    isToolAllowed(tool: string) {
+      const current = host.roles.get(name)
+      return allowedTools.includes(tool) && !!current && selected(current).includes(tool)
+        && host.roles.revision(name) === revision
+    },
+  }
+}
 
 /**
  * Register a role's declared tools onto a child registry, resolved from the
@@ -22,7 +41,7 @@ import { d } from "./diagnostics.ts"
  */
 export function resolveRoleTools(
   roleName: string,
-  declared: string[],
+  declared: readonly string[],
   parent: ToolRegistry,
   child: ToolRegistry,
 ): string[] {
@@ -36,7 +55,10 @@ export function resolveRoleTools(
       // A host factory may already have mounted a child-scoped replacement
       // (same name, its own execution context); never overwrite it with the
       // parent-bound object, which cannot run in a child context anyway.
-      if (!child.get(name)) child.register(tool)
+      if (!child.get(name)) {
+        if (isOriginalLocalExecTool(tool)) { missing.push(name); continue }
+        child.register(tool)
+      }
       // The role has already selected these exact bindings. A child has no
       // parent discovery tool, so expose its allowed deferred schemas locally
       // without cloning bindings or promoting anything in the parent.
