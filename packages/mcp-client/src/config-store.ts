@@ -1,6 +1,7 @@
 import { readFile, rename, writeFile, rm } from "node:fs/promises"
 import { resolve } from "node:path"
 import { randomUUID } from "node:crypto"
+import { setTimeout as delay } from "node:timers/promises"
 import { acquireSessionLock } from "@i-harness/fs-lock"
 import { validateMcpConfig, type McpServerConfig } from "./types.ts"
 
@@ -48,6 +49,24 @@ function publicRow(row: Entry): McpConfigRow {
   return { enabled: row.enabled, revision: row.revision, config, secretKeys: Object.keys(headers ?? {}) }
 }
 
+async function publishStage(temporary: string, file: string): Promise<void> {
+  // On Windows a short-lived reader can prevent replacement. Retain the
+  // completed stage and the writer lock while that sharing window clears.
+  const deadline = performance.now() + 500
+  let delayMs = 10
+  for (;;) {
+    try { await rename(temporary, file); return }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException | null)?.code
+      const remaining = deadline - performance.now()
+      if (process.platform !== "win32" || (code !== "EPERM" && code !== "EBUSY") || remaining <= 0) throw error
+      await delay(Math.min(delayMs, remaining))
+      if (performance.now() >= deadline) throw error
+      delayMs = Math.min(delayMs * 2, 50)
+    }
+  }
+}
+
 /** Versioned local configuration; loading never connects or executes a server.
  * Private env/header values are returned only by active(), for backend mounting. */
 export function createMcpConfigStore(path: string) {
@@ -74,7 +93,10 @@ export function createMcpConfigStore(path: string) {
       if (rows.length > 100) throw new Error("MCP server limit reached")
       if (write) {
         const temporary = `${file}.${randomUUID()}.tmp`
-        try { await writeFile(temporary, JSON.stringify({ version: 1, servers: rows }, null, 2) + "\n", { mode: 0o600 }); await rename(temporary, file) }
+        try {
+          await writeFile(temporary, JSON.stringify({ version: 1, servers: rows }, null, 2) + "\n", { mode: 0o600 })
+          await publishStage(temporary, file)
+        }
         finally { await rm(temporary, { force: true }) }
       }
       return result
