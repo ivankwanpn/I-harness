@@ -233,7 +233,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   let management: ReturnType<typeof createSessionManagement>
   const drainSession = async (id: string) => { await service.closeSession(id); await approvals.flush() }
   const projects = createProjectScopeBroker(coordinator, options.workspace, createSessionRuntimeVisibility(coordinator), { fence, assertIdle: id => management.assertIdle(id), drainSession,
-    authorityChanged: ids => service.reconcileExecutionAuthority(ids) })
+    async authorityChanged(ids) { await Promise.all([service.reconcileExecutionAuthority(ids), ownedNative.reconcileChildSearches(ids)]) } })
   defer(() => projects.close())
   const projectContexts = new Map<string, () => SessionProjectContext | undefined>()
   const executionAuthorities = new Map<string, NonNullable<SessionServiceOptions["executionAuthority"]>>()
@@ -413,20 +413,31 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
     if(!original.instructions)throw Error('Original instruction binding unavailable')
     const parts=createOwnedGatewayPromptParts(original,{workspace:options.workspace,rewindEnabled:true,mode:observation=>ownedNative.modeFor(id,observation),authority:original.instructions.authority,project:()=>projectContexts.get(id)?.(),shell:()=>ownedNative.agentShellFor(id)})
     const result=await createOwnedGatewayTaskOptions({bindChildHost(childId,host){if(childId!==id||ownedChildHosts.has(id))throw Error('Original child instruction host already bound');original.retain(()=>{if(ownedChildHosts.get(id)===host)ownedChildHosts.delete(id)});ownedChildHosts.set(id,host)},coordinator,prepareTaskChild:nativeContext.prepareTaskChild,resolveModel:selection=>runtime.resolveModel({sessionSelection:selection}),roleSelectionFor:subagents.selectionFor,roleToolsFor:(role)=>settings.get().agents.roleTools?.[role],allowSubagentModelSelection:()=>roleModelsEnabled,autoCompactionEnabled:()=>autoCompactionEnabled,
-      childShellFactory:async({ctx,tools,sessionId})=>{
+      childShellFactory:async({ctx,tools,session,sessionId,factOwner,allowedTools,isToolAllowed,retainCleanup})=>{
         if(!sessionId)return
+        if (session.header?.origin === 'subagent' && session.header.semanticSeed) {
+          await ownedNative.mountTaskChildSearch({ ctx, tools, session, factOwner, sessionId, parentSessionId: id, retainCleanup,
+            allowed: name => isToolAllowed(name) && original.tools.get(name) !== undefined },
+            { coordinator, workspace: options.workspace, authority: () => projects.authorityFor(sessionId, { requireUnarchived: true }),
+              assertParentCurrent: () => original.assertLifetimeCurrent() })
+          return
+        }
         let acquired:Awaited<ReturnType<typeof acquireChildManagedExecution>>
         try{acquired=await acquireChildManagedExecution(service,sessionId)}catch{return}
         const retained:(()=>void|Promise<void>)[]=[]
+        const release=async()=>{while(retained.length){await retained.at(-1)!();retained.pop()}await acquired.release()}
+        let mount:ReturnType<typeof mountChildShellTools>|undefined
         try{
           const host=await ownedNative.acquireExecution(sessionId,cleanup=>retained.push(cleanup),acquired.execution)
           const output=await ownedNative.acquireOutput(sessionId,cleanup=>retained.push(cleanup))
-          mountChildShellTools({ctx,tools,workspace:options.workspace,execution:acquired.execution,host,output:output.service,release:async()=>{for(const cleanup of retained.reverse())await cleanup();await acquired.release()}})
-        }catch{
+          mount=mountChildShellTools({ctx,tools,workspace:options.workspace,execution:acquired.execution,host,output:output.service,
+            allowedTools,isToolAllowed,searchOwner:{session,factOwner},release})
+          retainCleanup(mount.dispose)
+        }catch(cause){
           // Best effort: without a child execution host the child keeps the
           // previous (unavailable) behavior; a spawn must not fail because of it.
-          for(const cleanup of retained.reverse())await Promise.resolve(cleanup()).catch(()=>{})
-          await acquired.release().catch(()=>{})
+          try { await (mount?.dispose() ?? release()) }
+          catch (cleanup) { throw new AggregateError([cause, cleanup], 'Original child Shell cleanup incomplete') }
         }
       },
       childOptions:{generationFactoryFor:(owner,sessionId,selected)=>(action,deps)=>createGenerationLifecycle(owner.view,sessionId,action,{enabled:false,selectedClient:selected},usageObservations?{...deps,beforeDrain:deps?.beforeDrain??(async()=>{}),passiveGeneration:usageObservations.observer}:deps),summaryFactory,

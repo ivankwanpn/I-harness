@@ -42,7 +42,7 @@ export async function assembleChild(
   // tools, whose parent-bound direct entry cannot run in a child context.
   const allowedTools = Object.freeze([...role.tools])
   const current = opts.isRoleToolAllowed
-  if (opts.childShellFactory) await nativeTools.mount(opts.childShellFactory, {
+  if (opts.childShellFactory) await nativeTools.mount(opts.childShellFactory.bind(opts), {
     ctx: childCtx, tools: childReg, session: childSession, factOwner, ...(sessionId !== undefined ? { sessionId } : {}),
     allowedTools, isToolAllowed: name => allowedTools.includes(name) && !!opts.parentRegistry.get(name) && (current?.(name) ?? true),
   })

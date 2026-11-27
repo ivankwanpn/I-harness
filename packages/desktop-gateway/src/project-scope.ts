@@ -305,8 +305,8 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     assertAvailable(projectId)
     return { id: context.id, name: context.name, primaryRoot: context.primaryRoot!, roots: [...context.roots] }
   }
-  async function observeOwner(id: string): Promise<void> {
-    await resolveOwner(id)
+  async function observeOwner(id: string, requireUnarchived = false): Promise<void> {
+    await resolveOwner(id, undefined, requireUnarchived)
     observed.add(id)
   }
   async function changed(projectIds: readonly string[], publish = true): Promise<void> {
@@ -697,8 +697,8 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
       }
       return Object.freeze({confirm:(facts:BootstrapPreparationFactsV2,current:()=>boolean)=>invoke(facts,current),reconcile:(facts:BootstrapPreparationFactsV2)=>invoke(facts,undefined),assertTargetCurrent:owner.targetPreparation.assertTargetCurrent,targetScope:owner.targetScope,close:owner.close})
     },
-    async authorityFor(id: string): Promise<() => AuthorityState> {
-      await observeOwner(id)
+    async authorityFor(id: string, options?: { requireUnarchived?: true }): Promise<() => AuthorityState> {
+      await observeOwner(id, options?.requireUnarchived)
       return () => authority(id)
     },
     /** Resolve the original binding once for execution setup. Both reads stay live. */

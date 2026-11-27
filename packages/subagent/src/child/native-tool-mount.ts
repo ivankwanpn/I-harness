@@ -19,7 +19,8 @@ export function createChildNativeToolMount() {
     },
     async close() {
       while (cleanup.length) {
-        await cleanup[cleanup.length - 1]!()
+        const close = cleanup[cleanup.length - 1]!
+        await close()
         cleanup.pop()
       }
     },

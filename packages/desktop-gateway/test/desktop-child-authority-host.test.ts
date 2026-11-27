@@ -1,9 +1,9 @@
 import { createServer } from "node:http"
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { expect, it } from "vitest"
+import { expect, it, vi } from "vitest"
 import { PluginRegistry } from "@i-harness/plugin-registry"
 import { createHookTrustStore, sha256ClaudePluginTreeSync } from "@i-harness/hooks"
 import { encodeFrame, isRpcSuccess, makeRequest, type HistoryRange, type RpcMessage } from "@i-harness/sdk"
@@ -11,6 +11,18 @@ import { createDesktopHost } from "../src/host.ts"
 import { createHostFixtureTrace } from "./host-fixture-trace.ts"
 import { createHostFixtureModel } from "./host-fixture-model.ts"
 import { append, createSession, deriveMessages, fromJSONL, toJSONL } from '@i-harness/core-session'
+import { createLoopbackProvider, writeSplitSse } from "../../core-agent/test/helpers/provider-loopback.ts"
+
+function hostRpc(host: Awaited<ReturnType<typeof createDesktopHost>>, frames: RpcMessage[], trace: ReturnType<typeof createHostFixtureTrace>) {
+  let nextId = 0
+  return async (method: string, params = {}): Promise<unknown> => {
+    const requestId = ++nextId
+    await trace.run(method, () => host.handleLine(encodeFrame(makeRequest(requestId, method, params))))
+    const reply = frames.find(frame => "id" in frame && frame.id === requestId)
+    if (!isRpcSuccess(reply)) throw new Error(method + ": " + JSON.stringify(reply))
+    return reply.result
+  }
+}
 
 it("the real Desktop host registers authority for independent child ordinary and Code Mode tool dispatch", async () => {
   const trace = createHostFixtureTrace('desktop-child-authority-host')
@@ -52,13 +64,7 @@ it("the real Desktop host registers authority for independent child ordinary and
     llm: { providers: { fixture: { protocol: "openai-completions", baseURL: `${origin}/v1`, models: [{ id: "parent", contextWindow: 272000 }, { id: "child", contextWindow: 272000 }] } }, defaultModel: { provider: "fixture", model: "parent" } } }))
   const frames: RpcMessage[] = []
   host = await trace.run('host/create', () => createDesktopHost({ workspace, settingsPath, sessionDir: join(root, "sessions"), buildProviderClient: createHostFixtureModel(origin, trace), onWrite: frame => { trace.observe(frame); frames.push(frame) } }))
-  let id = 0
-  async function rpc(method: string, params = {}): Promise<unknown> {
-    const requestId = ++id; await trace.run(method, () => host!.handleLine(encodeFrame(makeRequest(requestId, method, params))))
-    const reply = frames.find(frame => "id" in frame && frame.id === requestId)
-    if (!isRpcSuccess(reply)) throw new Error(JSON.stringify(reply))
-    return reply.result
-  }
+  const rpc = hostRpc(host, frames, trace)
     await rpc("initialize")
     await rpc("desktop/provider/mutate", { action: "key/set", id: "fixture", value: "test-only-key" })
     const { sessionId } = await rpc("session/create") as { sessionId: string }
@@ -109,3 +115,124 @@ it("the real Desktop host registers authority for independent child ordinary and
 // Two native inherited-history births each execute ordinary read and Code Mode;
 // the complete measured workload, history reads, and cleanup took 35–42s.
 }, 60_000)
+
+it.skipIf(process.platform !== "win32")("a real restricted Task child searches its bound project and persists both tool results", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-desktop-child-file-search-"))
+  const workspace = join(root, "workspace"), sibling = join(root, "other"), sessions = join(root, "sessions")
+  const settingsPath = join(root, "settings.json"), credentialsPath = join(root, "credentials.json")
+  const allowed = "scope marker in the bound project", decoy = "scope marker in the other project"
+  const childAnswer = "Child search finished", parentAnswer = "Parent received child search"
+  const trace = createHostFixtureTrace("desktop-task-child-file-search")
+  const completes = { type: "response.completed", response: { usage: { input_tokens: 20, output_tokens: 6 } } }
+  const text = (delta: string) => ({ type: "response.output_text.delta", delta })
+  const call = (name: string, args: object, index = 0) => {
+    const item = { id: name, call_id: name, type: "function_call", name, arguments: "" }
+    const encoded = JSON.stringify(args)
+    return [
+      { type: "response.output_item.added", output_index: index, item },
+      { type: "response.function_call_arguments.done", item_id: item.id, arguments: encoded },
+      { type: "response.output_item.done", output_index: index, item: { ...item, arguments: encoded } },
+    ]
+  }
+  const server = await createLoopbackProvider("/v1/responses", [
+    async (response, request) => {
+      expect(request.body.model).toBe("fixture-parent")
+      await writeSplitSse(response, [...call("spawn_agent", {
+        task_name: "scout", agent_type: "explore", message: "Search this project for the marker.", fork_turns: "none", background: false,
+      }), completes])
+    },
+    async (response, request) => {
+      expect(request.body.model).toBe("fixture-child")
+      const catalog = request.body.tools as Array<{ name: string }> | undefined
+      expect(catalog?.map(tool => tool.name).sort() ?? []).toEqual(["glob", "grep"])
+      await writeSplitSse(response, [
+        ...call("glob", { pattern: "*.txt" }),
+        ...call("grep", { pattern: "scope marker", mode: "literal" }, 1),
+        completes,
+      ])
+    },
+    async (response, request) => {
+      expect(request.body.model).toBe("fixture-child")
+      const input = JSON.stringify(request.body.input)
+      expect(input).toContain(allowed)
+      expect(input).not.toContain(decoy)
+      await writeSplitSse(response, [text(childAnswer), completes])
+    },
+    async (response, request) => {
+      expect(request.body.model).toBe("fixture-parent")
+      expect(JSON.stringify(request.body.input)).toContain(childAnswer)
+      await writeSplitSse(response, [text(parentAnswer), completes])
+    },
+  ])
+  let host: Awaited<ReturnType<typeof createDesktopHost>> | undefined
+  try {
+    await Promise.all([mkdir(workspace), mkdir(sibling), mkdir(join(root, "plugins"))])
+    await Promise.all([
+      writeFile(join(workspace, "found.txt"), allowed + "\n"),
+      writeFile(join(sibling, "found.txt"), decoy + "\n"),
+      writeFile(join(sibling, "other.txt"), decoy + "\n"),
+      writeFile(join(root, "plugins", "state.json"), JSON.stringify({ version: 1, sources: [], plugins: [] })),
+      writeFile(credentialsPath, JSON.stringify({ refs: { IH_CHILD_FILE_SEARCH_FIXTURE_KEY: "loopback-only" } })),
+      writeFile(settingsPath, JSON.stringify({
+        autoTitle: false, approvalMode: "dangerous", sandboxMode: "read-only", windowsSandboxBackend: "legacy", codeMode: { mode: "off" },
+        plugins: { subagentModel: true },
+        agents: { roles: { explore: { provider: "fixture", model: "fixture-child" } }, roleTools: { explore: ["glob", "grep"] } },
+        llm: { defaultModel: { provider: "fixture", model: "fixture-parent" }, providers: { fixture: {
+          baseURL: server.baseUrl, protocol: "openai-responses", apiKeyEnv: "IH_CHILD_FILE_SEARCH_FIXTURE_KEY",
+          models: ["fixture-parent", "fixture-child"].map(id => ({ id, contextWindow: 128_000 })),
+        } } },
+      })),
+    ])
+    const frames: RpcMessage[] = []
+    host = await trace.run("host/create", () => createDesktopHost({
+      workspace, sessionDir: sessions, settingsPath, credentialsPath, sessionStore: "jsonl",
+      onWrite: frame => { trace.observe(frame); frames.push(frame) },
+    }))
+    const rpc = hostRpc(host, frames, trace)
+    await rpc("initialize")
+    await rpc("desktop/project/sync", { projects: [
+      { id: "bound", name: "Bound project", roots: [workspace], primaryRoot: workspace },
+      { id: "other", name: "Other project", roots: [sibling], primaryRoot: sibling },
+    ] })
+    const { sessionId } = await rpc("session/create") as { sessionId: string }
+    await rpc("desktop/session/project/bind", { sessionId, projectId: "bound" })
+    await expect(rpc("desktop/session/input/submit", {
+      sessionId, text: "Delegate the search", delivery: "queue", clientToken: "task-child-scoped-search",
+    })).resolves.toMatchObject({ accepted: true })
+    await trace.run("parent/turn-end", () => vi.waitFor(() => {
+      if (server.errors.length) return
+      expect(frames.some(frame => {
+        if (!("method" in frame) || frame.method !== "session/event") return false
+        const params = frame.params as { sessionId?: string; event?: { type?: string } }
+        return params.sessionId === sessionId && params.event?.type === "turn/end"
+      })).toBe(true)
+    }, { timeout: 25_000 }))
+    expect(server.errors).toEqual([])
+    expect(server.requests).toHaveLength(4)
+    const catalog = await rpc("desktop/session/subagents/list", { sessionId }) as { agents: Array<{ sessionId: string; path: string }> }
+    expect(catalog.agents).toEqual([expect.objectContaining({ path: "root/scout", roleName: "explore", status: "completed" })])
+    const childSessionId = catalog.agents[0]!.sessionId
+    expect(await rpc("desktop/session/project/state", { sessionId: childSessionId })).toMatchObject({ projectId: "bound" })
+    const child = await rpc("desktop/session/subagents/history", { sessionId, childSessionId }) as HistoryRange
+    const parent = await rpc("session/history", { sessionId }) as HistoryRange
+    expect(parent.events.filter(event => event.type === "tool/call").map(event => event.name)).toEqual(["spawn_agent"])
+    expect(parent.events).toContainEqual(expect.objectContaining({ type: "assistant/message", text: parentAnswer }))
+
+    await trace.run("host/close", () => host!.close())
+    host = undefined
+    const durable = fromJSONL(await readFile(join(sessions, childSessionId + ".jsonl"), "utf8"))
+    expect(durable.header).toMatchObject({ parentSession: sessionId, origin: "subagent" })
+    expect(durable.events).toContainEqual(expect.objectContaining({ type: "assistant/message", text: childAnswer }))
+    const results = durable.events.filter(event => event.type === "tool/result")
+    expect(results.map(result => result.name).sort()).toEqual(["glob", "grep"])
+    for (const result of results) {
+      expect(result.envelope?.execution).toEqual({ outcome: "succeeded", dispatch: "dispatched" })
+      expect(child.events).toContainEqual(result)
+    }
+    const resultFor = (name: string) => results.find(result => result.name === name)?.envelope?.retention
+    expect(resultFor("glob")).toMatchObject({ kind: "inline", value: { matches: ["found.txt"] } })
+    expect(resultFor("grep")).toMatchObject({ kind: "inline", value: { matches: [expect.objectContaining({ path: "found.txt", text: allowed })] } })
+  } finally {
+    try { await host?.close() } finally { await server.close(); await rm(root, { recursive: true, force: true }) }
+  }
+}, 45_000)
