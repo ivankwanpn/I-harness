@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useId, useState, useSyncExternalStore, useRef, type ReactNode } from "react"
+import { useEffect, useLayoutEffect, useId, useMemo, useState, useSyncExternalStore, useRef, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 import { ArrowUp, Square, Plus, FileText, X, ChevronDown, LoaderCircle, Shield, ShieldCheck, ShieldAlert, Check } from "lucide-react"
 import { useText } from "../design/i18n.ts"
@@ -224,6 +224,8 @@ function restoreUnsentDraft(workspace: string, session: string, draft: UnsentDra
   } finally { applyingDrafts.delete(key) }
 }
 
+export type ComposerStopTarget = { kind: "input"; inputId: string } | { kind: "compact"; operationId: string } | { kind: "legacy"; inputId?: string }
+
 export interface ComposerProps {
   bridge?: DesktopBridge
   draftRequest?: DraftRequester
@@ -241,6 +243,7 @@ export interface ComposerProps {
   sendReason?: string
   executionError?: string
   running: boolean
+  stopTarget?: ComposerStopTarget | null
   modelLabel?: string
   modelControl?: ReactNode
   fileReferencesEnabled?: boolean
@@ -254,7 +257,7 @@ export interface ComposerProps {
   onPrompt(text: string, context?: string, images?: ImageInput[], onAdmitted?: (consumeSubmission?: () => void) => void | Promise<void>, submission?: Submission): Promise<void>
   steeringEnabled?: boolean
   onSteer?: ComposerProps["onPrompt"]
-  onCancel(): void | Promise<void>
+  onCancel(): void | boolean | Promise<void | boolean>
 }
 
 /** Failed admission retains both the complete Composer draft and its created
@@ -417,6 +420,7 @@ function SessionComposer({
   prepareSubmission,
   onPrompt,
   onCancel,
+  stopTarget = { kind: "legacy" },
 }: ComposerProps) {
   const t = useText()
   const attachmentText = useAttachmentText()
@@ -539,20 +543,31 @@ function SessionComposer({
   const [value, setValue] = useState(() => readDraft(workspaceId, sessionId))
   const [draftError, setDraftError] = useState<string>()
   const [draftLoading, setDraftLoading] = useState(!!draftRequest)
-  const [stopPending, setStopPending] = useState(false)
-  const [forceStopReady, setForceStopReady] = useState(false)
+  const stopKind = stopTarget?.kind
+  const stopId = stopTarget?.kind === "compact" ? stopTarget.operationId : stopTarget?.inputId
+  const stopOwner = useMemo(() => running && stopKind ? {} : undefined, [workspaceId, sessionId, running, stopKind, stopId])
+  const [stopAttempt, setStopAttempt] = useState<{ owner: object; token: object; timedOut?: true }>()
+  const stopProgress = stopAttempt?.owner === stopOwner ? stopAttempt : undefined
+  const stopInFlight = stopKind !== "legacy" && stopProgress !== undefined && !stopProgress.timedOut
+  const restartAvailable = stopProgress?.timedOut && stopKind === "legacy" && stopId !== undefined
   const [dispatching, setDispatching] = useState(false)
   const [sendDiagnostic, setSendDiagnostic] = useState("")
   useEffect(() => {
-    if (!running) { setStopPending(false); setForceStopReady(false); return }
-    if (!stopPending) return
-    const timer = setTimeout(() => setForceStopReady(true), 4000)
+    if (!stopProgress || stopProgress.timedOut) return
+    const timer = setTimeout(() => setStopAttempt(current => current === stopProgress ? { ...current, timedOut: true } : current), 4000)
     return () => clearTimeout(timer)
-  }, [running, stopPending])
-  const requestStop = () => { setStopPending(true); setForceStopReady(false); void onCancel() }
+  }, [stopProgress])
+  async function requestStop() {
+    if (!stopOwner || stopInFlight) return
+    const token = {}
+    setStopAttempt({ owner: stopOwner, token })
+    const clear = () => setStopAttempt(current => current?.token === token ? undefined : current)
+    try { if (await onCancel() === false) clear() }
+    catch { clear() }
+  }
   async function forceStop() {
-    if (!bridge) return
-    setForceStopReady(false); setStopPending(true)
+    if (!bridge || !restartAvailable) return
+    setStopAttempt(undefined)
     try { await bridge.request({ kind: "desktop/session/force-stop", workspaceId, sessionId }) } catch { /* reported by the reconnect surface */ }
     try { await bridge.request({ kind: "desktop/session/reload", workspaceId, sessionId }) } catch { /* the restart already cleared live work */ }
   }
@@ -586,6 +601,8 @@ function SessionComposer({
   const pendingDraft = sendState.pending?.includes(sendState.draftIdentity!) === true
   const primaryBusy = (sending && !dispatching) || pendingDraft && hasPayload || readingImages || draftLoading
   const primaryStops = running && !hasPayload && !primaryBusy && !dispatching
+  const stopDisabled = !stopOwner || stopInFlight
+  const stopLabel = stopOwner ? t("停止") : t("沒有可停止的輸入")
   const primaryState = primaryBusy ? "sending" : running ? "running" : "idle"
   async function send(invertDelivery = false): Promise<void> {
     const text = value
@@ -796,16 +813,16 @@ function SessionComposer({
         </span> : null}
         {bridge && contextUsageEnabled ? <ContextUsage bridge={bridge} workspaceId={workspaceId} sessionId={sessionId} refreshKey={contextRefreshKey} /> : null}
         {modelControl ?? (modelLabel ? <span className="composer-model" title={modelLabel}>{modelLabel}</span> : null)}
-        {stopPending && running ? <span className="composer-stop-note" role="status">{t(forceStopReady ? "停止沒有回應" : "正在停止…")}</span> : null}
-        {forceStopReady && bridge ? <button type="button" className="composer-force-stop" onClick={() => { void forceStop() }}>{t("強制停止")}</button> : null}
-        {running && !primaryStops ? <button type="button" className="composer-send" data-state="running" aria-label={t("停止")} title={t("停止")} onClick={requestStop}>
+        {stopProgress ? <span className="composer-stop-note" role="status">{t(stopProgress.timedOut ? "停止沒有回應" : "正在停止…")}</span> : null}
+        {restartAvailable && bridge ? <button type="button" className="composer-force-stop" title={t("重新啟動將中斷此工作區的所有執行。")} onClick={() => { void forceStop() }}>{t("重新啟動工作區")}</button> : null}
+        {running && !primaryStops ? <button type="button" className="composer-send" data-state="running" aria-label={t("停止")} title={stopLabel} disabled={stopDisabled} onClick={() => { void requestStop() }}>
           <Square size={14} fill="currentColor" aria-hidden="true" />
         </button> : null}
         <button type="button" className="composer-send" data-state={primaryState} aria-busy={primaryBusy || undefined}
           data-can-send={canSend ? "1" : "0"} data-payload={hasPayload ? "1" : "0"} data-sending={sending ? "1" : "0"} data-dispatching={dispatching ? "1" : "0"} data-send-diag={sendDiagnostic}
           aria-label={t(primaryStops ? "停止" : "送出")}
-          title={dispatching ? t("已送出，等待代理") : primaryBusy ? t("操作進行中") : primaryStops ? t("停止") : running ? deliveryLabel : t("送出")}
-          disabled={primaryBusy || (!primaryStops && (!canSend || !hasPayload))} onClick={primaryStops ? requestStop : () => { void send() }}>
+          title={dispatching ? t("已送出，等待代理") : primaryBusy ? t("操作進行中") : primaryStops ? stopLabel : running ? deliveryLabel : t("送出")}
+          disabled={primaryBusy || (primaryStops ? stopDisabled : !canSend || !hasPayload)} onClick={primaryStops ? () => { void requestStop() } : () => { void send() }}>
           {primaryBusy ? <LoaderCircle size={18} className="composer-spinner" aria-hidden="true" /> : primaryStops ? <Square size={14} fill="currentColor" aria-hidden="true" /> : <ArrowUp size={18} aria-hidden="true" />}
         </button>
       </>}

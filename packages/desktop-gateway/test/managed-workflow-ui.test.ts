@@ -13,7 +13,7 @@ import type {ManagedRegistryConstruction} from '../../session-executor/src/manag
 import {createDesktopWorkflow} from '../src/workflow.ts'
 import {createManagedWorkflowUi} from '../src/managed-workflow-ui.ts'
 
-it('reads and mutates the original private Goal and stops its queued run',async()=>{
+it.each(['legacy','scoped'] as const)('reads and mutates the original private Goal and stops its queued run (%s)',async stop=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'managed-goal-ui-')),coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root,'sessions')),{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract);await coordinator.create({sessionId:'main'})
  const started=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
  const wire=(text:string)=>`data: ${JSON.stringify({choices:[{delta:{content:text},finish_reason:'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
@@ -27,7 +27,7 @@ it('reads and mutates the original private Goal and stops its queued run',async(
   const before=owner!.goal.read()
   const created=await workflow.mutate('main',{action:'goal',operation:'create',request:{objective:'Finish the task'}});expect(created.goal).toMatchObject({phase:'active',objective:'Finish the task'});expect(()=>before.assertCurrent()).toThrow(/observation expired/);expect(server.requests).toHaveLength(baseline)
   await workflow.mutate('main',{action:'plan',enabled:true,proposal:'First inspect the file'});expect((await workflow.read('main')).plan).toMatchObject({active:true,proposal:'First inspect the file'});await workflow.mutate('main',{action:'plan',enabled:false})
-  await workflow.mutate('main',{action:'goal',operation:'resume',request:{ref:created.goal},start:true});await Promise.race([started.promise,new Promise((_,reject)=>setTimeout(()=>reject(Error('Goal request did not start')),30000))]);await workflow.cancel('main');release.resolve();expect((await workflow.read('main')).goal?.phase).toBe('paused');expect(server.requests).toHaveLength(baseline+1)
+  await workflow.mutate('main',{action:'goal',operation:'resume',request:{ref:created.goal},start:true});await Promise.race([started.promise,new Promise((_,reject)=>setTimeout(()=>reject(Error('Goal request did not start')),30000))]);await (stop==='scoped'?workflow.cancelForInputStop('main'):workflow.cancel('main'));release.resolve();expect((await workflow.read('main')).goal?.phase).toBe('paused');expect(server.requests).toHaveLength(baseline+1)
   await workflow.close();await owner!.goal.close();const count=original.execution.observe().eventCount
   await expect(owner!.goal.mutateGoal('clear',{ref:owner!.goal.read().goal!})).rejects.toThrow('Goal metadata recovery required')
   expect(original.execution.observe().eventCount).toBe(count)

@@ -9,7 +9,7 @@ import type { ProjectCatalog } from "./projects.ts"
 import type { createDesktopWorktrees } from "./worktrees.ts"
 import { readPickedAttachments } from "./file-attachments.ts"
 import { projectRuntimeContexts, syncLiveProjectContexts } from "./project-runtime.ts"
-import { contextRequestParams } from "./context-requests.ts"
+import { contextRequestParams, requireCompactOperationId } from "./context-requests.ts"
 import { dispatchResultReadRequest } from "./result-pages.ts"
 import { contextQuery, contextReference, type ContextItem } from "../../../desktop-gateway/src/context-picker.ts"
 import { resolveCurrentProjectMembers, runtimeForProjectMember } from "./project-membership.ts"
@@ -267,6 +267,7 @@ export async function dispatchDesktopRequest(
     }
     const longOperation = ["desktop/session/compact", "desktop/mcp/mutate", "desktop/mcp/refresh", "desktop/hooks/mutate", "desktop/hooks/refresh", "desktop/wsl/repair", "desktop/wsl/diagnose"].includes(value.kind)
     if (value.kind === "desktop/session/compact") {
+      if (contextParams.operationId !== undefined && !runtime.info.capabilities["desktop-compaction"]?.includes("cancel-operation")) throw new Error("Scoped compaction is not supported by this gateway")
       const recordFailure = dependencies.diagnostics?.createAdmissionFailureRecorder(String(value.workspaceId), String(contextParams.sessionId))
       try { return await runtime.client.request(value.kind, contextParams, 600000) }
       catch (error) { try { recordFailure?.(error) } catch { /* Preserve compaction rejection. */ } throw error }
@@ -662,6 +663,23 @@ export async function dispatchDesktopRequest(
         } catch { /* Preserve the original request rejection. */ }
         throw error
       }
+    }
+    case "desktop/session/input/stop":
+    case "desktop/session/compact/cancel": {
+      const input = value.kind === "desktop/session/input/stop"
+      const target = input ? "inputId" : "operationId"
+      if (Object.keys(value).some(key => !["kind", "workspaceId", "sessionId", target].includes(key))) throw new Error("Invalid stop request")
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const sessionId = requireNonEmpty(value.sessionId, "sessionId")
+      const id = input ? requireNonEmpty(value.inputId, "inputId") : requireCompactOperationId(value.operationId)
+      if (sessionId.length > (input ? 128 : 256) || id.length > 256 || id.includes("\0")) throw new Error("Invalid stop target")
+      if (!dependencies.catalog.get(workspaceId)) throw new Error(`unknown workspace id: ${workspaceId}`)
+      const runtime = dependencies.runtimes.peek?.(workspaceId)
+      if (!runtime) return { cancelled: false, reason: input ? "stale-input" : "stale-operation" }
+      const [family, option] = input ? ["desktop-input", "stop-running"] : ["desktop-compaction", "cancel-operation"]
+      const capabilities = runtime.info.capabilities[family]
+      if (!capabilities?.includes("1") || !capabilities.includes(option)) throw new Error("Scoped stop is not supported by this gateway")
+      return await runtime.client.request(value.kind, { sessionId, [target]: id })
     }
     case "desktop/session/input/state":
     case "desktop/session/input/resume":

@@ -252,6 +252,40 @@ function fixture() {
 }
 
 describe("Desktop SDK router", () => {
+  it("cancels only the manual compaction identified by the caller", async () => {
+    const service = createSessionService({ workspace: process.cwd(), modelPolicy: "required" })
+    const sent: RpcMessage[] = []
+    const send = (frame: RpcMessage) => { sent.push(frame) }
+    const started = Promise.withResolvers<AbortSignal>()
+    const handlers: DesktopHandlers = {
+      async compact(_sessionId, _instructions, signal) {
+        started.resolve(signal)
+        if (!signal.aborted) await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }))
+        return { compacted: false, shadowedSeqs: [], outcome: "ready", publication: "nondurable" }
+      },
+    }
+    const base = createSdkServer(service, { onWrite: createGatewayWrite(send, handlers) })
+    const router = createDesktopRouter(base, send, handlers)
+    const call = (id: number, method: string, params: object) => router.handleLine(encodeFrame(makeRequest(id, method, params)))
+    const current = { sessionId: "s", operationId: "23456789-1234-4321-9876-0123456789ab" }
+    try {
+      await call(1, "initialize", {})
+      expect(sent).toContainEqual(expect.objectContaining({ result: expect.objectContaining({
+        capabilities: expect.objectContaining({ "desktop-compaction": ["1", "cancel-operation"] }),
+      }) }))
+      const work = call(2, "desktop/session/compact", current)
+      const signal = await started.promise
+      await call(3, "desktop/session/compact/cancel", { sessionId: "s", operationId: "12345678-1234-4321-9876-0123456789ab" })
+      expect(sent).toContainEqual(makeSuccess(3, { cancelled: false, reason: "stale-operation" }))
+      expect(signal.aborted).toBe(false)
+      await call(4, "desktop/session/compact/cancel", current)
+      expect(signal.aborted).toBe(true)
+      expect(sent).toContainEqual(makeSuccess(4, { cancelled: true }))
+      await work
+      await call(5, "desktop/session/compact/cancel", current)
+      expect(sent).toContainEqual(makeSuccess(5, { cancelled: false, reason: "stale-operation" }))
+    } finally { await router.close() }
+  })
   it("reserves a session while an asynchronous model switch is pending", async () => {
     const sent: RpcMessage[] = []
     let release!: () => void

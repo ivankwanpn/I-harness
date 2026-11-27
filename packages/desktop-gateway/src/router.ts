@@ -23,7 +23,7 @@ import { ModelUnavailableError } from "@i-harness/session-executor"
 import { boundSearchHits } from "./search-bounds.ts"
 import { providerCommand } from "./provider-wire.ts"
 import { createProviderProbes } from "./provider-probes.ts"
-import { DESKTOP_INPUT_PROJECT_CHECKED } from "./input.ts"
+import { DESKTOP_INPUT_PROJECT_CHECKED, DESKTOP_INPUT_STOP_RUNNING } from "./input.ts"
 import { dispatchGatewayProjectFiles } from "./project-files.ts"
 import { dispatchGatewayContentSearch } from "./project-content-search.ts"
 import { usageRequest } from "./usage-wire.ts"
@@ -31,6 +31,10 @@ import { instructionRequest } from './instructions/wire.ts'
 import { canonicalJsonData } from '@i-harness/core-session'
 import { ForkAdmissionError } from '@i-harness/session-persistence'
 import { AsyncLocalStorage } from 'node:async_hooks'
+
+function isCompactionId(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+}
 
 /** Augment only an initialize reply, without modifying the SDK server's object. */
 export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers, internalIds: Set<string> = new Set()): GatewayWrite {
@@ -57,8 +61,11 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.approvalRules) capabilities["desktop-approval-rules"] = ["1"]
     if (handlers.draftSession) capabilities["desktop-draft-create"] = ["1"]
     if (handlers.projects) capabilities["desktop-project-scope"] = ["1"]
-    if (handlers.input) capabilities["desktop-input"] = typeof handlers.input.checkProjectScope === "function"
-      ? ["1", DESKTOP_INPUT_PROJECT_CHECKED] : ["1"]
+    if (handlers.input) capabilities["desktop-input"] = [
+      "1",
+      ...(typeof handlers.input.checkProjectScope === "function" ? [DESKTOP_INPUT_PROJECT_CHECKED] : []),
+      ...(typeof handlers.input.stop === "function" ? [DESKTOP_INPUT_STOP_RUNNING] : []),
+    ]
     if (handlers.workflow) capabilities["desktop-workflow"] = ["1"]
     if (handlers.agentShell) capabilities["desktop-agent-shell"] = ["1"]
     if (handlers.wslSettings) capabilities["desktop-wsl-settings"] = ["1"]
@@ -83,7 +90,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
       capabilities["desktop-memory"] = ["1"]
       capabilities["desktop-memory-authoring"] = ["1"]
     }
-    if (handlers.compact !== undefined) capabilities["desktop-compaction"] = ["1"]
+    if (handlers.compact !== undefined) capabilities["desktop-compaction"] = ["1", "cancel-operation"]
     if (handlers.sessionQuery !== undefined) capabilities["desktop-session-search"] = ["1"]
     if (handlers.sandboxState !== undefined) capabilities["desktop-sandbox"] = ["1"]
     if (handlers.interaction !== undefined) capabilities["desktop-interaction"] = ["1"]
@@ -129,7 +136,7 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
   let requestsInFlight = 0
   const forkRequestContext = new AsyncLocalStorage<{ active: boolean }>()
   const activePrompts = new Map<string, number>()
-  const compacting = new Map<string, AbortController>()
+  const compacting = new Map<string, { controller: AbortController; operationId?: string }>()
   const compactJobs = new Set<Promise<unknown>>()
   const probes = handlers.provider ? createProviderProbes(handlers.provider) : undefined
   const modelSwitches = new Map<string, Promise<unknown>>()
@@ -182,14 +189,14 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
           catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
           return
         }
-        if (message.method === "shutdown") for (const controller of compacting.values()) controller.abort()
+        if (message.method === "shutdown") for (const { controller } of compacting.values()) controller.abort()
         const scopedSessionId = asRecord(message.params)?.sessionId
         if (typeof scopedSessionId === "string" && (modelSwitches.has(scopedSessionId) || forkSources.has(scopedSessionId))
           && ["session/prompt", "session/model/set", "session/rewind/execute"].includes(message.method)) {
           send(makeFailure(message.id, INVALID_REQUEST, "session model change is running", { reason: "session_busy" })); return
         }
         if (message.method === "session/cancel" && typeof scopedSessionId === "string" && compacting.has(scopedSessionId)) {
-          compacting.get(scopedSessionId)!.abort()
+          compacting.get(scopedSessionId)!.controller.abort()
           send(makeSuccess(message.id, { cancelled: true }))
           return
         }
@@ -350,9 +357,10 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
         const params = asRecord(message.params)
         const sessionId = params?.sessionId
         if (typeof sessionId !== "string" || !sessionId || sessionId.length > 128) { send(makeFailure(message.id, INVALID_PARAMS, "Invalid session")); return }
-        if (compacting.has(sessionId) || modelSwitches.has(sessionId) || forkSources.has(sessionId)) { send(makeFailure(message.id, INVALID_REQUEST, "Session is busy")); return }
+        const operation = message.method.slice("desktop/session/input/".length)
+        const busy = compacting.has(sessionId) || modelSwitches.has(sessionId) || forkSources.has(sessionId)
+        if (busy && operation !== "stop") { send(makeFailure(message.id, INVALID_REQUEST, "Session is busy")); return }
         try {
-          const operation = message.method.slice("desktop/session/input/".length)
           let result: unknown
           if (operation === "submit") {
             if (typeof params?.text !== "string" || !["queue", "steer"].includes(String(params.delivery))) throw new Error("Invalid input")
@@ -364,6 +372,14 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
           } else if (operation === "state") result = await handlers.input.state(sessionId)
           else if (operation === "resume") result = await handlers.input.resume(sessionId)
           else if (operation === "cancel" && typeof params?.inputId === "string") result = await handlers.input.cancel(sessionId, params.inputId)
+          else if (operation === "stop" && handlers.input.stop) {
+            const inputId = params?.inputId
+            if (typeof inputId !== "string" || !inputId || inputId.length > 256 || inputId.includes("\0")) throw new Error("Invalid input")
+            result = busy ? { cancelled: false, reason: "stale-input" } : await handlers.input.stop(sessionId, inputId, async () => {
+              try { handlers.interaction?.cancelSession?.(sessionId) }
+              finally { await handlers.workflow?.cancelForInputStop(sessionId) }
+            })
+          }
           else throw new Error("Invalid input operation")
           send(makeSuccess(message.id, result))
         } catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
@@ -644,6 +660,21 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
         catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
         return
       }
+      if (message.method === "desktop/session/compact/cancel" && handlers.compact !== undefined) {
+        const params = asRecord(message.params)
+        if (typeof params?.sessionId !== "string" || !params.sessionId || !isCompactionId(params.operationId)) {
+          send(makeFailure(message.id, INVALID_PARAMS, "sessionId and a compaction operationId are required"))
+          return
+        }
+        const operation = compacting.get(params.sessionId)
+        if (!operation || operation.operationId !== params.operationId) {
+          send(makeSuccess(message.id, { cancelled: false, reason: "stale-operation" }))
+          return
+        }
+        operation.controller.abort()
+        send(makeSuccess(message.id, { cancelled: true }))
+        return
+      }
       if (message.method === "desktop/session/compact" && handlers.compact !== undefined) {
         const params = asRecord(message.params)
         if (typeof params?.sessionId !== "string" || !params.sessionId
@@ -652,12 +683,17 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
           return
         }
         const sessionId = params.sessionId
+        const operationId = params.operationId
+        if (operationId !== undefined && !isCompactionId(operationId)) {
+          send(makeFailure(message.id, INVALID_PARAMS, "Invalid compaction operationId"))
+          return
+        }
         if (activePrompts.has(sessionId) || compacting.has(sessionId) || modelSwitches.has(sessionId)) {
           send(makeFailure(message.id, INVALID_REQUEST, "session is busy", { reason: "session_busy" }))
           return
         }
         const controller = new AbortController()
-        compacting.set(sessionId, controller)
+        compacting.set(sessionId, { controller, operationId })
         const compact = handlers.compact
         const job = Promise.resolve().then(() => compact(sessionId, params.instructions as string | undefined,
           AbortSignal.any([controller.signal, AbortSignal.timeout(120000)])))
@@ -858,7 +894,7 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
         try { await handlers.projectContentSearch?.close() } catch (cause) { failures.push(cause) }
         try { await probes?.close() } catch (cause) { failures.push(cause) }
         await Promise.allSettled(modelSwitches.values())
-        for (const controller of compacting.values()) controller.abort()
+        for (const { controller } of compacting.values()) controller.abort()
         for (const sessionId of activePrompts.keys()) {
           const id = `desktop-internal-${randomUUID()}`
           internalIds.add(id)

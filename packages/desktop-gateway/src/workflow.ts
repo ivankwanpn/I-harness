@@ -73,6 +73,50 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
     }
   }
   function stopGoal(id: string) { goalRuns.get(id)?.controller.abort(new Error("Goal stopped by user")) }
+  async function pauseStoppedGoal(id: string, goal: Readonly<GoalView> | null | undefined, managed?: ManagedWorkflowUi,
+    assembly?: NonNullable<ReturnType<SessionService['liveAssembly']>>) {
+    if (goal?.phase === 'active') {
+      const ref = { id: goal.id, revision: goal.revision }
+      if (managed) await managed.goal.mutateGoal('pause', { ref })
+      else {
+        const event = applyGoalMutation(goal, 'pause', { ref }, Date.now()).event
+        if (assembly) committedFactSeqs(await metadataFactsFor(assembly.session, assembly.metadataFacts).admit(event))
+        else await save(id, event)
+      }
+    }
+    await coordinator.flush(id)
+    options.onChanged?.(id)
+  }
+  async function cancelForInputStop(id: string) {
+    const running = goalRuns.get(id)
+    if (!running) return
+    const version = goalVersions.get(id)
+    let managed: ManagedWorkflowUi | undefined
+    let assembly: ReturnType<SessionService['liveAssembly']>
+    let target: { id: string; revision: number } | undefined
+    try {
+      managed = options.managed?.(id)
+      assembly = managed ? undefined : service.liveAssembly(id)
+      const goal = managed ? managed.goal.read().goal : assembly && foldGoal(assembly.session.events)
+      if (goal?.phase === 'active') target = { id: goal.id, revision: goal.revision }
+    } finally {
+      // This run is selected synchronously at the matched input's Stop.
+      running.controller.abort(new Error("Goal stopped by user"))
+    }
+    await running.job
+    if (!target || goalVersions.get(id) !== version) return
+    if (managed) {
+      try { managed.assertCurrent() } catch { return }
+      const goal = managed.goal.read().goal
+      if (!goal || goal.phase !== 'active' || goal.id !== target.id || goal.revision !== target.revision) return
+      await pauseStoppedGoal(id, goal, managed)
+    } else {
+      if (!assembly || service.liveAssembly(id) !== assembly) return
+      const goal = foldGoal(assembly.session.events)
+      if (!goal || goal.phase !== 'active' || goal.id !== target.id || goal.revision !== target.revision) return
+      await pauseStoppedGoal(id, goal, undefined, assembly)
+    }
+  }
   function startGoal(id: string, objective: string, originalGoalId?:string) {
     if (closed) throw new Error("Workflow closed")
     const previous = goalRuns.get(id)
@@ -184,7 +228,7 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
     return read(id)
   }
   return {
-    read, mutate,
+    read, mutate, cancelForInputStop,
     hasActiveWork: () => goalRuns.size > 0,
     async cancel(id: string) {
       const running=goalRuns.get(id);if(!running)return
@@ -192,9 +236,7 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
       const managed=options.managed?.(id);if(managed)await running.job
       const session = managed?undefined:service.liveSession(id)
       const current = managed?managed.goal.read().goal:session&&foldGoal(session.events)
-      if(current?.phase==='active'){if(managed)await managed.goal.mutateGoal('pause',{ref:current});else if(session)await save(id,applyGoalMutation(current,'pause',{ref:current},Date.now()).event)}
-      await coordinator.flush(id)
-      options.onChanged?.(id)
+      await pauseStoppedGoal(id, current, managed)
     },
     async output(id: string, jobId: string) {
       await coordinator.profile(id)

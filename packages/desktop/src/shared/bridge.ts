@@ -51,7 +51,7 @@ export type DesktopRequest =
   | { kind: "desktop/session/project/state"; workspaceId: string; sessionId: string }
   | { kind: "desktop/session/input/submit"; workspaceId: string; sessionId: string; text: string; delivery: "queue" | "steer"; context?: string; images?: ImageInput[]; clientToken?: string }
   | { kind: "desktop/session/input/state" | "desktop/session/input/resume"; workspaceId: string; sessionId: string }
-  | { kind: "desktop/session/input/cancel"; workspaceId: string; sessionId: string; inputId: string }
+  | { kind: "desktop/session/input/cancel" | "desktop/session/input/stop"; workspaceId: string; sessionId: string; inputId: string }
   | { kind: "desktop/agent-shell/state"; workspaceId: string }
   | { kind: "desktop/agent-shell/configure"; workspaceId: string; patch: { shell: import("@i-harness/desktop-gateway/src/agent-shell.ts").AgentShellOption["id"] } }
   | { kind: "desktop/session/workflow/read"; workspaceId: string; sessionId: string }
@@ -122,7 +122,8 @@ export type DesktopRequest =
   | { kind: "window/reset-bounds" | "desktop/local/state" }
   | { kind: "desktop/local/configure"; notifications?: boolean; locale?: "zh-TW" | "en"; terminalShell?: TerminalShellChoice; terminalFontFamily?: string; followupDelivery?: "queue" | "steer" }
   | { kind: "desktop/session/search"; workspaceId: string; query: string; sessionId?: string; limit?: number }
-  | { kind: "desktop/session/compact"; workspaceId: string; sessionId: string; instructions?: string }
+  | { kind: "desktop/session/compact"; workspaceId: string; sessionId: string; instructions?: string; operationId?: string }
+  | { kind: "desktop/session/compact/cancel"; workspaceId: string; sessionId: string; operationId: string }
   | { kind: "desktop/memory/state" | "desktop/memory/summary"; workspaceId: string }
   | { kind: "desktop/memory/configure"; workspaceId: string; enabled: boolean }
   | { kind: "desktop/memory/list"; workspaceId: string; limit?: number }

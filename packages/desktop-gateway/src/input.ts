@@ -2,13 +2,14 @@ import { createHash, randomUUID } from "node:crypto"
 import type { AsyncInbox, ImageInput, SessionEventView } from "@i-harness/core-session"
 import type { PendingInputSummary, SessionCoordinator } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
-import { createDurableSessionLoader } from "@i-harness/session-executor"
+import { createDurableSessionLoader, waitForStopSettlement } from "@i-harness/session-executor"
 import { isFactRecoveryRequired, isManagedFactOwner, readInbox, validateImages } from "@i-harness/core-session"
 import { modelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 
 /** Exact producer-owned document identity for permanent session cleanup. */
 export const desktopInputReceiptDocumentKey = (sessionId: string) => `desktop-input-tokens-${createHash("sha256").update(sessionId).digest("hex")}`
 export const DESKTOP_INPUT_PROJECT_CHECKED = "project-checked"
+export const DESKTOP_INPUT_STOP_RUNNING = "stop-running"
 export type DesktopInputProjectCheck = (sessionId: string) => Promise<unknown>
 type ManagedInputOwner=NonNullable<Awaited<ReturnType<NonNullable<SessionService['managedInputFor']>>>>
 type ManagedInputObservation=ReturnType<ManagedInputOwner['observe']>
@@ -202,6 +203,19 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
         return { cancelled }
       })
     },
+    ...(typeof service.stopRunningInput === "function" ? {
+      async stop(id: string, inputId: string, stopAdjacent: () => Promise<void>) {
+        if (closed) throw new Error("Input service closed")
+        const original = service.stopRunningInput!(id, inputId)
+        if (!original.cancelled) return original
+        // Start adjacent cancellation synchronously in the matched owner turn.
+        // The awaited settlement can outlast this input, so it cannot start
+        // any session-wide cleanup.
+        const adjacent = stopAdjacent()
+        await waitForStopSettlement(Promise.all([original.settlement, adjacent]))
+        return { cancelled: true as const }
+      },
+    } : {}),
     resume(id: string) {
       return serial(id, async () => {
         if (closed) throw new Error("Input service closed")

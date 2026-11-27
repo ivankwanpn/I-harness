@@ -156,6 +156,7 @@ const english = {
   "主導覽": "Main navigation",
   "背景訊息": "Background message",
   "已儲存；有效權限仍以目前狀態為準，重新啟動工作區後生效。": "Saved. Effective permissions are shown above; restart the workspace to apply pending changes.",
+  "重新啟動工作區": "Restart workspace", "重新啟動將中斷此工作區的所有執行。": "Restarting will interrupt all work in this workspace.", "沒有可停止的輸入": "No input is available to stop",
   "請先選擇工作區以使用此設定。": "Select a workspace to use this setting.", "等待工作區連線。": "Waiting for workspace connection.", "目前工作區後端未提供此功能。": "This workspace gateway does not provide this feature.",
   "選擇會話以開啟工作流程。": "Select a conversation to open workflows.", "背景工作": "Background work", "代審": "Review agents", "耐久輸入不可用": "Durable input unavailable",
   "子代理列表": "Subagents", "正在讀取子代理…": "Loading subagents…", "尚無子代理": "No subagents yet", "主會話": "Parent conversation", "返回子代理列表": "Back to subagents", "子代理執行記錄": "Subagent transcript",

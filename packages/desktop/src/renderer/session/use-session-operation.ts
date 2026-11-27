@@ -4,9 +4,9 @@ import type { ImageInput } from "@i-harness/sdk"
 import type { SessionModelSelection, SessionModelState } from "@i-harness/sdk"
 
 export type CompactResult = import('@i-harness/sdk').SessionCompactResult
-export interface SessionOperation { kind: "prompt" | "compact" | "model"; busy: boolean; error?: string; result?: CompactResult }
+export interface SessionOperation { kind: "prompt" | "compact" | "model"; busy: boolean; operationId?: string; error?: string; result?: CompactResult }
 type InputOperation =
-  | { kind: "compact"; instructions?: string }
+  | { kind: "compact"; instructions?: string; operationId?: string }
   | { kind: "prompt"; text: string; context?: string; images?: ImageInput[]; token: string; delivery: "queue" | "steer"; onAdmitted?(inputId?: string): void }
 export const operationKey = (workspaceId: string, sessionId: string) => JSON.stringify([workspaceId, sessionId])
 
@@ -19,7 +19,8 @@ export function useSessionOperation(bridge: DesktopBridge, durableInputs = false
     const key = operationKey(workspaceId, sessionId)
     if (locks.current.has(key)) throw new Error("Session is busy")
     locks.current.add(key)
-    setStates((old) => ({ ...old, [key]: { kind, busy: true } }))
+    const operationId = kind === "compact" ? operation.operationId : undefined
+    setStates((old) => ({ ...old, [key]: { kind, busy: true, ...(operationId ? { operationId } : {}) } }))
     let unsubscribe: (() => void) | undefined
     let acknowledged = false
     if (kind === "prompt" && operation.onAdmitted && !durableInputs) {
@@ -43,7 +44,7 @@ export function useSessionOperation(bridge: DesktopBridge, durableInputs = false
         ? durableInputs
           ? { kind: "desktop/session/input/submit", workspaceId, sessionId, text: operation.text, delivery: operation.delivery, clientToken: operation.token, ...(operation.context ? { context: operation.context } : {}), ...(operation.images?.length ? { images: operation.images } : {}) }
           : { kind: "session/prompt", workspaceId, sessionId, prompt: operation.text, clientToken: operation.token, ...(operation.context ? { context: operation.context } : {}), ...(operation.images?.length ? { images: operation.images } : {}) }
-        : { kind: "desktop/session/compact", workspaceId, sessionId, ...(operation.instructions?.trim() ? { instructions: operation.instructions } : {}) })
+        : { kind: "desktop/session/compact", workspaceId, sessionId, ...(operationId ? { operationId } : {}), ...(operation.instructions?.trim() ? { instructions: operation.instructions } : {}) })
       const result = kind === "compact" ? value as CompactResult : undefined
       if (kind === "prompt" && !acknowledged) {
         const receipt = value as { inputId?: string } | undefined

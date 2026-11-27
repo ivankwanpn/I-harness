@@ -76,6 +76,7 @@ export interface ConversationView {
   sendReason?: string
   executionError?: string
   running: boolean
+  stopTarget?: ComposerProps["stopTarget"]
   modelLabel?: string
   modelState?: SessionModelState
   onSetModel?(selection: SessionModelSelection): Promise<void>
@@ -97,7 +98,7 @@ export interface ConversationView {
   historyNotice?: string
   pending: PendingInteraction[]
   onPrompt: ComposerProps["onPrompt"]
-  onCancel(): void | Promise<void>
+  onCancel: ComposerProps["onCancel"]
   onCancelTask(taskId: string): void
   onCancelQueue(queueId: string): void
   onReply(reply: InteractionReply): Promise<void>
@@ -558,7 +559,7 @@ export function Workbench({
                     </div>
                   })()}
                 </div>
-                <PendingPanel key={`${selectedWorkspaceId}:${selectedSessionId}`} draftOwner={bridge} workspaceId={selectedWorkspaceId} pending={conversation.pending} onReply={conversation.onReply} onStop={conversation.running ? conversation.onCancel : undefined} />
+                <PendingPanel key={JSON.stringify([selectedWorkspaceId, selectedSessionId, conversation.stopTarget])} draftOwner={bridge} workspaceId={selectedWorkspaceId} pending={conversation.pending} onReply={conversation.onReply} onStop={conversation.running && conversation.stopTarget !== null ? conversation.onCancel : undefined} />
                 <div hidden={conversation.pending.length > 0}>
                   {composerProject}
                   {isolatedSession && selectedWorkspace ? <WorktreeIndicator key={selectedWorkspace.id} bridge={bridge} workspaceId={selectedWorkspace.id} path={selectedWorkspace.path}
@@ -585,6 +586,7 @@ export function Workbench({
                   sendReason={conversation.sendReason}
                   executionError={conversation.executionError}
                   running={conversation.running}
+                  stopTarget={conversation.stopTarget}
                   modelLabel={conversation.modelLabel}
                   modelControl={bridge && conversation.onSetModel ? <SessionModelPicker key={`${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} current={conversation.modelState} disabled={conversation.running || conversation.operation?.busy === true} onSelect={async selection => { await conversation.onSetModel!(selection); if (contextModelOwner.current === currentContextModelOwner) setContextModelRevision(value => value + 1) }} /> : undefined}
                   captureSubmission={(text, _images, delivery) => captureSessionSubmission(selectedWorkspaceId, selectedSessionId, text, delivery)}

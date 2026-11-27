@@ -178,6 +178,64 @@ it("restores running from the authoritative queue on selection and retains it un
   await act(async () => captured.props!.conversation!.onCancel())
   expect(captured.props!.conversation!.running).toBe(true)
 })
+
+it("stops only the input owned by the clicked render when the queue has already advanced", async () => {
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  let inputId = "input-A"
+  const requests = fixture(request => {
+    if (request.kind === "desktop/capabilities") return Promise.resolve({ "desktop-input": ["1", "stop-running"] })
+    if (request.kind === "desktop/session/input/state") return Promise.resolve({
+      items: [{ id: inputId, text: inputId, delivery: "queue", intent: "user", state: "running", order: 1 }], resumable: false,
+    })
+    if (request.kind === "desktop/session/input/stop") return Promise.resolve(request.inputId === inputId ? { cancelled: true } : { cancelled: false, reason: "stale-input" })
+    return undefined
+  }, listener => { emit = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("s"))
+  await waitFor(() => expect(captured.props!.conversation!.stopTarget).toEqual({ kind: "input", inputId: "input-A" }))
+  const clickedStop = captured.props!.conversation!.onCancel
+  inputId = "input-B"
+  act(() => emit({ kind: "sdk/notification", workspaceId: "w1", method: "session/execution-state", params: { sessionId: "s", running: true, queued: 0, revision: 2 } }))
+  await waitFor(() => expect(captured.props!.conversation!.stopTarget).toEqual({ kind: "input", inputId: "input-B" }))
+  await act(async () => { expect(await clickedStop()).toBe(false) })
+  expect(requests.mock.calls.filter(([request]) => ["desktop/session/input/stop", "desktop/session/input/cancel", "session/cancel"].includes(request.kind)))
+    .toEqual([[{ kind: "desktop/session/input/stop", workspaceId: "w1", sessionId: "s", inputId: "input-A" }]])
+
+  const selectedStop = captured.props!.conversation!.onCancel
+  act(() => captured.props!.onSelectSession("other"))
+  await act(async () => { expect(await selectedStop()).toBe(false) })
+  expect(requests.mock.calls.filter(([request]) => request.kind === "desktop/session/input/stop")).toHaveLength(1)
+})
+
+it("keeps early admission unscoped work unstopped and cancels only the submitted compaction ID", async () => {
+  const compact = defer()
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  const requests = fixture(request => {
+    if (request.kind === "desktop/capabilities") return Promise.resolve({ "desktop-input": ["1", "stop-running"], "desktop-compaction": ["1", "cancel-operation"] })
+    if (request.kind === "desktop/session/input/state") return Promise.resolve({ items: [{ id: "preparing", state: "queued" }], resumable: false })
+    if (request.kind === "desktop/session/compact") return compact.promise
+    if (request.kind === "desktop/session/compact/cancel") return Promise.resolve({ cancelled: false, reason: "stale-operation" })
+    return undefined
+  }, listener => { emit = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.capabilities["desktop-input"]).toContain("stop-running"))
+  act(() => captured.props!.onSelectSession("s"))
+  await waitFor(() => expect(captured.props!.conversation!.queue).toBeDefined())
+  const executionState = (running: boolean, revision: number) => emit({ kind: "sdk/notification", workspaceId: "w1", method: "session/execution-state", params: { sessionId: "s", running, queued: 1, revision } })
+  act(() => executionState(true, 1))
+  expect(captured.props!.conversation!.running).toBe(true)
+  expect(captured.props!.conversation!.stopTarget).toBeNull()
+  await act(async () => { expect(await captured.props!.conversation!.onCancel()).toBe(false) })
+  act(() => executionState(false, 2))
+  let compacting!: Promise<void>
+  act(() => { compacting = captured.props!.conversation!.onCompact!() })
+  const sent = requests.mock.calls.map(([request]) => request).find(request => request.kind === "desktop/session/compact")
+  expect(sent?.operationId).toMatch(/^[0-9a-f-]{36}$/i)
+  expect(captured.props!.conversation!.stopTarget).toEqual({ kind: "compact", operationId: sent!.operationId })
+  await act(async () => { expect(await captured.props!.conversation!.onCancel()).toBe(false) })
+  expect(requests).toHaveBeenCalledWith({ kind: "desktop/session/compact/cancel", workspaceId: "w1", sessionId: "s", operationId: sent!.operationId })
+  expect(requests.mock.calls.some(([request]) => ["session/cancel", "desktop/session/input/stop", "desktop/session/input/cancel"].includes(request.kind))).toBe(false)
+  await act(async () => { compact.resolve({ compacted: false, shadowedSeqs: [] }); await compacting })
+})
 it.each(["queued", "idle"] as const)("does not replace a newer %s notification with an earlier queue snapshot", async status => {
   const pending = defer()
   let queueReads = 0

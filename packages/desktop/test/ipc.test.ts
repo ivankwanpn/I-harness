@@ -58,6 +58,38 @@ function fixture() {
 }
 
 describe("Desktop scoped IPC", () => {
+  it("forwards exact input and compaction stops only to an already-ready capable workspace", async () => {
+    const f = fixture()
+    const peek = vi.fn<NonNullable<DesktopIpcDependencies["runtimes"]["peek"]>>()
+    f.dependencies.runtimes.peek = peek
+    const input = { kind: "desktop/session/input/stop", workspaceId: ENTRY.id, sessionId: "session", inputId: "input-A" }
+    const operationId = "01020304-0506-0708-090a-0b0c0d0e0f00"
+    const compact = { kind: "desktop/session/compact/cancel", workspaceId: ENTRY.id, sessionId: "session", operationId }
+    await expect(dispatchDesktopRequest({ ...input, inputId: "" }, f.dependencies)).rejects.toThrow("inputId")
+    await expect(dispatchDesktopRequest({ ...compact, operationId: "loose" }, f.dependencies)).rejects.toThrow("operationId")
+    expect(peek).not.toHaveBeenCalled()
+    await expect(dispatchDesktopRequest({ ...input, workspaceId: "other" }, f.dependencies)).rejects.toThrow("unknown workspace")
+    await expect(dispatchDesktopRequest(input, f.dependencies)).resolves.toEqual({ cancelled: false, reason: "stale-input" })
+    await expect(dispatchDesktopRequest(compact, f.dependencies)).resolves.toEqual({ cancelled: false, reason: "stale-operation" })
+    expect(f.get).not.toHaveBeenCalled()
+    expect(f.request).not.toHaveBeenCalled()
+
+    const runtime = (capabilities: Record<string, string[]>) => ({ client: { request: f.request }, info: { capabilities } }) as unknown as NonNullable<ReturnType<typeof peek>>
+    peek.mockReturnValue(runtime({ "desktop-input": ["1"], "desktop-compaction": ["1"] }))
+    await expect(dispatchDesktopRequest(input, f.dependencies)).rejects.toThrow("Scoped stop")
+    await expect(dispatchDesktopRequest(compact, f.dependencies)).rejects.toThrow("Scoped stop")
+    expect(f.request).not.toHaveBeenCalled()
+    const ready = runtime({ "desktop-input": ["1", "stop-running"], "desktop-compaction": ["1", "cancel-operation"] })
+    peek.mockReturnValue(ready)
+    f.setRuntime(ready)
+    f.request.mockResolvedValueOnce({ cancelled: false, reason: "stale-input" }).mockResolvedValueOnce({ cancelled: true })
+    await expect(dispatchDesktopRequest(input, f.dependencies)).resolves.toEqual({ cancelled: false, reason: "stale-input" })
+    await expect(dispatchDesktopRequest(compact, f.dependencies)).resolves.toEqual({ cancelled: true })
+    expect(f.request.mock.calls).toEqual([[input.kind, { sessionId: "session", inputId: "input-A" }], [compact.kind, { sessionId: "session", operationId }]])
+    expect(f.get).not.toHaveBeenCalled()
+    await dispatchDesktopRequest({ ...compact, kind: "desktop/session/compact" }, f.dependencies)
+    expect(f.request).toHaveBeenLastCalledWith("desktop/session/compact", { sessionId: "session", operationId }, 600000)
+  })
   it("opens turn-aware history and the current preview without fetching execution state twice", async () => {
     const f = fixture()
     const dashboard = vi.fn(async () => ({ sessions: [] }))

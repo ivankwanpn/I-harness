@@ -7,6 +7,7 @@ export {
   type SessionProjectContext,
 } from "./assembly.ts"
 export { createDurableSessionLoader } from "./durable-session.ts"
+export { waitForStopSettlement } from './lifecycle/stop-settlement.ts'
 export { createUnmanagedTaskChildHost } from './lifecycle/task-child-host.ts'
 export type { InstructionReport, InstructionPublication } from './context/instructions/diagnostics.ts'
 export { openExecutorDocument } from './lifecycle/managed-document.ts'

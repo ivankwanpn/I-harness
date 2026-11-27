@@ -133,6 +133,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const capabilities = capabilitiesReady ? capabilitySnapshot.value : {}
   const inputCapabilities = capabilities["desktop-input"]
   const usesDurableInput = inputCapabilities?.includes("1") === true
+  const supportsInputStop = usesDurableInput && inputCapabilities.includes("stop-running")
+  const compactCapabilities = capabilities["desktop-compaction"]
+  const supportsCompactStop = compactCapabilities?.includes("1") === true && compactCapabilities.includes("cancel-operation")
   const checksProjectOnAdmission = usesDurableInput && inputCapabilities.includes("project-checked")
   const durableInputSupported = useRef(false)
   durableInputSupported.current = usesDurableInput
@@ -147,7 +150,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const assistantPreviews = useRef(new Map<string, AssistantPreview>())
   const [optimistic, setOptimistic] = useState<PendingEcho[]>([])
   const [model, setModel] = useState<SessionModelState>()
-  const [queue, setQueue] = useState<SessionQueueItem[]>()
   const [tasks, setTasks] = useState<AgentTaskView[]>()
   const [taskError, setTaskError] = useState<string>()
   const [taskActionFailure, setTaskActionFailure] = useState<{ scope: { workspaceId?: string; sessionId?: string }; message: string }>()
@@ -188,6 +190,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     selection.current = { workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }
     executionRevision.current = undefined
   }
+  const [queueSnapshot, setQueueSnapshot] = useState<{ scope: typeof selection.current; items: SessionQueueItem[] }>()
+  const queue = queueSnapshot?.scope === selection.current ? queueSnapshot.items : undefined
   const reviewRequest = useRef(0)
   const navigationVersion = useRef(0)
   const historySurfaceRevision = useRef(0)
@@ -328,7 +332,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       ])
       if (selection.current !== scope || request !== tasksRequest.current) return
       const items = Array.isArray(queueRows) ? queueRows as SessionQueueItem[] : (queueRows as { items: SessionQueueItem[] }).items
-      setQueue(items)
+      setQueueSnapshot({ scope, items })
       // A status notification received during this read is newer than its snapshot.
       if (executionRevision.current === undefined && statusRevision === runningRevision.current) setRunning(items.some(row => row.state === "running"))
       setQueueResumable(!Array.isArray(queueRows) && (queueRows as { resumable: boolean }).resumable)
@@ -560,7 +564,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         runningRevision.current++
         tasksRequest.current++
         setRunning(false)
-        setQueue(rows => rows?.filter(row => row.state !== "running"))
+        setQueueSnapshot(snapshot => snapshot && { ...snapshot, items: snapshot.items.filter(row => row.state !== "running") })
         if (event.kind === "sdk/idle") {
           setHistoryLoading(false)
           return
@@ -721,7 +725,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     setEventWindow(preview ? applyNotification(window, preview) : window)
     setHistoryLoading(cached === undefined)
     setModel(undefined)
-    setQueue(undefined)
+    setQueueSnapshot(undefined)
     setTasks(undefined)
     setTaskError(undefined)
     setHistoryError(undefined)
@@ -857,6 +861,15 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       void refreshDashboard(selectedWorkspaceId)
     }
   }
+  const runningInputId = queue?.find(row => row.state === "running")?.id
+  const compacting = operation?.kind === "compact" && operation.busy
+  let stopTarget: ComposerProps["stopTarget"] = null
+  if (capabilitiesReady) {
+    if (compacting && supportsCompactStop && operation.operationId) stopTarget = { kind: "compact", operationId: operation.operationId }
+    else if (!compacting && supportsInputStop && running && runningInputId) stopTarget = { kind: "input", inputId: runningInputId }
+    else if (!supportsInputStop && (!compacting || !supportsCompactStop)) stopTarget = { kind: "legacy", inputId: compacting ? undefined : runningInputId }
+  }
+  const stopScope = selection.current, stopGeneration = disconnectRevision.current
   const conversation = selectedWorkspaceId === undefined || selectedSessionId === undefined
     ? undefined
     : {
@@ -868,6 +881,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         projectReady,
         sendReason: !projectReady ? currentBinding?.error ?? t("正在套用專案資料夾…") : operation?.kind === "compact" && operation.busy ? t("正在壓縮上下文") : gate.reason,
         running: running || sending,
+        stopTarget,
         modelLabel: model?.status === "ready" ? model.label : undefined,
         modelState: model,
         onSetModel: async (selectionValue: SessionModelSelection) => {
@@ -880,7 +894,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         canCompact: gate.canSend && !running && !operation?.busy && !(queue?.length),
         onCompact: async (instructions?: string): Promise<void> => {
           const scope = selection.current
-          const result = await operations.run(selectedWorkspaceId, selectedSessionId, { kind: "compact", instructions })
+          const result = await operations.run(selectedWorkspaceId, selectedSessionId, { kind: "compact", instructions, ...(supportsCompactStop ? { operationId: crypto.randomUUID() } : {}) })
           if (selection.current === scope && (result?.outcome === 'blocked' || result?.outcome === 'reduced-over-target')) setTaskActionFailure({ scope, message: [result.outcome === 'reduced-over-target' ? t('壓縮後的完整請求仍超過目標。') : t('壓縮未完成。'), safeCompactionBlockedReason(result.blockedReason)].filter(Boolean).join(' ') })
           if (selection.current === scope) await pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
         },
@@ -925,18 +939,22 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         pending: pendingForSession(pending, selectedSessionId),
         onPrompt: sendInput("queue"),
         onCancel: async () => {
-          const scope = selection.current
+          const current = () => selection.current === stopScope && disconnectRevision.current === stopGeneration
+          if (!stopTarget || !current()) return false
           try {
-            let result = await bridge.request({ kind: "session/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }) as { cancelled?: boolean; reason?: string }
-            // Draft sessions created through durable input are not in the
-            // server's prompt-flight registry. Abort their running input row.
-            if (result?.cancelled !== true && result?.reason === "not-found") {
-              const running = queue?.find(row => row.state === "running")
-              if (running) result = await bridge.request({ kind: "desktop/session/input/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, inputId: running.id }) as { cancelled?: boolean; reason?: string }
+            const scope = { workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }
+            const request = stopTarget.kind === "input" ? { kind: "desktop/session/input/stop" as const, ...scope, inputId: stopTarget.inputId }
+              : stopTarget.kind === "compact" ? { kind: "desktop/session/compact/cancel" as const, ...scope, operationId: stopTarget.operationId }
+              : { kind: "session/cancel" as const, ...scope }
+            let result = await bridge.request(request) as { cancelled?: boolean; reason?: string }
+            if (stopTarget.kind === "legacy" && stopTarget.inputId && current() && result?.cancelled !== true && result?.reason === "not-found") {
+              result = await bridge.request({ kind: "desktop/session/input/cancel", ...scope, inputId: stopTarget.inputId }) as { cancelled?: boolean; reason?: string }
             }
-            if (selection.current === scope) { setTaskActionFailure(undefined); await refreshTasks(selectedWorkspaceId, selectedSessionId) }
+            if (current()) { setTaskActionFailure(undefined); void refreshTasks(selectedWorkspaceId, selectedSessionId) }
+            return result?.cancelled === true
           } catch (reason) {
-            if (selection.current === scope) setTaskActionFailure({ scope, message: reason instanceof Error ? reason.message : String(reason) })
+            if (current()) setTaskActionFailure({ scope: stopScope, message: reason instanceof Error ? reason.message : String(reason) })
+            return false
           }
         },
         onCancelTask: (taskId: string) => {

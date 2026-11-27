@@ -37,6 +37,55 @@ it("keeps Stop available with a follow-up draft and an admitted pending request"
   await act(async () => { release(); await pending })
 })
 
+it("owns stop feedback by the clicked input and clears a stale result without offering a workspace restart", async () => {
+  vi.useFakeTimers()
+  try {
+    const a = Promise.withResolvers<boolean>(), b = Promise.withResolvers<boolean>()
+    const stopA = vi.fn(() => a.promise), stopB = vi.fn(() => b.promise)
+    const request = vi.fn(async () => ({}))
+    const props = { ...base, canSend: true, running: true, bridge: { request, onEvent: () => () => {} }, onPrompt: async () => {} }
+    const view = render(<Composer {...props} stopTarget={{ kind: "input", inputId: "A" }} onCancel={stopA} />)
+    fireEvent.click(screen.getByRole("button", { name: "停止" }))
+    expect(stopA).toHaveBeenCalledOnce()
+    expect(screen.getByText("正在停止…")).toBeTruthy()
+    act(() => vi.advanceTimersByTime(4000))
+    expect(screen.getByText("停止沒有回應")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "重新啟動工作區" })).toBeNull()
+
+    view.rerender(<Composer {...props} stopTarget={{ kind: "input", inputId: "B" }} onCancel={stopB} />)
+    expect(screen.queryByText("停止沒有回應")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "停止" }))
+    expect(stopB).toHaveBeenCalledOnce()
+    await act(async () => { a.resolve(false); await a.promise })
+    expect(screen.getByText("正在停止…")).toBeTruthy()
+    await act(async () => { b.resolve(false); await b.promise })
+    act(() => vi.advanceTimersByTime(4000))
+    expect(screen.queryByText("正在停止…")).toBeNull()
+    expect(screen.queryByText("停止沒有回應")).toBeNull()
+    expect(request).not.toHaveBeenCalled()
+  } finally { vi.useRealTimers() }
+})
+
+it("disables scoped Stop without a target and labels a timed-out legacy restart as workspace-wide", async () => {
+  vi.useFakeTimers()
+  try {
+    const props = { ...base, canSend: true, running: true, bridge: { request: vi.fn(async () => ({})), onEvent: () => () => {} }, onPrompt: async () => {}, onCancel: vi.fn() }
+    const view = render(<Composer {...props} stopTarget={null} />)
+    const stop = () => screen.getByRole<HTMLButtonElement>("button", { name: "停止" })
+    expect(stop().disabled).toBe(true)
+    fireEvent.click(stop())
+    expect(props.onCancel).not.toHaveBeenCalled()
+
+    view.rerender(<Composer {...props} stopTarget={{ kind: "legacy", inputId: "A" }} />)
+    fireEvent.click(stop())
+    act(() => vi.advanceTimersByTime(4000))
+    expect(screen.getByRole("button", { name: "重新啟動工作區" }).title).toBe("重新啟動將中斷此工作區的所有執行。")
+    view.rerender(<Composer {...props} stopTarget={{ kind: "legacy", inputId: "B" }} />)
+    expect(screen.queryByRole("button", { name: "重新啟動工作區" })).toBeNull()
+    expect(props.onCancel).toHaveBeenCalledOnce()
+  } finally { vi.useRealTimers() }
+})
+
 function textarea(): HTMLTextAreaElement {
   return screen.getByLabelText("提示") as HTMLTextAreaElement
 }

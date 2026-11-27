@@ -20,7 +20,7 @@ export interface PendingPanelProps {
   workspaceId?: string
   pending: PendingInteraction[]
   onReply(reply: InteractionReply): Promise<void>
-  onStop?(): void | Promise<void>
+  onStop?(): void | boolean | Promise<void | boolean>
 }
 
 function approvalText(payload: unknown, fallback: string): string {

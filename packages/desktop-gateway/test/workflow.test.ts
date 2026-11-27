@@ -89,7 +89,7 @@ it("contains background recovery persistence failures and reports them to the UI
     expect((await workflow.read("s")).goalRun?.error).toContain("disk unavailable")
   } finally { warn.mockRestore(); await workflow.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
-it("restarts a paused Goal while the old aborted provider request is still settling", async () => {
+it.each(["legacy", "scoped"] as const)("restarts a paused Goal while the old aborted provider request is still settling (%s)", async stop => {
   const root = await mkdtemp(join(tmpdir(), "ih-goal-resume-"))
   const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: "s" })
@@ -106,19 +106,23 @@ it("restarts a paused Goal while the old aborted provider request is still settl
       yield { type: "end" }
     } } as import('@i-harness/llm-seam').ModelClient).stream(request)) })
   const workflow = createDesktopWorkflow(coordinator, service, { onRunningChanged: (_id, value) => states.push(value) })
+  let stopping: Promise<void> | undefined
   try {
     const first = await workflow.mutate("s", { action: "goal", operation: "create", request: { objective: "Verify done" }, start: true })
     expect(workflow.hasActiveWork()).toBe(true)
     await vi.waitFor(() => expect(calls).toBe(1))
+    if (stop === "scoped") stopping = workflow.cancelForInputStop("s")
+    void stopping?.catch(() => {})
     const paused = await workflow.mutate("s", { action: "goal", operation: "pause", request: { ref: first.goal! } })
     await workflow.mutate("s", { action: "goal", operation: "resume", request: { ref: paused.goal! }, start: true })
     release()
+    await stopping
     await vi.waitFor(async () => expect((await workflow.read("s")).goal?.phase).toBe("complete"))
     await vi.waitFor(() => expect(states.at(-1)).toBe(false))
     expect(workflow.hasActiveWork()).toBe(false)
     expect(calls).toBe(3)
     expect(states).toEqual([true, true, false])
-  } finally { release(); await workflow.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+  } finally { release(); await stopping?.catch(() => {}); await workflow.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
 
 it('refuses removed Team commands before resolving a runtime', async () => {

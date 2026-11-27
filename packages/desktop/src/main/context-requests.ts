@@ -1,3 +1,8 @@
+export function requireCompactOperationId(value: unknown): string {
+  if (typeof value !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value)) throw new Error("invalid compact operationId")
+  return value
+}
+
 /** Strict allowlist for context/memory IPC. No filesystem or backend logic. */
 export function contextRequestParams(value: Record<string, unknown>): Record<string, unknown> | undefined {
   const text = (field: string, max: number) => {
@@ -177,7 +182,7 @@ export function contextRequestParams(value: Record<string, unknown>): Record<str
     case "desktop/session/search":
       return { query: text("query", 4096), ...limit(), ...(value.sessionId === undefined ? {} : { sessionId: text("sessionId", 256) }) }
     case "desktop/session/compact":
-      return { sessionId: text("sessionId", 256), ...(value.instructions === undefined ? {} : { instructions: text("instructions", 4096) }) }
+      return { sessionId: text("sessionId", 256), ...(value.instructions === undefined ? {} : { instructions: text("instructions", 4096) }), ...(value.operationId === undefined ? {} : { operationId: requireCompactOperationId(value.operationId) }) }
     case "desktop/memory/state":
     case "desktop/memory/summary": return {}
     case "desktop/memory/configure":

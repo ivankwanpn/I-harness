@@ -330,6 +330,10 @@ export interface SessionService {
   cancelQueued(sessionId: string, id: string): Promise<{ cancelled: boolean }>
   /** Cancel the executing submission; queued submissions retain their own controllers. */
   cancelRunning?(sessionId: string): { cancelled: boolean }
+  /** Stop only the named current input or its retained post-turn work. */
+  stopRunningInput?(sessionId: string, inputId: string):
+    | { cancelled: false; reason: 'stale-input' }
+    | { cancelled: true; settlement: Promise<import('@i-harness/core-session').DeliveryCloseReceipt | undefined> }
   awaitDeliveryStop(sessionId: string): Promise<import('@i-harness/core-session').DeliveryCloseReceipt | undefined>
   /** M49 Task 12 (spec §8.2): the per-session task projection (assembly tasks
    * rows — subagent/job/workflow). Workflow rows are attributed to the session
@@ -596,19 +600,23 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     void flight.then(release, release)
     return flight
   }
-  async function awaitDeliveryStop(id: string) {
-    await managedCodeStops.get(id)?.flight
-    const pending=managedStopReceipts.get(id)
+  function settleDeliveryStop(
+    pending: ReturnType<typeof managedStopReceipts.get>,
+    request: ReturnType<typeof deliveryStops.get>,
+  ) {
     if (pending) return joinStopSettlement(pending, async () => {
       await pending.settleSources?.()
       return pending.recipient.closeReceipt(pending.fenceId)
     })
-    const request = deliveryStops.get(id)
     if (!request) return undefined
     return joinStopSettlement(request, async () => {
       await request.settleSources?.()
       return request.delivery.closeReceipt(request.fenceId)
     })
+  }
+  async function awaitDeliveryStop(id: string) {
+    await managedCodeStops.get(id)?.flight
+    return settleDeliveryStop(managedStopReceipts.get(id), deliveryStops.get(id))
   }
   function stopNotifications(id: string, attempts?: Map<NotificationStop, Promise<boolean>>): void {
     cancelledParents.add(id)
@@ -1736,7 +1744,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return { cancelled: true }
   }
 
-  function cancelRunning(sessionId: string): { cancelled: boolean } {
+  function beginRunningStop(sessionId: string): void {
     requestDeliveryStop(sessionId)
     const code=managedCodeMounts.get(sessionId)?.mount
     const priorCodeStop=managedCodeStops.get(sessionId)
@@ -1752,6 +1760,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       void record.flight.catch(error => d.warn('[i-harness] private Code Stop requires cleanup: ' + String(error)))
     }
     stopNotifications(sessionId)
+  }
+
+  function cancelRunning(sessionId: string): { cancelled: boolean } {
+    beginRunningStop(sessionId)
     const current = laneControls(sessionId)?.currentInput()
     if (current !== undefined && laneControls(sessionId)?.cancelCurrent !== undefined) {
       const result = laneControls(sessionId)!.cancelCurrent!()
@@ -1770,6 +1782,40 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     if (current === undefined) record.state = "cancelled"
     notifyExecutionState(sessionId)
     return { cancelled: true }
+  }
+
+  function stopRunningInput(sessionId: string, inputId: string): ReturnType<NonNullable<SessionService['stopRunningInput']>> {
+    const stale = { cancelled: false, reason: 'stale-input' } as const
+    if (closed || closing.has(sessionId) || failedClose.has(sessionId)) return stale
+    opts.sessionOperation?.assertOpen(sessionId)
+    const lane = laneControls(sessionId)
+    const current = lane?.currentInput()
+    const record = queues.get(sessionId)?.byId.get(inputId)
+    if (current ? current.inputId !== inputId : !record?.postTurn) return stale
+    const cancelCurrent = current && lane?.cancelCurrent
+    if (!cancelCurrent && (!record || record.controller.signal.aborted)) return stale
+
+    // The lane accepts the abort synchronously. A real no-op must not close
+    // delivery, Code or notifications. All fences follow in this same turn,
+    // before the accepted input can settle and the next input can promote.
+    if (cancelCurrent) {
+      if (!cancelCurrent.call(lane).cancelled) return stale
+    } else {
+      record!.controller.abort()
+      if (!current) record!.state = 'cancelled'
+    }
+    beginRunningStop(sessionId)
+    // Capture these exact joined receipts before the lane can advance.
+    const code = managedCodeStops.get(sessionId)?.flight
+    const pending = managedStopReceipts.get(sessionId)
+    const request = deliveryStops.get(sessionId)
+    const settlement = (async () => {
+      await code
+      return settleDeliveryStop(pending, request)
+    })()
+    void settlement.catch(() => {})
+    notifyExecutionState(sessionId)
+    return { cancelled: true, settlement }
   }
 
   const failedClose = new Set<string>()
@@ -2091,6 +2137,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     queue: (sessionId) => queue(sessionId),
     cancelQueued: (sessionId, id) => cancelQueued(sessionId, id),
     cancelRunning,
+    stopRunningInput,
     awaitDeliveryStop,
     // M49 Task 12: the sessions' task rows — the assembly owns the truth; a
     // session whose assembly does not exist (or was closed) has NO tasks

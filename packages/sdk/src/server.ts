@@ -80,7 +80,7 @@ import { SELECTED_RESULTS_FORK_CAPABILITY, SelectedResultsForkOperationError, re
 // Malformed lines are ignored; unknown methods get -32601; invalid params -32602;
 // a request sent before `initialize` gets -32600 (M68 batch B, v3).
 import { createNondurableFactOwner, isFactRecoveryRequired, isNondurableSession, subscribe, IMAGE_MEDIA_TYPES, SESSION_HISTORY_LIMIT, sessionHistoryRange, sessionHistoryTurns, validateImages, type ImageInput, type OwnedSessionHistoryPage, type SessionView as Session, type SessionEventView as SessionEvent, type SessionEvent as MutableSessionEvent } from "@i-harness/core-session"
-import { createRewindIntentLog, withRewindFacts } from '@i-harness/session-executor'
+import { createRewindIntentLog, waitForStopSettlement, withRewindFacts } from '@i-harness/session-executor'
 import { transportHistoryPageEvents, transportSessionEvents } from "./image-transport.ts"
 import { dispatchResultPage, type ResultPageHost } from './result-page.ts'
 export { parseResultPageQuery } from './results.ts'
@@ -721,10 +721,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
               if (typeof service.awaitDeliveryStop !== 'function') throw new Error('Cancellation settlement unavailable')
               // A provider stream that ignores abort must not hang the cancel RPC:
               // the UI can then offer Force stop instead of waiting forever.
-              let deadline: ReturnType<typeof setTimeout> | undefined
-              try {
-                await Promise.race([service.awaitDeliveryStop(sessionId), new Promise<void>(resolve => { deadline = setTimeout(resolve, 2500) })])
-              } finally { clearTimeout(deadline) }
+              await waitForStopSettlement(service.awaitDeliveryStop(sessionId))
               return makeSuccess(id, response)
             }
             // Explicit legacy compatibility: FIFO abort has no delivery owner.

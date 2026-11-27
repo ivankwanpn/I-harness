@@ -14,6 +14,7 @@ import * as projectScope from '../src/project-scope.ts'
 import { createDesktopHost } from '../src/host.ts'
 import { createDesktopRouter, createGatewayWrite } from '../src/router.ts'
 import type { AgentProcessesView } from '../src/agent-processes.ts'
+import type { PendingInteraction } from '../src/interaction.ts'
 import type { DesktopHandlers } from '../src/types.ts'
 
 const processCaptures = vi.hoisted(() => new Map<string, { entered(): void; release: Promise<void> }[]>())
@@ -110,6 +111,59 @@ async function fixture(beforeReply?: (request: LLMRequest) => Promise<void>, too
 }
 
 const submit = (sessionId: string, clientToken = 'checked-input-token') => ({ sessionId, clientToken, text: 'fixture input', delivery: 'queue' })
+
+it('ignores a late Stop for A while B owns a live card, then stops B without dropping queued C', async () => {
+  const aStarted = Promise.withResolvers<void>(), finishA = Promise.withResolvers<void>()
+  let calls = 0
+  const f = await fixture(async () => {
+    if (++calls === 1) { aStarted.resolve(); await finishA.promise }
+  }, () => calls === 2 ? [{
+    id: 'question-for-b', name: 'ask_user_input', args: { question: 'B is still the current input' },
+  }] : [])
+  try {
+    const { capabilities } = await f.succeed('initialize') as { capabilities: Record<string, string[]> }
+    expect(capabilities['desktop-input']).toContain('stop-running')
+    const { sessionId } = await f.succeed('session/create') as { sessionId: string }
+    const push = async (text: string) => (await f.succeed('desktop/session/input/submit', {
+      ...submit(sessionId, 'scoped-stop-fixture-' + text), text,
+    }) as { inputId: string }).inputId
+    const read = async () => fromJSONL((await f.saved(sessionId)).toString()).events
+    const cards = async () => await f.succeed('desktop/interaction/pending', { sessionId }) as PendingInteraction[]
+    const stop = (inputId: string) => f.succeed('desktop/session/input/stop', { sessionId, inputId })
+
+    const a = await push('A')
+    await aStarted.promise
+    const fromA = () => stop(a)
+    const b = await push('B')
+    finishA.resolve()
+    const card = await vi.waitFor(async () => {
+      const pending = await cards()
+      expect(pending).toHaveLength(1)
+      return pending[0]!
+    }, { timeout: 15000 })
+    expect(card).toMatchObject({ kind: 'question' })
+    const c = await push('C')
+    expect(f.service.queue(sessionId)).toMatchObject([{ id: b, state: 'running' }, { id: c, state: 'queued' }])
+    const before = await f.saved(sessionId)
+
+    expect(await fromA()).toEqual({ cancelled: false, reason: 'stale-input' })
+    expect(await stop(c)).toEqual({ cancelled: false, reason: 'stale-input' })
+    expect(await cards()).toEqual([card])
+    expect(await f.saved(sessionId)).toEqual(before)
+    expect(f.service.queue(sessionId)).toMatchObject([{ id: b, state: 'running' }, { id: c, state: 'queued' }])
+
+    expect(await stop(b)).toEqual({ cancelled: true })
+    expect(await cards()).toEqual([])
+    await f.idle()
+    const saved = await read()
+    const promoted = saved.filter(event => event.type === 'agent/input/promoted').map(event => event.inputId)
+    expect(promoted).toEqual([a, b, c])
+    expect(saved.filter(event => event.type === 'agent/input/cancelled' && event.inputId === c)).toEqual([])
+    expect(saved.filter(event => event.type === 'assistant/message' && event.text === 'fixture answer')).toHaveLength(2)
+    expect(saved.filter(event => event.type === 'agent/delivery-generation' && event.op === 'close')).toHaveLength(1)
+    expect(calls).toBe(3)
+  } finally { finishA.resolve(); await f.close() }
+}, 60000)
 
 it('announces a promoted private turn as running while its provider is held and reports durable Stop', async () => {
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), aborted = Promise.withResolvers<void>()
@@ -413,7 +467,7 @@ it('lists and controls only original managed PTY output and close through the pu
 it('checks the original project root once before attaching public input and preserves durable retries', async () => {
   const f = await fixture()
   try {
-    expect(await f.succeed('initialize')).toMatchObject({ capabilities: { 'desktop-input': ['1', 'project-checked'] } })
+    expect(await f.succeed('initialize')).toMatchObject({ capabilities: { 'desktop-input': ['1', 'project-checked', 'stop-running'] } })
     await f.coordinator.create({ sessionId: 'visible' })
     await f.coordinator.create({ sessionId: 'review', origin: 'approval-review' })
     await f.coordinator.create({ sessionId: 'legacy' })
