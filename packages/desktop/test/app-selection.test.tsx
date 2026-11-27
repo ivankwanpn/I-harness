@@ -950,6 +950,74 @@ it("ignores history from a session left while loading", async () => {
   expect(captured.props!.conversation!.rows).toEqual([])
 })
 
+it.each([false, true])("releases the displayed window on entering a draft and restores the preview only when cacheable (images=%s)", async images => {
+  const reopened = defer()
+  let opens = 0
+  const request = fixture(input => {
+    if (input.kind === "projects/list") return Promise.resolve([{ id: "p", name: "Project", workspaceIds: ["w1"], primaryWorkspaceId: "w1" }])
+    if (input.kind === "desktop/notifications/target") return Promise.resolve({ workspaceId: "w1", sessionId: "a", projectId: "p" })
+    if (input.kind !== "desktop/session/open") return undefined
+    if (++opens !== 1) return reopened.promise
+    return Promise.resolve({ history: { events: [{ type: "user/message", text: "confirmed history", seq: 0,
+      ...(images ? { images: [{ mediaType: "image/png", dataBase64: "aGVsbG8=" }] } : {}) }], startSeq: 0, nextSeq: 1, headSeq: 1 } })
+  })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSessionInWorkspace!("w1", "a", "p"))
+  await waitFor(() => expect(captured.props?.conversation?.rows).toHaveLength(1))
+  act(() => captured.props!.onSelectHistory!({ workspaceId: "w1", sessionId: "a", seq: 0 }))
+  await waitFor(() => expect(captured.props?.historicalView?.selection.sessionId).toBe("a"))
+
+  const emptied = vi.spyOn(eventWindow, "emptyEventWindow")
+  try {
+    request.mockClear()
+    act(() => captured.props!.onSelectProject!("p"))
+    expect(emptied).toHaveBeenCalled()
+    expect(captured.props?.selectedSessionId).toBeUndefined()
+    expect(captured.props?.conversation).toBeUndefined()
+    expect(captured.props?.historicalView).toBeUndefined()
+    expect(request).not.toHaveBeenCalled()
+
+    act(() => captured.props!.onSelectSessionInWorkspace!("w1", "a", "p"))
+    await waitFor(() => expect(opens).toBe(2))
+    if (images) expect(captured.props?.conversation?.rows).toEqual([])
+    else expect(captured.props?.conversation?.rows).toMatchObject([{ text: "confirmed history" }])
+    expect(captured.props?.historicalView).toBeUndefined()
+    await act(async () => {
+      reopened.resolve({ history: { events: [{ type: "user/message", seq: 0, text: "freshly opened history" }], startSeq: 0, nextSeq: 1, headSeq: 1 } })
+      await reopened.promise
+    })
+    expect(captured.props?.conversation?.rows).toMatchObject([{ text: "freshly opened history" }])
+  } finally { emptied.mockRestore() }
+})
+
+it("keeps a discarded open request from replacing the same session after returning from a draft", async () => {
+  const retired = defer()
+  let opens = 0
+  const request = fixture(input => {
+    if (input.kind === "projects/list") return Promise.resolve([{ id: "p", name: "Project", workspaceIds: ["w1"], primaryWorkspaceId: "w1" }])
+    if (input.kind !== "desktop/session/open") return undefined
+    if (++opens === 1) return retired.promise
+    return Promise.resolve({ history: { events: [{ type: "user/message", text: "current open", seq: 0 }], startSeq: 0, nextSeq: 1, headSeq: 1 } })
+  })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSessionInWorkspace!("w1", "a", "p"))
+  await waitFor(() => expect(opens).toBe(1))
+  request.mockClear()
+  act(() => captured.props!.onSelectProject!("p"))
+  expect(captured.props?.conversation).toBeUndefined()
+  expect(request).not.toHaveBeenCalled()
+
+  act(() => captured.props!.onSelectSessionInWorkspace!("w1", "a", "p"))
+  await waitFor(() => expect(captured.props?.conversation?.rows).toMatchObject([{ text: "current open" }]))
+  await act(async () => {
+    retired.resolve({ history: { events: [{ type: "user/message", seq: 23, text: "retired open" }], startSeq: 23, nextSeq: 24, headSeq: 24 } })
+    await retired.promise
+  })
+  expect(captured.props?.conversation?.rows).toMatchObject([{ text: "current open" }])
+  expect(request.mock.calls.filter(([input]) => input.kind === "desktop/session/warm")).toHaveLength(1)
+  expect(request.mock.calls.filter(([input]) => input.kind === "session/history")).toHaveLength(0)
+})
+
 it("keeps a newer execution notification and queue when the opening history settles late", async () => {
   const history = defer()
   let running = false

@@ -702,7 +702,13 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   }, [bridge, selectedWorkspaceId])
 
   useEffect(() => {
-    if (selectedWorkspaceId === undefined || selectedSessionId === undefined) return
+    if (selectedWorkspaceId === undefined || selectedSessionId === undefined) {
+      // A new draft owns no displayed conversation. Reopening uses the
+      // bounded preview cache and then reads the original session again.
+      setWindowKey(undefined)
+      setEventWindow(emptyEventWindow())
+      return
+    }
     let active = true
     const scope = selection.current
     const generation = disconnectRevision.current
