@@ -12,7 +12,7 @@ import { aggregateErrors } from './error-classification.ts'
 import { factPrefixDigest } from '../serialization/fact-journal.ts'
 import type { OriginalConversationRestorationSource } from '../conversation/restoration-input.ts'
 import type { CapturedFactGroup } from './groups.ts'
-import type { EncodedFactBatch,FactReceipt,FactOutcome,BatchKey,JournalPrefix,SessionEventView } from './types.ts'
+import type { EncodedFactBatch,FactReceipt,FactOutcome,BatchKey,JournalPrefix,SessionEventView,SessionView } from './types.ts'
 import type { ManagedExecutionIdentity,ManagedExecutionOwner,ManagedExecutionDomain,OriginalExecutionWriterBinding,OriginalWriterDependencyScope,OriginalExecutionCaptureHooks,ExecutionObservation,PreparedExecutionRequest } from './execution-types.ts'
 import {freezeJsonData,isCapturedExecutionFoldSnapshot,isStrictFactData} from './capture.ts'
 import {captureOriginalRestorationSource} from './restoration-source.ts'
@@ -244,7 +244,7 @@ export function assertManagedExecutionSession(identity:ManagedExecutionIdentity,
 }
 /** The original managed constructor supplies a separate held writer binding.
  * A readonly restored candidate alone cannot construct or authenticate an owner. */
-export async function restoreManagedExecutionState(input:OriginalConversationRestorationSource,binding:OriginalExecutionWriterBinding,foldFactory?:import('./execution-types.ts').OriginalExecutionFoldFactory){
+export async function restoreManagedExecutionState(input:OriginalConversationRestorationSource,binding:OriginalExecutionWriterBinding,foldFactory?:import('./execution-types.ts').OriginalExecutionFoldFactory,decodedHistory?:SessionView){
   const source=captureOriginalRestorationSource(input)
   let compatibility:ReturnType<typeof import('./view.ts').createManagedIndexedView>|undefined
   const liveEvents=new Map<number,WeakRef<import('./types.ts').SessionEventView>>()
@@ -262,7 +262,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
   const assertHeld=originalHeld??(()=>{if(Object.getOwnPropertyDescriptor(binding,'token')?.value!==token||Object.getOwnPropertyDescriptor(binding,'assertHeld')?.value!==heldField.value||Object.getOwnPropertyDescriptor(binding,'openDependencies')?.value!==openField.value)throw new TypeError('Held writer binding changed');held()})
   assertHeld()
   if(!token.sessionId||!token.incarnation)throw new TypeError('Original writer incarnation required')
-  const candidateOwner=Object.freeze({}),candidate=await restoreManagedConversation(originalSource,candidateOwner,token.sessionId,foldFactory)
+  const candidateOwner=Object.freeze({}),candidate=await restoreManagedConversation(originalSource,candidateOwner,token.sessionId,foldFactory,decodedHistory)
   assertHeld()
   const original=installRestoredManagedConversation(candidate,candidateOwner),identity=Object.freeze({}) as ManagedExecutionIdentity,members=createExecutionMemberOwner(assertHeld,identity),debt=new Set<OriginalWriterDependencyScope>(),activeDependencyScopes=new Set<OriginalWriterDependencyScope>(),taskHistoryScopes=new Set<OriginalWriterDependencyScope>(),admissionReads=new Map<OriginalWriterDependencyScope,Promise<void>>()
   let stopped=false,ownerBound=false,closed=false,pendingWrite:{phase:'staged'|'issued'}|undefined

@@ -48,7 +48,7 @@ function decodeCleanHistory(body: Buffer, meta: ReturnType<typeof parseHeader>) 
         history.push(body);
         const result = history.finish();
         if (result.torn || result.prefix.bodyBytes !== body.length) return undefined;
-        return { prefix: result.prefix, torn: false, events: result.validatedEvents(meta) };
+        return { prefix: result.prefix, torn: false, events: result.validatedEvents(meta, undefined, true) };
     } catch { return undefined; }
 }
 /** Low-level byte adapter; cannot associate a backend with factory authority. */

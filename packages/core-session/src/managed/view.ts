@@ -11,7 +11,8 @@ import { prepareSessionEvent } from '../events/intake.ts'
 import { hasOriginalImageMediaTypeLookup } from '../images.ts'
 import { createManagedIntakeIndex } from './intake-index.ts'
 import { canFoldPruneProjection } from '../projection/pruning.ts'
-import { isOriginalArchiveValidationEnvironment } from '../serialization/validation-environment.ts'
+import { isOriginalArchiveValidationEnvironment, unchangedDataPrototypes } from '../serialization/validation-environment.ts'
+export { unchangedDataPrototypes } from '../serialization/validation-environment.ts'
 const originalIndexes = new WeakMap<SessionView, ConversationValidationIndex>()
 const originalSourceSessions = new WeakMap<SessionView, string | undefined>()
 // Only managedSessionState enrolls: its initial copy and every appended row
@@ -23,28 +24,6 @@ const immutableFactories = new WeakMap<SessionView, {
   hasProjectionProof(): boolean
 }>()
 const originalObjectPrototype = Object.prototype, originalArrayPrototype = Array.prototype
-const originalDataPrototypes = [originalObjectPrototype, originalArrayPrototype].map(prototype => {
-  const keys = Reflect.ownKeys(prototype)
-  return { prototype, keys, fields: keys.map(key => Object.getOwnPropertyDescriptor(prototype, key)!) }
-})
-
-export function unchangedDataPrototypes(): boolean {
-  // Freezing own fields does not freeze inherited optional fields or methods.
-  // A custom prototype keeps the original repeat validation behavior.
-  for (let index = 0; index < originalDataPrototypes.length; index++) {
-    const { prototype, keys, fields } = originalDataPrototypes[index]!
-    if (Reflect.ownKeys(prototype).length !== keys.length) return false
-    for (let position = 0; position < keys.length; position++) {
-      const expected = fields[position]!, actual = Object.getOwnPropertyDescriptor(prototype, keys[position]!)
-      if (!actual || actual.configurable !== expected.configurable || actual.enumerable !== expected.enumerable) return false
-      if (Object.hasOwn(expected, 'value')) {
-        if (!Object.hasOwn(actual, 'value') || !Object.is(actual.value, expected.value) || actual.writable !== expected.writable) return false
-      } else if (prototype !== originalObjectPrototype || keys[position] !== '__proto__'
-        || !Object.hasOwn(actual, 'get') || actual.get !== expected.get || actual.set !== expected.set) return false
-    }
-  }
-  return true
-}
 
 function ordinaryProjectionHeader(header: SessionView['header']) {
   return header?.semanticSeed === undefined && header?.parentSession === undefined && header?.seedLength === undefined

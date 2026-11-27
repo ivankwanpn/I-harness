@@ -3,9 +3,14 @@ import { isDeliveryEventType } from '../events/delivery.ts'
 import { createHash } from 'node:crypto'
 import { types } from 'node:util'
 import { CURRENT_FORMAT_VERSION, type SessionEvent } from '../events/types.ts'
-import type { BatchKey, EncodedFactBatch, JournalMetadata, JournalPrefix } from '../managed/types.ts'
+import type { BatchKey, EncodedFactBatch, JournalMetadata, JournalPrefix, SessionEventView } from '../managed/types.ts'
 import { stringifyJsonData } from './json-data.ts'
 import { validateConversationHistory, validateDecoderOwnedConversationHistory, createBootstrapConversationIndex } from '../conversation/validation.ts'
+import { conversationScopeKey } from '../conversation/bootstrap-validation.ts'
+import type { GenerationHistoryScope } from '../conversation/generation.ts'
+import { freezeJsonData } from '../managed/capture.ts'
+import { IMAGE_MEDIA_TYPES, hasOriginalImageMediaTypeLookup } from '../images.ts'
+import { isOriginalArchiveValidationEnvironment, unchangedDataPrototypes } from './validation-environment.ts'
 
 const digestPattern = /^[a-f0-9]{64}$/
 const fail = (): never => { throw new TypeError('Invalid fact journal frame or digest') }
@@ -206,6 +211,30 @@ export interface JournalFrameExtent {
 }
 type JournalStreamOptions = { from?: Readonly<JournalPrefix>; onFrame?: (extent: JournalFrameExtent) => void }
 const MAX_ARCHIVE_FRAMES = 16384
+const { freeze: nativeFreeze, isFrozen: nativeIsFrozen, values: nativeValues } = Object
+const initialMediaTypes = [...IMAGE_MEDIA_TYPES]
+const nativeSetSize = Object.getOwnPropertyDescriptor(Set.prototype, 'size')?.get
+const canTransferArchiveIndex = () => isOriginalArchiveValidationEnvironment()
+  && Object.freeze === nativeFreeze && Object.isFrozen === nativeIsFrozen && Object.values === nativeValues
+  && unchangedDataPrototypes() && hasOriginalImageMediaTypeLookup() && nativeSetSize !== undefined
+  && Reflect.apply(nativeSetSize, IMAGE_MEDIA_TYPES, []) === initialMediaTypes.length
+  && initialMediaTypes.every(type => IMAGE_MEDIA_TYPES.has(type))
+const archiveIndexes = new WeakMap<readonly SessionEventView[], {
+  index: ReturnType<typeof validateDecoderOwnedConversationHistory>
+  prefix: Readonly<JournalPrefix>
+  formatVersion: number
+  scope: string
+}>()
+
+/** One original frozen decode; the restored writer still owns its prefix. */
+export function takeArchiveConversationIndex(events: readonly SessionEventView[], prefix: Readonly<JournalPrefix>, formatVersion: number, header: GenerationHistoryScope) {
+  const candidate = archiveIndexes.get(events)
+  if (!candidate || !canTransferArchiveIndex() || !nativeIsFrozen(events) || candidate.formatVersion !== formatVersion
+    || prefix.eventCount !== candidate.prefix.eventCount || prefix.bodyBytes !== candidate.prefix.bodyBytes
+    || prefix.prefixDigest !== candidate.prefix.prefixDigest || conversationScopeKey(header) !== candidate.scope) return undefined
+  archiveIndexes.delete(events)
+  return candidate.index
+}
 
 /** Incremental physical decoding. A resumed prefix must already have been
  * verified by the original archive reader. Publish only after finish. */
@@ -242,12 +271,20 @@ export function createArchiveJournalHistoryDecoder(
     },
     finish() {
       const decoded = decoder.finish()
-      return { ...decoded, frames: frames && Object.freeze(frames), validatedEvents(header: import('../conversation/generation.ts').GenerationHistoryScope, onOriginal?: () => void) {
+      const { eventCount, bodyBytes, prefixDigest } = decoded.prefix
+      return { ...decoded, frames: frames && Object.freeze(frames), validatedEvents(header: GenerationHistoryScope, onOriginal?: () => void, prepareRestoration = false) {
         if (!events) throw new TypeError('Archive history already consumed')
         const history = events
         events = undefined
         if (native && !decoded.torn && !header.semanticSeed && hasNativeSerializer()) {
-          validateDecoderOwnedConversationHistory(history, formatVersion, header)
+          const scope = prepareRestoration && typeof header.sessionId === 'string' && header.sessionId
+            && header.parentSession === undefined && header.seedLength === undefined && canTransferArchiveIndex()
+            ? conversationScopeKey(header) : undefined
+          const index = validateDecoderOwnedConversationHistory(history, formatVersion, header)
+          if (scope !== undefined && index.generationScope === scope && canTransferArchiveIndex() && conversationScopeKey(header) === scope) {
+            freezeJsonData(history)
+            archiveIndexes.set(history, { index, prefix: nativeFreeze({ eventCount, bodyBytes, prefixDigest }), formatVersion, scope })
+          }
           if (hasNativeSerializer()) onOriginal?.()
         } else validateConversationHistory(history, formatVersion, header)
         return history

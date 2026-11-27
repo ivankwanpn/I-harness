@@ -5,7 +5,7 @@ import {originalOwnershipArtifactGuard} from './ownership.ts'
 import {FactRecoveryRequiredError,type JournalPrefix,type SessionView} from '@i-harness/core-session'
 import {restoreManagedExecutionState} from '@i-harness/core-session/internal/execution'
 import type {OriginalConversationRestorationSource} from '@i-harness/core-session/internal/restoration'
-import {readArchiveHistoryPrefix} from '../archive-read-internal.ts'
+import {readArchiveHistoryPrefix,recognizesOriginalCleanHistoryMaterialization} from '../archive-read-internal.ts'
 import {openExecutionDependencies} from '../execution-internal.ts'
 import {heldFactOwner} from './fact-owner.ts'
 import type {PersistenceBackend} from './types.ts'
@@ -78,7 +78,8 @@ export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry
      const read=readArchiveHistoryPrefix(ports.backend,history)
      if(read.kind!=='available'||read.prefix.eventCount!==snapshot.events.length)throw new FactRecoveryRequiredError()
      initial=snapshot;proof=history;formatVersion=snapshot.formatVersion;header=snapshot.header;prefix=Object.freeze({...read.prefix})
-     state=await restoreManagedExecutionState(source,Object.freeze({token,assertHeld:held.assertHeld,openDependencies(expected:JournalPrefix){assertCurrent();return openExecutionDependencies(ports.backend,ports.id,held,expected)}}),ports.foldFactory)
+     const decoded=recognizesOriginalCleanHistoryMaterialization(ports.backend,history)?snapshot:undefined
+     state=await restoreManagedExecutionState(source,Object.freeze({token,assertHeld:held.assertHeld,openDependencies(expected:JournalPrefix){assertCurrent();return openExecutionDependencies(ports.backend,ports.id,held,expected)}}),ports.foldFactory,decoded)
      await history.assertCurrent();assertCurrent()
    });flight=pending
    try{await pending;return state!}catch(cause){initialFailure={cause};throw cause}finally{initial=undefined;proof=undefined;flight=undefined}

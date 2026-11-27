@@ -1,6 +1,8 @@
 import { expect, it } from 'vitest'
-import { createArchiveJournalHistoryDecoder, createJournalStreamDecoder, decodeFactBatch, encodeFactBatch, legacyPrefixDigest, readFactJournal } from '../src/serialization/fact-journal.ts'
+import { createArchiveJournalHistoryDecoder, createJournalStreamDecoder, decodeFactBatch, encodeFactBatch, legacyPrefixDigest, readFactJournal, takeArchiveConversationIndex } from '../src/serialization/fact-journal.ts'
 import { CURRENT_FORMAT_VERSION } from '../src/events/types.ts'
+import { createConversationValidationScan, prepareConversationAppend, takeConversationValidationScan } from '../src/conversation/validation.ts'
+import { IMAGE_MEDIA_TYPES } from '../src/images.ts'
 import type { JournalFrameExtent } from '../src/serialization/archive-internal.ts'
 
 it('matches the original decoder across every byte boundary and ignores a torn suffix', () => {
@@ -91,6 +93,62 @@ it('validates the full shape before relational errors and never exposes an unval
   const valid = load(duplicate.slice(0, 1))
   expect(valid()).toEqual(duplicate.slice(0, 1))
   expect(valid).toThrow(/already consumed/)
+})
+
+it('lends one native frozen index for the same prefix and keeps original append validation', async () => {
+  const { metadata } = nativePrefix()
+  const header = { sessionId: 'archive' }
+  const call = { type: 'tool/call', seq: 3, callId: 'archive-call', name: 'read', args: { path: 'local.txt' } } as const
+  const initial: Parameters<typeof encodeFactBatch>[2] = [
+    { type: 'conversation/semantics', version: 1, mode: 'accepted-exchange-v1', seq: 0 },
+    { type: 'step/start', actionId: 'action', attemptId: 'attempt', seq: 1 },
+    { type: 'assistant/message', text: '', seq: 2 },
+    call,
+    { type: 'model/exchange-accepted', version: 1, actionId: 'action', attemptId: 'attempt', exchangeId: 'exchange',
+      stepStartSeq: 1, assistantSeq: 2, callSeqs: [call.seq], seq: 4 },
+  ]
+  const frame = encodeFactBatch('original', metadata.legacyPrefixDigest, initial)
+  const decoder = createArchiveJournalHistoryDecoder(metadata, CURRENT_FORMAT_VERSION)
+  decoder.push(frame.bytes)
+  const decoded = decoder.finish(), prefix = { ...decoded.prefix }
+  // The result's plain metadata cannot redirect the decoder's nominal proof.
+  decoded.prefix.bodyBytes++
+  const events = decoded.validatedEvents(header, undefined, true)
+  expect(Object.isFrozen(events)).toBe(true)
+  expect(Object.isFrozen((events[call.seq] as typeof call).args)).toBe(true)
+  expect(takeArchiveConversationIndex(Object.freeze([...events]), prefix, CURRENT_FORMAT_VERSION, header)).toBeUndefined()
+  expect(takeArchiveConversationIndex(events, decoded.prefix, CURRENT_FORMAT_VERSION, header)).toBeUndefined()
+  expect(takeArchiveConversationIndex(events, prefix, CURRENT_FORMAT_VERSION - 1, header)).toBeUndefined()
+  expect(takeArchiveConversationIndex(events, prefix, CURRENT_FORMAT_VERSION, { ...header, parentSession: 'other' })).toBeUndefined()
+  const inherited = Symbol('fixture optional data')
+  Object.defineProperty(Object.prototype, inherited, { value: 1, configurable: true })
+  try { expect(takeArchiveConversationIndex(events, prefix, CURRENT_FORMAT_VERSION, header)).toBeUndefined() }
+  finally { Reflect.deleteProperty(Object.prototype, inherited) }
+  const mediaTypes = [...IMAGE_MEDIA_TYPES]
+  IMAGE_MEDIA_TYPES.delete('image/png')
+  try { expect(takeArchiveConversationIndex(events, prefix, CURRENT_FORMAT_VERSION, header)).toBeUndefined() }
+  finally { IMAGE_MEDIA_TYPES.clear(); for (const type of mediaTypes) IMAGE_MEDIA_TYPES.add(type) }
+
+  const index = takeArchiveConversationIndex(events, prefix, CURRENT_FORMAT_VERSION, header)!
+  expect(index).toBeDefined()
+  expect(takeArchiveConversationIndex(events, prefix, CURRENT_FORMAT_VERSION, header)).toBeUndefined()
+  const fallback = createConversationValidationScan({ formatVersion: CURRENT_FORMAT_VERSION, header, async readEvent(ordinal) { return initial[ordinal]! } })
+  await fallback.push(events)
+  const original = takeConversationValidationScan(fallback.finish())
+  expect(index.resultFacts()).toEqual(original.resultFacts())
+  const suffix = [{ type: 'tool/dispatch', seq: 5, callId: call.callId, eventSeq: call.seq }] as const
+  const badPrior = { ...call, callId: 'different' }
+  const prepare = (prior: typeof call | typeof badPrior) => prepareConversationAppend(index, suffix, async ordinal => {
+    expect(ordinal).toBe(call.seq)
+    return prior
+  }, () => {})
+  await expect(prepare(badPrior)).rejects.toThrow(/mutated/)
+  expect(index.eventCount).toBe(initial.length)
+  const reusedAppend = await prepare(call)
+  const checkedAppend = await prepareConversationAppend(original, suffix, async () => call, () => {})
+  reusedAppend.commit()
+  checkedAppend.commit()
+  expect(index.resultFacts()).toEqual(original.resultFacts())
 })
 
 it('resumes a verified native prefix and reports complete frames at absolute body offsets', () => {

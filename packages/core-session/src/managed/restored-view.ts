@@ -9,10 +9,11 @@ import { captureRewrites,type ConversationRewriteDraft,type ConversationCandidat
 import {extendConversationSourceCoordinates} from '../conversation/sources.ts';
 import {extendPruneDependencyView} from '../projection/pruning.ts';
 import { captureOriginalRestorationSource } from './restoration-source.ts';
-import type { SessionEventView, EncodedFactBatch, FactReceipt } from './types.ts';
+import type { SessionEventView, SessionView, EncodedFactBatch, FactReceipt } from './types.ts';
 import type { ConversationPayloadCapture } from '../conversation/payload.ts';
 import type { ConversationEventArchive } from '../conversation/archive.ts';
 import { captureData } from '../serialization/context-data.ts';
+import { takeArchiveConversationIndex } from '../serialization/fact-journal.ts';
 import { digestRuntimeContextEvent } from '../conversation/render.ts';
 import { preparePrunedResultProjection } from '../conversation/payload.ts';
 import type { ConversationProjection } from '../conversation/types.ts';
@@ -68,7 +69,7 @@ type Preparation = {
 };
 const preparations = new WeakMap<object, Preparation>();
 /** Full validation is original scan/finish; the candidate keeps no source array. */
-export async function restoreManagedConversation(input: OriginalConversationRestorationSource, owner: object, sessionId: string, foldFactory?: OriginalExecutionFoldFactory): Promise<object> {
+export async function restoreManagedConversation(input: OriginalConversationRestorationSource, owner: object, sessionId: string, foldFactory?: OriginalExecutionFoldFactory, decodedHistory?: SessionView): Promise<object> {
     const source = captureOriginalRestorationSource(input);
     source.assertCurrent();
     const supplied = foldFactory?.(Object.freeze({sessionId, seedLength: source.header?.seedLength ?? 0, formatVersion: source.formatVersion}));
@@ -150,11 +151,18 @@ export async function restoreManagedConversation(input: OriginalConversationRest
     if(fold&&snapshotRead&&validatorRead)propagateOriginalCurrentnessReader(supplied!,'snapshot',fold,'snapshot',[],[[supplied!,'validateSnapshot']]);
     const code = createExecutionCodeState(source.header,sessionId);
     let ordinal = 0;
-    const scan = createConversationValidationScan({ formatVersion: source.formatVersion, header: { ...source.header, sessionId }, readEvent: source.readEvent.bind(source) });
+    const formatVersion = source.formatVersion, header = { ...source.header, sessionId };
+    const newScan = () => createConversationValidationScan({ formatVersion, header, readEvent: source.readEvent.bind(source) });
+    let scan: ReturnType<typeof newScan> | undefined;
+    let transferred: ReturnType<typeof takeArchiveConversationIndex>;
     const sources = createConversationSourceCoordinates(), state = createConversationStateIndex(), context = createContextStateIndex(), prune = createPruneDependencyIndex(),intake=createManagedIntakeIndex();
     await source.consume(async (unit) => {
         source.assertCurrent();
-        await scan.push(unit);
+        if (transferred) failure('CONVERSATION_RESTORATION_PREFIX_MISMATCH');
+        if (ordinal === 0 && decodedHistory?.events === unit && Object.isFrozen(decodedHistory)
+            && decodedHistory.formatVersion === formatVersion && unit.length === source.prefix.eventCount)
+            transferred = takeArchiveConversationIndex(unit, source.prefix, formatVersion, header);
+        if (!transferred) await (scan ??= newScan()).push(unit);
         source.assertCurrent();
         fold?.appendValidated(unit, ordinal);
         code.append(unit, ordinal);
@@ -166,7 +174,7 @@ export async function restoreManagedConversation(input: OriginalConversationRest
         prune.stage(unit).commit();
         intake.stage(unit,false).commit();
     });
-    const index = takeConversationValidationScan(scan.finish());
+    const index = transferred ?? takeConversationValidationScan((scan ?? newScan()).finish());
     if (index.eventCount !== source.prefix.eventCount)
         failure('CONVERSATION_RESTORATION_PREFIX_MISMATCH');
     await source.settle();

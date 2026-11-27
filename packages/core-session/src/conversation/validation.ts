@@ -100,7 +100,8 @@ export function createSemanticSourceConversationIndex(events: readonly SessionEv
     return conversationIndex(events, undefined, formatVersion, header, semanticSourceStructure);
 }
 function conversationIndex(events: readonly SessionEvent[], read: ((index: number) => SessionEvent | undefined) | undefined, formatVersion: number, header: GenerationHistoryScope, capability?: typeof bootstrapStaging | typeof semanticSourceStructure, scan?: (begin: ConversationScanBegin) => void, initialShapeProof?: InitialShapeProof): ConversationValidationIndex {
-    const restoredSource = scan !== undefined;
+    const decodedArchive = initialShapeProof === archiveShapePreflight;
+    const restoredSource = scan !== undefined || decodedArchive;
     const validateShape = capability === semanticSourceStructure ? validateSemanticSourceEventShape : validateConversationEventShape;
     const acceptances = new Map<number, AcceptanceFact>();
     const completions = new Map<number, string>();
@@ -449,8 +450,12 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
         scan = undefined; // no callback back-edge into the transient scan owner
         register(beginStage);
     }
-    else
+    else {
         stage(events, undefined, initialShapeProof).commit();
+        // The original decoder finished the immutable prefix. Future writes
+        // provide their own dependency reader instead of retaining its rows.
+        if (decodedArchive) events = [];
+    }
     if (capability !== semanticSourceStructure)
         deliveryObservations.set(index, delivery.readIndex());
     if (capability !== semanticSourceStructure)
@@ -468,9 +473,9 @@ export function validateConversationHistory(events: readonly SessionEvent[], for
 /** Package-private: complete decoded frames are still private to the journal
  * reader. Preserve the original whole-history shape error precedence before
  * advancing relational validators over those same events. */
-export function validateDecoderOwnedConversationHistory(events: readonly SessionEvent[], formatVersion: number, header: GenerationHistoryScope): void {
+export function validateDecoderOwnedConversationHistory(events: readonly SessionEvent[], formatVersion: number, header: GenerationHistoryScope): ConversationValidationIndex {
     validateHistoryShapes(events, formatVersion);
-    conversationIndex(events, undefined, formatVersion, header, undefined, undefined, archiveShapePreflight);
+    return conversationIndex(events, undefined, formatVersion, header, undefined, undefined, archiveShapePreflight);
 }
 /** Only nominal completed validation candidates cross into original managed
  * construction. Read consumers never receive the mutable validation index. */

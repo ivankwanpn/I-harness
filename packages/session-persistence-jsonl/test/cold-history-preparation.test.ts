@@ -1,4 +1,5 @@
 import * as archive from '@i-harness/core-session/internal/archive'
+import * as validation from '../../core-session/src/conversation/validation.ts'
 import { committedFactSeqs, encodeFactBatch, factPrefixDigest, legacyPrefixDigest, type JournalMetadata, type SessionView } from '@i-harness/core-session'
 import { originalColdArchiveHistoryReader } from '@i-harness/session-persistence/internal/archive-read'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -53,7 +54,13 @@ vi.mock('@i-harness/core-session/internal/archive', async load => {
   return { ...original, createArchiveJournalHistoryDecoder: vi.fn(original.createArchiveJournalHistoryDecoder) }
 })
 
+vi.mock('../../core-session/src/conversation/validation.ts', async load => {
+  const original = await load<typeof import('../../core-session/src/conversation/validation.ts')>()
+  return { ...original, createConversationValidationScan: vi.fn(original.createConversationValidationScan) }
+})
+
 const decodes = vi.mocked(archive.createArchiveJournalHistoryDecoder)
+const validationScans = vi.mocked(validation.createConversationValidationScan)
 const tail = { afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: 5, includeTurns: true }
 const originalEvent = {type: 'user/message' as const, text: 'before', provenance: {
   kind: 'human' as const, authority: 'request' as const, scope: 'turn' as const, producer: 'fixture',
@@ -104,6 +111,23 @@ it('detaches page and public snapshot from a one-use native writer decode', asyn
   const next = await coordinator.openManagedDocument('a')
   expect(decodes.mock.calls.length).toBeGreaterThan(preOpen)
   expect(next.view.events[0]).toMatchObject(originalEvent)
+}))
+
+it.each(['held-writer-decode','retained-cold-page'] as const)('keeps a single original relational validation on the %s path', async mode => withHistory(async ({ coordinator }) => {
+  if (mode === 'retained-cold-page') expect(await coordinator.readHistoryPage!('a', tail)).toBeDefined()
+  decodes.mockClear()
+  validationScans.mockClear()
+  const execution = await acquireManagedExecution(coordinator,'a')
+  expect(decodes).toHaveBeenCalledTimes(mode === 'held-writer-decode' ? 1 : 0)
+  expect(validationScans).toHaveBeenCalledTimes(mode === 'held-writer-decode' ? 0 : 1)
+  const action = execution.owner.beginAction()
+  try {
+    committedFactSeqs(await action.facts.metadata.admit({type:'plan/mode',mode:'on'}))
+  } finally { action.finish() }
+  expect(await coordinator.readHistoryPage!('a', tail)).toMatchObject({
+    headSeq:2, events:[originalEvent,{type:'plan/mode',mode:'on'}],
+  })
+  await execution.close()
 }))
 
 it.each(['preparing', 'committed', 'revoked'] as const)('qualifies the initial page while the original writable owner is %s', async mode => withHistory(async ({ coordinator }) => {
