@@ -11,6 +11,7 @@ import {originalFilesystemPolicyFor} from './execution-runtime.ts'
 import {createScopedPrivateExecWithReservation,createScopedWorkflowExec} from './scoped-exec.ts'
 import {createExecResultRetention} from './lifecycle/exec-result-retention.ts'
 import {receivedExecutionInputsFor} from './lifecycle/execution-inputs.ts'
+import {mountOwnedFileSearch} from './owned-file-search.ts'
 
 /** Trusted original resources supplied by the concrete host, with their exact retained cleanup. */
 export interface OwnedShellOptions {
@@ -72,6 +73,8 @@ export function mountOwnedShell(original:ManagedRegistryConstruction,workspace:s
   original.retain(()=>mount.dispose())
  }
  for(const tool of createShellTools({exec:scoped.service,directEntry:scoped.direct,agentShell:()=>options.agentShellFor?options.agentShellFor(original.domain.sessionId):options.agentShell()}))original.tools.register(tool)
+ if(nativePolicy)mountOwnedFileSearch({workspace,tools:original.tools,service:scoped.service,policy:nativePolicy,
+  owner:{kind:'managed-execution',context:original.ctx,domain:original.domain,sessionId:original.domain.sessionId}})
  for(const tool of createContextOutputTools(output.service, {
   exposure: 'direct', withLegacyReadObservation: output.withLegacyReadObservation,
  }))original.tools.register(tool)

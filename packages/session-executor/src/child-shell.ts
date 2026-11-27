@@ -5,15 +5,18 @@ import type { PluginContext } from '@i-harness/core-plugin'
 import type { ToolRegistry } from '@i-harness/core-tools'
 import type { ContextOutputService } from '@i-harness/context-output'
 import type { ExecExecutionHost } from '@i-harness/exec'
+import type { FactOwner, SessionView } from '@i-harness/core-session'
 import type { ManagedExecutionAttachment } from '../../session-persistence/src/execution-internal.ts'
 import { createExecResultRetention } from './lifecycle/exec-result-retention.ts'
 import { receivedExecutionInputsFor } from './lifecycle/execution-inputs.ts'
 import { createScopedPrivateExecWithReservation } from './scoped-exec.ts'
 import { createChildExecutionDomain } from './host-managed-execution.ts'
+import { originalFilesystemPolicyFor } from './execution-runtime.ts'
+import { mountOwnedFileSearch } from './owned-file-search.ts'
 
 export interface ChildShellMount {
-  /** Idempotent: disposes the child's exec reservation and releases the child
-   * execution acquisition. Also runs when the child context unmounts. */
+  /** Stops the child's Exec service before releasing the execution acquisition.
+   * Concurrent calls join, and a failure can retry the unfinished stage. */
   dispose(): Promise<void>
 }
 
@@ -30,6 +33,9 @@ export function mountChildShellTools(options: {
   execution: ManagedExecutionAttachment
   host: ExecExecutionHost
   output?: ContextOutputService
+  allowedTools?: readonly string[]
+  isToolAllowed?(name: string): boolean
+  searchOwner?: { session: SessionView; factOwner: FactOwner }
   release(): Promise<void>
 }): ChildShellMount {
   const domain = createChildExecutionDomain(options.execution, options.ctx)
@@ -38,13 +44,36 @@ export function mountChildShellTools(options: {
     execution: options.host,
     resultRetention: createExecResultRetention(options.output),
   })
-  let disposed: Promise<void> | undefined
-  const dispose = () => disposed ??= (async () => { pair.service.dispose(); await options.release() })()
+  let stopped = false
+  let disposal: Promise<void> | undefined
+  function dispose(): Promise<void> {
+    if (disposal) return disposal
+    // Publish the flight before either cleanup callback can reenter dispose.
+    const attempt = Promise.resolve().then(async () => {
+      if (!stopped) {
+        await pair.service.dispose()
+        stopped = true
+      }
+      await options.release()
+    })
+    disposal = attempt
+    void attempt.catch(() => { if (disposal === attempt) disposal = undefined })
+    return attempt
+  }
   const name = `child-shell-${randomUUID()}`
   try {
     const recipient = receivedExecutionInputsFor(options.execution).execDelivery(domain)
     const scoped = createScopedPrivateExecWithReservation(pair, options.workspace, () => undefined, options.execution, domain, options.ctx, recipient)
-    for (const tool of createShellTools({ exec: scoped.service, directEntry: scoped.direct })) options.tools.register(tool)
+    const allowed = (tool: string) => options.allowedTools?.includes(tool) !== false && options.isToolAllowed?.(tool) !== false
+    for (const tool of createShellTools({ exec: scoped.service, directEntry: scoped.direct })) {
+      if (allowed(tool.name)) options.tools.register(tool)
+    }
+    const policy = originalFilesystemPolicyFor(options.host, options.execution)
+    const owner = options.searchOwner
+    if (policy && owner) mountOwnedFileSearch({
+      workspace: options.workspace, tools: options.tools, service: scoped.service, policy, allowed,
+      owner: { view: owner.session, factOwner: owner.factOwner, context: options.ctx, sessionId: domain.sessionId },
+    })
     options.ctx.mount({ name, mount() {}, async unmount() { await dispose() } })
     return Object.freeze({ dispose })
   } catch (error) {
