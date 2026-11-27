@@ -77,17 +77,23 @@ it.each([false, true])("reads cold history without executing a model and restore
   } finally { await host.close(); await rm(root, { recursive: true, force: true }) }
 })
 
-it("leaves locked policy readers idle under watch coverage, and retries a failed settings change", async () => {
+it("runs policy retries only during watch loss or a failed settings change", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-policy-watch-")), workspace = join(root, "workspace")
   await mkdir(workspace)
   const settingsPath = join(root, "settings.json")
   await writeFile(settingsPath, "{}")
   const watch = settingsModule.watchSettings
   let monitor: ReturnType<typeof watch> | undefined
+  let publishCoverage: Parameters<ReturnType<typeof watch>["subscribeState"]>[0] | undefined
+  let periodicStateReads = 0
   const observer = vi.spyOn(settingsModule, "watchSettings").mockImplementation((paths, ...args) => {
     const handle = watch(paths, ...args)
-    if (paths === settingsPath) monitor = handle
-    return handle
+    if (paths !== settingsPath || args[1]?.baseline) return handle
+    monitor = handle
+    return { ...handle, getState() { periodicStateReads++; return handle.getState() }, subscribeState(listener) {
+      publishCoverage = listener
+      return handle.subscribeState(listener)
+    } }
   })
   let reads = 0, failNext = false
   const create = agentSettingsModule.createAgentSettings
@@ -110,6 +116,7 @@ it("leaves locked policy readers idle under watch coverage, and retries a failed
     const baseline = reads
     await new Promise(done => setTimeout(done, 2200))
     expect(reads).toBe(baseline)
+    expect(periodicStateReads).toBe(0)
     failNext = true
     await writeFile(settingsPath, JSON.stringify({ sandboxMode: "read-only" }))
     let id = 2
@@ -119,6 +126,23 @@ it("leaves locked policy readers idle under watch coverage, and retries a failed
       expect(reads).toBeGreaterThanOrEqual(baseline + 2)
     }, {timeout:5000})
     expect(warn).toHaveBeenCalled()
+
+    const covered = monitor!.getState()
+    expect(covered.kind).toBe("covered")
+    const unavailable = { kind: "unavailable", code: "FS_WATCH_BACKEND" } as const
+    const updated = reads
+    publishCoverage!(unavailable)
+    publishCoverage!(unavailable)
+    await vi.waitFor(() => expect(reads).toBe(updated + 1), { timeout: 3500 })
+    publishCoverage!(covered)
+    await new Promise(done => setTimeout(done, 1250))
+    expect(reads).toBe(updated + 1)
+
+    publishCoverage!(unavailable)
+    await host.close()
+    const stopped = reads
+    await new Promise(done => setTimeout(done, 1250))
+    expect(reads).toBe(stopped)
   } finally {
     try { await host?.close() } finally { observer.mockRestore(); reader.mockRestore(); warn.mockRestore(); await rm(root,{recursive:true,force:true}) }
   }

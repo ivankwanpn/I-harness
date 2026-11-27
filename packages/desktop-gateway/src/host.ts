@@ -855,11 +855,30 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   let policySync: Promise<void> | undefined
   let policyChanged = false
   let retryPolicy = false
+  let policyCovered = false
+  let policyTimer: ReturnType<typeof setTimeout> | undefined
+  const clearPolicyTimer = () => {
+    if (policyTimer !== undefined) clearTimeout(policyTimer)
+    policyTimer = undefined
+  }
+  const updatePolicyTimer = () => {
+    if (shutdownRequested || policySync || (policyCovered && !retryPolicy)) {
+      clearPolicyTimer()
+      return
+    }
+    if (policyTimer !== undefined) return
+    policyTimer = setTimeout(() => {
+      policyTimer = undefined
+      syncPolicy()
+    }, 1000)
+    policyTimer.unref?.()
+  }
   const syncPolicy = () => {
     if (shutdownRequested) return
     policyChanged = true
     if (policySync) return
-    const job = (async () => {
+    clearPolicyTimer()
+    const job = Promise.resolve().then(async () => {
       do {
         policyChanged = false
         // Read policy once under the provider lease. Apply role enablement
@@ -878,21 +897,22 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
         retryPolicy = results.some(result => result.status === "rejected")
         if (retryPolicy) console.warn("[desktop] agent settings refresh failed")
       } while (policyChanged && !shutdownRequested)
-    })()
+    })
     policySync = job
-    void job.finally(() => {
-      if (policySync === job) policySync = undefined
-      if (policyChanged) syncPolicy()
-    }).catch(() => { retryPolicy = true })
+    const settled = () => {
+      policySync = undefined
+      if (policyChanged && !shutdownRequested) syncPolicy()
+      else updatePolicyTimer()
+    }
+    void job.then(settled, () => { retryPolicy = true; settled() })
   }
   const policyWatcher = watchSettings(settingsPath, syncPolicy, { service: instructionWatch })
-  defer(async () => { shutdownRequested = true; await policyWatcher.close(); await policySync })
-  const policyTimer = setInterval(() => {
-    if (!policySync && (retryPolicy || policyWatcher.getState().kind !== "covered")) syncPolicy()
-  }, 1000)
-  defer(() => clearInterval(policyTimer))
-  policyTimer.unref?.()
+  defer(async () => { shutdownRequested = true; clearPolicyTimer(); await policyWatcher.close(); await policySync })
   syncPolicy()
+  policyWatcher.subscribeState(state => {
+    policyCovered = state.kind === "covered"
+    updatePolicyTimer()
+  })
   const offMcpRefresh = mcp.bindRefresh(async () => {
     applyingMcp = true
     try { await plugins.refresh() } finally { applyingMcp = false }
@@ -908,6 +928,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
       if (closing) return closing
       const cleanupOperation = createRetainedCleanupOperation()
       shutdownRequested = true
+      clearPolicyTimer()
       offMcpRefresh()
       workspaceMemory.stop()
       let pluginFenceFailure: { cause: unknown } | undefined
@@ -923,7 +944,6 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
         if (pluginFenceFailure) failures.push({ name: "plugin observer fence", cause: pluginFenceFailure.cause })
         await once("trust watcher fence", () => trustWatcher.dispose())
         await once("policy watcher fence", () => policyWatcher.dispose())
-        await once("policy timer", () => clearInterval(policyTimer))
         await once("interaction", () => interaction.close())
 
         await once("terminal", () => terminal.close())
