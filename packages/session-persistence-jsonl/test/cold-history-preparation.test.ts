@@ -1,5 +1,5 @@
 import * as archive from '@i-harness/core-session/internal/archive'
-import { encodeFactBatch, factPrefixDigest, legacyPrefixDigest, type JournalMetadata, type SessionView } from '@i-harness/core-session'
+import { committedFactSeqs, encodeFactBatch, factPrefixDigest, legacyPrefixDigest, type JournalMetadata, type SessionView } from '@i-harness/core-session'
 import { originalColdArchiveHistoryReader } from '@i-harness/session-persistence/internal/archive-read'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -8,6 +8,45 @@ import { expect, it, vi } from 'vitest'
 import { createJsonlBackend } from '../src/index.ts'
 import { PREPARED_HISTORY_LIFETIME_MS } from '../src/backend/process-read.ts'
 import { createSessionCoordinator } from './helpers/composed.ts'
+import { acquireManagedExecution } from '../../session-persistence/src/execution-internal.ts'
+
+const barrier = vi.hoisted(() => ({
+  afterSealedPage: undefined as (() => Promise<void>) | undefined,
+  beforeRestore: undefined as (() => Promise<void>) | undefined,
+}))
+
+vi.mock('../../session-persistence/src/archive-read-internal.ts', async load => {
+  const original = await load<typeof import('../../session-persistence/src/archive-read-internal.ts')>()
+  return {
+    ...original,
+    associateColdArchiveHistoryReader(backend: object, reader: import('../../session-persistence/src/archive-read-internal.ts').ColdArchiveHistoryReader) {
+      original.associateColdArchiveHistoryReader(backend, reader.readFullForHistoryPage ? {
+        ...reader,
+        async readFullForHistoryPage(id) {
+          const result = await reader.readFullForHistoryPage!(id)
+          if (result?.retainDecoded) await barrier.afterSealedPage?.()
+          return result
+        },
+      } : reader)
+    },
+  }
+})
+
+vi.mock('../../session-persistence/src/coordinator/managed-execution-source.ts', async load => {
+  const original = await load<typeof import('../../session-persistence/src/coordinator/managed-execution-source.ts')>()
+  return {
+    ...original,
+    createManagedExecutionSource(ports: Parameters<typeof original.createManagedExecutionSource>[0]) {
+      const source = original.createManagedExecutionSource(ports)
+      const initialize = source.initialize
+      source.initialize = async () => {
+        await barrier.beforeRestore?.()
+        return initialize.call(source)
+      }
+      return source
+    },
+  }
+})
 
 vi.mock('@i-harness/core-session/internal/archive', async load => {
   const original = await load<typeof import('@i-harness/core-session/internal/archive')>()
@@ -65,6 +104,55 @@ it('detaches page and public snapshot from a one-use native writer decode', asyn
   const next = await coordinator.openManagedDocument('a')
   expect(decodes.mock.calls.length).toBeGreaterThan(preOpen)
   expect(next.view.events[0]).toMatchObject(originalEvent)
+}))
+
+it.each(['preparing', 'committed', 'revoked'] as const)('qualifies the initial page while the original writable owner is %s', async mode => withHistory(async ({ coordinator }) => {
+  const sealed = Promise.withResolvers<void>(), releasePage = Promise.withResolvers<void>()
+  const restoring = Promise.withResolvers<void>(), releaseRestore = Promise.withResolvers<void>()
+  barrier.afterSealedPage = async () => { sealed.resolve(); await releasePage.promise }
+  if (mode !== 'committed') barrier.beforeRestore = async () => { restoring.resolve(); await releaseRestore.promise }
+  const opening = coordinator.readHistoryPage!('a', tail)
+  void opening.catch(() => {})
+  let attaching: ReturnType<typeof acquireManagedExecution> | undefined
+  async function append(attachment: Awaited<ReturnType<typeof acquireManagedExecution>>) {
+    const action = attachment.owner.beginAction()
+    try { committedFactSeqs(await action.facts.metadata.admit({ type: 'plan/mode', mode: 'on' })) }
+    finally { action.finish() }
+  }
+  try {
+    await sealed.promise
+    attaching = acquireManagedExecution(coordinator, 'a')
+    void attaching.catch(() => {})
+    if (mode === 'revoked') {
+      await restoring.promise
+      coordinator.revokeManagedDocumentNewWork!('a')
+      releasePage.resolve()
+      releaseRestore.resolve()
+      await expect(attaching).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+      await expect(opening).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+      return
+    }
+    if (mode === 'preparing') {
+      await restoring.promise
+      releasePage.resolve()
+      const winner = await Promise.race([opening, new Promise(resolve => setImmediate(() => resolve('waiting for writer')))])
+      expect(winner).toMatchObject({ headSeq: 1, events: [originalEvent] })
+      releaseRestore.resolve()
+      await append(await attaching)
+    } else {
+      await append(await attaching)
+      releasePage.resolve()
+      expect(await opening).toMatchObject({ headSeq: 2, events: [originalEvent, { type: 'plan/mode', mode: 'on' }] })
+    }
+    const refreshed = await coordinator.readHistoryPage!('a', tail)
+    expect(refreshed).toMatchObject({ headSeq: 2, events: [originalEvent, { type: 'plan/mode', mode: 'on' }] })
+  } finally {
+    barrier.afterSealedPage = undefined
+    barrier.beforeRestore = undefined
+    releasePage.resolve()
+    releaseRestore.resolve()
+    await Promise.allSettled([opening, ...(attaching ? [attaching] : [])])
+  }
 }))
 
 it.each(['other session', 'replaced input', 'corrupted input'] as const)('does not promote prepared data across %s', async mode => withHistory(async ({ root, coordinator }) => {

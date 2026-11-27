@@ -169,7 +169,10 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
         const cold = await loads.readColdHistoryPage(sessionId, options, onSnapshotFallback
           ? (session, isCurrent) => { fallback = { session, isCurrent } }
           : undefined)
-        page = managed.has(sessionId) ? await managed.readHistoryPage(sessionId, options) : cold
+        // The original sealed snapshot has its own read linearization point.
+        // An execution reserving its entry does not publish a writable owner.
+        const reserving = cold?.originalSealCurrent?.() === true && managed.isPreparingUnpublishedExecution(sessionId)
+        page = managed.has(sessionId) && !reserving ? await managed.readHistoryPage(sessionId, options) : cold?.page
         archiveReads?.assertPublicReadAdmission()
         if (!page && fallback && !managed.has(sessionId) && fallback.isCurrent()) onSnapshotFallback?.(fallback.session)
       }

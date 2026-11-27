@@ -1,4 +1,4 @@
-import { CURRENT_FORMAT_VERSION, freezeJsonData, stringifyJsonData, validateSubagentHeader, type JournalPrefix, type Session, type SessionView, type SessionEvent, type SessionEventView, type SessionHistoryPageOptions } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, freezeJsonData, stringifyJsonData, validateSubagentHeader, type JournalPrefix, type OwnedSessionHistoryPage, type Session, type SessionView, type SessionEvent, type SessionEventView, type SessionHistoryPageOptions } from "@i-harness/core-session"
 import { materializeSessionHistoryPage, planSessionHistoryPage, sessionHistoryFact, type SessionHistoryFact } from '@i-harness/core-session/internal/archive'
 import { prepareManagedSessionClone, type ManagedSessionClone } from '@i-harness/core-session/internal/restoration'
 import { repairTurnTail } from "../repair.ts"
@@ -19,6 +19,7 @@ export type LoadOwned = ReturnType<typeof createLoads>['loadOwned']
 type AfterTransition = (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>
 type MaterializedHistory = { session: Session; readonly archivePrefix?: Readonly<JournalPrefix>; readonly managedClone?: ManagedSessionClone }
 type ColdSnapshotFallback = (session: SessionView, isCurrent: () => boolean) => void
+type ColdHistoryPageResult = { page: OwnedSessionHistoryPage; originalSealCurrent?: () => boolean }
 
 const MAX_COLD_HISTORY_SESSIONS = 2
 const MAX_COLD_HISTORY_FACTS = 16_384
@@ -136,7 +137,7 @@ export function createLoads(
       ...(meta === undefined ? {} : { header: meta }),
     }
   }
-  async function readInitialColdHistoryPage(sessionId: string, options: SessionHistoryPageOptions, original: ColdArchiveHistoryReader, onSnapshotFallback?: ColdSnapshotFallback) {
+  async function readInitialColdHistoryPage(sessionId: string, options: SessionHistoryPageOptions, original: ColdArchiveHistoryReader, onSnapshotFallback?: ColdSnapshotFallback): Promise<ColdHistoryPageResult | undefined> {
     let decoded: Awaited<ReturnType<NonNullable<ColdArchiveHistoryReader['readFullForHistoryPage']>>>
     try { decoded = await original.readFullForHistoryPage?.(sessionId) }
     catch (cause) {
@@ -167,7 +168,7 @@ export function createLoads(
       decoded.retainDecoded?.()
       rememberColdHistory(sessionId, { evidence, facts })
     }
-    return page
+    return { page, ...(decoded.retainDecoded ? { originalSealCurrent: isCurrent } : {}) }
   }
   function loadThroughTransition<T>(sessionId: string, finalize: (proof: HistoryProof) => Promise<T>, after?: AfterTransition, skipPending = false, allowClean = false) {
     const run = () => transitionLoadOriginal(sessionId, finalize, after, skipPending, allowClean)
@@ -260,7 +261,7 @@ export function createLoads(
       }
       return { session: await asSnapshot(decoded, qualified) }
     },
-    async readColdHistoryPage(sessionId: string, options: SessionHistoryPageOptions, onSnapshotFallback?: ColdSnapshotFallback) {
+    async readColdHistoryPage(sessionId: string, options: SessionHistoryPageOptions, onSnapshotFallback?: ColdSnapshotFallback): Promise<ColdHistoryPageResult | undefined> {
       if (coldHistoryRetired) return undefined
       const original = originalColdArchiveHistoryReader(backend)
       if (!original) return undefined
@@ -282,7 +283,7 @@ export function createLoads(
       })
       const page = materializeSessionHistoryPage(plan, ordered)
       if (coldHistory.get(sessionId) === history) rememberColdHistory(sessionId, history)
-      return page
+      return { page }
     },
     retireColdHistory() {
       coldHistoryRetired = true

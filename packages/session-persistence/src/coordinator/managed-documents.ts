@@ -334,6 +334,13 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       return parent
     },
     has:(id:string)=>documents.has(id),
+    isPreparingUnpublishedExecution(id: string) {
+      const entry = documents.get(id)
+      if (!entry || !entry.flight || entry.document || entry.revoked || entry.headerUnknown || entry.bootstrap ||
+        entry.selected || entry.coldSelected || entry.coldFinalization || entry.journalMutation || hasJournalDebt(entry)) return false
+      const original = executions.get(entry)
+      return original !== undefined && original.attachment === undefined
+    },
     assertMutation(id:string){assertEntry(documents.get(id))},
     beginTaskMetadataUpdate(id:string){
       assertTaskOutside(id);bootstrap.assertOutsideCapture(id);const entry=documents.get(id);assertEntry(entry);const document=entry?.document;if(!entry||!document)return;const original=beginManagedTaskMetadataUpdate(document,ownership);return Object.freeze({before:original.before,after:original.after,finish(success:boolean){original.finish(success&&documents.get(id)===entry&&entry.document===document&&!entry.revoked&&!entry.headerUnknown)}})
