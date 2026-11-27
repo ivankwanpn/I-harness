@@ -7,6 +7,7 @@ import { createUsageStore } from "@i-harness/usage-stats"
 import { createAutoTitleSettings } from "./auto-title.ts"
 import { createCodingPlans } from "./coding-plans.ts"
 import type { DesktopHost } from "./host.ts"
+import { createDesktopMcp } from "./mcp-settings.ts"
 import { createModelRetrySettings } from "./model-retry-settings.ts"
 import { createModelWaitSettings } from "./model-wait-settings.ts"
 import { createDesktopRouter, createGatewayWrite } from "./router.ts"
@@ -21,7 +22,10 @@ export function createDesktopProfileServices(settingsPath = resolveSettingsPath(
   const provider = createFileProviderRuntime({ settingsPath, credentialsPath, codex: accounts })
   const codingPlans = createCodingPlans(accounts, provider)
   const usageStore = createUsageStore(join(dirname(settingsPath), "usage-stats"))
-  return { settingsPath, credentialsPath, accounts, provider, codingPlans, usageStore, close: () => codingPlans.close() }
+  const mcp = createDesktopMcp(join(dirname(settingsPath), "mcp-servers.json"))
+  return { settingsPath, credentialsPath, accounts, provider, codingPlans, usageStore, mcp, async close() {
+    try { await mcp.close() } finally { await codingPlans.close() }
+  } }
 }
 
 export type DesktopProfileServices = ReturnType<typeof createDesktopProfileServices>
@@ -33,7 +37,7 @@ export async function createConfigurationHost(profile: DesktopProfileServices, s
   const handlers: DesktopHandlers = {
     hasActiveWork: () => false,
     hasActiveProfileWork: () => profile.accounts.hasActiveLogin(),
-    provider: profile.provider, codingPlans: profile.codingPlans,
+    provider: profile.provider, codingPlans: profile.codingPlans, mcp: profile.mcp,
     autoTitle: createAutoTitleSettings(profile.settingsPath),
     modelRetry: createModelRetrySettings(profile.settingsPath),
     modelWait: createModelWaitSettings(profile.settingsPath),

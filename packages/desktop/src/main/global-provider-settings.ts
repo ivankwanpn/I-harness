@@ -1,5 +1,6 @@
 import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wire.ts"
 import {decodeUsageSnapshotV2,decodeLegacyUsageView} from '@i-harness/usage-stats/observation-snapshot'
+import { contextRequestParams } from "./context-requests.ts"
 
 export type GlobalProviderRequest =
   | { kind: "desktop/global-provider/directory" }
@@ -9,7 +10,7 @@ export type GlobalProviderRequest =
 export type GlobalPreferencesRequest =
   | { kind: "desktop/global-preferences/state" }
   | { kind: "desktop/global-preferences/configure"; autoTitle: boolean }
-export interface ConfigurationClient { request(method: string, params: Record<string, unknown>): Promise<unknown>;readonly capabilities?:Readonly<Record<string,readonly string[]>> }
+export interface ConfigurationClient { request(method: string, params: Record<string, unknown>, timeoutMs?: number): Promise<unknown>;readonly capabilities?:Readonly<Record<string,readonly string[]>> }
 
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value)
 const id = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 128 && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(value) && !["constructor", "prototype"].includes(value)
@@ -26,7 +27,14 @@ export function createGlobalProviderSettings(client: () => Promise<Configuration
       if (closed || !record(input)) throw new Error("Global provider settings unavailable")
       let method: string
       let params: Record<string, unknown>
+      let timeoutMs: number | undefined
       switch (input.kind) {
+        case "desktop/mcp/state":
+        case "desktop/mcp/refresh":
+        case "desktop/mcp/mutate":
+          method = input.kind; params = contextRequestParams(input)!
+          timeoutMs = method === "desktop/mcp/state" ? 30000 : 600000
+          break
         case "desktop/usage/query":
           if (!record(input.query)) throw new Error("Invalid usage query")
           method = input.kind; params = { query: input.query }; break
@@ -105,7 +113,7 @@ export function createGlobalProviderSettings(client: () => Promise<Configuration
           }
           return target.request("desktop/coding-plans/state", {})
         }
-        const result = await target.request(method, params)
+        const result = await (timeoutMs === undefined ? target.request(method, params) : target.request(method, params, timeoutMs))
         if (method === "desktop/model-wait/state" || method === "desktop/model-wait/configure") {
           if (!record(result) || !waitSeconds(result.firstResponseSeconds) || !waitSeconds(result.progressSeconds)) throw new Error("Invalid model wait state")
           return { firstResponseSeconds: result.firstResponseSeconds, progressSeconds: result.progressSeconds }

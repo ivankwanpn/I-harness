@@ -246,6 +246,13 @@ export async function dispatchDesktopRequest(
     if (!dependencies.browser) throw new Error("Browser surface unavailable")
     return dependencies.browser.request(workspaceId, value)
   }
+  if (dependencies.globalProviders && ["desktop/mcp/state", "desktop/mcp/refresh", "desktop/mcp/mutate"].includes(value.kind)) {
+    const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+    const workspace = dependencies.catalog.get(workspaceId)
+    if (!workspace) throw new Error(`unknown workspace id: ${workspaceId}`)
+    if (workspace.worktree) await dependencies.worktrees?.assertWorktree(workspace)
+    return dependencies.globalProviders.request(value)
+  }
   const contextParams = contextRequestParams(value)
   if (contextParams !== undefined) {
     const runtime = await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)

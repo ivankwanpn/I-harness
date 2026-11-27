@@ -348,7 +348,9 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   let autoCompactionEnabled = settings.get().compaction.auto
   const subagents = createSubagentSettings(settingsPath, roleModelsEnabled, { onEnabledChanged(next) { roleModelsEnabled = next } })
   const mcpPath = join(dirname(settingsPath), "mcp-servers.json")
-  const mcp = createDesktopMcp(mcpPath)
+  const mcp = options.profile?.mcp ?? createDesktopMcp(mcpPath)
+  let applyingMcp = false
+  if (!options.profile) defer(() => mcp.close())
   const autoTitle = createAutoTitleSettings(settingsPath)
   const ownedApprovalBindings = createOwnedApprovalBindings()
   const approvalRulesBase = createApprovalRulesAdapter({ ownedPolicyIdentity: ownedApprovalBindings.identity, filePath: join(options.sessionDir, "approval-rules-v1.json"), policyIdentity: assembly => {
@@ -619,7 +621,6 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   }
   const stopPluginObserver = plugins.bindRefresh(() => service.refreshExtensions())
   defer(() => stopPluginObserver.close())
-  mcp.bindRefresh(() => plugins.refresh())
   const offInteraction = onOriginalHostAssembly(service,(assembly) => { interaction.attach(assembly);liveIndexJobOwners();if(assembly.sessionId)indexJobOwners.set(assembly.sessionId,new WeakRef(assembly)) })
   defer(offInteraction)
   const sessionSubagents = createDesktopSubagents(coordinator, service, {
@@ -687,7 +688,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   }
   const resources = createDesktopResources(options.workspace, () => plugins.inputs(), { configDir: dirname(settingsPath), refresh: () => service.refreshExtensions() })
   const handlers: DesktopHandlers = {
-    hasActiveWork: (): boolean => base.hasActiveWork() || interaction.hasPending() || input.hasActiveWork()
+    hasActiveWork: (): boolean => applyingMcp || base.hasActiveWork() || interaction.hasPending() || input.hasActiveWork()
       || workflow.hasActiveWork() || terminal.hasActiveWork() || nativeContext.hasActiveWork()
       || modelReview.hasActiveWork()
       || ownedIndexJobs.hasActiveWork() || (!options.profile && codexAccounts.hasActiveLogin()),
@@ -846,8 +847,9 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   let shutdownRequested = false
   let shutdownComplete = false
   const cleaned = new Set<string>()
-  const trustWatcher = watchSettings([resolveHookTrustPath(dirname(settingsPath)), mcpPath], async () => {
-    if (!shutdownRequested) await mcp.refresh().catch(() => { /* Settings surfaces expose live refresh failures. */ })
+  const trustWatcher = watchSettings([resolveHookTrustPath(dirname(settingsPath)), mcpPath], async (path) => {
+    if (shutdownRequested) return
+    await (path === mcpPath ? mcp.observeChange() : plugins.refresh()).catch(() => { /* Settings surfaces expose live refresh failures. */ })
   }, { service: instructionWatch })
   defer(() => { shutdownRequested = true; return trustWatcher.close() })
   let policySync: Promise<void> | undefined
@@ -891,6 +893,11 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   defer(() => clearInterval(policyTimer))
   policyTimer.unref?.()
   syncPolicy()
+  const offMcpRefresh = mcp.bindRefresh(async () => {
+    applyingMcp = true
+    try { await plugins.refresh() } finally { applyingMcp = false }
+  })
+  defer(offMcpRefresh)
   return {
     hasActiveWork: () => shutdownRequested || router.hasActiveWork(),
     handleLine: (line) => shutdownRequested ? Promise.reject(new Error("Desktop host is closing")) : router.handleLine(line),
@@ -901,6 +908,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
       if (closing) return closing
       const cleanupOperation = createRetainedCleanupOperation()
       shutdownRequested = true
+      offMcpRefresh()
       workspaceMemory.stop()
       let pluginFenceFailure: { cause: unknown } | undefined
       try { stopPluginObserver.dispose() } catch (cause) { pluginFenceFailure = { cause } }
@@ -947,6 +955,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
         // A refresh may await creating session assemblies. Fence early, but
         // join only after their owners can settle shutdown dependencies.
         await once("trust watcher", () => trustWatcher.close())
+        if (!options.profile) await once("MCP settings", () => mcp.close())
         await once("policy watcher", () => policyWatcher.close())
         if (cleaned.has('session service')) await once('instructions', () => instructionEnvironment.close())
         if (cleaned.has('trust watcher') && cleaned.has('policy watcher') && cleaned.has('instructions') && cleaned.has('plugins') && cleaned.has('plugin observer')) await once('instruction watch', () => instructionWatch.close())

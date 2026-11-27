@@ -6,6 +6,7 @@ import type { BrowserWindow } from "electron"
 import type { HarnessClient } from "@i-harness/sdk"
 import { dispatchDesktopRequest, registerDesktopIpc } from "../src/main/ipc.ts"
 import type { DesktopIpcDependencies, IpcMainLike } from "../src/main/ipc.ts"
+import { createGlobalProviderSettings } from "../src/main/global-provider-settings.ts"
 import { DESKTOP_EVENT_CHANNEL, DESKTOP_REQUEST_CHANNEL, type DesktopEvent, type DesktopRequest } from "../src/shared/bridge.ts"
 import type { WorkspaceEntry } from "../src/main/workspaces.ts"
 import { RpcError, createSelectedResultsIntent, createSelectedResultsOperation, readSelectedResultsCore, readSelectedResultsPrepared } from '@i-harness/sdk'
@@ -110,6 +111,26 @@ describe("Desktop scoped IPC", () => {
     f.request.mockRejectedValueOnce(new RpcError(-32603, 'Session fork unavailable', fault))
     expect(await dispatchDesktopRequest(retry, f.dependencies)).toEqual(fault)
     expect(f.request).toHaveBeenLastCalledWith('session/fork/results/retry', { operation }, 0)
+  })
+
+  it("uses the profile channel for MCP settings without starting the selected workspace", async () => {
+    const f = fixture()
+    const request = vi.fn(async () => ({ servers: [] }))
+    const profile = vi.fn(async () => ({ request }))
+    f.dependencies.globalProviders = createGlobalProviderSettings(profile)
+    const state = { kind: "desktop/mcp/state", workspaceId: ENTRY.id } as const
+    await expect(dispatchDesktopRequest(state, f.dependencies)).resolves.toEqual({ servers: [] })
+    await dispatchDesktopRequest({ ...state, kind: "desktop/mcp/refresh" }, f.dependencies)
+    await dispatchDesktopRequest({ ...state, kind: "desktop/mcp/mutate", command: { action: "disable", name: "fixture" } }, f.dependencies)
+    await expect(dispatchDesktopRequest({ ...state, workspaceId: "unknown" }, f.dependencies)).rejects.toThrow("unknown workspace")
+    await expect(dispatchDesktopRequest({ ...state, kind: "desktop/mcp/mutate", command: { action: "invalid" } }, f.dependencies)).rejects.toThrow("invalid MCP action")
+    expect(profile).toHaveBeenCalledTimes(3)
+    expect(request.mock.calls).toEqual([
+      ["desktop/mcp/state", {}, 30000],
+      ["desktop/mcp/refresh", {}, 600000],
+      ["desktop/mcp/mutate", { action: "disable", name: "fixture" }, 600000],
+    ])
+    expect(f.get).not.toHaveBeenCalled()
   })
 
   it('routes explicit recovery to its known workspace owner without resetting on ordinary reads', async () => {
