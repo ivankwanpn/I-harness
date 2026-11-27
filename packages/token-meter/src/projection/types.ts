@@ -17,6 +17,9 @@ export interface ProjectedInputFacts {
   shapeFingerprint: string
   inputFingerprint: string
   readonly semanticIdentity?: SemanticInputIdentityV2
+  /** Zero-based final message unit containing a locally unpriced block. Set
+   * only when every such block was attributed to a unit of this projection. */
+  readonly lastUnpricedUnit?: number
   units: readonly {
     fingerprint: string
     role?: 'user' | 'assistant' | 'tool'

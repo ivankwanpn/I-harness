@@ -17,6 +17,9 @@ export class ProjectionCounter {
   inlineBinaryBytes = 0;
   cacheMetadataBytes = 0;
   signatureBytes = 0;
+  private unpricedBlocksInUnits = 0;
+  private lastUnpricedUnit?: number;
+  private unpricedBlocks(): number { return this.components.images.blockCount + this.components.opaqueContinuation.blockCount }
   private total(): number { return categories.reduce((sum, key) => sum + this.components[key].heuristicTokens, 0) }
   text(category: InputComponent, value: unknown): void {
     if (value === undefined)
@@ -56,9 +59,15 @@ export class ProjectionCounter {
   }
   unit(value: unknown, role: 'user' | 'assistant' | 'tool' | undefined, visit: () => void): void {
     const start = this.total()
+    const unpricedBefore = this.unpricedBlocks()
     this.components.framing.blockCount++
     this.components.framing.heuristicTokens += 12
     visit()
+    const addedUnpriced = this.unpricedBlocks() - unpricedBefore
+    if (addedUnpriced > 0) {
+      this.unpricedBlocksInUnits += addedUnpriced
+      this.lastUnpricedUnit = this.units.length
+    }
     const semanticId = this.pricingVersion ? semanticProjectionDigest("unit", value) : undefined
     this.units.push({ fingerprint: semanticId ?? projectionFingerprint(value), ...(semanticId ? { semanticId } : {}), ...(role ? { role } : {}), heuristicTokens: this.total() - start })
   }
@@ -87,10 +96,13 @@ export class ProjectionCounter {
     expectedModelId?: string
   }, input: unknown, shape: unknown, overrides: ProjectedInputFacts['overriddenInputFields'] = [], coverage: ProjectedInputFacts['coverage'] = 'complete'): ProjectedInputFacts {
     const semanticIdentity = this.pricingVersion ? semanticInputIdentity(identity, shape, input, this.units) : undefined
+    const needsProviderPricing = this.uncertainties.has('image-token-cost') || this.uncertainties.has('opaque-continuation-token-cost')
     return {
       version: 1, ...identity,
       bindingFingerprint: projectionFingerprint(identity), shapeFingerprint: semanticIdentity ? projectionFingerprint(['projection-compat-v2', semanticIdentity.shapeId, semanticIdentity.pricingVersion]) : projectionFingerprint(shape), inputFingerprint: semanticIdentity?.semanticId ?? projectionFingerprint(input),
       ...(semanticIdentity ? { semanticIdentity } : {}),
+      ...(semanticIdentity && needsProviderPricing && coverage === 'complete' && this.lastUnpricedUnit !== undefined && this.unpricedBlocksInUnits === this.unpricedBlocks()
+        ? { lastUnpricedUnit: this.lastUnpricedUnit } : {}),
       units: this.units, components: this.components, coverage, uncertainties: [...this.uncertainties],
       overriddenInputFields: overrides,
     }

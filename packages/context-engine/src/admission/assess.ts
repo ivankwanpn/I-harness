@@ -59,6 +59,12 @@ export function assessLegacyPreparedRequest(
     ...(unavailable ? { reason: incomplete ? 'Prepared input includes unpriced fixed provider references' : 'This model has no configured context window' }
       : recoveryRequired ? { reason: 'Provider context recovery remains required' } : {}),
   })
+  // The meter can describe a measured prefix and its priced tail even when the
+  // capacity policy still requires independent pricing for the whole request.
+  const displayEstimate = assessed.estimate.kind === 'unknown' && assessed.estimate.reason === 'token-cost-unavailable'
+    && input.coverage === 'complete' && estimate.calibrated && estimate.coversUnpricedUnits
+    ? { kind: 'estimated' as const, value: estimate.tokens, source: 'provider-anchor-plus-projection' as const }
+    : assessed.estimate
   return { prepared: candidate, snapshot, capacityFit: unavailable ? 'unavailable' : capacityFits ? 'yes' : 'no',
-    disposition: estimate.disposition, calibrated: estimate.calibrated, decision, estimate: assessed.estimate }
+    disposition: estimate.disposition, calibrated: estimate.calibrated, decision, estimate: displayEstimate }
 }

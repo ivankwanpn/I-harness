@@ -38,7 +38,14 @@ export function createAcceptedCalibration(ownerSessionId: string, observationLif
       // Charge only actual suffix units. Hidden provider output is never input.
       const suffix = input.units.slice(anchor.unitCount).reduce((sum, u) => sum + u.heuristicTokens, 0)
       const tokens = anchor.reportedInputTokens + suffix
-      return Number.isSafeInteger(tokens) ? { tokens, calibrated: true } : { tokens: heuristic, calibrated: false, disposition: 'pricing-changed' as const }
+      if (!Number.isSafeInteger(tokens)) return { tokens: heuristic, calibrated: false, disposition: 'pricing-changed' as const }
+      // Some adapters cannot price new images or opaque continuation locally.
+      // The accepted provider already counted those in an identical prefix.
+      const last = input.lastUnpricedUnit
+      const coversUnpricedUnits = input.coverage === 'complete' && last !== undefined && Number.isSafeInteger(last)
+        && last >= 0 && last < anchor.unitCount && input.uncertainties.every(reason =>
+          reason === 'image-token-cost' || reason === 'opaque-continuation-token-cost' || reason === 'signature-token-cost' || reason === 'route-output-floor-unverified')
+      return { tokens, calibrated: true, ...(coversUnpricedUnits ? { coversUnpricedUnits: true as const } : {}) }
     },
     retire(reason: CalibrationRetirementReason): Extract<ContextUsageEventV2, { op: 'retire' }> | undefined {
       if (!anchor) return

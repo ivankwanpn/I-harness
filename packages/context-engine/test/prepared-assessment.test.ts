@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest'
 import { ProjectionCounter, createAcceptedCalibration, type ProjectedInputFacts } from '@i-harness/token-meter'
 import { prepareModelRequest, type PreparedModelRequest } from '@i-harness/llm-seam'
-import { assessLegacyPreparedRequest, assessPreparedCapacity, type LegacyPreparedAssessmentInput, type PreparedAssessmentReaders } from '../src/index.ts'
+import { admissionObservation, assessLegacyPreparedRequest, assessPreparedCapacity, type LegacyPreparedAssessmentInput, type PreparedAssessmentReaders } from '../src/index.ts'
 
 const d = 'a'.repeat(64)
 const policy: LegacyPreparedAssessmentInput = {
@@ -29,6 +29,23 @@ function prepared(input = facts(), output: Partial<PreparedModelRequest['measure
   }
 }
 const readers = (recovery = false): PreparedAssessmentReaders => ({ estimate: () => ({ tokens: 7399, calibrated: false }), recoveryRequired: () => recovery })
+
+it('shows an accepted-prefix estimate without using it to grant capacity or derive an output cap', () => {
+  const input = { ...facts(), uncertainties: ['image-token-cost'] }
+  const request = prepared(input)
+  const ordinary = assessLegacyPreparedRequest(request, policy, {
+    estimate: () => ({ tokens: 4342, calibrated: true }), recoveryRequired: () => false,
+  })
+  const observed = assessLegacyPreparedRequest(request, policy, {
+    estimate: () => ({ tokens: 4342, calibrated: true, coversUnpricedUnits: true }), recoveryRequired: () => false,
+  })
+  expect(ordinary.estimate).toEqual({ kind: 'unknown', reason: 'token-cost-unavailable' })
+  expect(admissionObservation(observed, 'main').estimate).toEqual({ kind: 'estimated', value: 4342, source: 'provider-anchor-plus-projection' })
+  expect(observed.decision).toEqual(ordinary.decision)
+  expect(observed.capacityFit).toBe('unavailable')
+  expect(observed.prepared).toBe(ordinary.prepared)
+  expect(observed.snapshot.admission).toBe('unavailable')
+})
 
 it.each([1000, 1010])('selects one literal8000 derivative and reprices actual B=%s', finalInput => {
   const a = prepared(facts('A'), { effectiveCap: 128000, minimumCap: 1025 }), b = prepared(facts('B'), { effectiveCap: 8000, minimumCap: 1025 })

@@ -6,6 +6,8 @@ import type { AdmissionPurpose, CapacityAssessment, Estimate } from './policy.ts
 export interface ProjectionEstimate {
   readonly tokens: number
   readonly calibrated: boolean
+  /** The matched, measured prefix includes all blocks of unknown local cost. */
+  readonly coversUnpricedUnits?: true
   readonly disposition?: CalibrationRetirementReason
 }
 export interface LegacyPreparedAssessmentInput {

@@ -18,6 +18,31 @@ function input(tail = false, prefix = 'prefix', shape = 'shape') {
   return c.finish({ protocol: 'test', modelId: 'm' }, { prefix, tail }, shape)
 }
 const suffix = (next: ReturnType<typeof input>, count: number) => next.units.slice(count).reduce((n, u) => n + u.heuristicTokens, 0)
+
+it.each(['image', 'opaque'] as const)('tracks whether the accepted prefix covers every unpriced %s block', kind => {
+  function project(tail: 'none' | 'text' | 'unpriced', options: { external?: boolean; fixed?: boolean; replacement?: string } = {}) {
+    const counter = new ProjectionCounter('projected-pricing-v2')
+    const unpriced = () => kind === 'image' ? counter.image('YQ==') : counter.opaque('opaque')
+    if (options.fixed) unpriced()
+    const prefix = options.replacement ?? 'original'
+    counter.unit(prefix, 'user', unpriced)
+    if (tail === 'text') counter.unit('later', 'user', () => counter.text('visibleText', 'later'))
+    if (tail === 'unpriced') counter.unit('new attachment', 'user', unpriced)
+    if (options.external) counter.uncertainties.add('external-image-token-cost')
+    return counter.finish({ modelId: 'm', protocol: 'test' }, [prefix, tail], 'shape', [], options.external ? 'incomplete' : 'complete')
+  }
+  const first = project('none'), source = createAcceptedCalibration('owner', 'live')
+  record(source, first, { inputTokens: 4321, cacheReadTokens: 3000, inputTokenSemantics: 'includes-cache', outputTokens: 50 })
+  expect(source.probe(first, compatibility)).toMatchObject({ tokens: 4321, coversUnpricedUnits: true })
+  const textTail = project('text')
+  expect(source.probe(textTail, compatibility)).toMatchObject({ tokens: 4321 + suffix(textTail, 1), coversUnpricedUnits: true })
+  expect(source.probe(project('unpriced'), compatibility)).not.toHaveProperty('coversUnpricedUnits')
+  expect(source.probe(project('text', { replacement: 'different' }), compatibility)).not.toHaveProperty('coversUnpricedUnits')
+  expect(source.probe(project('text', { external: true }), compatibility)).not.toHaveProperty('coversUnpricedUnits')
+  expect(source.probe(project('text', { fixed: true }), compatibility)).not.toHaveProperty('coversUnpricedUnits')
+  expect(source.probe(textTail, { ...compatibility, branchId: 'c'.repeat(64) })).not.toHaveProperty('coversUnpricedUnits')
+  expect(createAcceptedCalibration('owner','new-lifetime').probe(textTail, compatibility)).not.toHaveProperty('coversUnpricedUnits')
+})
 it('keeps incident arithmetic as a synthetic live observation without cold continuity', () => {
   const first = input(), next = input(true), source = createAcceptedCalibration('owner', 'live')
   const checkpoint = record(source, first, { inputTokens: 162, cacheReadTokens: 760448, cacheCreationTokens: 0, inputTokenSemantics: 'excludes-cache', outputTokens: 587 })
