@@ -749,11 +749,8 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           return makeFailure(id, INVALID_PARAMS, "session/warm requires a non-empty sessionId")
         }
         try {
-          // Private/managed runtimes refuse a direct assembly request until
-          // their compatibility adapter exists. `managedInputFor` is the exact
-          // path a prompt takes, so warming through it prepares that adapter.
-          const managed = await service.managedInputFor?.(p.sessionId, { completePreparation: true })
-          if (managed) return makeSuccess(id, { ready: true })
+          if (service.warmSession) return makeSuccess(id, await service.warmSession(p.sessionId))
+          // Explicit legacy SDK embedders may only provide assemblyFor.
           const assembly = await service.assemblyFor(p.sessionId)
           return makeSuccess(id, { ready: assembly !== undefined })
         } catch (error) {
@@ -789,8 +786,8 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         try {
           session = service.liveSession(p.sessionId)
           if (session === undefined) {
-            page = await opts.coordinator?.readHistoryPage?.(p.sessionId, pageOptions)
-            if (page === undefined) session = await sessionForHistory(p.sessionId)
+            page = await opts.coordinator?.readHistoryPage?.(p.sessionId, pageOptions, fallback => { session = fallback })
+            if (page === undefined && session === undefined) session = await sessionForHistory(p.sessionId)
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)

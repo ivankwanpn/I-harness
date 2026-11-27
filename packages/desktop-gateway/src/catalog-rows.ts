@@ -8,10 +8,13 @@ export async function readCatalogRows<T>(
   source: Pick<SessionCoordinator, "list">,
   prepare: (ids: readonly string[], markPartial: () => void) => (id: string) => Promise<T | undefined>,
   sequential = false,
+  onlyId?: string,
 ): Promise<{ rows: T[]; partial: boolean }> {
   let partial = false
   const incomplete = () => { partial = true }
-  const ids = await source.list(incomplete)
+  const listed = onlyId === undefined ? await source.list(incomplete) : await source.list(incomplete, onlyId)
+  // Embedded coordinators may implement only the original unfiltered list.
+  const ids = onlyId === undefined ? listed : listed.filter(id => id === onlyId)
   const project = prepare(ids, incomplete)
   async function read(id: string) {
     try { return await project(id) }

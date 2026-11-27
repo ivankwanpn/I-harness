@@ -242,13 +242,14 @@ export function createArchiveJournalHistoryDecoder(
     },
     finish() {
       const decoded = decoder.finish()
-      return { ...decoded, frames: frames && Object.freeze(frames), validatedEvents(header: import('../conversation/generation.ts').GenerationHistoryScope) {
+      return { ...decoded, frames: frames && Object.freeze(frames), validatedEvents(header: import('../conversation/generation.ts').GenerationHistoryScope, onOriginal?: () => void) {
         if (!events) throw new TypeError('Archive history already consumed')
         const history = events
         events = undefined
-        if (native && !decoded.torn && !header.semanticSeed && hasNativeSerializer())
+        if (native && !decoded.torn && !header.semanticSeed && hasNativeSerializer()) {
           validateDecoderOwnedConversationHistory(history, formatVersion, header)
-        else validateConversationHistory(history, formatVersion, header)
+          if (hasNativeSerializer()) onOriginal?.()
+        } else validateConversationHistory(history, formatVersion, header)
         return history
       } }
     },

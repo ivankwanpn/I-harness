@@ -4,6 +4,7 @@ import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 import { normalizeCodeMode, type SettingsCodeMode } from "@i-harness/settings"
 import { withDesktopSettings } from "./settings-file.ts"
+import { originalManagedCodeFor } from "../../session-executor/src/host-managed-execution.ts"
 
 export type CodeMode = "off" | "mixed" | "only"
 export interface CodeModeSettingsView { saved: SettingsCodeMode; effective?: CodeMode; live: boolean }
@@ -54,7 +55,8 @@ export function createCodeModeSettings(path: string, service: Pick<SessionServic
   }
   function view(saved: SettingsCodeMode, sessionId?: string): CodeModeSettingsView {
     const assembly = sessionId ? service.liveAssembly(resourceId(sessionId)) : undefined
-    return { saved, live: Boolean(assembly), ...(assembly?.executionState ? { effective: assembly.executionState().codeMode } : {}) }
+    const managed = sessionId && !assembly ? originalManagedCodeFor(service, sessionId) : undefined
+    return { saved, live: Boolean(assembly || managed), ...(assembly?.executionState ? { effective: assembly.executionState().codeMode } : managed ? { effective: managed.effectiveMode } : {}) }
   }
   return {
     resolve,
@@ -82,6 +84,10 @@ export function createDesktopExecution(coordinator: SessionCoordinator, service:
       const limit = boundedInteger(options.limit, 1, 20, 10)
       assertCurrent?.()
       const assembly = service.liveAssembly(sessionId)
+      const managed = assembly ? undefined : originalManagedCodeFor(service, sessionId)
+      const assertManaged = () => {
+        if (managed && (originalManagedCodeFor(service, sessionId) !== managed || managed.surfaceState() !== 'available')) throw Error('Execution source retired or unavailable')
+      }
       assertCurrent?.()
       let session = assembly?.session
       if (!session) {
@@ -89,7 +95,9 @@ export function createDesktopExecution(coordinator: SessionCoordinator, service:
         session = await readDesktopSnapshot(coordinator, sessionId, assertCurrent)
         assertCurrent?.()
       }
-      const owned = new Set(assembly?.liveResources?.().codeCells.map(cell => cell.id) ?? [])
+      assertManaged()
+      const owned = new Set((assembly?.liveResources?.().codeCells ?? managed?.liveCells() ?? []).map(cell => cell.id))
+      const canTerminate = typeof (assembly?.stopCodeCell ?? managed?.terminateCell) === 'function'
       const starts = new Map<string, Extract<SessionEvent, { type: "code/cell" }>>()
       for (const event of session.events) if (event.type === "code/cell" && (!event.sessionId || event.sessionId === sessionId)) starts.set(event.cellId, { ...starts.get(event.cellId), ...event })
       const ids = [...starts.keys()].reverse()
@@ -98,7 +106,7 @@ export function createDesktopExecution(coordinator: SessionCoordinator, service:
       for (const id of selected) {
         const event = starts.get(id)!
         cells.set(id, { id, ownerSessionId: sessionId, parentCallId: event.parentCallId, status: event.state, source: event.source ?? "", error: event.error,
-          live: owned.has(id), canTerminate: owned.has(id) && typeof assembly?.stopCodeCell === "function", truncated: false, seq: event.seq, output: [], calls: [] })
+          live: owned.has(id), canTerminate: owned.has(id) && canTerminate, truncated: false, seq: event.seq, output: [], calls: [] })
       }
       // Per-page content is bounded to 20 * 64K; every clipping is disclosed.
       const budgets = new Map(selected.map(id => [id, 65536]))
@@ -139,16 +147,22 @@ export function createDesktopExecution(coordinator: SessionCoordinator, service:
           }
         }
       }
-      const result = { sessionId, live: Boolean(assembly), ...(assembly?.executionState ? { effectiveMode: assembly.executionState().codeMode } : {}), cells: selected.map(id => cells.get(id)!), total: ids.length, offset, hasMore: offset + limit < ids.length }
+      const result = { sessionId, live: Boolean(assembly || managed), ...(assembly?.executionState ? { effectiveMode: assembly.executionState().codeMode } : managed ? { effectiveMode: managed.effectiveMode } : {}), cells: selected.map(id => cells.get(id)!), total: ids.length, offset, hasMore: offset + limit < ids.length }
       assertCurrent?.()
+      assertManaged()
       return result
     },
     async stop(sessionId: string, cellId: string) {
       resourceId(sessionId); resourceId(cellId); await coordinator.profile(sessionId)
       const assembly = service.liveAssembly(sessionId)
-      if (!assembly?.stopCodeCell || !assembly.liveResources?.().codeCells.some(cell => cell.id === cellId)) throw new Error("Cell has no live execution owner; cold history cannot be stopped")
-      await assembly.stopCodeCell(cellId)
+      const managed = assembly ? undefined : originalManagedCodeFor(service, sessionId)
+      if (managed?.terminateCell) await managed.terminateCell(cellId)
+      else {
+        if (!assembly?.stopCodeCell || !assembly.liveResources?.().codeCells.some(cell => cell.id === cellId)) throw new Error("Cell has no live execution owner; cold history cannot be stopped")
+        await assembly.stopCodeCell(cellId)
+      }
       await coordinator.flush(sessionId)
+      if (managed && originalManagedCodeFor(service, sessionId) !== managed) throw Error('Execution source retired or unavailable')
       return { stopped: true as const, cellId }
     },
   }

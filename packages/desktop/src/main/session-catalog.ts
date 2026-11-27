@@ -18,18 +18,18 @@ export function createDesktopSessionCatalog(sessionsRoot: string, entry: string 
     if (key(canonical) !== key(workspace.path) || !(await stat(canonical)).isDirectory()) throw Error('Workspace path changed')
     return join(sessionsRoot, workspace.id)
   }
-  function query<T>(workspace: WorkspaceEntry, method: 'navigation' | 'navigationSnapshot' | 'dashboard'): Promise<T> {
+  function query<T>(workspace: WorkspaceEntry, method: 'navigation' | 'navigationSnapshot' | 'dashboard', sessionId?: string): Promise<T> {
     if (closing) return Promise.reject(Error('Session catalog is closed'))
     const job = root(workspace).then(root => {
       reader ??= startCatalogReader(entry, () => { reader = undefined })
-      return reader.request<T>({ method, root })
+      return reader.request<T>({ method, root, ...(sessionId === undefined ? {} : { sessionId }) })
     })
     pending.add(job)
     void job.finally(() => pending.delete(job)).catch(() => undefined)
     return job
   }
   return {
-    navigation: (workspace: WorkspaceEntry) => query<Record<string, SessionNavigation>>(workspace, 'navigation'),
+    navigation: (workspace: WorkspaceEntry, sessionId?: string) => query<Record<string, SessionNavigation>>(workspace, 'navigation', sessionId),
     navigationSnapshot: (workspace: WorkspaceEntry) => query<{ entries: Record<string, SessionNavigation>; partial: boolean }>(workspace, 'navigationSnapshot'),
     dashboard: (workspace: WorkspaceEntry) => query<SessionDashboardResult>(workspace, 'dashboard'),
     close() {

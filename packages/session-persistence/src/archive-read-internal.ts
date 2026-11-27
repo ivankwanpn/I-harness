@@ -43,6 +43,12 @@ export function recognizesOriginalCleanHistoryMaterialization(backend: object, p
 /** The original archive owner lends only frame evidence and verified records. */
 export interface ColdArchiveHistoryReader {
   readFull(sessionId: string): Promise<Awaited<ReturnType<PersistenceBackend['read']>> & { evidence?: object }>
+  /** Internal page planner only. A detached page may retain this original decode
+   * briefly for native writable preparation. Public snapshot uses readFull. */
+  readFullForHistoryPage?(sessionId: string): Promise<(Awaited<ReturnType<PersistenceBackend['read']>> & {
+    evidence?: object
+    retainDecoded?(): void
+  }) | undefined>
   /** Complete decoded history and its exact prefix from one sealed descriptor. */
   readSealedHistory?(sessionId: string): Promise<(Awaited<ReturnType<PersistenceBackend['read']>> & {
     prefix: Readonly<JournalPrefix>

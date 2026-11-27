@@ -4,10 +4,11 @@ import { assertRetainedBindingReferenceFor, observationCleanupFor, observeColdEx
 import type { SessionService, SessionAssembly } from '@i-harness/session-executor'
 import type { createProjectScopeBroker } from './project-scope.ts'
 import type { createDesktopExecution } from './execution.ts'
+import { originalManagedCodeFor, type OriginalManagedCodeSurface } from '../../session-executor/src/host-managed-execution.ts'
 
 type Notice = { kind: 'invalidate' | 'retired'; epoch: string; revision: number }
 /** Private composition of original owners. No wire authority or timer. */
-export function createExecutionHostObservation(coordinator: SessionCoordinator, projects: Pick<ReturnType<typeof createProjectScopeBroker>, 'observeExecutionBinding'>, service: Pick<SessionService, 'liveAssembly' | 'onExecutionSurfaceLifecycle'>, execution: ReturnType<typeof createDesktopExecution>) {
+export function createExecutionHostObservation(coordinator: SessionCoordinator, projects: Pick<ReturnType<typeof createProjectScopeBroker>, 'observeExecutionBinding'>, service: Pick<SessionService, 'liveAssembly' | 'onExecutionSurfaceLifecycle' | 'onManagedRuntimeLifecycle'>, execution: ReturnType<typeof createDesktopExecution>) {
   type Owned = { preflight(): void; fence(): void; drain(operation: RetainedCleanupOperation, retry?: boolean): Promise<void>; settleRetirement(): Promise<void>; settleNotice(): Promise<void>; settleExternalClose(): Promise<void> }
   const leases = new Set<Owned>()
   let closing = false, closeFlight: Promise<void> | undefined
@@ -38,6 +39,7 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
       const epoch = randomUUID(), setup = Promise.withResolvers<void>()
       void setup.promise.catch(() => {})
       let revision = 0, active = true, source: SessionAssembly | undefined, enumerating = true, retiredNotice = false
+      let managedSource: OriginalManagedCodeSurface | undefined, managedRetired = false
       let terminalSource: { kind: 'published' | 'retiring' | 'removed'; assembly: SessionAssembly } | undefined
       let acquisitionCleanup: ReturnType<typeof observationCleanupFor>, acquisitionReported = false, acquisitionFailure: { error: unknown } | undefined
       let reference: RetainedExistingBinding | undefined, broker: ReturnType<typeof projects.observeExecutionBinding> | undefined
@@ -51,7 +53,8 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
       }
       const disposers: { dispose(): void; done: boolean }[] = []
       const add = (dispose: (() => void) | undefined) => { if (dispose) disposers.push({ dispose, done: false }) }
-      const reliable = () => !terminalSource && (!source || (typeof source.onExecutionSurfaceChanged === 'function' && source.executionSurfaceState?.() === 'available'))
+      const sameSource = () => source === service.liveAssembly(sessionId) && managedSource === originalManagedCodeFor(service, sessionId)
+      const reliable = () => !terminalSource && !managedRetired && (!source || (typeof source.onExecutionSurfaceChanged === 'function' && source.executionSurfaceState?.() === 'available')) && (!managedSource || managedSource.surfaceState() === 'available')
       const terminate = () => {
         if (!active) return
         active = false
@@ -127,7 +130,7 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
         },
         withCurrent<T>(write: (stamp: { epoch: string; revision: number }) => T): T {
           if(writing) throw Error('Execution writer reentry')
-          if (!active || !reference || !broker || !reliable() || source !== service.liveAssembly(sessionId)) throw Error('Execution source retired or unavailable')
+          if (!active || !reference || !broker || !reliable() || !sameSource()) throw Error('Execution source retired or unavailable')
           reference.assertCurrent(); broker.assertCurrent()
           writing=true
           try { return write({ epoch, revision }) } catch(error) {terminate();throw error} finally {writing=false}
@@ -137,8 +140,8 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
           if (!reliable()) { terminate(); throw Error('Execution source unavailable') }
           reference.assertCurrent(); broker.assertCurrent()
           if (read) return { kind: 'reset' as const, epoch, revision }
-          const initial = revision, captured = source
-          const check = () => { try { if (!active || source !== captured || service.liveAssembly(sessionId) !== captured || !reliable()) throw Error('Execution source retired or unavailable'); reference!.assertCurrent(); broker!.assertCurrent() } catch (error) { terminate(); throw error } }
+          const initial = revision
+          const check = () => { try { if (!active || !sameSource() || !reliable()) throw Error('Execution source retired or unavailable'); reference!.assertCurrent(); broker!.assertCurrent() } catch (error) { terminate(); throw error } }
           const flight = reference.withRead(profile => execution.read(sessionId, options, check, profile)); read = flight
           try { const value = await flight; check(); return initial === revision ? { kind: 'snapshot' as const, epoch, revision, value } : { kind: 'reset' as const, epoch, revision } }
           catch (error) { terminate(); throw error }
@@ -157,9 +160,21 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
         add(observeColdExecutionWrites(coordinator, id => { if (id === sessionId) dirty() }))
         add(service.onExecutionSurfaceLifecycle!(event => {
           if (event.sessionId !== sessionId) return
-          if (event.kind !== 'published' || !enumerating || source && source !== event.assembly) { terminalSource = { kind: event.kind, assembly: event.assembly }; terminate(); return }
+          if (event.kind !== 'published' || !enumerating || managedSource || source && source !== event.assembly) { terminalSource = { kind: event.kind, assembly: event.assembly }; terminate(); return }
           source = event.assembly
           add(source.onExecutionSurfaceChanged?.(dirty))
+        }, { includeExisting: true }))
+        add(service.onManagedRuntimeLifecycle?.(event => {
+          if (event.sessionId !== sessionId) return
+          if (event.kind !== 'published') {
+            if (managedSource) { managedRetired = true; terminate() }
+            return
+          }
+          const selected = originalManagedCodeFor(service, sessionId)
+          if (!selected) return
+          if (!enumerating || source || managedSource && managedSource !== selected) { managedRetired = true; terminate(); return }
+          managedSource = selected
+          add(selected.onSurfaceChanged(dirty))
         }, { includeExisting: true }))
         enumerating = false
         reference = await coordinator.retainExistingSessionBindingObservation!({ sessionId }, retire)
@@ -168,7 +183,7 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
         if (reference.metadata().sessionId !== sessionId) throw Error('Execution retained identity mismatch')
         broker = projects.observeExecutionBinding(reference, retire); add(() => broker!.release())
         reference.assertCurrent(); broker.assertCurrent()
-        if (source !== service.liveAssembly(sessionId) || !reliable()) throw Error('Execution source unavailable')
+        if (!sameSource() || !reliable()) throw Error('Execution source unavailable')
       })()
       void acquisition.then(setup.resolve, error => { acquisitionFailure = { error }; acquisitionCleanup = observationCleanupFor(coordinator, error); setup.reject(error) })
       try { await acquisition; return Object.freeze({ epoch, snapshot: lease.snapshot, close: lease.close, withCurrent: lease.withCurrent }) }

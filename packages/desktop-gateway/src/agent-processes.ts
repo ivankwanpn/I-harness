@@ -4,7 +4,7 @@ import { buildSavedProcessIndex, createFixedSavedSelections, type SavedCall, typ
 import { hydrateSavedCandidate, hydrateSavedInlineCatalog } from './saved-result-json.ts'
 import { readSavedProcessFrame, readSavedProcessPreview } from './saved-process-output.ts'
 import type { AgentProcessReadRunner, AgentProcessReadContext } from './agent-process-read.ts'
-import { originalManagedExecutionFor } from '../../session-executor/src/host-managed-execution.ts'
+import { originalManagedExecutionFor, originalManagedRuntimeFor } from '../../session-executor/src/host-managed-execution.ts'
 import { sameManagedArtifactRef, validManagedArtifactRef, type ExecFrameCursor, type ManagedArtifactRef } from '@i-harness/core-session'
 import { randomUUID } from "node:crypto"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -191,13 +191,19 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: S
       context.selectTerminals([...savedPtys.values()])
       const terminals = new Map([...savedPtys.values()].map(({ text: _text, truncated: _truncated, dropped: _dropped, endOffset: _offset, evidence: _evidence, ...row }) => [row.id, row]))
       for (const row of assembly?.liveResources?.().terminals ?? []) if (row.ownerSessionId === sessionId) terminals.set(row.id, { ...row, live: true, canControl: row.status === "running", outputAvailable: true })
+      for (const row of managed?.terminals ?? []) if (row.ownerSessionId === sessionId) terminals.set(row.id, { ...row, live: true, canControl: false, outputAvailable: true })
       for (const job of background) jobs.set(job.kind + ":" + job.id, { jobId: job.id, kind: job.kind, label: job.id, status: job.status, outputAvailable: Boolean(job.output), ...(job.kind === "shell" ? { nativeJob: job.nativeJob } : {}) })
       return { sessionId, live: Boolean(assembly || managed), terminals: [...terminals.values()].slice(-200),
         jobs: [...jobs.values(), ...saved.filter(row => !row.nativeJob || !background.some(active => active.kind === "shell" && active.nativeJob?.instanceId === row.nativeJob?.instanceId))].slice(-200).map(job => {
           const task = job.kind === "shell" ? undefined : tasks.find(task => task.id === job.jobId); const active = background.find(row => row.id === job.jobId && row.kind === job.kind && (row.kind !== "shell" || "nativeJob" in job && job.nativeJob && row.nativeJob?.instanceId === (job.nativeJob as any).instanceId))
           const declaration = "declaration" in job ? job.declaration as SavedCall : undefined
+          const managedControl = managed?.canCancelJobs === true
+          const canCancel = active
+            ? (!!assembly || managedControl) && active.status === "running" && (active.kind !== "shell"
+              || !!active.nativeJob && (!assembly || assembly.ctx.services.get<{ supportsNativeJobKill?: true }>("exec/service")?.supportsNativeJobKill === true))
+            : task?.canCancel === true && (!!assembly || (managedControl && task.group === "job"))
           return { jobId: job.jobId, kind: job.kind, label: job.label, status: job.status, outputAvailable: job.outputAvailable, startedAt: job.startedAt, endedAt: job.endedAt,
-            ownerSessionId: sessionId, live: Boolean(task || active), canCancel: !!assembly && (active ? active.status === "running" && (active.kind !== "shell" || !!active.nativeJob && assembly.ctx.services.get<{ supportsNativeJobKill?: true }>("exec/service")?.supportsNativeJobKill === true) : task?.canCancel === true), backend: job.kind === "shell" ? "shell" : job.kind === "workflow" ? "workflow" : "child", ...("nativeJob" in job ? { nativeJob: job.nativeJob } : {}), ...("outputDisposition" in job ? { outputDisposition: job.outputDisposition } : {}), ...(declaration ? { declaration: { surface: declaration.surface, cellId: declaration.cellId, callId: declaration.callId, callIndex: declaration.callIndex, resultIndex: declaration.resultIndex, callSeq: declaration.callSeq, resultSeq: declaration.resultSeq } } : {}) }
+            ownerSessionId: sessionId, live: Boolean(task || active), canCancel, backend: job.kind === "shell" ? "shell" : job.kind === "workflow" ? "workflow" : "child", ...("nativeJob" in job ? { nativeJob: job.nativeJob } : {}), ...("outputDisposition" in job ? { outputDisposition: job.outputDisposition } : {}), ...(declaration ? { declaration: { surface: declaration.surface, cellId: declaration.cellId, callId: declaration.callId, callIndex: declaration.callIndex, resultIndex: declaration.resultIndex, callSeq: declaration.callSeq, resultSeq: declaration.resultSeq } } : {}) }
         }) }
       })
     },
@@ -212,13 +218,38 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: S
       })
     },
     async control(sessionId: string, input: unknown) {
-      resourceId(sessionId); await coordinator.profile(sessionId)
+      resourceId(sessionId); const { meta } = await coordinator.profile(sessionId)
       if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid process command")
       const command = input as Record<string, unknown>; const id = resourceId(command.id)
       const allowed: Record<string, string[]> = { read: ["offset"], send: ["data"], resize: ["cols", "rows"], signal: ["signal"], close: [], "job/cancel": ["backend", "instanceId", "sourceId"] }
       const fields = allowed[String(command.action)]
       if (!fields || Object.keys(command).some(key => !["action", "id", ...fields].includes(key))) throw new Error("Unsupported process command")
       const assembly = service.liveAssembly(sessionId)
+      if (!assembly && command.action === "read") {
+        const runtime = originalManagedRuntimeFor(service, sessionId)
+        if (runtime) {
+          if (meta.archived) throw new Error("Archived conversation cannot read a live process")
+          const result = runtime.readTerminal(id, { offset: boundedInteger(command.offset, 0, Number.MAX_SAFE_INTEGER, 0), maxBytes: 32768 })
+          if (!result) throw new Error("Terminal has no live process owner in this session")
+          return result
+        }
+      }
+      if (!assembly && command.action === "job/cancel") {
+        const runtime = originalManagedRuntimeFor(service, sessionId)
+        if (runtime) {
+          if (meta.archived) throw new Error("Archived conversation cannot control a process")
+          const instanceId = command.instanceId === undefined ? undefined : resourceId(command.instanceId)
+          const sourceId = command.sourceId === undefined ? undefined : resourceId(command.sourceId)
+          const backend = command.backend
+          if (backend === "shell") {
+            if (!instanceId) throw new Error("Checked native cancellation requires a job instance")
+            return { outcome: await runtime.cancelProcessJob({ backend, id, instanceId, sourceId }) }
+          }
+          if (backend !== "workflow" && backend !== "child") throw new Error("Original job backend required")
+          if (instanceId !== undefined || sourceId !== undefined) throw new Error("Native selectors require shell backend")
+          return { outcome: await runtime.cancelProcessJob({ backend, id }) }
+        }
+      }
       if (!assembly && originalManagedExecutionFor(service, sessionId)) throw new Error("Process control is unavailable for this private runtime")
       if (!assembly) throw new Error("No live process owner; cold history cannot control a process")
       if (command.action === "job/cancel") {

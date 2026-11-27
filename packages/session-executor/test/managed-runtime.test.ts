@@ -18,10 +18,12 @@ import {createMainInstructionManager} from '../src/context/instructions/manager.
 import {createProjectInstructionEnvironment} from '../src/context/instructions/index.ts'
 import {createExecutionRuntimeContext} from '../src/lifecycle/execution-runtime-context.ts'
 import {registerApprovalAnswerer} from '@i-harness/interaction'
-import {createManagedExecutionRuntime} from '../src/managed-assembly.ts'
+import {createManagedExecutionRuntime,createManagedExecutionRuntimeWithRegistry} from '../src/managed-assembly.ts'
 import {controlledModel} from './controlled-model.ts'
 import {completeCheckpoint} from '../../compaction/test/fixtures/checkpoint.ts'
 import {committedFactSeqs} from '@i-harness/core-session'
+import {approxTokens} from '@i-harness/compaction'
+import type {LLMRequest} from '@i-harness/llm-seam'
 import {createSessionManagement} from '../../desktop-gateway/src/session-management.ts'
 
 it('inspects a held managed request without claiming a legacy assembly',async()=>{
@@ -75,25 +77,59 @@ it('private runtime honors live automatic compaction policy',async()=>{
  }finally{await cache.closeAll();await coordinator.close()}
 },30000)
 
-it('private runtime atomically rebinds an idle model and its limits',async()=>{
+it('prices and executes the original context budget tool through a private model rebind',async()=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-rebind-'))
- const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
  await coordinator.create({sessionId:'main'})
  const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
- const firstRequests:unknown[]=[],secondRequests:{maxOutputTokens?:number;reasoningEffort?:string}[]=[]
- const first=controlledModel(async function*(request){firstRequests.push(request);yield {type:'text/chunk',text:'first'};yield {type:'end'}})
- const second=controlledModel(async function*(request){secondRequests.push(request);yield {type:'text/chunk',text:'second'};yield {type:'end'}})
+ const firstRequests:LLMRequest[]=[],secondRequests:LLMRequest[]=[],overheadTools:string[][]=[]
+ const budgetTool='get_context_remaining',cleanups:Array<()=>Promise<void>>=[]
+ const modelFor=(label:string,requests:LLMRequest[])=>controlledModel(async function*(request){
+  requests.push(request)
+  if(requests.length===1)yield {type:'tool_call',call:{id:'budget-'+label,name:budgetTool,args:{}}}
+  else yield {type:'text/chunk',text:label}
+  yield {type:'end'}
+ })
+ const first=modelFor('first',firstRequests),second=modelFor('second',secondRequests)
  try{
-  const runtime=createManagedExecutionRuntime({execution:entry.execution,model:first,systemPrompt:'system',tools:[],contextWindow:10000,maxOutputTokens:100})
+  const runtime=await createManagedExecutionRuntimeWithRegistry({
+   execution:entry.execution,systemPrompt:'system',tools:[],resolveModel:()=>({model:first,contextWindow:10000,maxOutputTokens:100}),
+   assertConstructionCurrent:()=>entry.execution.observe().assertCurrent(),retainConstructionCleanup:cleanup=>{cleanups.push(cleanup)},
+   configureRegistry(original){
+    const schemas=()=>original.tools.schemas()
+    return {
+     systemPrompt:()=> 'system',modelToolSchemas:schemas,
+     modelOverheadTokens(){const tools=schemas();overheadTools.push(tools.map(tool=>tool.name));return approxTokens('system')+approxTokens(JSON.stringify(tools))},
+     async prepareInput(text){return text},async reconcileAuthority(){},
+    }
+   },
+  })
+  expect(overheadTools).toEqual([[budgetTool]])
   await entry.inputs.inbox.admit({inputId:'a',text:'first',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
   await runtime.lane.runAdmitted('a')
   runtime.setModelBinding({model:second,contextWindow:20000,maxOutputTokens:200,reasoningEffort:'low'})
   await entry.inputs.inbox.admit({inputId:'b',text:'second',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
   await runtime.lane.runAdmitted('b')
-  expect(firstRequests).toHaveLength(1);expect(secondRequests).toHaveLength(1)
+  expect(firstRequests).toHaveLength(2);expect(secondRequests).toHaveLength(2)
   expect(secondRequests[0]).toMatchObject({maxOutputTokens:200,reasoningEffort:'low'})
-  await runtime.close()
- }finally{await cache.closeAll();await coordinator.close()}
+  expect([...firstRequests,...secondRequests].every(request=>request.tools.some(tool=>tool.name===budgetTool))).toBe(true)
+  const events=(await backend.read('main')).events
+  const toolResults=events.flatMap(event=>event.type==='tool/result'&&event.name===budgetTool&&'output' in event?[event.output]:[])
+  expect(toolResults).toHaveLength(2)
+  for(const [index,window] of [10000,20000].entries()){
+   const result=toolResults[index]
+   expect(result).toMatchObject({kind:'unavailable',reason:expect.any(String),observation:{
+    dimensions:expect.arrayContaining([expect.objectContaining({dimension:'context',limit:window})]),
+   }})
+   expect(result).not.toHaveProperty('percentage')
+  }
+  runtime.setModelBinding({model:second})
+  expect(runtime.tools.get(budgetTool)).toBeUndefined()
+  expect(()=>runtime.setModelBinding({model:first,contextWindow:0})).toThrow()
+  expect(runtime.tools.get(budgetTool)).toBeUndefined()
+  runtime.setModelBinding({model:first,contextWindow:30000})
+  expect(runtime.tools.schemas()).toContainEqual(expect.objectContaining({name:budgetTool}))
+ }finally{for(const cleanup of cleanups.reverse())await cleanup();await cache.closeAll();await coordinator.close()}
 },30000)
 
 it('private model binding rejects a busy turn and invalid limits without changing the model',async()=>{

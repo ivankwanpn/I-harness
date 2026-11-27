@@ -35,6 +35,9 @@ it.each(["jsonl", "commit-log"])("preserves healthy %s rows across cold and live
     const navigation = { partial: true, entries: { good: { pinned: false, unread: false } } }
     expect(await cold.dashboard(sessionDir)).toMatchObject(dashboard)
     expect(await cold.navigationSnapshot(sessionDir)).toEqual(navigation)
+    const selected = { partial: false, entries: { good: { pinned: false, unread: false, archived: false } } }
+    expect(await cold.navigationSnapshot(sessionDir, "good")).toEqual(selected)
+    expect(await cold.navigation(sessionDir, "missing")).toEqual({})
     const frames: unknown[] = []
     host = await createDesktopHost({ workspace, sessionDir, settingsPath, onWrite: frame => frames.push(frame) })
     async function call(id: number, method: string, params = {}) {
@@ -47,6 +50,8 @@ it.each(["jsonl", "commit-log"])("preserves healthy %s rows across cold and live
     expect(await call(2, "session/dashboard")).toMatchObject(dashboard)
     expect(await call(3, "desktop/session/navigation/state", { includeCoverage: true })).toEqual(navigation)
     expect(await call(4, "session/list")).toMatchObject(dashboard)
+    expect(await call(5, "desktop/session/navigation/state", { sessionId: "good", includeCoverage: true })).toEqual(selected)
+    expect(await call(6, "desktop/session/navigation/state", { sessionId: "missing" })).toEqual({})
   } finally { await host?.close(); await cold.close(); vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true }) }
 }, 30000)
 
@@ -58,4 +63,20 @@ it("only treats a missing JSONL directory as empty", async () => {
     await writeFile(path, "not a directory")
     await expect(createJsonlBackend(path).list()).rejects.toThrow()
   } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it("keeps an unpublished JSONL session out of a single-session navigation lookup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-catalog-publish-"))
+  const sessionDir = join(root, "sessions")
+  vi.stubEnv("IH_CONFIG_DIR", root)
+  const catalog = createCommittedSessionCatalog()
+  const writer = createSessionCoordinator(createJsonlBackend(sessionDir))
+  try {
+    await writeFile(join(root, "settings.json"), JSON.stringify({ sessionStore: "jsonl" }))
+    await writer.create({ sessionId: "first" })
+    await writer.create({ sessionId: "second" })
+    await writeFile(join(sessionDir, "first.jsonl.publishing"), "")
+    expect(await catalog.navigation(sessionDir, "first")).toEqual({})
+    expect(await catalog.navigation(sessionDir, "second")).toEqual({ second: { pinned: false, unread: false, archived: false } })
+  } finally { await writer.close(); await catalog.close(); vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true }) }
 })

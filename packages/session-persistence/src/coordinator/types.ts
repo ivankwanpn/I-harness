@@ -60,9 +60,9 @@ export interface PersistenceBackend {
   create(sessionId: string, meta: SessionMeta): Promise<void>
   append(sessionId: string, events: SessionEvent[]): Promise<void>
   read(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }>
-  /** Pass a callback for partial display listings. Individual unreadable entries
-   * are omitted and reported; a failed directory enumeration always rejects. */
-  list(onUnreadable?: () => void): Promise<string[]>
+  /** Pass a callback to omit and report unreadable rows. onlyId bounds the
+   * lookup to one published session; directory failures still reject. */
+  list(onUnreadable?: () => void, onlyId?: string): Promise<string[]>
   repair(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }>
   /** Atomically replace the event body while preserving session metadata.
    * Optional because read-only/custom backends may not support writable crash
@@ -164,13 +164,13 @@ export interface SessionCoordinator {
   /** Read the durable prefix without ownership, disk repair or runtime creation. */
   snapshot?(sessionId: string, options?: { prepareHistoryPages?: boolean }): Promise<{ session: Session }>
   /** Read a bounded page from an existing private execution or verified cold archive. */
-  readHistoryPage?(sessionId: string, options: SessionHistoryPageOptions): Promise<OwnedSessionHistoryPage | undefined>
+  readHistoryPage?(sessionId: string, options: SessionHistoryPageOptions, onSnapshotFallback?: (session: Session) => void): Promise<OwnedSessionHistoryPage | undefined>
   /** Acquire long-term ownership before reading, durably canonicalize crash
    * recovery, and return a writable snapshot whose length equals its next seq. */
   loadOwned(sessionId: string): Promise<{ session: Session }>
-  /** Pass a callback for partial display listings. Individual unreadable entries
-   * are omitted and reported; a failed directory enumeration always rejects. */
-  list(onUnreadable?: () => void): Promise<string[]>
+  /** Pass a callback to omit and report unreadable rows. onlyId bounds the
+   * lookup to one published session; directory failures still reject. */
+  list(onUnreadable?: () => void, onlyId?: string): Promise<string[]>
   /** C5: cheap per-session meta profile (header read only; no event decode).
    * Read-only — never acquires the ownership lease. */
   profile(sessionId: string): Promise<{ meta: SessionMeta; blank: boolean; updatedAt?: number }>

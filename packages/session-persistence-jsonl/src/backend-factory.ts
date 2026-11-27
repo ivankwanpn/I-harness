@@ -449,7 +449,7 @@ export function createJsonlBackend(root: string, options?: {
       },false,sessionId,true)
     },
 
-    async list(onUnreadable?: () => void): Promise<string[]> {
+    async list(onUnreadable?: () => void, onlyId?: string): Promise<string[]> {
       const names = await readdir(rootPath).catch((error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT') return []
         throw error
@@ -460,7 +460,7 @@ export function createJsonlBackend(root: string, options?: {
       // session, so neither may appear.
       const markers = new Set(names.map(publicationMarkerId).filter((id): id is string => id !== undefined))
       const ids = names
-        .filter((n) => n.endsWith(".jsonl") && !n.endsWith(".doc.jsonl"))
+        .filter((n) => n.endsWith(".jsonl") && !n.endsWith(".doc.jsonl") && (onlyId === undefined || n === onlyId + ".jsonl"))
         .map((n) => basename(n, ".jsonl"))
       return (await Promise.all(ids.map(async id => {
         try {
@@ -567,15 +567,16 @@ export function createJsonlBackend(root: string, options?: {
     async profile(sessionId) {
       await assertNotDeleted("session", sessionId)
       const path = filePath(sessionId)
-      const updatedAt = (await stat(path)).mtimeMs
+      const { mtimeMs: updatedAt, size } = await stat(path)
       // Blank probe (coldBlankProbeMaxBytes policy): a small artifact is read
       // whole for the exact answer; a big one is served non-blank.
-      if ((await stat(path)).size <= BLANK_PROBE_MAX_BYTES) {
+      if (size <= BLANK_PROBE_MAX_BYTES) {
         const lines = (await readFile(path, "utf-8")).split("\n")
+        const meta = parseHeader(lines[0]!)
         return {
-          meta: parseHeader(lines[0]!),
-          blank: ([6, 7, 8, 9, 10, 11, 12, 13, 14].includes(parseHeader(lines[0]!).formatVersion)
-            ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), parseHeader(lines[0]!).journal!, parseHeader(lines[0]!).formatVersion, parseHeader(lines[0]!)).events
+          meta,
+          blank: ([6, 7, 8, 9, 10, 11, 12, 13, 14].includes(meta.formatVersion)
+            ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), meta.journal!, meta.formatVersion, meta).events
             : parseEventLines(lines.slice(1))).every((ev) => ev.type !== "turn/start"), updatedAt,
         }
       }
@@ -740,6 +741,7 @@ export function createJsonlBackend(root: string, options?: {
       },
       checkDeleted: id => assertNotDeleted('session', id),
       qualify: assertReadableBootstrapNamespace,
+      prepareHistory: history => capability.prepareHistory(history),
     }))
   }
   nativePrewrite.associate(backend, assertOriginal, captureIO.retainCleanup, (held, actual) => {

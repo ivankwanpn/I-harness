@@ -12,7 +12,7 @@ export type LegacySession = { readonly version: number; readonly events: readonl
 /** Legacy read port, with an optional constructor-owned exclusive migration scope. */
 export type LegacySessionStore = {
   read(sessionId: string): Promise<LegacySession>
-  list(onUnreadable?: () => void): Promise<string[]>
+  list(onUnreadable?: () => void, onlyId?: string): Promise<string[]>
   /** Exclusive original legacy ownership spans the read and generation publication. */
   migrate?<T>(sessionId: string, publish: (source: LegacySession | undefined) => Promise<T>): Promise<T>
   withDocuments?<T>(keys: readonly string[], work: () => Promise<T>): Promise<T>
@@ -39,7 +39,7 @@ export function createOwnedLegacySessionStore(backend: PersistenceBackend, optio
       archiveReads?.assertPublicReadAdmission()
       return source
     },
-    list: (onUnreadable?: () => void) => backend.list(onUnreadable),
+    list: (onUnreadable?: () => void, onlyId?: string) => backend.list(onUnreadable, onlyId),
     readDocument: (key: string) => backend.getDocument(key),
     migrate<T>(id: string, publish: (source: LegacySession | undefined) => Promise<T>): Promise<T> {
       if (closed) return Promise.reject(new Error('Legacy migration owner is closed'))

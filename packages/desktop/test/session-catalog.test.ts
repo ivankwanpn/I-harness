@@ -8,6 +8,7 @@ import { asSessionCoordinator } from '../../session-persistence/src/commit/facad
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createDesktopSessionCatalog } from '../src/main/session-catalog.ts'
 import { dispatchDesktopRequest, type DesktopIpcDependencies } from '../src/main/ipc.ts'
+import { AttachmentDraftStore } from '../src/main/attachment-draft-store.ts'
 import { navigationDocumentKey, projectBindingDocumentKey } from '../../desktop-gateway/src/session-navigation.ts'
 import { createJsonlDashboardSummaryCache } from '../../desktop-gateway/src/session-dashboard-summary.ts'
 
@@ -42,6 +43,7 @@ it.each(['jsonl', 'commit-log'] as const)('reads cold %s navigation and titles a
   const dependencies = {
     catalog: { get: (id: string) => workspaces.find(workspace => workspace.id === id) },
     runtimes: { get, peek: () => live ? { client: { dashboard: liveDashboard } } : undefined }, sessionCatalog,
+    drafts: new AttachmentDraftStore(join(root, 'drafts.json')), notifications: {},
   } as unknown as DesktopIpcDependencies
   try {
     for (const writer of writers) {
@@ -53,6 +55,13 @@ it.each(['jsonl', 'commit-log'] as const)('reads cold %s navigation and titles a
       await writer.putDocument(projectBindingDocumentKey('conversation'), { version: 1, projectId: 'project' })
     }
     for (const workspace of workspaces) {
+      const scope = { workspaceId: workspace.id, identity: 'conversation' }
+      const draft = { prompt: 'keep this real edit', references: [], images: [], texts: [], contextRefs: [] }
+      await dispatchDesktopRequest({ kind: 'desktop/draft/save', scope, expectedRevision: null, draft }, dependencies)
+      expect(await dispatchDesktopRequest({ kind: 'desktop/draft/load', scope }, dependencies)).toMatchObject({ draft })
+      await expect(dispatchDesktopRequest({ kind: 'desktop/draft/load', scope: { ...scope, identity: 'hidden' } }, dependencies)).rejects.toThrow('Draft conversation unavailable')
+      expect(await dispatchDesktopRequest({ kind: 'desktop/notifications/target', workspaceId: workspace.id, sessionId: 'conversation' }, dependencies)).toEqual({ workspaceId: workspace.id, sessionId: 'conversation', projectId: 'project' })
+      await expect(dispatchDesktopRequest({ kind: 'desktop/notifications/target', workspaceId: workspace.id, sessionId: 'archived' }, dependencies)).rejects.toThrow('已封存')
       const navigation = await dispatchDesktopRequest({ kind: 'desktop/session/navigation/state', workspaceId: workspace.id }, dependencies)
       expect(navigation).toEqual({ conversation: { pinned: true, unread: true, projectId: 'project' }, archived: { pinned: false, unread: false } })
       const dashboard = await dispatchDesktopRequest({ kind: 'session/dashboard', workspaceId: workspace.id }, dependencies)

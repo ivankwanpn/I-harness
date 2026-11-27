@@ -9,7 +9,7 @@ const managed = (v: number) => [6, 7, 8, 9, 10, 11, 12, 13, 14].includes(v);
 type ArchivePrefix = { header: SessionMeta; birth: Buffer };
 type DependencySelection = { ordinals: ReadonlySet<number>; prefix: Readonly<JournalPrefix>; assertCurrent(): void; verified?: VerifiedArchiveBody; coldHeaderDigest?: string };
 type ArchiveBodyDecoder = { push(bytes: Buffer): void; finish(): {
-    prefix: JournalPrefix; torn: boolean; verified?: VerifiedArchiveBody; validatedEvents?(header: SessionMeta): SessionEvent[];
+    prefix: JournalPrefix; torn: boolean; verified?: VerifiedArchiveBody; validatedEvents?(header: SessionMeta, onOriginal?: () => void): SessionEvent[];
 } };
 const incompleteBirth = () => Object.assign(new Error('bootstrap-incomplete'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' });
 /** IO chunks are bounded; complete decoded events and the largest record remain materialized. */
@@ -103,7 +103,7 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
         await qualifyPrefix?.({ header, birth: Buffer.concat(birth) });
         for (const frame of birth.slice(1)) consume(frame);
     }
-    let verified: VerifiedArchiveBody | undefined;
+    let verified: VerifiedArchiveBody | undefined, originalDecode = false;
     if (!prefixOnly) {
         const decoded=decoder?.finish();
         if (!dependency && header.semanticSeed) {
@@ -117,7 +117,7 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
             dependency.assertCurrent();
             verified = decoded.verified;
         }else if (managed(header.formatVersion) || events.some(e => e.type === 'compaction/replacement')) {
-            if (decoded?.validatedEvents) events = decoded.validatedEvents(header);
+            if (decoded?.validatedEvents) events = decoded.validatedEvents(header, () => { originalDecode = true });
             else validateConversationHistory(events, header.formatVersion, header);
             if (decoded?.verified && birth.length === 1 && decoded.prefix.bodyBytes === extent - birth[0]!.length) verified = decoded.verified;
             if (completePrefix && decoded && !decoded.torn && birth[0]!.at(-1) === 10 && lastByte === 10
@@ -126,5 +126,5 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
             }
         }
     }
-    return { header, birth: Buffer.concat(birth), events, verified };
+    return { header, birth: Buffer.concat(birth), events, verified, originalDecode };
 }

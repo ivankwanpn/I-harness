@@ -75,7 +75,7 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
     expect(await call('desktop/session/tasks/integrity', { sessionId: created.sessionId })).toBeTruthy()
     expect(await call('desktop/session/tasks/integrity', { sessionId: created.sessionId, reconcile: true })).toBeTruthy()
     const processes = await call('desktop/session/processes/read', { sessionId: created.sessionId }) as { live?: boolean; terminals?: unknown[]; jobs?: unknown[] }
-    expect(processes).toMatchObject({ live: false })
+    expect(processes).toMatchObject({ live: true })
     expect(processes.terminals).toEqual([])
     expect(processes.jobs).toEqual([])
     await expect(call('desktop/session/processes/read', { sessionId: 'missing-session' })).rejects.toThrow(/does not exist/)
@@ -83,7 +83,7 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
     await expect(call('desktop/session/processes/job-output', { sessionId: created.sessionId, id: 'missing-job' })).rejects.toThrow(/Job output unavailable for this owner/)
     await expect(call('desktop/session/processes/terminal-output', { sessionId: created.sessionId, id: 'missing-terminal' })).rejects.toThrow(/Saved terminal output unavailable for this owner/)
     const executionSurface = await call('desktop/session/execution/read', { sessionId: created.sessionId, offset: 0, limit: 10 }) as { live?: boolean; cells?: unknown[]; total?: number }
-    expect(executionSurface).toMatchObject({ live: false, total: 0 })
+    expect(executionSurface).toMatchObject({ live: true, effectiveMode: 'off', total: 0 })
     expect(executionSurface.cells).toEqual([])
     await expect(call('desktop/session/execution/read', { sessionId: created.sessionId, offset: -5, limit: 10 })).rejects.toThrow(/Invalid execution cursor or dimension/)
     await expect(call('desktop/session/execution/read', { sessionId: created.sessionId, offset: 0, limit: 999 })).rejects.toThrow(/Invalid execution cursor or dimension/)
@@ -99,7 +99,8 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
     expect(toolCalls).toBe(2)
     await expect(call('desktop/session/execution/stop', { sessionId: created.sessionId })).rejects.toThrow(/Execution unavailable/)
     await expect(call('desktop/session/execution/stop', { sessionId: created.sessionId, cellId: 'missing-cell' })).rejects.toThrow(/cold history cannot be stopped/)
-    await expect(call('desktop/session/processes/control', { sessionId: created.sessionId, command: { action: 'close', id: 'missing-process' } })).rejects.toThrow(/cold history cannot control a process/)
+    await expect(call('desktop/session/processes/control', { sessionId: created.sessionId, command: { action: 'job/cancel', backend: 'shell', id: 'missing-process' } })).rejects.toThrow(/requires a job instance/)
+    await expect(call('desktop/session/processes/control', { sessionId: created.sessionId, command: { action: 'close', id: 'missing-process' } })).rejects.toThrow(/unavailable for this private runtime/)
     const observer = createJsonlCommitCoordinator(sessionDir, { lock: { enabled: true, lockRoot: sessionDir } })
     try {
       const { session } = await observer.load(created.sessionId)
@@ -125,6 +126,10 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
       expect(await call('session/result/read', { sessionId: created.sessionId, ref: unknown, maxBytes: 4096 })).toMatchObject({ kind: 'unavailable' })
       expect(await call('session/result/read', { sessionId: 'missing-session', ref, maxBytes: 4096 })).toMatchObject({ kind: 'unavailable' })
     } finally { await observer.close() }
+    await call('desktop/session/reload', { sessionId: created.sessionId })
+    expect(await call('desktop/session/processes/read', { sessionId: created.sessionId })).toMatchObject({ live: false, terminals: [], jobs: [] })
+    expect(await call('desktop/session/execution/read', { sessionId: created.sessionId })).toMatchObject({ live: false, cells: [] })
+    await expect(call('desktop/session/processes/control', { sessionId: created.sessionId, command: { action: 'job/cancel', backend:'shell', id:'missing-process', instanceId:'retired-instance' } })).rejects.toThrow(/cold history cannot control a process/)
   } finally {
     await host.close()
   }

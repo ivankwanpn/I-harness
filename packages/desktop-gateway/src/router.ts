@@ -224,7 +224,7 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
         }
         if (message.method === "session/warm" && initialized && typeof scopedSessionId === "string" && scopedSessionId !== "") {
           // Speculative warmup yields to one original cold Processes list.
-          // The SDK must not begin compatibility preparation before this wait.
+          // No speculative preparation begins before this wait.
           const ready = handlers.beforeSessionWarm?.(scopedSessionId)
           if (ready) {
             const open = await ready
@@ -576,7 +576,12 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
         return
       }
       if (message.method === "desktop/session/navigation/state" && handlers.sessions) {
-        try { send(makeSuccess(message.id, asRecord(message.params)?.includeCoverage === true ? await handlers.sessions.navigationSnapshot() : await handlers.sessions.navigation())) }
+        const params = asRecord(message.params)
+        const onlyId = params?.sessionId
+        if (onlyId !== undefined && (typeof onlyId !== "string" || !onlyId)) {
+          send(makeFailure(message.id, INVALID_PARAMS, "Invalid navigation session")); return
+        }
+        try { send(makeSuccess(message.id, params?.includeCoverage === true ? await handlers.sessions.navigationSnapshot(onlyId) : await handlers.sessions.navigation(onlyId))) }
         catch (error) { send(makeFailure(message.id, INTERNAL_ERROR, error instanceof Error ? error.message : String(error))) }
         return
       }

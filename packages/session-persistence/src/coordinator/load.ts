@@ -1,4 +1,4 @@
-import { CURRENT_FORMAT_VERSION, freezeJsonData, stringifyJsonData, validateSubagentHeader, type JournalPrefix, type Session, type SessionEvent, type SessionEventView, type SessionHistoryPageOptions } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, freezeJsonData, stringifyJsonData, validateSubagentHeader, type JournalPrefix, type Session, type SessionView, type SessionEvent, type SessionEventView, type SessionHistoryPageOptions } from "@i-harness/core-session"
 import { materializeSessionHistoryPage, planSessionHistoryPage, sessionHistoryFact, type SessionHistoryFact } from '@i-harness/core-session/internal/archive'
 import { prepareManagedSessionClone, type ManagedSessionClone } from '@i-harness/core-session/internal/restoration'
 import { repairTurnTail } from "../repair.ts"
@@ -18,6 +18,7 @@ export type LoadOwnedExecution = ReturnType<typeof createLoads>['loadOwnedExecut
 export type LoadOwned = ReturnType<typeof createLoads>['loadOwned']
 type AfterTransition = (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>
 type MaterializedHistory = { session: Session; readonly archivePrefix?: Readonly<JournalPrefix>; readonly managedClone?: ManagedSessionClone }
+type ColdSnapshotFallback = (session: SessionView, isCurrent: () => boolean) => void
 
 const MAX_COLD_HISTORY_SESSIONS = 2
 const MAX_COLD_HISTORY_FACTS = 16_384
@@ -112,12 +113,61 @@ export function createLoads(
       throw error
     } finally { token?.end(outcome) }
   }
+  function translateReadFailure(cause: unknown): never {
+    if (['SESSION_CONTEXT_REPLACEMENT_FORMAT', 'SESSION_CONVERSATION_FORMAT'].includes((cause as { code?: string })?.code ?? ''))
+      throw new SessionFormatUnsupportedError('unsupported conversation history', { cause })
+    throw cause
+  }
   const read = async (sessionId: string, original?: ColdArchiveHistoryReader['readFull']): ReturnType<ColdArchiveHistoryReader['readFull']> => {
     try { return await (original ? Reflect.apply(original, backend, [sessionId]) : backend.read(sessionId)) }
-    catch (cause) {
-      if (['SESSION_CONTEXT_REPLACEMENT_FORMAT', 'SESSION_CONVERSATION_FORMAT'].includes((cause as { code?: string })?.code ?? '')) throw new SessionFormatUnsupportedError('unsupported conversation history', { cause })
-      throw cause
+    catch (cause) { return translateReadFailure(cause) }
+  }
+  function visibleHistory({version, events, meta}: Awaited<ReturnType<ColdArchiveHistoryReader['readFull']>>) {
+    const current = originalDecodedArchiveRead(backend) !== undefined && version === CURRENT_FORMAT_VERSION
+    if (current) preflightDecodedFactHistory(version, events)
+    else preflightSessionFormat(version, events, meta)
+    const visible = guardIgnorable(events)
+    return { visible, unchanged: current && visible.length === events.length }
+  }
+  async function asSnapshot({version, meta}: Awaited<ReturnType<ColdArchiveHistoryReader['readFull']>>, {visible, unchanged}: ReturnType<typeof visibleHistory>): Promise<Session> {
+    return {
+      formatVersion: CURRENT_FORMAT_VERSION,
+      events: unchanged ? visible : await migrate(version, visible, meta),
+      ...(meta === undefined ? {} : { header: meta }),
     }
+  }
+  async function readInitialColdHistoryPage(sessionId: string, options: SessionHistoryPageOptions, original: ColdArchiveHistoryReader, onSnapshotFallback?: ColdSnapshotFallback) {
+    let decoded: Awaited<ReturnType<NonNullable<ColdArchiveHistoryReader['readFullForHistoryPage']>>>
+    try { decoded = await original.readFullForHistoryPage?.(sessionId) }
+    catch (cause) {
+      if ((cause as NodeJS.ErrnoException)?.code === 'ENOENT') return undefined
+      return translateReadFailure(cause)
+    }
+    const isCurrent = () => !coldHistoryRetired && originalColdArchiveHistoryReader(backend) === original
+    if (!decoded || !isCurrent()) return undefined
+    const qualified = visibleHistory(decoded), { events, evidence } = decoded
+    const snapshotFallback = async () => {
+      if (onSnapshotFallback) {
+        const session = await asSnapshot(decoded, qualified)
+        if (isCurrent()) onSnapshotFallback(session, isCurrent)
+      }
+      return undefined
+    }
+    const facts = qualified.unchanged && evidence ? historyFacts(events) : undefined
+    if (!facts || !evidence) return snapshotFallback()
+    const plan = planSessionHistoryPage(facts, options)
+    if (!plan) return snapshotFallback()
+    // Public callers can retain and modify the returned page. Copy only its
+    // selected records and any external image admissions, not the entire log.
+    const serialized = stringifyJsonData(plan.ordinals.map(ordinal => events[ordinal]))
+    if (serialized === undefined) return snapshotFallback()
+    const records: SessionEvent[] = JSON.parse(serialized)
+    const page = materializeSessionHistoryPage(plan, records)
+    if (!coldHistory.has(sessionId)) {
+      decoded.retainDecoded?.()
+      rememberColdHistory(sessionId, { evidence, facts })
+    }
+    return page
   }
   function loadThroughTransition<T>(sessionId: string, finalize: (proof: HistoryProof) => Promise<T>, after?: AfterTransition, skipPending = false, allowClean = false) {
     const run = () => transitionLoadOriginal(sessionId, finalize, after, skipPending, allowClean)
@@ -200,30 +250,22 @@ export function createLoads(
     async snapshot(sessionId: string, prepareHistoryPages = false) {
       const cold = prepareHistoryPages && !coldHistoryRetired ? originalColdArchiveHistoryReader(backend) : undefined
       const previous = cold ? coldHistory.get(sessionId) : undefined
-      const original = originalDecodedArchiveRead(backend)
-      const { version, events, meta, evidence } = await read(sessionId, cold?.readFull.bind(cold) ?? original)
-      const currentDecoded = original !== undefined && version === CURRENT_FORMAT_VERSION
-      if (currentDecoded) preflightDecodedFactHistory(version, events)
-      else preflightSessionFormat(version, events, meta)
-      const visible = guardIgnorable(events)
-      const unchanged = currentDecoded && visible.length === events.length
+      const decoded = await read(sessionId, cold?.readFull.bind(cold) ?? originalDecodedArchiveRead(backend))
+      const qualified = visibleHistory(decoded), { visible, unchanged } = qualified
+      const { evidence } = decoded
       if (cold && !coldHistoryRetired && originalColdArchiveHistoryReader(backend) === cold) {
         const facts = unchanged && evidence ? historyFacts(visible) : undefined
         if (facts && evidence) rememberColdHistory(sessionId, { evidence, facts })
         else if (coldHistory.get(sessionId) === previous) coldHistory.delete(sessionId)
       }
-      return { session: {
-        formatVersion: CURRENT_FORMAT_VERSION,
-        // Dropping ignorable records can change the effective conversation.
-        events: unchanged ? visible : await migrate(version, visible, meta),
-        ...(meta === undefined ? {} : { header: meta }),
-      } }
+      return { session: await asSnapshot(decoded, qualified) }
     },
-    async readColdHistoryPage(sessionId: string, options: SessionHistoryPageOptions) {
-      const history = coldHistory.get(sessionId)
-      if (!history) return undefined
+    async readColdHistoryPage(sessionId: string, options: SessionHistoryPageOptions, onSnapshotFallback?: ColdSnapshotFallback) {
+      if (coldHistoryRetired) return undefined
       const original = originalColdArchiveHistoryReader(backend)
       if (!original) return undefined
+      const history = coldHistory.get(sessionId)
+      if (!history) return await readInitialColdHistoryPage(sessionId, options, original, onSnapshotFallback)
       const plan = planSessionHistoryPage(history.facts, options)
       if (!plan) return undefined
       const records = await original.readWindow(sessionId, history.evidence, new Set(plan.ordinals))

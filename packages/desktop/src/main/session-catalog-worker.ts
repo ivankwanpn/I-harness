@@ -2,7 +2,7 @@ import { parentPort } from 'node:worker_threads'
 import { createCommittedSessionCatalog } from '@i-harness/desktop-gateway'
 
 export type CatalogRequest =
-  | { method: 'navigation' | 'navigationSnapshot' | 'dashboard'; root: string }
+  | { method: 'navigation' | 'navigationSnapshot' | 'dashboard'; root: string; sessionId?: string }
   | { method: 'close' }
 
 const port = parentPort
@@ -26,7 +26,7 @@ port.on('message', async ({ id, request }: { id: number; request: CatalogRequest
       previousScan = read.then(() => undefined, () => undefined)
       value = await read
     } else {
-      value = await catalog[request.method](request.root)
+      value = await catalog[request.method](request.root, request.sessionId)
     }
     port.postMessage({ id, value })
   } catch (error) {

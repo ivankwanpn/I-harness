@@ -161,12 +161,17 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       if (managed.has(sessionId)) throw new Error('Managed document requires fact admission')
       mutations.enqueue(sessionId, events)
     },
-    async readHistoryPage(sessionId, options) {
+    async readHistoryPage(sessionId, options, onSnapshotFallback) {
       archiveReads?.assertPublicReadAdmission()
       let page = await managed.readHistoryPage(sessionId, options)
       if (page === undefined && !managed.has(sessionId)) {
-        const cold = await loads.readColdHistoryPage(sessionId, options)
+        let fallback: { session: Parameters<NonNullable<typeof onSnapshotFallback>>[0]; isCurrent: () => boolean } | undefined
+        const cold = await loads.readColdHistoryPage(sessionId, options, onSnapshotFallback
+          ? (session, isCurrent) => { fallback = { session, isCurrent } }
+          : undefined)
         page = managed.has(sessionId) ? await managed.readHistoryPage(sessionId, options) : cold
+        archiveReads?.assertPublicReadAdmission()
+        if (!page && fallback && !managed.has(sessionId) && fallback.isCurrent()) onSnapshotFallback?.(fallback.session)
       }
       archiveReads?.assertPublicReadAdmission()
       return page
@@ -180,7 +185,11 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     },
     async load(sessionId) { archiveReads?.assertPublicReadAdmission(); assertDurableTransition(); observations.assertOutsideObservedSession(sessionId); const session = await managed.snapshot(sessionId); const candidate = session ? { session } : await loads.load(sessionId); archiveReads?.assertPublicReadAdmission(); return candidate },
     async loadOwned(sessionId) { assertDurableTransition(); observations.assertOutsideObservedSession(sessionId); observations.assertManagedSessionAdmission(sessionId); const session = await managed.snapshot(sessionId); return { session: session ?? (await loads.loadOwned(sessionId)).session } },
-    async list(onUnreadable) { return backend.list(onUnreadable) },
+    async list(onUnreadable, onlyId) {
+      if (onlyId === undefined) return backend.list(onUnreadable)
+      const ids = await backend.list(onUnreadable, onlyId)
+      return ids.filter(id => id === onlyId)
+    },
     async profile(sessionId) { observations.assertOutsideObservedSession(sessionId); return backend.profile(sessionId) },
     updateMeta: async (id,patch) => {
       assertDurableTransition()

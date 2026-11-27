@@ -760,10 +760,10 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         await pageHistory(selectedWorkspaceId, selectedSessionId, 0, history ? { history, assistantPreview: opened?.assistantPreview } : undefined)
       }
       if (!stillOpen()) return
-      // Warm the session assembly while the user is reading the restored tail;
-      // the first prompt then does not pay the lazy assembly cost.
+      // Join preparation when the execution mode is already known. A deferred
+      // reply leaves that choice to the next real input.
       if (opened) void bridge.request({ kind: "desktop/session/warm", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
-        .then((warm: unknown) => { const result = warm as { ready?: boolean; error?: string } | undefined; if (result?.ready === false) console.warn("session warm failed", result.error) })
+        .then((warm: unknown) => { const result = warm as { ready?: boolean; deferred?: boolean; error?: string } | undefined; if (result?.ready === false && !result.deferred) console.warn("session warm failed", result.error) })
         .catch((error: unknown) => console.warn("session warm failed", error))
     })().catch(fail)
     const version = ++modelRequest.current

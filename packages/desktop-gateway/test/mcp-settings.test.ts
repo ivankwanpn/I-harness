@@ -120,6 +120,12 @@ it("applies the saved MCP revision to both live workspace hosts before acknowled
     for (const workspace of [a, b]) {
       const live = await connect(onWrite => createDesktopHost({ workspace, sessionDir: join(workspace, "sessions"), profile, onWrite, buildProviderClient: () => ({ stream: failIfModelRuns }) }))
       const created = await live.request("session/create") as { sessionId: string }
+      expect(await live.request("session/warm", { sessionId: created.sessionId })).toEqual({ ready: false, deferred: true })
+      // A real user operation establishes this workspace's execution owner.
+      const reminder = await live.request("desktop/schedule/create", { sessionId: created.sessionId, command: {
+        prompt: "MCP configuration fixture", after_seconds: 3600,
+      } }) as { id: string }
+      await live.request("desktop/schedule/delete", { sessionId: created.sessionId, id: reminder.id })
       expect(await live.request("session/warm", { sessionId: created.sessionId })).toEqual({ ready: true })
       hosts.push(live)
     }

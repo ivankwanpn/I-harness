@@ -40,22 +40,22 @@ export function createCommittedSessionCatalog() {
     void job.finally(() => reads.delete(job)).catch(() => undefined)
     return job
   }
-  async function navigationSnapshot(root: string) {
+  async function navigationSnapshot(root: string, onlyId?: string) {
     return read(root, { entries: {} as Record<string, SessionNavigation>, partial: false }, async coordinator => {
       const { rows, partial } = await readCatalogRows(coordinator, () => async id => {
         const { meta } = await coordinator.profile(id)
         if (!isConversationMetadata(meta)) return undefined
         const navigation = parseSessionNavigation(await coordinator.getDocument(navigationDocumentKey(id)))
         const binding = parseSessionProjectBinding(await coordinator.getDocument(projectBindingDocumentKey(id)))
-        return [id, { ...navigation, ...(binding.projectId ? { projectId: binding.projectId } : {}) }] as const
-      }, true)
+        return [id, { ...navigation, ...(binding.projectId ? { projectId: binding.projectId } : {}), ...(onlyId === undefined ? {} : { archived: meta.archived === true }) }] as const
+      }, true, onlyId)
       return { entries: Object.fromEntries(rows), partial }
     })
   }
   return {
     navigationSnapshot,
-    async navigation(root: string): Promise<Record<string, SessionNavigation>> {
-      return (await navigationSnapshot(root)).entries
+    async navigation(root: string, onlyId?: string): Promise<Record<string, SessionNavigation>> {
+      return (await navigationSnapshot(root, onlyId)).entries
     },
     dashboard(root: string): Promise<SessionDashboardResult> {
       return read<SessionDashboardResult>(root, { sessions: [] }, async (coordinator, store) => {

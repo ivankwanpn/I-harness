@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { ColdArchiveHistoryReader } from '@i-harness/session-persistence/internal/archive-read'
 import type { SessionMeta } from '@i-harness/session-persistence'
-import { SESSION_HISTORY_LIMIT, type JournalPrefix } from '@i-harness/core-session'
+import { CURRENT_FORMAT_VERSION, SESSION_HISTORY_LIMIT, freezeJsonData, type JournalPrefix, type SessionEvent } from '@i-harness/core-session'
 import type { createArchiveReadOwner } from './archive-read-owner.ts'
 import { readSessionArchive } from './archive-reader.ts'
 import { ArchiveEvidenceMismatch, type VerifiedArchiveBody } from './verified-archive-body.ts'
@@ -15,6 +15,19 @@ interface ColdEvidence {
   readonly headerDigest: string
   readonly verified: VerifiedArchiveBody
 }
+export const MAX_PREPARED_HISTORY_BYTES = 8 * 1024 * 1024
+export const MAX_PREPARED_HISTORY_EVENTS = 16_384
+export interface PreparedArchiveHistory {
+  readonly sessionId: string
+  readonly size: number
+  readonly dev: bigint
+  readonly ino: bigint
+  readonly headerDigest: string
+  readonly bodyDigest: string
+  readonly prefix: Readonly<JournalPrefix>
+  readonly events: SessionEvent[]
+}
+class HistoryPreparationUnavailable extends Error {}
 
 /** The exact constructor's native archive reader. Proofs retain coordinates
  * only and have no authority beyond the original backend's read admission. */
@@ -24,6 +37,7 @@ export function createColdArchiveHistoryReader(options: {
   file(sessionId: string): string
   checkDeleted(sessionId: string): Promise<void>
   qualify(sessionId: string, prefix: { header: SessionMeta; birth: Buffer }): Promise<void>
+  prepareHistory?(history: PreparedArchiveHistory): void
 }): ColdArchiveHistoryReader {
   const { archive } = options
   const evidenceRecords = new WeakMap<object, ColdEvidence>()
@@ -33,6 +47,30 @@ export function createColdArchiveHistoryReader(options: {
   }
   function assertCurrent(generation: object) {
     if (currentGeneration() !== generation) throw new Error('ARCHIVE_READ_UNAVAILABLE')
+  }
+  function observe(sessionId: string, generation: object, prepared: boolean) {
+    return async (handle: Parameters<typeof readSessionArchive>[0], extent: number, identity: { dev: bigint; ino: bigint }) => {
+      if (prepared && extent >= MAX_PREPARED_HISTORY_BYTES) throw new HistoryPreparationUnavailable()
+      const result = await readSessionArchive(handle, extent, false, async prefix => {
+        await options.qualify(sessionId, prefix)
+        const { header } = prefix
+        if (prepared && (header.formatVersion !== CURRENT_FORMAT_VERSION || !header.journal ||
+            header.journal.legacyEventCount || header.journal.legacyBodyBytes || header.journal.separatorBytes ||
+            header.semanticSeed || header.parentSession !== undefined || header.seedLength !== undefined ||
+            header.origin === 'fork' || header.forkPublication !== undefined)) throw new HistoryPreparationUnavailable()
+      }, undefined, true)
+      await options.checkDeleted(sessionId)
+      const physical: ColdEvidence | undefined = result.verified ? {
+        sessionId, generation, extent, dev: identity.dev, ino: identity.ino,
+        headerDigest: createHash('sha256').update(result.birth).digest('hex'), verified: result.verified,
+      } : undefined
+      return { version: result.header.formatVersion, events: result.events, meta: result.header, physical, originalDecode: result.originalDecode }
+    }
+  }
+  function retainEvidence(physical: ColdEvidence) {
+    const evidence = Object.freeze({})
+    evidenceRecords.set(evidence, Object.freeze(physical))
+    return evidence
   }
 
   return Object.freeze({
@@ -57,21 +95,44 @@ export function createColdArchiveHistoryReader(options: {
       const generation = currentGeneration()
       await options.checkDeleted(sessionId)
       assertCurrent(generation)
-      const observed = await archive.run(options.file(sessionId), async (handle, extent, identity) => {
-        const result = await readSessionArchive(handle, extent, false, prefix => options.qualify(sessionId, prefix), undefined, true)
-        await options.checkDeleted(sessionId)
-        const physical = result.verified ? {
-          sessionId, generation, extent, dev: identity.dev, ino: identity.ino,
-          headerDigest: createHash('sha256').update(result.birth).digest('hex'), verified: result.verified,
-        } : undefined
-        return { version: result.header.formatVersion, events: result.events, meta: result.header, physical }
-      }, false, sessionId)
+      const observed = await archive.run(options.file(sessionId), observe(sessionId, generation, false), false, sessionId)
       assertCurrent(generation)
-      const { physical, ...result } = observed
+      const { physical, originalDecode: _originalDecode, ...result } = observed
       if (!physical) return result
-      const evidence = Object.freeze({})
-      evidenceRecords.set(evidence, Object.freeze(physical))
-      return { ...result, evidence }
+      return { ...result, evidence: retainEvidence(physical) }
+    },
+
+    async readFullForHistoryPage(sessionId: string) {
+      if (!options.prepareHistory) return undefined
+      const generation = currentGeneration()
+      await options.checkDeleted(sessionId)
+      assertCurrent(generation)
+      const observed = await archive.runSealed(options.file(sessionId), observe(sessionId, generation, true), sessionId)
+        .catch((error: unknown) => {
+          if (error instanceof HistoryPreparationUnavailable) return undefined
+          throw error
+        })
+      assertCurrent(generation)
+      if (!observed) return undefined
+      const { physical, originalDecode, ...result } = observed
+      if (!physical) return result
+      const evidence = retainEvidence(physical)
+      if (!originalDecode || observed.meta.sessionId !== sessionId || result.events.length > MAX_PREPARED_HISTORY_EVENTS)
+        return { ...result, evidence }
+      // No caller can mutate decoded payloads before the one-shot handoff.
+      // The owning page planner detaches the bounded returned page.
+      freezeJsonData(result.events)
+      let available = true
+      return { ...result, evidence, retainDecoded() {
+        if (!available) return
+        available = false
+        assertCurrent(generation)
+        options.prepareHistory!({
+          sessionId, size: physical.extent, dev: physical.dev, ino: physical.ino,
+          headerDigest: physical.headerDigest, bodyDigest: physical.verified.digest,
+          prefix: physical.verified.prefix, events: result.events,
+        })
+      } }
     },
 
     async readWindow(sessionId: string, evidence: object, ordinals: ReadonlySet<number>) {

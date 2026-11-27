@@ -5,7 +5,7 @@ import {originalFilesystemPolicyFor} from './execution-runtime.ts'
 import {types} from 'node:util'
 import {AsyncLocalStorage} from 'node:async_hooks'
 import {firstPartySelectionFor} from './first-party-selection.ts'
-import {associateOriginalManagedExecution} from './host-managed-execution.ts'
+import {associateOriginalManagedExecution,type OriginalProcessJobSelector} from './host-managed-execution.ts'
 import {projectSessionBackgroundJobs} from './background-job-view.ts'
 import {mountOwnedWorkflow} from './owned-workflow.ts'
 import {associateOriginalHostAssemblyObserver} from './host-assembly-observer.ts'
@@ -252,6 +252,9 @@ export interface ManagedRuntimePublication {
 }
 export type ManagedRuntimeLifecycle={sessionId:string;owner:ManagedRuntimePublication;kind:'published'|'retiring'|'removed'}
 export interface SessionService {
+  /** Warm only an execution already selected or required by the host. A
+   * deferred warm leaves the first real input's execution choice open. */
+  warmSession?(sessionId: string): Promise<{ ready: boolean; deferred?: true }>
   /** Internal default-input adapter over the SAME private entry; no Session facade. */
   managedInputFor?(sessionId:string,requirements?:{completePreparation?:boolean;supplementalContext?:boolean}):Promise<{
     readonly inbox:Pick<AsyncInbox,'pending'|'admit'|'cancel'>
@@ -386,10 +389,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const managedTitles=new Map<string,ReturnType<typeof createOwnedPostTurnLifetime>>()
   const managedRecipients=new Map<string,ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>>()
   const managedPrepubSettlers=new Map<string,()=>Promise<void>>()
-  type TaskLifecycle={dispose():Promise<void>;drain():Promise<void>;journal():Promise<void>;activate():void;ready:Promise<void>;projectTasks():AgentTaskView[];cancelTask(id:string):'cancellation-requested'|'already-finished';projectionIntegrity():Promise<TaskProjectionIssue[]>;reconcileProjection():Promise<TaskProjectionIssue[]>}
+  type TaskLifecycle={dispose():Promise<void>;drain():Promise<void>;journal():Promise<void>;activate():void;ready:Promise<void>;projectTasks():AgentTaskView[];cancelTask(id:string):'cancellation-requested'|'already-finished';cancelProcessJob(id:string):'cancellation-requested'|'already-finished';projectionIntegrity():Promise<TaskProjectionIssue[]>;reconcileProjection():Promise<TaskProjectionIssue[]>}
   const managedTaskOwners=new Map<string,TaskLifecycle>()
   const managedWorkflowOwners=new Map<string,{list():import('@i-harness/exec').BackgroundJobView[];kill(id:string):'cancellation-requested'|'already-finished';journal():Promise<void>}>()
-  const managedCodeMounts=new Map<string,import('@i-harness/code-mode').CodeModeMount>()
+  const managedCodeMounts=new Map<string,Awaited<ReturnType<typeof mountOwnedCode>>>()
   const managedShellOwners=new Map<string,import('./owned-shell.ts').OwnedShellMount>()
   const managedCodeStops=new Map<string,{flight:Promise<void>;failed:boolean;settled:boolean}>()
   type StopSettlement = { acknowledged: boolean; settlement?: Promise<import('@i-harness/core-session').DeliveryCloseReceipt> }
@@ -922,6 +925,35 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   function getOrCreate(sessionId: string): Promise<SessionAssembly> {
     return opts.sessionOperation ? opts.sessionOperation.run(sessionId, () => getOrCreateUnfenced(sessionId)) : getOrCreateUnfenced(sessionId)
   }
+  function warmSession(sessionId: string): Promise<{ ready: boolean; deferred?: true }> {
+    const warm = async () => {
+      assertWritableOpen(sessionId)
+      const ready = () => {
+        const managed = managedPublications.get(sessionId), assembly = assemblies.get(sessionId)
+        if (managed?.retired || assembly && surfaceKind(sessionId, assembly) === 'retiring') throw new Error('Original session warm owner retired')
+        return managed !== undefined || assembly !== undefined
+      }
+      if (ready()) return { ready: true }
+      const pending = creating.get(sessionId)
+      if (pending) {
+        await pending.work
+        assertWritableOpen(sessionId)
+        if (ready()) return { ready: true }
+        throw new Error('Original session warm owner retired')
+      }
+      if (completeSelections.has(sessionId) || (!firstParty && !supportsManagedServiceOptions(opts))) {
+        return { ready: (await getOrCreateUnfenced(sessionId)) !== undefined }
+      }
+      // Neither the original selector's configuration witness nor a private
+      // writer can be acquired just in case. The first real input may require
+      // a Session or see newly changed extensions. Probe the existing header
+      // without binding a model or retaining an execution lease.
+      await opts.coordinator?.profile(sessionId)
+      assertWritableOpen(sessionId)
+      return ready() ? { ready: true } : { ready: false, deferred: true as const }
+    }
+    return opts.sessionOperation ? opts.sessionOperation.run(sessionId, warm) : warm()
+  }
   async function getOrCreateUnfenced(sessionId: string): Promise<SessionAssembly> {
     if(privateEntries.has(sessionId)||managedRuntimes.has(sessionId))throw Error('Private runtime requires explicit complete compatibility adapter')
     selectComplete(sessionId)
@@ -1255,7 +1287,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       let taskNotify:ParentInputAdmission|undefined
       let taskMount:RegisterSubagentResult|undefined,taskLifecycle:TaskLifecycle|undefined,initialTaskModel:import('@i-harness/llm-seam').ModelClient|undefined,initialBinding:import('./managed-assembly.ts').ManagedExecutionModelBinding|undefined
       let shellMount:import('./owned-shell.ts').OwnedShellMount|undefined
-      let codeMount:import('@i-harness/code-mode').CodeModeMount|undefined
+      let codeMount:Awaited<ReturnType<typeof mountOwnedCode>>|undefined
       let codeSchemas: (() => import('@i-harness/llm-seam').ToolSchema[]) | undefined
       let shellExecution:import('@i-harness/exec').ExecExecutionHost|undefined
       if(opts.managedRuntime!.ownedShell?.acquireExecution){let acquiring=true;try{shellExecution=await opts.managedRuntime!.ownedShell.acquireExecution(sessionId,cleanup=>{if(!acquiring||retired)throw Error('Original execution retention expired');assertWritableOpen(sessionId);if(typeof cleanup!=='function')throw TypeError('Original execution cleanup required');mounted.add(cleanup)},entry.execution)}finally{acquiring=false}assertWritableOpen(sessionId);if(shellExecution.defaultOwner?.sessionId!==sessionId)throw TypeError('Original Shell execution owner required')}
@@ -1314,9 +1346,14 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         const taskAdditions={...workflowMount?{workflow:workflowMount.executor}:{},managedParent:{domain:original.domain,execution:original.execution},parentNotify:notify,deferRestoredWork:true,getParentModel:()=>{const model=taskOptions.parentModel??(runtime?runtime.selectedModelBinding().model:initialTaskModel);if(!model)throw Error('Original parent model not bound');return model}}
         taskMount=registerSubagent(original.ctx,original.tools,Object.defineProperties({}, {...taskFields,...Object.getOwnPropertyDescriptors(taskAdditions)}) as Parameters<typeof registerSubagent>[2])
         const mounted=taskMount,dispose=mounted.dispose,drain=mounted.drainParentNotifications,journal=mounted.settleParentDeliveryJournalDebt,activate=mounted.activateRestoredWork,catalogReady=mounted.catalogReady,ready=mounted.ready,project=mounted.projectTasks.bind(mounted),table=mounted.table,jobs=mounted.jobs,tasks=mounted.tasks,entriesMethod=table.entries,getMethod=table.get,listJobsMethod=jobs.listAll,listTasksMethod=tasks.list,tableGet=getMethod.bind(table),kill=jobs.kill.bind(jobs)
-        taskLifecycle=Object.freeze({dispose:()=>Reflect.apply(dispose,mounted,[]),drain:()=>Reflect.apply(drain,mounted,[]),journal:()=>Reflect.apply(journal,mounted,[]),activate:()=>Reflect.apply(activate,mounted,[]),ready,projectTasks(){const check=()=>{if(table.entries!==entriesMethod||table.get!==getMethod||jobs.listAll!==listJobsMethod||tasks.list!==listTasksMethod)throw Error('Original Task projection changed')};check();const rows=project();check();return rows},projectionIntegrity(){if(!opts.coordinator)return Promise.reject(Error('Task projection integrity requires the original coordinator'));const coordinator=opts.coordinator;return (async()=>[...await inspectTaskProjection(tasks,coordinator),...await inspectJobRecordProjection(tasks,coordinator),...await inspectDocumentWriteIntents(coordinator, sessionId)])()},reconcileProjection(){if(!opts.coordinator)return Promise.reject(Error('Task projection integrity requires the original coordinator'));const coordinator=opts.coordinator;return (async()=>[...await reconcileTaskProjection(tasks,coordinator),...await inspectJobRecordProjection(tasks,coordinator),...await inspectDocumentWriteIntents(coordinator, sessionId)])()},cancelTask(id:string){const entry=tableGet(id);if(entry!==undefined){if(entry.status!=='running')return 'already-finished';entry.controller.abort();return entry.jobId!==undefined?kill(entry.jobId):'cancellation-requested'}return kill(id)}})
+        const readJob=jobs.read.bind(jobs)
+        const cancelProcessJob=(id:string)=>{
+          if(readJob(id).status!=='running')throw Error('Job is not live or cancellable for this owner')
+          return kill(id)
+        }
+        taskLifecycle=Object.freeze({dispose:()=>Reflect.apply(dispose,mounted,[]),drain:()=>Reflect.apply(drain,mounted,[]),journal:()=>Reflect.apply(journal,mounted,[]),activate:()=>Reflect.apply(activate,mounted,[]),ready,projectTasks(){const check=()=>{if(table.entries!==entriesMethod||table.get!==getMethod||jobs.listAll!==listJobsMethod||tasks.list!==listTasksMethod)throw Error('Original Task projection changed')};check();const rows=project();check();return rows},projectionIntegrity(){if(!opts.coordinator)return Promise.reject(Error('Task projection integrity requires the original coordinator'));const coordinator=opts.coordinator;return (async()=>[...await inspectTaskProjection(tasks,coordinator),...await inspectJobRecordProjection(tasks,coordinator),...await inspectDocumentWriteIntents(coordinator, sessionId)])()},reconcileProjection(){if(!opts.coordinator)return Promise.reject(Error('Task projection integrity requires the original coordinator'));const coordinator=opts.coordinator;return (async()=>[...await reconcileTaskProjection(tasks,coordinator),...await inspectJobRecordProjection(tasks,coordinator),...await inspectDocumentWriteIntents(coordinator, sessionId)])()},cancelProcessJob,cancelTask(id:string){const entry=tableGet(id);if(entry!==undefined){if(entry.status!=='running')return 'already-finished';entry.controller.abort();return entry.jobId!==undefined?kill(entry.jobId):'cancellation-requested'}return kill(id)}})
         original.retain(taskLifecycle.dispose);await catalogReady;original.assertCurrent()
-       }if(opts.managedRuntime!.ownedCode){if(!shellOutput?.sourceFor)throw Error('Original Code output source required');if(!opts.managedRuntime!.ownedShell){for(const tool of createContextOutputTools(shellOutput.service, { exposure: 'direct', withLegacyReadObservation: shellOutput.withLegacyReadObservation }))original.tools.register(tool)}codeMount=await mountOwnedCode(original,{service:shellOutput.service,sourceFor:shellOutput.sourceFor},codeConfig!);codeSchemas=codeMount.schemas.bind(codeMount)}let surface=registrySurface;if(opts.managedRuntime!.mountDefaultSurface){original.assertCurrent();surface=await opts.managedRuntime!.mountDefaultSurface(original,{modelToolSchemas:()=>codeMount?codeMount.schemas():original.tools.schemas(),modelBinding:()=>{original.assertCurrent();const selected=runtime?runtime.selectedModelBinding():initialBinding;if(!selected)throw Error('Original parent model not bound');return selected},...taskMount?{task:taskMount}:{},...taskNotify?{parentNotify:taskNotify}:{},...shellMount?{shell:shellMount.service}:{},...shellOutput?{output:shellOutput}:{}});original.assertCurrent()}if(taskMount){const selected=await resolveModel();original.assertCurrent();initialBinding=selected;initialTaskModel=selected.model;taskLifecycle!.activate();await taskLifecycle!.ready;original.assertCurrent()}if(surface&&types.isProxy(surface))throw TypeError('Original default surface required');return surface},resolveModel,assertConstructionCurrent(){if(retired)throw Error('Original construction retired');assertWritableOpen(sessionId)}})
+       }if(opts.managedRuntime!.ownedCode){if(!shellOutput?.sourceFor)throw Error('Original Code output source required');if(!opts.managedRuntime!.ownedShell){for(const tool of createContextOutputTools(shellOutput.service, { exposure: 'direct', withLegacyReadObservation: shellOutput.withLegacyReadObservation }))original.tools.register(tool)}codeMount=await mountOwnedCode(original,{service:shellOutput.service,sourceFor:shellOutput.sourceFor},codeConfig!);codeSchemas=codeMount.mount.schemas.bind(codeMount.mount)}let surface=registrySurface;if(opts.managedRuntime!.mountDefaultSurface){original.assertCurrent();surface=await opts.managedRuntime!.mountDefaultSurface(original,{modelToolSchemas:()=>codeMount?codeMount.mount.schemas():original.tools.schemas(),modelBinding:()=>{original.assertCurrent();const selected=runtime?runtime.selectedModelBinding():initialBinding;if(!selected)throw Error('Original parent model not bound');return selected},...taskMount?{task:taskMount}:{},...taskNotify?{parentNotify:taskNotify}:{},...shellMount?{shell:shellMount.service}:{},...shellOutput?{output:shellOutput}:{}});original.assertCurrent()}if(taskMount){const selected=await resolveModel();original.assertCurrent();initialBinding=selected;initialTaskModel=selected.model;taskLifecycle!.activate();await taskLifecycle!.ready;original.assertCurrent()}if(surface&&types.isProxy(surface))throw TypeError('Original default surface required');return surface},resolveModel,assertConstructionCurrent(){if(retired)throw Error('Original construction retired');assertWritableOpen(sessionId)}})
       }else runtime=createManagedExecutionRuntime({...common,...await resolveModel()})
       await runtime.startSchedule?.()
       assertWritableOpen(sessionId)
@@ -1701,7 +1738,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
 
   function cancelRunning(sessionId: string): { cancelled: boolean } {
     requestDeliveryStop(sessionId)
-    const code=managedCodeMounts.get(sessionId)
+    const code=managedCodeMounts.get(sessionId)?.mount
     const priorCodeStop=managedCodeStops.get(sessionId)
     if (code && (!priorCodeStop || priorCodeStop.failed)) {
       const record = { flight: Promise.resolve(), failed: false, settled: false }
@@ -1983,6 +2020,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     liveSession: (sessionId) => assemblies.get(sessionId)?.session,
     writableSessionFor,
     receivedInputFor,
+    warmSession,
     managedInputFor,
     liveAssembly,
     pendingAssemblyMount,
@@ -2028,7 +2066,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         || managedPrepubSettlers.has(sessionId) || deliveryDrains.get(sessionId)?.hasActiveWork() || stopPending
       let active = state.running || state.queued > 0 || tasks > 0 || pending
       try {
-        active ||= (managedCodeMounts.get(sessionId)?.liveCells?.().length ?? 0) > 0
+        active ||= (managedCodeMounts.get(sessionId)?.mount.liveCells?.().length ?? 0) > 0
         active ||= managedShellOwners.get(sessionId)?.hasActiveJobs() ?? false
         if (!active && assembly) {
           const live = assembly.liveResources?.()
@@ -2127,9 +2165,39 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         check()
         return jobs
       },
+      async cancelProcessJob(selector: OriginalProcessJobSelector) {
+        check()
+        if (selector.backend === 'shell') {
+          const shell = managedShellOwners.get(id)
+          if (!shell) throw Error('Checked native cancellation unavailable')
+          const job = shell.getJobView(selector.id)
+          if (job.owner !== id || job.status !== 'running') throw Error('Job is not live or cancellable for this owner')
+          const identity = job.nativeJob
+          if (!identity || identity.jobId !== selector.id || identity.ownerSessionId !== id || identity.instanceId !== selector.instanceId
+            || (selector.sourceId !== undefined && selector.sourceId !== identity.sourceId)) throw Error('Native job instance changed')
+          const outcome = await shell.killJob(selector.id, { jobInstanceId: identity.instanceId, sourceId: identity.sourceId })
+          check()
+          return outcome
+        }
+        if (selector.backend === 'workflow') {
+          const workflow = managedWorkflowOwners.get(id)
+          if (!workflow?.list().some(job => job.id === selector.id && job.owner === id && job.status === 'running'))
+            throw Error('Job is not live or cancellable for this owner')
+          const outcome = workflow.kill(selector.id)
+          check()
+          return outcome
+        }
+        const tasks = managedTaskOwners.get(id)
+        if (!tasks) throw Error('Job is not live or cancellable for this owner')
+        const outcome = tasks.cancelProcessJob(selector.id)
+        check()
+        return outcome
+      },
     })
   }
-  associateOriginalManagedExecution(service,{read(id){if(!privateEntries.has(id))return undefined;if(closed||closing.has(id)||!privateCache)throw Error('Original managed execution unavailable');const execution=privateCache.current(id);if(!execution)throw Error('Original managed execution unavailable');return execution},runtime:readOriginalRuntime,async acquireChild(id){if(closed||!privateCache)throw Error('Original managed execution unavailable');const entry=await privateCache.get(id);if(closed){await privateCache.close(id);throw Error('Original managed execution unavailable')}let released=false;return Object.freeze({execution:entry.execution,async release(){if(released)return;released=true;await privateCache!.close(id)}})},async prepareRuntime(id){await prepareFirstParty(id);if(!managedCompatible(id)){if(privateEntries.has(id))throw Error('Private entry cannot switch to Session-shaped compatibility');return undefined}await waitForFirstPartyRefresh(id);await getManagedRuntime(id);await waitForFirstPartyRefresh(id);return readOriginalRuntime(id)},retain(id,execution,cleanup){if(!privateEntries.has(id)||closed||closing.has(id)||!privateCache)throw Error('Original managed execution unavailable');privateCache.retain(id,execution,cleanup)}})
+  associateOriginalManagedExecution(service,{read(id){if(!privateEntries.has(id))return undefined;if(closed||closing.has(id)||!privateCache)throw Error('Original managed execution unavailable');const execution=privateCache.current(id);if(!execution)throw Error('Original managed execution unavailable');return execution},runtime:readOriginalRuntime,
+    codeSurface(id){if(!closed&&!closing.has(id)&&!failedClose.has(id)&&managedPublications.get(id)?.retired===false)return managedCodeMounts.get(id)?.surface},
+    async acquireChild(id){if(closed||!privateCache)throw Error('Original managed execution unavailable');const entry=await privateCache.get(id);if(closed){await privateCache.close(id);throw Error('Original managed execution unavailable')}let released=false;return Object.freeze({execution:entry.execution,async release(){if(released)return;released=true;await privateCache!.close(id)}})},async prepareRuntime(id){await prepareFirstParty(id);if(!managedCompatible(id)){if(privateEntries.has(id))throw Error('Private entry cannot switch to Session-shaped compatibility');return undefined}await waitForFirstPartyRefresh(id);await getManagedRuntime(id);await waitForFirstPartyRefresh(id);return readOriginalRuntime(id)},retain(id,execution,cleanup){if(!privateEntries.has(id)||closed||closing.has(id)||!privateCache)throw Error('Original managed execution unavailable');privateCache.retain(id,execution,cleanup)}})
   associateOriginalManagedRewind(service,id=>{
     if(!privateEntries.has(id))return undefined
     const runtime=managedRuntimes.get(id),row=managedRewinds.get(id)

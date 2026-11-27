@@ -197,6 +197,28 @@ function makeStubService(): SessionService {
 }
 
 describe("createSdkServer", () => {
+  it('uses the original warm capability without forcing compatibility and retains the legacy assembly fallback', async () => {
+    const service = makeStubService()
+    service.warmSession = vi.fn(async () => ({ ready: false, deferred: true as const }))
+    service.managedInputFor = vi.fn(async () => { throw Error('Warm must not acquire a private or complete input') })
+    const server = createSdkServer(service)
+    const warm = async () => JSON.parse((await server.handleLine(encodeFrame(makeRequest(1, 'session/warm', { sessionId: 'original' }))))!)
+    try {
+      await handshake(server)
+      expect(await warm()).toMatchObject({ result: { ready: false, deferred: true } })
+      expect(service.warmSession).toHaveBeenCalledWith('original')
+      expect(service.managedInputFor).not.toHaveBeenCalled()
+      expect(service.assemblyFor).not.toHaveBeenCalled()
+      vi.mocked(service.warmSession).mockRejectedValueOnce(new Error('Original warm failed'))
+      expect(await warm()).toMatchObject({ result: { ready: false, error: 'Original warm failed' } })
+      delete service.warmSession
+      vi.mocked(service.assemblyFor).mockResolvedValueOnce({ sessionId: 'original' } as SessionAssembly)
+      expect(await warm()).toMatchObject({ result: { ready: true } })
+      expect(service.assemblyFor).toHaveBeenCalledOnce()
+      expect(service.managedInputFor).not.toHaveBeenCalled()
+    } finally { await server.close() }
+  })
+
   it('carries final validation from the actual adapter through server status, RPC framing and client sanitization', async () => {
     const rejected = await createOpenAICompatibleClient({ apiKey: '', model: 'm', options: { messages: null } }).prepare!({ systemPrompt: 'sentinel-private-prompt', messages: [], tools: [] }).catch(error => error)
     const service = makeStubService(); vi.mocked(service.submit).mockRejectedValue(rejected)
@@ -932,7 +954,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
       const { images: _durableImages, ...admittedWire } = admitted
       expect(result).toEqual({ events: [{ ...user, images: [image] }, admittedWire], startSeq: 12, nextSeq: 14, headSeq: 20,
         turns: [{ startSeq: 10, endSeq: 15 }] })
-      expect(readHistoryPage).toHaveBeenCalledWith("persisted", { afterSeq: 0, beforeSeq: 14, limit: 2, includeTurns: true })
+      expect(readHistoryPage).toHaveBeenCalledWith("persisted", { afterSeq: 0, beforeSeq: 14, limit: 2, includeTurns: true }, expect.any(Function))
       expect((await request({ sessionId: "persisted", afterSeq: 12, limit: 2 })).result).toEqual({
         events: [{ ...user, images: [image] }, admittedWire], nextSeq: 14,
       })
@@ -961,6 +983,12 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
       expect(await request("fallback")).toMatchObject({ result: { events: live.events, nextSeq: 1 } })
       expect(snapshot).toHaveBeenCalledOnce()
       expect(snapshot).toHaveBeenCalledWith("fallback", { prepareHistoryPages: true })
+      readHistoryPage.mockImplementationOnce(async (_id, _options, useAlreadyRead) => {
+        useAlreadyRead?.(live)
+        return undefined
+      })
+      expect(await request("already-decoded")).toMatchObject({ result: { events: live.events, nextSeq: 1 } })
+      expect(snapshot).toHaveBeenCalledOnce()
       readHistoryPage.mockRejectedValueOnce(new Error("Archive changed"))
       expect(await request("faulty")).toMatchObject({ error: { code: INTERNAL_ERROR, message: "session/history: failed to prepare session: Archive changed" } })
       expect(snapshot).toHaveBeenCalledOnce()

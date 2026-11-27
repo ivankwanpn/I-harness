@@ -9,7 +9,75 @@ import {enrollFirstPartySelection,type FirstPartySelection} from '../src/first-p
 const enroll=(options:SessionServiceOptions,owner:Omit<FirstPartySelection,'options'>)=>enrollFirstPartySelection(Object.freeze({options,...owner}))
 import {createDurableSessionLoader} from '../src/durable-session.ts'
 import {controlledModel} from './controlled-model.ts'
-import {prepareOriginalManagedRuntime,originalManagedRuntimeFor} from '../src/host-managed-execution.ts'
+import {prepareOriginalManagedRuntime,originalManagedRuntimeFor,originalManagedExecutionFor} from '../src/host-managed-execution.ts'
+
+it.each(['managed','explicit-complete','changed-hooks'] as const)('speculative warm leaves first actual %s selection and model readiness to the real input',async mode=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'paired-warm-')),coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ let kind:'managed'|'complete'='managed',configured=false,preparations=0,resolutions=0,calls=0,transforms=0
+ const model=controlledModel(async function*(){calls++;yield {type:'end'}})
+ const options:SessionServiceOptions={workspace:root,coordinator,sessionFor:createDurableSessionLoader(coordinator),managedRuntime:{systemPrompt:'system',tools:[]},
+  async modelBindingFor(){resolutions++;return configured?{status:'ready',binding:{model,providerId:'p',modelId:'fixture',label:'fixture',contextWindow:32000,maxOutputTokens:128}}:{status:'unconfigured',reason:'Select provider'}}}
+ enroll(options,{async prepare(){preparations++;return {kind,assertCurrent(){}}}})
+ const service=createSessionService(options)
+ try{
+  expect(await service.warmSession!('main')).toEqual({ready:false,deferred:true})
+  expect(originalManagedExecutionFor(service,'main')).toBeUndefined()
+  expect(service.liveAssembly('main')).toBeUndefined()
+  expect([preparations,resolutions,calls]).toEqual([0,0,0])
+  configured=true
+  if(mode==='changed-hooks')kind='complete'
+  if(mode==='explicit-complete'){
+   expect(await service.managedInputFor!('main',{completePreparation:true})).toBeUndefined()
+   expect(await service.warmSession!('main')).toEqual({ready:true})
+   expect(service.liveAssembly('main')).toBeDefined()
+   expect(calls).toBe(0)
+  }
+  await service.submit('main','first real input',new AbortController().signal,mode==='explicit-complete'?{
+   async prepareInput(assembly,text){transforms++;expect(assembly.sessionId).toBe('main');return text},
+  }:undefined)
+  expect(transforms).toBe(mode==='explicit-complete'?1:0)
+  expect(originalManagedRuntimeFor(service,'main')!==undefined).toBe(mode==='managed')
+  expect(service.liveAssembly('main')!==undefined).toBe(mode!=='managed')
+  expect([preparations,resolutions,calls]).toEqual([mode==='explicit-complete'?0:1,1,1])
+  expect(await service.warmSession!('main')).toEqual({ready:true})
+  expect([preparations,resolutions,calls]).toEqual([mode==='explicit-complete'?0:1,1,1])
+ }finally{await service.close();await coordinator.close()}
+},30000)
+
+it.each([false,true])('warm joins the original real construction while close=%s',async close=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'paired-warm-join-')),coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ let mounts=0,cleans=0,requests=0
+ const model=controlledModel(async function*(){requests++;yield {type:'end'}})
+ const service=createSessionService({workspace:root,coordinator,contextWindow:32000,maxOutputTokens:128,model,
+  managedRuntime:{systemPrompt:'system',tools:[],async mount(_ctx,retain){mounts++;retain(()=>{cleans++});entered.resolve();await release.promise}}})
+ const submit=service.submit('main','actual input',new AbortController().signal)
+ void submit.catch(()=>{})
+ try{
+  await entered.promise
+  let finished=false
+  const warmed=service.warmSession!('main')
+  void warmed.then(()=>{finished=true},()=>{finished=true})
+  await Promise.resolve()
+  expect(finished).toBe(false)
+  if(close){
+   const closing=service.closeSession('main')
+   release.resolve()
+   await expect(warmed).rejects.toThrow(/closing|closed|retired/i)
+   await expect(submit).rejects.toThrow()
+   await closing
+   expect([requests,cleans]).toEqual([0,1])
+  }else{
+   release.resolve()
+   expect(await warmed).toEqual({ready:true})
+   await submit
+   expect(requests).toBe(1)
+  }
+  expect(mounts).toBe(1)
+ }finally{release.resolve();await submit.catch(()=>{});await service.close();await coordinator.close()}
+},30000)
 
 it('prepares a UI mutation only after the paired decision without issuing a model request',async()=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'paired-ui-')),coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)

@@ -1,4 +1,5 @@
 import { readCatalogRows } from "./catalog-rows.ts"
+import { isConversationMetadata } from "./session-visibility.ts"
 import { ForkAdmissionError, type SessionCoordinator, type SessionMeta } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 import { navigationDocumentKey, parseSessionNavigation, type SessionNavigation } from './session-navigation.ts'
@@ -31,7 +32,7 @@ const actions = new Set<SessionManagementAction>(["rename", "archive", "restore"
 const navigationActions = new Set<SessionManagementAction>(["pin", "unpin", "read", "unread"])
 interface ManagedAgentState { formatVersion?: unknown; agentTable?: { path?: string; sessionId?: string; status?: string; mailbox?: unknown[]; lastInboxSeq?: number }[]; jobs?: { status?: string }[] }
 
-export function createSessionManagement(coordinator: SessionCoordinator, service: SessionService, visible: (id: string, meta: SessionMeta) => Promise<boolean> = async (_id, meta) => meta.origin !== "subagent" && meta.origin !== "approval-review" && !(meta.origin === "team" && meta.parentSession), options: SessionManagementOptions = {}) {
+export function createSessionManagement(coordinator: SessionCoordinator, service: SessionService, visible: (id: string, meta: SessionMeta) => Promise<boolean> = async (_id, meta) => isConversationMetadata(meta), options: SessionManagementOptions = {}) {
   const writes = new Map<string, Promise<unknown>>()
   const fence = options.fence ?? createSessionManagementFence()
   const documentKey = navigationDocumentKey
@@ -119,14 +120,14 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
     const latestQueue = service.queueState(id)
     if (latestQueue.running || (!allowPending && latestQueue.queued)) throw new Error("Session is busy")
   }
-  async function navigationSnapshot() {
+  async function navigationSnapshot(onlyId?: string) {
     const { rows, partial } = await readCatalogRows(coordinator, () => async id => {
+      await writes.get(id)
       const profile = await coordinator.profile(id)
       if (!await visible(id, profile.meta)) return undefined
-      await writes.get(id)
       const projectId = await options.projectFor?.(id)
-      return [id, { ...await navigationFor(id), ...(projectId ? { projectId } : {}) }] as const
-    })
+      return [id, { ...await navigationFor(id), ...(projectId ? { projectId } : {}), ...(onlyId === undefined ? {} : { archived: profile.meta.archived === true }) }] as const
+    }, false, onlyId)
     return { entries: Object.fromEntries(rows), partial }
   }
   async function archivedSnapshot() {
@@ -163,8 +164,8 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
       }, idle))
     },
     navigationSnapshot,
-    async navigation(): Promise<Record<string, SessionNavigation>> {
-      return (await navigationSnapshot()).entries
+    async navigation(onlyId?: string): Promise<Record<string, SessionNavigation>> {
+      return (await navigationSnapshot(onlyId)).entries
     },
     archivedSnapshot,
     async archived() {

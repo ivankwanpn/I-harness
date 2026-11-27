@@ -155,12 +155,17 @@ export async function dispatchDesktopRequest(
     if (value.kind === "desktop/notifications/target") {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const sessionId = requireNonEmpty(value.sessionId, "sessionId")
-      const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
-      const navigation = await runtime.client.request("desktop/session/navigation/state", {}) as Record<string, { projectId?: string }>
-      if (!navigation || !Object.hasOwn(navigation, sessionId)) throw new Error("會話已不存在或無法開啟")
-      const archived = await runtime.client.request("desktop/session/archived", {}) as { id: string }[]
-      if (archived.some(row => row.id === sessionId)) throw new Error("會話已封存，請先在會話管理還原")
-      return { workspaceId, sessionId, ...(navigation[sessionId]?.projectId ? { projectId: navigation[sessionId]!.projectId } : {}) }
+      const entry = await sessionNavigationEntry(workspaceId, sessionId, dependencies)
+      if (!entry) throw new Error("會話已不存在或無法開啟")
+      let archived = entry.archived
+      if (archived === undefined) {
+        // Older Gateways return the unfiltered map without the archive flag.
+        const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
+        const rows = await runtime.client.request("desktop/session/archived", {}) as { id: string }[]
+        archived = rows.some(row => row.id === sessionId)
+      }
+      if (archived) throw new Error("會話已封存，請先在會話管理還原")
+      return { workspaceId, sessionId, ...(entry.projectId ? { projectId: entry.projectId } : {}) }
     }
     if (value.kind === "desktop/notifications/list") return dependencies.notifications.list()
     if (value.kind === "desktop/notifications/read") return dependencies.notifications.markRead(value.id === undefined ? undefined : requireNonEmpty(value.id, "notification ID"))
@@ -179,9 +184,7 @@ export async function dispatchDesktopRequest(
         if (!project?.workspaceIds.includes(scope.workspaceId)) throw new Error("Draft project is unavailable")
       }
     } else {
-      const runtime = await runtimeForKnownWorkspace(scope.workspaceId, dependencies)
-      const navigation = await runtime.client.request("desktop/session/navigation/state", {})
-      if (!navigation || typeof navigation !== "object" || !Object.hasOwn(navigation, scope.identity)) throw new Error("Draft conversation unavailable")
+      if (!await sessionNavigationEntry(scope.workspaceId, scope.identity, dependencies)) throw new Error("Draft conversation unavailable")
     }
     if (value.kind.endsWith("/load")) return dependencies.drafts.load(scope)
     if (value.expectedRevision !== null && typeof value.expectedRevision !== "string") throw new Error("Invalid draft revision")
@@ -259,7 +262,7 @@ export async function dispatchDesktopRequest(
     if (value.kind.startsWith("desktop/session/subagents/") && !runtime.info.capabilities["desktop-subagent-catalog"]?.includes("1")) throw new Error("Subagent catalog unavailable")
     if (value.kind.startsWith('desktop/instructions/') && !runtime.info.capabilities['desktop-instructions']?.includes('1')) throw new Error('Instruction observation unavailable')
     if (value.kind === "desktop/approval-rules/add") {
-      const navigation = await runtime.client.request("desktop/session/navigation/state", {})
+      const navigation = await runtime.client.request("desktop/session/navigation/state", { sessionId: contextParams.sessionId })
       if (!navigation || typeof navigation !== "object" || !Object.hasOwn(navigation, String(contextParams.sessionId))) throw new Error("Approval conversation unavailable")
     }
     const longOperation = ["desktop/session/compact", "desktop/mcp/mutate", "desktop/mcp/refresh", "desktop/hooks/mutate", "desktop/hooks/refresh", "desktop/wsl/repair", "desktop/wsl/diagnose"].includes(value.kind)
@@ -967,6 +970,18 @@ export function registerDesktopIpc(
   }
   windowCleanups.add(unregister)
   return unregister
+}
+
+async function sessionNavigationEntry(workspaceId: string, sessionId: string, dependencies: DesktopIpcDependencies) {
+  const workspace = dependencies.catalog.get(workspaceId)
+  if (!workspace) throw new Error(`unknown workspace id: ${workspaceId}`)
+  const live = dependencies.runtimes.peek?.(workspaceId)
+  if (workspace.worktree) await dependencies.worktrees?.assertWorktree(workspace)
+  const navigation = !live && dependencies.sessionCatalog
+    ? await dependencies.sessionCatalog.navigation(workspace, sessionId)
+    : await (live ?? await dependencies.runtimes.get(workspace)).client.request("desktop/session/navigation/state", { sessionId })
+  if (!navigation || typeof navigation !== "object" || !Object.hasOwn(navigation, sessionId)) return undefined
+  return (navigation as Record<string, import("@i-harness/desktop-gateway").SessionNavigation>)[sessionId]
 }
 
 async function runtimeForKnownWorkspace(

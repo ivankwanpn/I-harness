@@ -13,6 +13,7 @@ import { originalManagedExecutionFor } from '../../session-executor/src/host-man
 import * as projectScope from '../src/project-scope.ts'
 import { createDesktopHost } from '../src/host.ts'
 import { createDesktopRouter, createGatewayWrite } from '../src/router.ts'
+import type { AgentProcessesView } from '../src/agent-processes.ts'
 import type { DesktopHandlers } from '../src/types.ts'
 
 const processCaptures = vi.hoisted(() => new Map<string, { entered(): void; release: Promise<void> }[]>())
@@ -36,12 +37,14 @@ function holdProcessCapture(id: string) {
   return { entered: entered.promise, release: release.resolve }
 }
 
-async function fixture(beforeReply?: (request: LLMRequest) => Promise<void>) {
+async function fixture(beforeReply?: (request: LLMRequest) => Promise<void>, jobs?: { commands(): readonly string[] }) {
   const root = await mkdtemp(join(tmpdir(), 'ih-project-checked-input-'))
   const workspace = join(root, 'workspace'), other = join(root, 'other'), sessionDir = join(root, 'sessions')
   await Promise.all([mkdir(workspace), mkdir(other)])
   const settingsPath = join(root, 'settings.json'), credentialsPath = join(root, 'credentials.json')
-  await writeFile(settingsPath, JSON.stringify({ autoTitle: false, sandboxMode: 'read-only', codeMode: { mode: 'off' },
+  const shell = process.platform === 'win32' ? 'pwsh' : 'bash'
+  await writeFile(settingsPath, JSON.stringify({ autoTitle: false, sandboxMode: jobs ? 'danger-full-access' : 'read-only', codeMode: { mode: 'off' },
+    ...(jobs ? { approvalMode: 'full-access', agentShell: shell } : {}),
     instructions: { enabled: true }, compaction: { auto: false }, llm: { providers: { fixture: { protocol: 'openai-completions', baseURL: 'http://127.0.0.1:1',
       apiKeyEnv: 'IH_PROJECT_CHECK_FIXTURE', models: [{ id: 'fixture', contextWindow: 32000 }] } },
     defaultModel: { provider: 'fixture', model: 'fixture' } } }))
@@ -55,9 +58,18 @@ async function fixture(beforeReply?: (request: LLMRequest) => Promise<void>) {
   })
   const serviceFactory = vi.spyOn(executor, 'createSessionService').mockImplementation(options => service = makeService(options))
   const frames: RpcMessage[] = []
+  let launched = false
   const produceReply = vi.fn(async function* (request: LLMRequest) {
     await beforeReply?.(request)
     request.signal?.throwIfAborted()
+    if (jobs && !launched) {
+      launched = true
+      for (const [index, command] of jobs.commands().entries()) {
+        yield { type: 'tool_call' as const, call: { id: `process-launch-${index}`, name: shell, args: { command, background: true } } }
+      }
+      yield { type: 'end' as const }
+      return
+    }
     yield { type: 'text/chunk' as const, text: 'fixture answer' }
     yield { type: 'end' as const }
   })
@@ -186,7 +198,10 @@ it('reads Processes during and after a private turn without opening a compatibil
 it('speculative warm joins one admitted cold Processes list without delaying other sessions or joining a later poll', async () => {
   const f = await fixture(), id = 'cold-list', other = 'independent'
   const first = holdProcessCapture(id), later = holdProcessCapture(id)
-  const assembly = vi.spyOn(f.service, 'assemblyFor')
+  const warmSession = f.service.warmSession
+  if (!warmSession) throw Error('Missing original warm operation')
+  const service = f.service as typeof f.service & { warmSession: typeof warmSession }
+  const warm = vi.spyOn(service, 'warmSession')
   const flights: Promise<unknown>[] = []
   try {
     await f.succeed('initialize')
@@ -201,20 +216,22 @@ it('speculative warm joins one admitted cold Processes list without delaying oth
     flights.push(polling); void polling.catch(() => {})
     await later.entered
 
-    expect(await f.succeed('session/warm', { sessionId: other })).toEqual({ ready: true })
-    expect(assembly.mock.calls).toEqual([[other]])
+    expect(await f.succeed('session/warm', { sessionId: other })).toEqual({ ready: false, deferred: true })
+    expect(warm.mock.calls).toEqual([[other]])
     expect(f.service.pendingAssemblyMount(id)).toBeUndefined()
     first.release()
     expect(await reading).toEqual({ sessionId: id, live: false, jobs: [], terminals: [] })
-    expect(await warming).toEqual({ ready: true })
-    expect(assembly.mock.calls).toEqual([[other], [id]])
+    expect(await warming).toEqual({ ready: false, deferred: true })
+    expect(warm.mock.calls).toEqual([[other], [id]])
+    expect(f.service.liveAssembly(id)).toBeUndefined()
+    expect(originalManagedExecutionFor(f.service, id)).toBeUndefined()
     later.release()
     expect(isRpcSuccess(await polling)).toBe(true)
     expect(f.produceReply).not.toHaveBeenCalled()
   } finally {
     first.release(); later.release()
     await Promise.allSettled(flights)
-    assembly.mockRestore(); processCaptures.delete(id); await f.close()
+    warm.mockRestore(); processCaptures.delete(id); await f.close()
   }
 }, 45_000)
 
@@ -231,12 +248,15 @@ it('same-session user input proceeds during the cold list, and a refused read re
     flights.push(warming); void warming.catch(() => {})
     expect(await f.succeed('desktop/session/input/submit', submit(id))).toMatchObject({ accepted: true })
     await f.finished(id)
-    expect(originalManagedExecutionFor(f.service, id)).toBeDefined()
+    const execution = originalManagedExecutionFor(f.service, id)
+    expect(execution).toBeDefined()
     expect(f.service.liveAssembly(id)).toBeUndefined()
 
     held.release()
     expect(isRpcSuccess(await reading)).toBe(false)
-    expect(await warming).toMatchObject({ ready: false, error: expect.stringContaining('Private entry') })
+    expect(await warming).toEqual({ ready: true })
+    expect(originalManagedExecutionFor(f.service, id)).toBe(execution)
+    expect(f.service.liveAssembly(id)).toBeUndefined()
     expect(f.produceReply).toHaveBeenCalledOnce()
   } finally {
     held.release()
@@ -244,6 +264,89 @@ it('same-session user input proceeds during the cold list, and a refused read re
     processCaptures.delete(id); await f.close()
   }
 }, 45_000)
+
+it('defers a cold warm so the first explicit compaction can use the original Session assembly', async () => {
+  const f = await fixture(), id = 'first-explicit-compaction'
+  try {
+    await f.succeed('initialize')
+    await f.coordinator.create({ sessionId: id })
+    const before = await f.saved(id)
+    expect(await f.succeed('session/warm', { sessionId: id })).toEqual({ ready: false, deferred: true })
+    expect(await f.saved(id)).toEqual(before)
+    expect(originalManagedExecutionFor(f.service, id)).toBeUndefined()
+    expect(f.service.liveAssembly(id)).toBeUndefined()
+    expect(f.produceReply).not.toHaveBeenCalled()
+    expect(await f.succeed('desktop/session/compact', { sessionId: id })).toMatchObject({ outcome: expect.any(String) })
+    const assembly = f.service.liveAssembly(id)
+    expect(assembly).toBeDefined()
+    expect(await f.succeed('session/warm', { sessionId: id })).toEqual({ ready: true })
+    expect(await f.succeed('desktop/session/input/submit', submit(id))).toMatchObject({ accepted: true })
+    await f.finished(id)
+    expect(f.service.liveAssembly(id)).toBe(assembly)
+    expect(originalManagedExecutionFor(f.service, id)).toBeUndefined()
+  } finally { await f.close() }
+}, 45_000)
+
+it('cancels only the selected live native job through the original private owner', async () => {
+  let commands: string[] = []
+  const f = await fixture(undefined, { commands: () => commands })
+  const id = 'private-process-control'
+  try {
+    await f.succeed('initialize')
+    await f.coordinator.create({ sessionId: id })
+    await f.coordinator.create({ sessionId: 'cold-other' })
+    const script = join(f.workspace, 'job-fixture.cjs')
+    await writeFile(script, 'console.log("fixture job " + process.argv[2]);setInterval(()=>{},1000);setTimeout(()=>process.exit(99),45000)')
+    const quote = (value: string) => process.platform === 'win32'
+      ? "'" + value.replaceAll("'", "''") + "'"
+      : "'" + value.replaceAll("'", "'\\''") + "'"
+    const command = `${process.platform === 'win32' ? '& ' : ''}${quote(process.execPath)} ${quote(script)}`
+    commands = [command + ' first', command + ' second']
+    expect(await f.succeed('session/warm', { sessionId: id })).toEqual({ ready: false, deferred: true })
+    expect(await f.succeed('desktop/session/input/submit', submit(id))).toMatchObject({ accepted: true })
+    await f.finished(id)
+    const execution = originalManagedExecutionFor(f.service, id)
+    expect(execution).toBeDefined()
+    expect(f.service.liveAssembly(id)).toBeUndefined()
+    const list = async () => (await f.succeed('desktop/session/processes/read', { sessionId: id }) as AgentProcessesView).jobs
+    const listed = await vi.waitFor(async () => {
+      const running = (await list()).filter(job => job.kind === 'shell' && job.status === 'running')
+      expect(running).toHaveLength(2)
+      expect(running.every(job => job.live && job.canCancel && !!job.nativeJob)).toBe(true)
+      return running
+    }, { timeout: 15_000 })
+    const [first, second] = listed
+    if (!first?.nativeJob || !second?.nativeJob) throw Error('Missing original native jobs')
+    const cancel = (job: typeof first) => ({
+      action: 'job/cancel', id: job.jobId, backend: 'shell',
+      instanceId: job.nativeJob!.instanceId, sourceId: job.nativeJob!.sourceId,
+    })
+    expect(await f.call('desktop/session/processes/control', {
+      sessionId: 'cold-other', command: cancel(first),
+    })).toMatchObject({ error: { message: expect.stringContaining('No live process owner') } })
+    expect(await f.call('desktop/session/processes/control', {
+      sessionId: id, command: { ...cancel(first), sourceId: 'stale-source' },
+    })).toMatchObject({ error: { message: expect.stringContaining('Native job instance changed') } })
+    expect(await f.succeed('desktop/session/processes/control', { sessionId: id, command: cancel(first) }))
+      .toEqual({ outcome: 'cancellation-requested' })
+    await vi.waitFor(async () => {
+      const jobs = await list()
+      expect(jobs.find(job => job.jobId === first.jobId)).toMatchObject({ status: 'killed', canCancel: false })
+      expect(jobs.find(job => job.jobId === second.jobId)).toMatchObject({ status: 'running', canCancel: true })
+      const events = fromJSONL((await f.saved(id)).toString()).events
+      expect(events.filter(event => event.type === 'exec/end' && event.instanceId === first.nativeJob!.instanceId)).toHaveLength(1)
+      expect(() => execution!.observe().assertCurrent()).not.toThrow()
+    }, { timeout: 15_000 })
+    expect(await f.call('desktop/session/processes/control', {
+      sessionId: id, command: cancel(first),
+    })).toMatchObject({ error: { message: expect.stringContaining('not live or cancellable') } })
+    expect(await f.succeed('desktop/session/processes/control', { sessionId: id, command: cancel(second) }))
+      .toEqual({ outcome: 'cancellation-requested' })
+    await f.idle()
+    expect(originalManagedExecutionFor(f.service, id)).toBe(execution)
+    expect(f.service.liveAssembly(id)).toBeUndefined()
+  } finally { await f.close() }
+}, 90_000)
 
 it('checks the original project root once before attaching public input and preserves durable retries', async () => {
   const f = await fixture()

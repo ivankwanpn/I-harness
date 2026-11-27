@@ -11,7 +11,12 @@ export interface AgentProcessReadContext {
   index: ReturnType<typeof buildObservedSavedProcessIndex>
   session: SessionView
   document: unknown
-  managedProcesses?(): { background: ReturnType<OriginalManagedRuntime['processes']>; tasks(): ReturnType<SessionService['tasks']> } | undefined
+  managedProcesses?(): {
+    background: ReturnType<OriginalManagedRuntime['processes']>
+    terminals?: ReturnType<OriginalManagedRuntime['terminals']>
+    tasks(): ReturnType<SessionService['tasks']>
+    canCancelJobs?: true
+  } | undefined
   selectJobs(selectors: readonly SavedProcessSelector[]): void
   selectTerminals(selectors: readonly SavedTerminalSelector[]): void
   checkpoint(): Promise<void>
@@ -95,8 +100,9 @@ export function createAgentProcessReadRunner(options: {
               if (!runtime) return undefined
               assert()
               const background = runtime.processes()
+              const terminals = runtime.terminals()
               assert()
-              return { background, tasks() { assert(); const tasks = service.tasks(id); assert(); return tasks } }
+              return { background, terminals, canCancelJobs: true, tasks() { assert(); const tasks = service.tasks(id); assert(); return tasks } }
             },
             selectJobs(selectors) {
               if (!selectors.length) return

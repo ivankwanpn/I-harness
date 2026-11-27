@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { isStrictFactData } from '@i-harness/core-session'
 
-export interface SessionNavigation { pinned: boolean; unread: boolean; projectId?: string }
+export interface SessionNavigation { pinned: boolean; unread: boolean; projectId?: string; archived?: boolean }
 export interface SessionProjectBinding { bound: boolean; projectId?: string }
 export const navigationDocumentKey = (id: string) => `desktop-navigation-${createHash('sha256').update(id).digest('hex')}`
 export const projectBindingDocumentKey = (id: string) => `desktop-session-project-${createHash('sha256').update(id).digest('hex')}`

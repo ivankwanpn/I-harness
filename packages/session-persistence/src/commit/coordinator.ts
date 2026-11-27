@@ -80,7 +80,7 @@ export type CommitCoordinator = {
   withProcessReadObservation<T, U>(id: string, options: import('../coordinator/process-read-owner.ts').ProcessReadOptions, work: (observation: import('../coordinator/process-read-owner.ts').ProcessReadObservation) => Promise<T>, publish: (candidate: T, observation: import('../coordinator/process-read-owner.ts').ProcessReadObservation, last: import('../coordinator/process-read-owner.ts').ProcessReadUpdate) => Promise<U>): Promise<U>
   closeManagedDocument(sessionId: string): Promise<void>
   revokeManagedDocumentNewWork(sessionId: string): void
-  list(onUnreadable?: () => void): Promise<string[]>
+  list(onUnreadable?: () => void, onlyId?: string): Promise<string[]>
   profile(sessionId: string): Promise<{ meta: SessionMeta; blank: boolean; updatedAt?: number }>
   updateMeta(sessionId: string, patch: Partial<SessionMeta>): Promise<SessionMeta>
   publishForkTarget(target: { targetSessionId: string; sourceSessionId: string; operationId: string; requestDigest: string; createdAt: string }): Promise<'published' | 'already-published' | 'mismatch'>
@@ -644,13 +644,14 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       await unpinSession(sessionId)
     },
     revokeManagedDocumentNewWork(sessionId) { managed.get(sessionId)?.revokeNewWork() },
-    async list(onUnreadable) {
+    async list(onUnreadable, onlyId) {
       const ids = new Set<string>()
       const entries = await readdir(root, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT') return []
         throw error
       })
       for (const entry of entries) {
+        if (onlyId !== undefined && entry.name !== (entry.isDirectory() ? onlyId : onlyId + '.jsonl')) continue
         if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== DOCUMENT_SESSION) {
           const exists = await stat(join(root, entry.name, `session.v${COMMIT_LOG_GENERATION}.jsonl`)).then(() => true, (error: NodeJS.ErrnoException) => {
             if (error.code === 'ENOENT') return false
@@ -664,7 +665,9 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
         }
       }
       // A broken legacy store must not silently look like an empty store.
-      if (options.legacy) for (const id of await options.legacy.list(onUnreadable)) ids.add(id)
+      if (options.legacy) for (const id of await options.legacy.list(onUnreadable, onlyId)) {
+        if (onlyId === undefined || id === onlyId) ids.add(id)
+      }
       const visible: string[] = []
       for (const id of ids) {
         try { const log = await open(id, 'read'); try { if (!log.view().deleted) visible.push(id) } finally { await log.close() } }
