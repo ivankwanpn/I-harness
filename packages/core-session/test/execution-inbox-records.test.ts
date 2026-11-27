@@ -5,8 +5,9 @@ import type {SessionEventView} from '../src/managed/types.ts'
 import {createNondurableFactOwner} from '../src/managed/nondurable.ts'
 import {createSession} from '../src/events/append.ts'
 import {captureExecutionFoldSnapshot} from '../src/managed/capture.ts'
+import {captureFactGroup} from '../src/managed/groups.ts'
 
-async function fixture(controls:{read?():Promise<void>;close?():Promise<void>;fold?:import('../src/managed/execution-types.ts').OriginalExecutionFoldFactory;events?:SessionEventView[]}={}){
+async function fixture(controls:{read?():Promise<void>;readBatch?():Promise<void>;close?():Promise<void>;shutdown?():Promise<void>;fold?:import('../src/managed/execution-types.ts').OriginalExecutionFoldFactory;events?:SessionEventView[]}={}){
  const events:SessionEventView[]=controls.events??[
   {type:'agent/input/admitted',version:1,inputId:'done',text:'original completed body',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture',originSessionId:'inbox'},seq:0},
   {type:'agent/input/cancelled',version:1,inputId:'done',reason:'cancelled',seq:1},
@@ -14,14 +15,102 @@ async function fixture(controls:{read?():Promise<void>;close?():Promise<void>;fo
  ]
  const prefix=Object.freeze({eventCount:events.length,bodyBytes:0,prefixDigest:'a'.repeat(64)})
  let held=true,epoch=0,opened=0,closed=0,reads:number[]=[],lastScope:any
- const source={formatVersion:14,prefix,assertCurrent(){if(!held)throw Error('lost native owner')},async consume(accept:any){for(const event of events)await accept([Object.freeze(event)])},async readEvent(ordinal:number){return events[ordinal]!},async settle(){},async close(){},appendCommitted(){throw Error('No observation writes')}}
- const binding={token:Object.freeze({sessionId:'inbox',incarnation:'original'}),assertHeld:source.assertCurrent,openDependencies(expected:typeof prefix){opened++;const captured=epoch;let disposed=false;lastScope={assertCurrent(){if(disposed||captured!==epoch||expected!==prefix)throw Error('changed original prefix');binding.assertHeld()},async readEvent(ordinal:number){reads.push(ordinal);await controls.read?.();return events[ordinal]!},async close(){await controls.close?.();disposed=true;closed++}};return lastScope}}
+ const source={formatVersion:14,prefix,assertCurrent(){if(!held)throw Error('lost native owner')},async consume(accept:any){for(const event of events)await accept([Object.freeze(event)])},async readEvent(ordinal:number){return events[ordinal]!},async settle(){},async close(){await controls.shutdown?.()},appendCommitted(){throw Error('No observation writes')}}
+ const binding={token:Object.freeze({sessionId:'inbox',incarnation:'original'}),assertHeld:source.assertCurrent,openDependencies(expected:typeof prefix){opened++;const captured=epoch;let disposed=false;lastScope={assertCurrent(){if(disposed||captured!==epoch||expected!==prefix)throw Error('changed original prefix');binding.assertHeld()},async readEvent(ordinal:number){reads.push(ordinal);await controls.read?.();return events[ordinal]!},...controls.readBatch?{async readEvents(ordinals:readonly number[]){reads.push(...ordinals);await controls.readBatch!();return ordinals.map(ordinal=>events[ordinal]!)}}:{},async close(){await controls.close?.();disposed=true;closed++}};return lastScope}}
  const state=await restoreManagedExecutionState(source,binding,controls.fold)
  const deliveryControl=createOwnerDeliveryControl(state.delivery,()=>state.eventCount)
  const action={signal:new AbortController().signal,assertOpen(){}},owner={ownsAction(value:object){return value===action},beginAction(){throw Error('No observation action')},registerReceivedInputSource(){throw Error('No observation source')},async drain(){},assertReady(){}}
  state.bindOwner(owner);state.captureHooks(action,()=>{})
  return {state,owner,action:action as unknown as import('../src/managed/ports.ts').ManagedAction<import('../src/managed/types.ts').FactOutcome>,deliveryControl,events,reads,get opened(){return opened},get closed(){return closed},get lastScope(){return lastScope},change(){epoch++},lose(){held=false}}
 }
+
+const historyWindow = {afterSeq:0,limit:2}
+
+function pendingInputGroup() {
+ const inputId = 'done:retry:1'
+ const captured = captureFactGroup({kind:'input-start',promoted:{type:'agent/input/promoted',version:1,inputId},turn:{type:'turn/start'},message:{type:'user/message',text:'retry body',input:{inputId,intent:'user'}}})
+ if (captured.kind !== 'captured') throw Error(captured.code)
+ return captured.group
+}
+
+it('keeps original model input current during bounded history and waits for its close before writing',async()=>{
+ const body = Promise.withResolvers<void>(), cleanup = Promise.withResolvers<void>(), closing = Promise.withResolvers<void>()
+ let closes = 0
+ const f = await fixture({readBatch:()=>body.promise,async close(){if (++closes === 1) { closing.resolve(); await cleanup.promise }}})
+ const domain = createManagedExecutionDomain(f.state.identity,f.owner,{}), observation = f.state.observe()
+ const page = observation.readHistoryPage(historyWindow)
+ expect(()=>domain.assertCurrent()).not.toThrow()
+ expect(()=>observation.assertRequestInputCurrent()).not.toThrow()
+ const waiting = getManagedExecutionAdmissionWait(domain,f.action,f.action.signal)
+ expect(waiting).toBeInstanceOf(Promise)
+ const writing = f.state.prepareWrite([pendingInputGroup()])
+ body.resolve()
+ await closing.promise
+ expect(f.opened).toBe(1)
+ expect(()=>domain.assertCurrent()).not.toThrow()
+ cleanup.resolve()
+ expect(await page).toMatchObject({headSeq:3,events:f.events.slice(0,2)})
+ const prepared = await writing
+ expect(prepared.events.map(event=>event.type)).toEqual(['agent/input/promoted','turn/start','user/message'])
+ expect(f.closed).toBe(2)
+ prepared.discardUnissued()
+ await waiting
+ await f.state.close()
+})
+
+it('keeps an actually failed history read unavailable until its original resource closes',async()=>{
+ const body = Promise.withResolvers<void>(), cleanup = Promise.withResolvers<void>(), closing = Promise.withResolvers<void>()
+ const f = await fixture({readBatch:()=>body.promise,async close(){closing.resolve();await cleanup.promise}})
+ const domain = createManagedExecutionDomain(f.state.identity,f.owner,{})
+ const page = f.state.observe().readHistoryPage(historyWindow)
+ const refused = expect(page).rejects.toThrow('changed original prefix')
+ f.change()
+ body.resolve()
+ await closing.promise
+ expect(()=>domain.assertCurrent()).toThrow(expect.objectContaining({code:'FACT_RECOVERY_REQUIRED'}))
+ cleanup.resolve()
+ await refused
+ expect(()=>domain.assertCurrent()).not.toThrow()
+ await f.state.close()
+})
+
+it('carries a history close failure into the waiting writer until original recovery succeeds',async()=>{
+ const body = Promise.withResolvers<void>(), failedClose = Error('unconfirmed history close')
+ let attempts = 0
+ const f = await fixture({readBatch:()=>body.promise,async close(){if (++attempts === 1) throw failedClose}})
+ const domain = createManagedExecutionDomain(f.state.identity,f.owner,{}), observation = f.state.observe()
+ const page = expect(observation.readHistoryPage(historyWindow)).rejects.toBe(failedClose)
+ const writing = expect(f.state.prepareWrite([pendingInputGroup()])).rejects.toBe(failedClose)
+ body.resolve()
+ await Promise.all([page,writing])
+ expect(f.opened).toBe(1)
+ expect(()=>domain.assertCurrent()).toThrow(expect.objectContaining({code:'FACT_RECOVERY_REQUIRED'}))
+ expect(()=>observation.assertRequestInputCurrent()).toThrow(expect.objectContaining({code:'FACT_RECOVERY_REQUIRED'}))
+ await f.state.settleDependencies()
+ expect(attempts).toBe(2)
+ expect(f.closed).toBe(1)
+ expect(()=>domain.assertCurrent()).not.toThrow()
+ await f.state.close()
+})
+
+it('shares a history reader cleanup across shutdown and does not let its waiting write cross shutdown',async()=>{
+ const body = Promise.withResolvers<void>(), cleanup = Promise.withResolvers<void>(), closing = Promise.withResolvers<void>()
+ let attempts = 0, shutdowns = 0
+ const f = await fixture({readBatch:()=>body.promise,async close(){attempts++;closing.resolve();await cleanup.promise},async shutdown(){shutdowns++}})
+ const observation = f.state.observe()
+ const page = expect(observation.readHistoryPage(historyWindow)).rejects.toThrow(expect.objectContaining({code:'FACT_CLOSED'}))
+ const writing = expect(f.state.prepareWrite([pendingInputGroup()])).rejects.toThrow('Original writer closed')
+ const shutdown = Promise.all([f.state.close(),f.state.close()])
+ body.resolve()
+ await closing.promise
+ expect(attempts).toBe(1)
+ expect(shutdowns).toBe(0)
+ cleanup.resolve()
+ await Promise.all([page,writing,shutdown])
+ expect(f.opened).toBe(1)
+ expect(f.closed).toBe(1)
+ expect(shutdowns).toBe(1)
+})
 
 it('hydrates at most the final 200 merged document and original job statuses in original UI order',async()=>{
  const events:SessionEventView[]=Array.from({length:250},(_,seq)=>({type:'job/status',version:1,seq,job:{jobId:`job-${seq}`,kind:'shell',label:`label-${seq}`,status:'completed',outputAvailable:false}}))

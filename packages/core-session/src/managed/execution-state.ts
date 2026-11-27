@@ -265,7 +265,10 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
   const candidateOwner=Object.freeze({}),candidate=await restoreManagedConversation(originalSource,candidateOwner,token.sessionId,foldFactory,decodedHistory)
   assertHeld()
   const original=installRestoredManagedConversation(candidate,candidateOwner),identity=Object.freeze({}) as ManagedExecutionIdentity,members=createExecutionMemberOwner(assertHeld,identity),debt=new Set<OriginalWriterDependencyScope>(),activeDependencyScopes=new Set<OriginalWriterDependencyScope>(),taskHistoryScopes=new Set<OriginalWriterDependencyScope>(),admissionReads=new Map<OriginalWriterDependencyScope,Promise<void>>()
+  const historyReads = new Map<OriginalWriterDependencyScope, { readonly prefix: Readonly<JournalPrefix>; readonly closed: Promise<void>; healthy: boolean }>()
+  const joinedRead = (scope: OriginalWriterDependencyScope) => admissionReads.get(scope) ?? historyReads.get(scope)?.closed
   let stopped=false,ownerBound=false,closed=false,pendingWrite:{phase:'staged'|'issued'}|undefined
+  let closeFlight: Promise<void> | undefined
   let pendingWriteActive=false
   let readinessWasReady=false,readinessEpoch=0,readinessQueued=false,ownerRecoveryBlocked=false
   let readinessFailure:{error:unknown;terminal:boolean}|undefined
@@ -329,8 +332,44 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     owner.newWork();observe();return false
   },subscribe(listener,onUnavailable){assertHeld();const owner=owners.get(identity);if(stopped||closed||!owner)throw TypeError('Original readiness owner retired');owner.current();const item={listener,onUnavailable,delivered:-1};readinessListeners.add(item);try{if(!pendingWrite&&!debt.size&&!ownerRecoveryBlocked){if(!owner.newWork)throw TypeError('Original readiness unavailable');owner.newWork();observe();readinessFailure=undefined;if(!readinessWasReady){readinessWasReady=true;readinessEpoch++}queueReadiness()}else if(readinessFailure){const failure=readinessFailure;queueMicrotask(()=>{if(!readinessListeners.has(item))return;try{item.onUnavailable?.(failure.error,failure.terminal)}catch{}if(failure.terminal)readinessListeners.delete(item)})}}catch(error){readinessListeners.delete(item);throw error}let active=true;return()=>{if(active){active=false;readinessListeners.delete(item)}}}})
   let dependencyFailure:{cause:unknown}|undefined
-  const settleDependencies=async()=>{const errors:unknown[]=[];for(const scope of debt)try{await scope.close();activeDependencyScopes.delete(scope);taskHistoryScopes.delete(scope);debt.delete(scope)}catch(error){errors.push(error)}if(errors.length){const error=aggregateErrors(errors,'Exact writer dependency cleanup unresolved');signalUnavailable(error,!sameHeldOwner());throw error};dependencyFailure=undefined;readinessFailure=undefined;signalReady()}
-  const assertFresh=(reading?:OriginalWriterDependencyScope)=>{assertHeld();if(stopped||closed)throw Object.assign(new Error('FACT_CLOSED'),{code:'FACT_CLOSED'});if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});if([...debt].some(scope=>scope!==reading&&!taskHistoryScopes.has(scope)))throw Object.assign(new Error('Original writer dependency cleanup unresolved',{cause:dependencyFailure?.cause}),{code:'FACT_RECOVERY_REQUIRED'})}
+  const settleDependencies = async () => {
+    const errors: unknown[] = []
+    for (const scope of debt) {
+      try {
+        const history = historyReads.get(scope)
+        if (history) {
+          await history.closed
+          continue
+        }
+        await scope.close()
+        activeDependencyScopes.delete(scope)
+        taskHistoryScopes.delete(scope)
+        debt.delete(scope)
+      } catch (error) { errors.push(error) }
+    }
+    if (errors.length) {
+      const error = aggregateErrors(errors, 'Exact writer dependency cleanup unresolved')
+      signalUnavailable(error, !sameHeldOwner())
+      throw error
+    }
+    dependencyFailure = undefined
+    readinessFailure = undefined
+    signalReady()
+  }
+  // A bounded history page observes this same committed prefix and cannot
+  // issue a write. Its healthy scope does not expire an in-progress request.
+  // Issuance still waits for the exact read to close before beginning.
+  const assertFresh = (reading?: OriginalWriterDependencyScope) => {
+    assertHeld()
+    if (stopped || closed) throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' })
+    if (pendingWrite) throw Object.assign(new Error('Original issued write needs reconciliation'), { code: 'FACT_RECOVERY_REQUIRED' })
+    for (const scope of debt) {
+      if (scope === reading || taskHistoryScopes.has(scope)) continue
+      const history = historyReads.get(scope)
+      if (history?.healthy && history.prefix === original.prefix) continue
+      throw Object.assign(new Error('Original writer dependency cleanup unresolved', { cause: dependencyFailure?.cause }), { code: 'FACT_RECOVERY_REQUIRED' })
+    }
+  }
   const assertNewWork=()=>assertFresh()
   // A known live dependency may be preparing the next write while readers
   // inspect the installed committed prefix. Failed cleanup and uncertain
@@ -382,9 +421,15 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       }
     })
     function readRecords(ordinals:readonly number[]):Promise<SessionEventView[]>
-    function readRecords(ordinals:readonly number[],requireBatch:true):Promise<SessionEventView[]|undefined>
-    async function readRecords(ordinals:readonly number[],requireBatch=false){
+    function readRecords(ordinals:readonly number[],kind:'history'):Promise<SessionEventView[]|undefined>
+    async function readRecords(ordinals:readonly number[],kind?:'history'){
       current();const scope=captureWriterDependencies(open(expected));debt.add(scope);activeDependencyScopes.add(scope);markBusy()
+      const finished = kind === 'history' && scope.readEvents ? Promise.withResolvers<void>() : undefined
+      const history = finished && { prefix: expected, closed: finished.promise, healthy: true }
+      if (history) {
+        historyReads.set(scope, history)
+        void history.closed.catch(() => {})
+      }
       let records:import('./types.ts').SessionEventView[]|undefined,failed=false,primary:unknown
       try{
         if(scope.readEvents){
@@ -392,12 +437,24 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
           const selected=await scope.readEvents(ordinals)
           current(scope);scope.assertCurrent()
           records=selected.map(record=>freezeJsonData(structuredClone(record)))
-        }else if(!requireBatch){
+        }else if(kind!=='history'){
           records=[];for(const ordinal of ordinals){current(scope);scope.assertCurrent();const record=await scope.readEvent(ordinal);current(scope);scope.assertCurrent();if(record.seq!==ordinal)throw TypeError('Original indexed record required');records.push(freezeJsonData(structuredClone(record)))}
         }
       }
-      catch(error){failed=true;primary=error}
-      try{await scope.close();activeDependencyScopes.delete(scope);debt.delete(scope)}catch(cleanup){activeDependencyScopes.delete(scope);const cause=failed?new AggregateError([primary,cleanup],'Delivery read and exact dependency cleanup failed'):cleanup;dependencyFailure={cause};signalUnavailable(cause,!sameHeldOwner());throw cause}
+      catch(error){failed=true;primary=error;if(history)history.healthy=false}
+      try { await scope.close() } catch (cleanup) {
+        activeDependencyScopes.delete(scope)
+        historyReads.delete(scope)
+        const cause = failed ? new AggregateError([primary, cleanup], 'Delivery read and exact dependency cleanup failed') : cleanup
+        dependencyFailure = {cause}
+        finished?.reject(cause)
+        signalUnavailable(cause, !sameHeldOwner())
+        throw cause
+      }
+      activeDependencyScopes.delete(scope)
+      historyReads.delete(scope)
+      debt.delete(scope)
+      finished?.resolve()
       if(failed){signalReady();throw primary};current();signalReady();return records
     }
     const deliveryView:ExecutionObservation['delivery']=Object.freeze({
@@ -436,7 +493,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
         current()
         const plan = original.historyPagePlan(options)
         if (!plan) return undefined
-        const records = await readRecords(plan.ordinals, true)
+        const records = await readRecords(plan.ordinals, 'history')
         current()
         return records ? materializeSessionHistoryPage(plan, records) : undefined
       },
@@ -619,15 +676,25 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     async prepareWrite(groups:readonly CapturedFactGroup[],rejectInvalidGroups=false){
       // Only the original writer invokes this after its real authorization;
       // already-admitted/source-required work can drain after new-work Stop.
-      assertHeld();if(closed)throw new TypeError('Original writer closed');if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'})
+      const assertWritable = () => {
+        assertHeld()
+        if (closed || closeFlight) throw new TypeError('Original writer closed')
+        if (pendingWrite) throw Object.assign(new Error('Original issued write needs reconciliation'), { code: 'FACT_RECOVERY_REQUIRED' })
+      }
+      assertWritable()
       // Retry the exact cleanup of stale dependency scopes once before failing
       // closed: a close that failed earlier (a lock or a retired reader) can
       // succeed later, and without this retry one transient failure wedges the
       // workspace for every later write in the process lifetime.
-      if(debt.size&&[...debt].some(scope=>!admissionReads.has(scope)&&!taskHistoryScopes.has(scope)))await settleDependencies()
-      // Join only already active, original admission readers. Failed or other
-      // dependency obligations remain recovery debt and never become a retry.
-      while(debt.size){const reads=[...debt].map(scope=>admissionReads.get(scope));if(reads.some(read=>!read))throw new TypeError('Writer dependency cleanup unresolved');await Promise.all(reads);assertHeld();if(closed)throw new TypeError('Original writer closed');if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'})}
+      if(debt.size&&[...debt].some(scope=>!joinedRead(scope)&&!taskHistoryScopes.has(scope))){await settleDependencies();assertWritable()}
+      // Join only already active, original admission or history readers. Failed
+      // or other obligations remain recovery debt and never become a retry.
+      while (debt.size) {
+        const reads = [...debt].map(joinedRead)
+        if (reads.some(read => !read)) throw new TypeError('Writer dependency cleanup unresolved')
+        await Promise.all(reads)
+        assertWritable()
+      }
       const expected=original.prefix,scope=captureWriterDependencies(open(expected))
       debt.add(scope);activeDependencyScopes.add(scope);markBusy() // installed before the first asynchronous read/open
       const check=scope.assertCurrent.bind(scope),close=scope.close.bind(scope)
@@ -641,7 +708,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       try{current();prepared=await original.prepareWrite(groups,read,current,rejectInvalidGroups,readBatch);current()}catch(error){failed=true;primary=error}
       try{await close();activeDependencyScopes.delete(scope);debt.delete(scope)}catch(cleanup){activeDependencyScopes.delete(scope);prepared?.discard();const cause=failed?new AggregateError([primary,cleanup],'Writer preparation and exact dependency cleanup failed'):cleanup;dependencyFailure={cause};signalUnavailable(cause,!sameHeldOwner());throw cause}finally{reading=false}
       if(failed){signalReady();throw primary}
-      try{assertHeld()}catch(error){prepared?.discard();throw error}
+      try{assertWritable()}catch(error){prepared?.discard();throw error}
       const staged=prepared!,operation:{phase:'staged'|'issued'}={phase:'staged'};let installed=false,started=false,discarded=false,absent=false,published=0,issuedBatch:EncodedFactBatch|undefined,originalBatch:EncodedFactBatch|undefined,originalReceipt:FactReceipt|undefined
       // Preparation and native issuance belong to one accepted operation.
       // Keep its existing reservation busy across the caller's awaited backend
@@ -697,10 +764,15 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     releaseSource:members.releaseSource,
     async close(){
       if(!stopped){stopped=true;signalUnavailable(Object.assign(new Error('FACT_CLOSED'),{code:'FACT_CLOSED'}),true)}if(closed)return
+      if(closeFlight)return closeFlight
       if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'})
-      await settleDependencies()
-      members.assertReleased()
-      await original.close();members.close();liveEvents.clear();closed=true;hydrationContext.disable();readinessOwners.delete(identity);owners.delete(identity)
+      const flight = Promise.resolve().then(async () => {
+        await settleDependencies()
+        members.assertReleased()
+        await original.close();members.close();liveEvents.clear();closed=true;hydrationContext.disable();readinessOwners.delete(identity);owners.delete(identity)
+      })
+      closeFlight = flight
+      try { await flight } finally { if(closeFlight===flight)closeFlight=undefined }
     }
   }
 }
