@@ -1,6 +1,10 @@
-import {expect,it,vi} from 'vitest'
+import {beforeEach,expect,it,vi} from 'vitest'
+import {observeManagedConstruction} from './helpers/managed-installation.ts'
 const probe=vi.hoisted(()=>({views:0}))
-vi.mock('@i-harness/core-session',async load=>{const original=await load<typeof import('@i-harness/core-session')>();return {...original,createManagedSessionState(){probe.views++;throw Error('Private source constructed a public view')}}})
+beforeEach(() => observeManagedConstruction(() => {
+ probe.views++
+ throw Error('Private source constructed a public view')
+}))
 import {mkdtemp,rm} from 'node:fs/promises'
 import {join} from 'node:path'
 import {createJsonlBackend} from '@i-harness/session-persistence-jsonl'

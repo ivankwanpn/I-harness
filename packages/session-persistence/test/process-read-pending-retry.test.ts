@@ -1,9 +1,10 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
 import type { BatchKey } from '@i-harness/core-session';
 import { createSessionCoordinator, createControlledJsonlBackend as createJsonlBackend, ownedControls } from './helpers/composed.ts';
+import { interceptManagedInstallation } from './helpers/managed-installation.ts';
 import type { createManagedDocuments } from '../src/coordinator/managed-documents.ts';
 import type { createProcessReadLatches } from '../src/coordinator/process-read-latches.ts';
 
@@ -23,16 +24,10 @@ vi.mock('../src/coordinator/managed-documents.ts', async load => {
 })
 
 const installation = vi.hoisted(() => ({ fail: false }));
-vi.mock('@i-harness/core-session', async importOriginal => {
-    const original = await importOriginal<typeof import('@i-harness/core-session')>();
-    return { ...original, createManagedSessionState: (...args: Parameters<typeof original.createManagedSessionState>) => {
-        const state = original.createManagedSessionState(...args);
-        return { ...state, stage: (...args: Parameters<typeof state.stage>) => {
-            const staged = state.stage(...args);
-            return { ...staged, install() { if (installation.fail) throw new Error('injected install failure'); staged.install(); } };
-        } };
-    } };
-});
+beforeEach(() => interceptManagedInstallation((_events, install) => {
+    if (installation.fail) throw new Error('injected install failure');
+    install();
+}));
 
 for (const terminal of ['committed', 'absent', 'failed-install'] as const) it(`retains bounded original pending witnesses through repeated unknown and ${terminal}`, async () => {
     const root = await mkdtemp(join(tmpdir(), 'ih-pending-')), backend = createJsonlBackend(root), opts = { lock: { enabled: true } };

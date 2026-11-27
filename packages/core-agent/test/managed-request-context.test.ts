@@ -1,5 +1,7 @@
-import { expect, it, vi } from 'vitest';
-vi.mock('@i-harness/core-session', async (load) => { const original = await load<typeof import('@i-harness/core-session')>(); return { ...original, createManagedSessionState() { throw Error('Request built a complete Session'); }, projectConversation() { throw Error('Request replayed public conversation'); }, readConversationState() { throw Error('Request replayed public state'); } }; });
+import { beforeEach, expect, it, vi } from 'vitest';
+import { observeManagedConstruction } from '../../session-persistence/test/helpers/managed-installation.ts';
+beforeEach(() => observeManagedConstruction(() => { throw Error('Request built a complete Session'); }));
+vi.mock('@i-harness/core-session', async (load) => { const original = await load<typeof import('@i-harness/core-session')>(); return { ...original, projectConversation() { throw Error('Request replayed public conversation'); }, readConversationState() { throw Error('Request replayed public state'); } }; });
 import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createContext, captureExecutionHookChannel, onExecutionEvent } from '@i-harness/core-plugin';

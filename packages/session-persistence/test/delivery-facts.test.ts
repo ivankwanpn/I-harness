@@ -1,4 +1,5 @@
-import { expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
+import { interceptManagedInstallation } from './helpers/managed-installation.ts';
 const installCut = vi.hoisted(() => ({ enabled: false }));
 const deliveryReads = vi.hoisted(() => ({ enabled: false, replays: 0, prefixEvents: 0 }));
 vi.mock('../../core-session/src/conversation/delivery.ts', async load => {
@@ -10,22 +11,13 @@ vi.mock('../../core-session/src/conversation/delivery.ts', async load => {
   };
 });
 
-vi.mock('@i-harness/core-session', async (load) => {
-  const api = await load<typeof import('@i-harness/core-session')>(); return {
-    ...api, createManagedSessionState: (...args: Parameters<typeof api.createManagedSessionState>) => {
-      const state = api.createManagedSessionState(...args), stage = state.stage; state.stage = events => {
-        const prepared = stage(events); return {
-          ...prepared, install() {
-            if (installCut.enabled && events.some(e => e.type === 'agent/delivery-received')) {
-              installCut.enabled = false;
-              throw Error('controlled original install failure');
-            } prepared.install();
-          }
-        };
-      }; return state;
-    }
-  };
-});
+beforeEach(() => interceptManagedInstallation((events, install) => {
+  if (installCut.enabled && events.some(event => event.type === 'agent/delivery-received')) {
+    installCut.enabled = false;
+    throw Error('controlled original install failure');
+  }
+  install();
+}));
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

@@ -1,5 +1,7 @@
-import { expect, it, vi } from 'vitest';
-vi.mock('@i-harness/core-session', async (load) => { const original = await load<typeof import('@i-harness/core-session')>(); return { ...original, createManagedSessionState() { throw Error('Private Agent built a full managed view'); }, projectConversation() { throw Error('Private Agent replayed public conversation'); }, readConversationState() { throw Error('Private Agent replayed public state'); } }; });
+import { beforeEach, expect, it, vi } from 'vitest';
+import { observeManagedConstruction } from '../../session-persistence/test/helpers/managed-installation.ts';
+beforeEach(() => observeManagedConstruction(() => { throw Error('Private Agent built a full managed view'); }));
+vi.mock('@i-harness/core-session', async (load) => { const original = await load<typeof import('@i-harness/core-session')>(); return { ...original, projectConversation() { throw Error('Private Agent replayed public conversation'); }, readConversationState() { throw Error('Private Agent replayed public state'); } }; });
 import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createContext, captureExecutionHookChannel, onExecutionEvent } from '@i-harness/core-plugin';

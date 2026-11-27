@@ -1,7 +1,10 @@
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { observeManagedConstruction } from '../../session-persistence/test/helpers/managed-installation.ts'
 const probe=vi.hoisted(()=>({lose:false,appends:0,allowPublic:false}))
 vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async load=>{const original=await load<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>();return{...original,createFactJournalBackend(...args:Parameters<typeof original.createFactJournalBackend>){const backend=original.createFactJournalBackend(...args);return{...backend,async appendOwnedBatch(...input:Parameters<typeof backend.appendOwnedBatch>){probe.appends++;const outcome=await backend.appendOwnedBatch(...input);if(probe.lose&&outcome.kind==='committed'){probe.lose=false;return{kind:'unknown' as const,key:input[3].key}}return outcome}}}}})
-vi.mock('@i-harness/core-session',async load=>{const original=await load<typeof import('@i-harness/core-session')>();return{...original,createManagedSessionState(...args:Parameters<typeof original.createManagedSessionState>){if(!probe.allowPublic)throw Error('Private executor materialized public view');return original.createManagedSessionState(...args)}}})
+beforeEach(() => observeManagedConstruction(() => {
+  if (!probe.allowPublic) throw Error('Private executor materialized public view')
+}))
 import { mkdtemp } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'

@@ -1,5 +1,9 @@
-import {expect,it,vi} from 'vitest'
-vi.mock('@i-harness/core-session',async load=>{const original=await load<typeof import('@i-harness/core-session')>();return {...original,createManagedSessionState(){throw Error('Private runtime opened public view')},projectConversation(){throw Error('Private runtime replayed public history')}}})
+import { beforeEach, expect, it, vi } from 'vitest'
+import { observeManagedConstruction } from '../../session-persistence/test/helpers/managed-installation.ts'
+beforeEach(() => observeManagedConstruction(() => {
+  throw Error('Private runtime opened public view')
+}))
+vi.mock('@i-harness/core-session',async load=>{const original=await load<typeof import('@i-harness/core-session')>();return {...original,projectConversation(){throw Error('Private runtime replayed public history')}}})
 import {mkdtemp,writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {createJsonlBackend} from '../../session-persistence-jsonl/src/index.ts'

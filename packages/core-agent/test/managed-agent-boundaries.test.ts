@@ -1,7 +1,9 @@
-import { expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
 import type { ManagedAction, FactOutcome } from '@i-harness/core-session';
+import { observeManagedConstruction } from '../../session-persistence/test/helpers/managed-installation.ts';
 const probe = vi.hoisted(() => ({ afterReserve: undefined as undefined | (() => Promise<void>), unknownType: undefined as string | undefined, acceptedAppends: 0, resultAppends: 0 }));
-vi.mock('@i-harness/core-session', async (load) => { const original = await load<typeof import('@i-harness/core-session')>(); return { ...original, createManagedSessionState() { throw Error('Private boundary constructed a complete view'); }, projectConversation() { throw Error('Private boundary replayed conversation'); }, readConversationState() { throw Error('Private boundary replayed state'); } }; });
+beforeEach(() => observeManagedConstruction(() => { throw Error('Private boundary constructed a complete view'); }));
+vi.mock('@i-harness/core-session', async (load) => { const original = await load<typeof import('@i-harness/core-session')>(); return { ...original, projectConversation() { throw Error('Private boundary replayed conversation'); }, readConversationState() { throw Error('Private boundary replayed state'); } }; });
 // Constructor-installed delegating callable: real reserve/issue/settle and its
 // exact returned reservation remain the original producer's operations.
 vi.mock('../src/agent/generation-request-lease.ts', async (load) => {

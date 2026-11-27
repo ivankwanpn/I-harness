@@ -1,5 +1,7 @@
-import { expect, it, vi } from 'vitest';
-vi.mock('@i-harness/core-session', async (load) => { const original = await load<typeof import('@i-harness/core-session')>(); return { ...original, createManagedSessionState() { throw Error('Instruction Agent built full view'); }, projectConversation() { throw Error('Instruction Agent replayed conversation'); }, readConversationState() { throw Error('Instruction Agent replayed state'); } }; });
+import { beforeEach, expect, it, vi } from 'vitest';
+import { observeManagedConstruction } from '../../session-persistence/test/helpers/managed-installation.ts';
+beforeEach(() => observeManagedConstruction(() => { throw Error('Instruction Agent built full view'); }));
+vi.mock('@i-harness/core-session', async (load) => { const original = await load<typeof import('@i-harness/core-session')>(); return { ...original, projectConversation() { throw Error('Instruction Agent replayed conversation'); }, readConversationState() { throw Error('Instruction Agent replayed state'); } }; });
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createContext, captureExecutionHookChannel } from '@i-harness/core-plugin';

@@ -1,5 +1,7 @@
-import {expect,it,vi} from 'vitest'
-vi.mock('@i-harness/core-session',async load=>{const original=await load<typeof import('@i-harness/core-session')>();return {...original,createManagedSessionState(){throw Error('Runtime bridge constructed full view')},projectConversation(){throw Error('Runtime bridge replayed public conversation')}}})
+import {beforeEach,expect,it,vi} from 'vitest'
+import {observeManagedConstruction} from '../../session-persistence/test/helpers/managed-installation.ts'
+beforeEach(() => observeManagedConstruction(() => { throw Error('Runtime bridge constructed full view') }))
+vi.mock('@i-harness/core-session',async load=>{const original=await load<typeof import('@i-harness/core-session')>();return {...original,projectConversation(){throw Error('Runtime bridge replayed public conversation')}}})
 import {mkdtemp} from 'node:fs/promises'
 import {join} from 'node:path'
 import {createContext,captureExecutionHookChannel,onExecutionEvent,onExecutionCascade,registerExecutionHookRuntime} from '@i-harness/core-plugin'

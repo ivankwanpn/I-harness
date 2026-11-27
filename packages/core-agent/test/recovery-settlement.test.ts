@@ -1,4 +1,5 @@
-import { expect, it, vi } from 'vitest'
+import { beforeEach, expect, it, vi } from 'vitest'
+import { interceptManagedInstallation } from '../../session-persistence/test/helpers/managed-installation.ts'
 import { mkdtemp } from 'node:fs/promises'
 import { join } from 'node:path'
 import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
@@ -30,17 +31,13 @@ vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts', async loa
 })
 
 const cut = vi.hoisted(() => ({ install: false }))
-vi.mock('@i-harness/core-session', async original => {
-  const api = await original<typeof import('@i-harness/core-session')>()
-  return { ...api, createManagedSessionState(...args: Parameters<typeof api.createManagedSessionState>) {
-    const state = api.createManagedSessionState(...args), stage = state.stage
-    state.stage = events => { const pending = stage(events); return { ...pending, install() {
-      if (cut.install) { cut.install = false; throw Error('original installation cut') }
-      pending.install()
-    } } }
-    return state
-  } }
-})
+beforeEach(() => interceptManagedInstallation((_events, install) => {
+  if (cut.install) {
+    cut.install = false
+    throw Error('original installation cut')
+  }
+  install()
+}))
 
 const event = (ownerSessionId: string, state: 'resolved' | 'blocked'): RecoverySettlementFact => ({ type: 'context/recovery', version: 1, ownerSessionId, recoveryId: 'original', logicalStepSeq: 0, bindingFingerprint: 'a'.repeat(64), rejectedInputFingerprint: 'b'.repeat(64), retryConsumed: true, state })
 

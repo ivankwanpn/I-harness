@@ -1,6 +1,9 @@
-import {afterEach,expect,it,vi} from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { observeManagedConstruction } from '../../session-persistence/test/helpers/managed-installation.ts'
 const probe=vi.hoisted(()=>({appends:0,lose:false}))
-vi.mock('@i-harness/core-session',async load=>{const original=await load<typeof import('@i-harness/core-session')>();return{...original,createManagedSessionState(){throw Error('Runtime context built a full Session')}}})
+beforeEach(() => observeManagedConstruction(() => {
+  throw Error('Runtime context built a full Session')
+}))
 vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async load=>{const original=await load<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>();return{...original,createFactJournalBackend(...args:Parameters<typeof original.createFactJournalBackend>){const backend=original.createFactJournalBackend(...args);return{...backend,async appendOwnedBatch(...input:Parameters<typeof backend.appendOwnedBatch>){probe.appends++;const result=await backend.appendOwnedBatch(...input);if(probe.lose&&result.kind==='committed'){probe.lose=false;return{kind:'unknown' as const,key:input[3].key}}return result}}}}})
 import {mkdtemp} from 'node:fs/promises'
 import {join} from 'node:path'

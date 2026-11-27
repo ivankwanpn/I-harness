@@ -1,4 +1,5 @@
-import { expect, it, vi } from 'vitest'
+import { beforeEach, expect, it, vi } from 'vitest'
+import { interceptManagedInstallation } from '../../session-persistence/test/helpers/managed-installation.ts'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -32,17 +33,13 @@ it('forwards the exact registration tuple through the unstarted-call source adap
 })
 
 const installCut = vi.hoisted(() => ({ blocked: false, acceptance: false }))
-vi.mock('@i-harness/core-session', async original => {
-  const api = await original<typeof import('@i-harness/core-session')>()
-  return { ...api, createManagedSessionState(...args: Parameters<typeof api.createManagedSessionState>) {
-    const state = api.createManagedSessionState(...args), stage = state.stage
-    state.stage = events => { const staged = stage(events); return { ...staged, install() {
-      if (installCut.blocked && events.some(event => event.type === 'tool/result') || installCut.acceptance && events.some(event => event.type === 'model/exchange-accepted')) throw Error('original installation failure')
-      staged.install()
-    } } }
-    return state
-  } }
-})
+beforeEach(() => interceptManagedInstallation((events, install) => {
+  if (installCut.blocked && events.some(event => event.type === 'tool/result')
+    || installCut.acceptance && events.some(event => event.type === 'model/exchange-accepted')) {
+    throw Error('original installation failure')
+  }
+  install()
+}))
 
 const callIds = ['original-a', 'original-b']
 const finished = (response: Parameters<typeof writeSplitSse>[0]) => writeSplitSse(response, [

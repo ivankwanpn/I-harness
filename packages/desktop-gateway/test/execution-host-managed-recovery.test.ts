@@ -1,4 +1,5 @@
-import { expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
+import { interceptManagedInstallation } from '../../session-persistence/test/helpers/managed-installation.ts';
 import { mkdtemp, rm, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 const injection = vi.hoisted(() => ({ install: false, marker: Error('original install seam'), attempts: 0, installed: 0 }));
@@ -20,17 +21,13 @@ vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async orig
  }}
 })
 vi.mock('node:fs/promises', async (original) => { const fs = await original<typeof import('node:fs/promises')>(); return { ...fs, readFile: vi.fn(fs.readFile), rename: vi.fn(fs.rename) }; });
-vi.mock('@i-harness/core-session', async (original) => {
-    const core = await original<typeof import('@i-harness/core-session')>();
-    return { ...core, createManagedSessionState(...args: Parameters<typeof core.createManagedSessionState>) {
-            const state = core.createManagedSessionState(...args), stage = state.stage;
-            return { ...state, stage(...values: Parameters<typeof stage>) {
-                    const staged = stage(...values);
-                    return { ...staged, install() { injection.attempts++; if (injection.install)
-                            throw injection.marker; staged.install(); injection.installed++; } };
-                } };
-        } };
-});
+beforeEach(() => interceptManagedInstallation((_events, install) => {
+    injection.attempts++;
+    if (injection.install) throw injection.marker;
+    install();
+    injection.installed++;
+}));
+
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl';
 import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory';
 import { taskDocumentStorageContract } from '@i-harness/subagent/internal/task-storage-contract';

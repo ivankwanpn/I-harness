@@ -16,7 +16,7 @@ import { rmWorkspaceSync } from "./helpers.ts"
 import { createAnthropicClient } from '../../llm-anthropic/src/index.ts'
 import { createLoopbackProvider, writeSplitSse } from '../../core-agent/test/helpers/provider-loopback.ts'
 import { captureContextSnapshot } from '@i-harness/context-engine'
-import * as sessionCore from '@i-harness/core-session'
+import { interceptManagedInstallation } from '../../session-persistence/test/helpers/managed-installation.ts'
 import { createJobFacts } from '../../subagent/src/job-facts.ts'
 
 const parkedSpawn = {
@@ -386,26 +386,16 @@ it.each([
     ...(child ? { allowSubagentModelSelection: true, pluginAgents: [{ name: 'parked', description: 'controlled', systemPrompt: 'wait', tools: [], model: { provider: 'fixture', model: 'child' } }], resolveRoleModel: async () => ({ status: 'ready' as const, binding: { client: child, contextWindow: 100000 } }) } : {}) })
   let pending: Promise<unknown> | undefined
   let jobs: ReturnType<typeof createJobFacts> | undefined
-  const installMarker = new Error('Controlled original acceptance memory installation failure'), restoreInstallSpies: (() => void)[] = []
+  const installMarker = new Error('Controlled original acceptance memory installation failure')
   let installBlocked = true, installFailures = 0
-  const actualState = sessionCore.createManagedSessionState
-  const stateSpy = management === 'install-failed' ? vi.spyOn(sessionCore, 'createManagedSessionState').mockImplementation((...args) => {
-    const state = Reflect.apply(actualState, sessionCore, args), originalStage = state.stage
-    const stageSpy = vi.spyOn(state, 'stage').mockImplementation((...stageArgs) => {
-      const staged = Reflect.apply(originalStage, state, stageArgs)
-      if (stageArgs[0].some(event => event.type === 'model/exchange-accepted')) {
-        // The original stage is frozen. Interpose at the constructor factory's
-        // return boundary, preserving its exact events and original installer.
-        return Object.freeze({ events: staged.events, install() {
-          if (installBlocked) { installFailures++; throw installMarker }
-          staged.install()
-        } })
-      }
-      return staged
-    })
-    restoreInstallSpies.push(() => stageSpy.mockRestore())
-    return state
+  const restoreInstallation = management === 'install-failed' ? interceptManagedInstallation((events, install) => {
+    if (installBlocked && events.some(event => event.type === 'model/exchange-accepted')) {
+      installFailures++
+      throw installMarker
+    }
+    install()
   }) : undefined
+
   const describe = (error: unknown, seen = new Map<object, number>()): unknown => {
     if (!(error instanceof Error)) return error
     if (seen.has(error)) return { ref: seen.get(error) }
@@ -576,6 +566,6 @@ it.each([
       childRelease.resolve(); await vi.waitFor(() => expect(assembly.tasks().find(row => row.group === 'subagent')?.status).toBe('completed'))
     }
   } finally {
-    installBlocked = false; ready = true; release.resolve(); recoveryRelease.resolve(); childRelease.resolve(); producerRelease.resolve(); await pending; await jobs?.close().catch(() => {}); await service.close().catch(() => {}); await coordinator.close().catch(() => {}); for (const restore of restoreInstallSpies.reverse()) restore(); stateSpy?.mockRestore(); await server.close(); rmWorkspaceSync(root)
+    installBlocked = false; ready = true; release.resolve(); recoveryRelease.resolve(); childRelease.resolve(); producerRelease.resolve(); await pending; await jobs?.close().catch(() => {}); await service.close().catch(() => {}); await coordinator.close().catch(() => {}); restoreInstallation?.(); await server.close(); rmWorkspaceSync(root)
   }
 }, 45000)

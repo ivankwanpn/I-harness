@@ -1,8 +1,12 @@
-import {afterEach,expect,it,vi} from 'vitest'
+import {afterEach,beforeEach,expect,it,vi} from 'vitest'
+import {observeManagedConstruction} from './helpers/managed-installation.ts'
 const probe=vi.hoisted(()=>({unknown:false,appends:0,views:0,captures:0,intakes:[] as {pending():readonly {inputId:string}[]}[],readGate:undefined as undefined|{entered():void;wait:Promise<void>}}))
 vi.mock('../../session-persistence-jsonl/src/backend/archive-reader.ts',async load=>{const original=await load<typeof import('../../session-persistence-jsonl/src/backend/archive-reader.ts')>();return {...original,async readSessionArchive(...args:Parameters<typeof original.readSessionArchive>){const result=await original.readSessionArchive(...args),gate=probe.readGate;if(gate&&args[4]){probe.readGate=undefined;gate.entered();await gate.wait}return result}}})
 vi.mock('../../core-session/src/managed/intake-index.ts',async load=>{const original=await load<typeof import('../../core-session/src/managed/intake-index.ts')>();return {...original,createManagedIntakeIndex(){const index=original.createManagedIntakeIndex();probe.intakes.push(index);return index}}})
-vi.mock('@i-harness/core-session',async load=>{const original=await load<typeof import('@i-harness/core-session')>();return {...original,createManagedSessionState(){probe.views++;throw Error('Consumer prerequisite constructed a full managed view')}}})
+beforeEach(() => observeManagedConstruction(() => {
+ probe.views++
+ throw Error('Consumer prerequisite constructed a full managed view')
+}))
 vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async load=>{const original=await load<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>();return {...original,createFactJournalBackend(...args:Parameters<typeof original.createFactJournalBackend>){const journal=original.createFactJournalBackend(...args);return {...journal,async appendOwnedBatch(...args:Parameters<typeof journal.appendOwnedBatch>){probe.appends++;const outcome=await journal.appendOwnedBatch(...args);return probe.unknown&&outcome.kind==='committed'?{kind:'unknown' as const,key:args[3].key}:outcome}}}}})
 vi.mock('../src/coordinator/action-captures.ts',async load=>{const original=await load<typeof import('../src/coordinator/action-captures.ts')>();return {...original,createActionCaptures(...args:Parameters<typeof original.createActionCaptures>){const ports=original.createActionCaptures(...args);if(ports.captureToolCall){const capture=ports.captureToolCall;ports.captureToolCall=(...args:Parameters<typeof capture>)=>{probe.captures++;return capture(...args)}}return ports}}})
 import {mkdtemp} from 'node:fs/promises'

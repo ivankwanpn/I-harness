@@ -1,4 +1,5 @@
-import { expect, it, vi } from 'vitest'
+import { beforeEach, expect, it, vi } from 'vitest'
+import { interceptManagedInstallation } from '../../session-persistence/test/helpers/managed-installation.ts'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,14 +11,12 @@ import { createRuntimeContext } from '../src/index.ts'
 
 const installation = vi.hoisted(() => ({ blocked: false }))
 vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async load=>{const original=await load<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>();return{...original,createFactJournalBackend(...args:Parameters<typeof original.createFactJournalBackend>){const journal=original.createFactJournalBackend(...args);return{...journal,appendOwnedBatch:vi.fn(journal.appendOwnedBatch),reconcileOwnedBatch:vi.fn(journal.reconcileOwnedBatch)}}}})
-vi.mock('@i-harness/core-session', async original => {
-  const api = await original<typeof import('@i-harness/core-session')>()
-  return { ...api, createManagedSessionState(...args: Parameters<typeof api.createManagedSessionState>) {
-    const state = api.createManagedSessionState(...args), stage = state.stage
-    state.stage = events => { const captured = stage(events); return { ...captured, install() { if (installation.blocked && events.some(event => event.type === 'runtime/context')) throw Error('actual runtime frame installation held'); captured.install() } } }
-    return state
-  } }
-})
+beforeEach(() => interceptManagedInstallation((events, install) => {
+  if (installation.blocked && events.some(event => event.type === 'runtime/context')) {
+    throw Error('actual runtime frame installation held')
+  }
+  install()
+}))
 
 async function fixture(disposition: 'committed' | 'absent' | 'install') {
   const root = await mkdtemp(join(tmpdir(), 'ih-runtime-disposition-')), backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } },taskDocumentStorageContract), { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
