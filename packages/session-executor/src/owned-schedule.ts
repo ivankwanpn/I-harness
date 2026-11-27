@@ -12,13 +12,42 @@ import {diagnosticsFor} from '@i-harness/diagnostics'
 /** Original schedule fold, metadata producer, atomic delivery and timer. */
 export function mountOwnedSchedule(options:{execution:ManagedExecutionAttachment;domain:ManagedExecutionDomain;ctx:PluginContext;tools:ToolRegistry;wake(inputId:string,text:string):void;retain(close:()=>Promise<void>):void}) {
  const {execution,domain}=options
- let dirty=true,unavailable:{cause:unknown}|undefined
+ let dirty=true,needsReconcile=false,unavailable:{cause:unknown}|undefined
  const diagnostics=diagnosticsFor('session')
- const original={identity:execution.identity,observe:()=>{if(unavailable)throw unavailable.cause;const observation=execution.observe();if(dirty){readOriginalSchedules({identity:execution.identity,observe:()=>observation}).assertCurrent();dirty=false}return observation}}
+ const original={identity:execution.identity,observe:()=>{
+  try{
+   if(unavailable)throw unavailable.cause
+   const observation=execution.observe()
+   if(dirty){readOriginalSchedules({identity:execution.identity,observe:()=>observation}).assertCurrent();dirty=false}
+   return observation
+  }catch(error){
+   // A deadline can observe temporary writer unavailability before its
+   // readiness notification. Keep the next ready edge for that failed read.
+   needsReconcile=true
+   throw error
+  }
+ }}
  readOriginalSchedules(original).assertCurrent()
  for(const tool of createScheduleTools({original,metadata:signal=>actionMetadataFacts(execution.owner,signal)}))options.tools.register(tool)
  const driver=createScheduleDriver({sessions:()=>[domain.sessionId],original:id=>id===domain.sessionId?original:undefined,
-  subscribeMutations:changed=>{const offEvents=subscribeManagedExecution(domain,event=>{if(event.type==='schedule/change')dirty=true});try{const offReady=subscribeManagedExecutionReadiness(domain,()=>{unavailable=undefined;changed(domain.sessionId)},(error,terminal)=>{unavailable={cause:error};dirty=true;try{if((error as {code?:string}|null)?.code!=='FACT_CLOSED')diagnostics.warn('[schedule] original readiness unavailable: '+String(error))}catch{}if(terminal)driver.stop()});return()=>{offReady();offEvents()}}catch(error){offEvents();throw error}},
+  subscribeMutations:changed=>{
+   // Installed schedule events arrive before the original writer signals
+   // readiness. Keep a separate wake so reading the fold cannot consume it.
+   const offEvents=subscribeManagedExecution(domain,event=>{if(event.type==='schedule/change'){dirty=true;needsReconcile=true}})
+   try{
+    const offReady=subscribeManagedExecutionReadiness(domain,()=>{
+     unavailable=undefined
+     if(!needsReconcile)return
+     needsReconcile=false
+     changed(domain.sessionId)
+    },(error,terminal)=>{
+     unavailable={cause:error};dirty=true;needsReconcile=true
+     try{if((error as {code?:string}|null)?.code!=='FACT_CLOSED')diagnostics.warn('[schedule] original readiness unavailable: '+String(error))}catch{}
+     if(terminal)driver.stop()
+    })
+    return()=>{offReady();offEvents()}
+   }catch(error){offEvents();throw error}
+  },
   async deliver(delivery) {
    const action = execution.owner.beginAction()
    try {
