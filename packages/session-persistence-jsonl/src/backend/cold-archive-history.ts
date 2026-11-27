@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { ColdArchiveHistoryReader } from '@i-harness/session-persistence/internal/archive-read'
 import type { SessionMeta } from '@i-harness/session-persistence'
 import { CURRENT_FORMAT_VERSION, SESSION_HISTORY_LIMIT, freezeJsonData, type JournalPrefix, type SessionEvent } from '@i-harness/core-session'
+import { replayOriginalArchiveFrames } from '@i-harness/core-session/internal/archive'
 import type { createArchiveReadOwner } from './archive-read-owner.ts'
 import { readSessionArchive } from './archive-reader.ts'
 import { ArchiveEvidenceMismatch, type VerifiedArchiveBody } from './verified-archive-body.ts'
@@ -14,6 +15,7 @@ interface ColdEvidence {
   readonly ino: bigint
   readonly headerDigest: string
   readonly verified: VerifiedArchiveBody
+  readonly sealedPage?: true
 }
 export const MAX_PREPARED_HISTORY_BYTES = 8 * 1024 * 1024
 export const MAX_PREPARED_HISTORY_EVENTS = 16_384
@@ -26,6 +28,9 @@ export interface PreparedArchiveHistory {
   readonly verified: VerifiedArchiveBody
   readonly events: SessionEvent[]
 }
+type HeldHistoryIdentity = { size: number; dev: bigint; ino: bigint }
+export type ReplayColdHistory = (id: string, evidence: object, identity: HeldHistoryIdentity, header: Buffer, body: Buffer, meta: SessionMeta) =>
+  (NonNullable<ReturnType<typeof replayOriginalArchiveFrames>> & { framing: { headerDigest: string; body: VerifiedArchiveBody } }) | undefined
 class HistoryPreparationUnavailable extends Error {}
 
 /** The exact constructor's native archive reader. Proofs retain coordinates
@@ -37,7 +42,7 @@ export function createColdArchiveHistoryReader(options: {
   checkDeleted(sessionId: string): Promise<void>
   qualify(sessionId: string, prefix: { header: SessionMeta; birth: Buffer }): Promise<void>
   prepareHistory?(history: PreparedArchiveHistory): void
-}): ColdArchiveHistoryReader {
+}): { reader: ColdArchiveHistoryReader; replayHeldHistory: ReplayColdHistory } {
   const { archive } = options
   const evidenceRecords = new WeakMap<object, ColdEvidence>()
   function currentGeneration() {
@@ -66,13 +71,26 @@ export function createColdArchiveHistoryReader(options: {
       return { version: result.header.formatVersion, events: result.events, meta: result.header, physical, originalDecode: result.originalDecode }
     }
   }
-  function retainEvidence(physical: ColdEvidence) {
+  function retainEvidence(physical: ColdEvidence, sealedPage = false) {
     const evidence = Object.freeze({})
-    evidenceRecords.set(evidence, Object.freeze(physical))
+    evidenceRecords.set(evidence, Object.freeze(sealedPage ? { ...physical, sealedPage: true } : physical))
     return evidence
   }
 
-  return Object.freeze({
+  const replayHeldHistory: ReplayColdHistory = (sessionId, evidence, identity, header, body, meta) => {
+    const proof = evidenceRecords.get(evidence)
+    if (!proof?.sealedPage || proof.sessionId !== sessionId || meta.sessionId !== sessionId || !meta.journal ||
+      proof.extent !== identity.size || proof.dev !== identity.dev || proof.ino !== identity.ino ||
+      proof.extent !== header.length + body.length) return undefined
+    try {
+      if (proof.generation !== currentGeneration() || createHash('sha256').update(header).digest('hex') !== proof.headerDigest) return undefined
+      const decoded = replayOriginalArchiveFrames(proof.verified.frames, body, meta.journal, meta.formatVersion, meta)
+      if (decoded) return { ...decoded, framing: Object.freeze({ headerDigest: proof.headerDigest, body: proof.verified }) }
+    } catch { /* Requalify through the original full decoder and its error ordering. */ }
+    return undefined
+  }
+
+  const reader = Object.freeze({
     async readSealedHistory(sessionId: string) {
       const generation = currentGeneration()
       await options.checkDeleted(sessionId)
@@ -115,7 +133,7 @@ export function createColdArchiveHistoryReader(options: {
       if (!observed) return undefined
       const { physical, originalDecode, ...result } = observed
       if (!physical) return result
-      const evidence = retainEvidence(physical)
+      const evidence = retainEvidence(physical, true)
       if (!originalDecode || observed.meta.sessionId !== sessionId || result.events.length > MAX_PREPARED_HISTORY_EVENTS)
         return { ...result, evidence }
       // No caller can mutate decoded payloads before the one-shot handoff.
@@ -168,4 +186,5 @@ export function createColdArchiveHistoryReader(options: {
       }
     },
   })
+  return { reader, replayHeldHistory }
 }

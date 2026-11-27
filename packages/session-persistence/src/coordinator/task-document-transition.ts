@@ -24,7 +24,7 @@ export type HistoryProof = { initial: SessionView; seedLength: number; assertCur
 type RecoverHistory = (beforeRepair: (version: number, events: readonly SessionEventView[], seedLength: number) => Promise<void>, markRepair: () => void) => Promise<void>
 type HistoryHeader = { confirm(): Promise<import('./bootstrap-types.ts').HeaderOutcome | {kind:'not-required'}>; settle(): Promise<void> }
 type HistoryReader = { observe(): Promise<HistoryProof>; settleResources(): Promise<void>; retryResources(): Promise<void>; hasDebt(): boolean }
-type CleanHistoryReader = HistoryReader & { observeClean(): Promise<HistoryProof | undefined> }
+type CleanHistoryReader = HistoryReader & { observeClean(coldPageEvidence?: () => object | undefined): Promise<HistoryProof | undefined> }
 type TransitionRoute = BootstrapRoute | SelectedResultsRoute
 function isTaskV3(value: unknown): boolean {
   return value !== null && typeof value === 'object' && !types.isProxy(value) && Object.getOwnPropertyDescriptor(value, 'formatVersion')?.value === 3
@@ -105,7 +105,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
   const records = new Map<string, { execute(): Promise<void>; close(): Promise<void>; retryClose(): Promise<void>; finite(): Promise<void> }>()
   const failures = new WeakMap<object, TransitionCleanupOwner>()
   const conflict = () => { throw new Error('TASK_TRANSITION_CONFLICT') }
-  function begin<T>(id: string, meta: SessionMeta | undefined, recover?: RecoverHistory, beforeQueue?: () => Promise<void>, finalize?: (proof: HistoryProof) => Promise<T>, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>, onCleanHistory?: () => void): Promise<T | void> {
+  function begin<T>(id: string, meta: SessionMeta | undefined, recover?: RecoverHistory, beforeQueue?: () => Promise<void>, finalize?: (proof: HistoryProof) => Promise<T>, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>, onCleanHistory?: () => void, coldPageEvidence?: () => object | undefined): Promise<T | void> {
     if (records.has(id)) return Promise.reject(new Error('TASK_TRANSITION_RETRY_REQUIRED'))
     const capturedMeta = meta === undefined ? undefined : captureTaskSnapshot(meta) as SessionMeta
     if (!ownership.lockEnabled) return Promise.reject(new Error('TASK_TRANSITION_UNSUPPORTED'))
@@ -182,7 +182,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
             const reader = openCleanHistory(scope!, await prepareHistoryOwner())
             historyAttempted = true
             historyReader = reader
-            history = await method(reader,'observeClean')()
+            history = await method(reader,'observeClean')(coldPageEvidence)
             guard()
             if (history) {
               if (history.initial.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error('Invalid current history proof')
@@ -511,5 +511,5 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
     const prior = bootstrapRecords.get(entry); if (prior) return prior
     const value = makeBootstrap(id,entry,route,mode,borrowed); bootstrapRecords.set(entry,value); return value
   }
-  return { async joinIO() { const results = await Promise.allSettled([...records.values()].map(record => record.finite())); const errors = results.flatMap(value => value.status === 'rejected' ? [value.reason] : []); if (errors.length) throw new AggregateError(errors,'Task transition IO unresolved') }, bootstrap, create(id: string, meta: SessionMeta) { return begin(id, meta) }, existing<T>(id: string, recover: RecoverHistory, beforeQueue: (() => Promise<void>) | undefined, finalize: (proof: HistoryProof) => Promise<T>, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>, onCleanHistory?: () => void) { return begin(id, undefined, recover, beforeQueue, finalize, after, onCleanHistory) as Promise<T> }, cleanupFor(error: unknown) { return error && typeof error === 'object' ? failures.get(error) : undefined } }
+  return { async joinIO() { const results = await Promise.allSettled([...records.values()].map(record => record.finite())); const errors = results.flatMap(value => value.status === 'rejected' ? [value.reason] : []); if (errors.length) throw new AggregateError(errors,'Task transition IO unresolved') }, bootstrap, create(id: string, meta: SessionMeta) { return begin(id, meta) }, existing<T>(id: string, recover: RecoverHistory, beforeQueue: (() => Promise<void>) | undefined, finalize: (proof: HistoryProof) => Promise<T>, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>, onCleanHistory?: () => void, coldPageEvidence?: () => object | undefined) { return begin(id, undefined, recover, beforeQueue, finalize, after, onCleanHistory, coldPageEvidence) as Promise<T> }, cleanupFor(error: unknown) { return error && typeof error === 'object' ? failures.get(error) : undefined } }
 }

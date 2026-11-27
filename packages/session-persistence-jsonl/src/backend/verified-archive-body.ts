@@ -29,17 +29,16 @@ export class ArchiveEvidenceMismatch extends Error {
 
 /** Collect coordinates around the full decoder's private semantic proof. */
 export function createColdArchiveFramingRecorder(metadata: JournalMetadata, formatVersion: number) {
-  const hash = createHash('sha256')
-  const decoder = createArchiveJournalHistoryDecoder(metadata, formatVersion)
+  const decoder = createArchiveJournalHistoryDecoder(metadata, formatVersion, true)
   return {
-    push(bytes: Buffer) { if (decoder.push(bytes)) hash.update(bytes) },
+    push(bytes: Buffer) { decoder.push(bytes) },
     finish() {
-      const { frames, ...result } = decoder.finish()
-      const verified: VerifiedArchiveBody | undefined = frames?.length && !result.torn ? Object.freeze({
+      const { frames, bodyDigest, ...result } = decoder.finish()
+      const verified: VerifiedArchiveBody | undefined = frames?.length && bodyDigest && !result.torn ? Object.freeze({
         formatVersion,
         legacyPrefixDigest: metadata.legacyPrefixDigest,
         prefix: Object.freeze({ ...result.prefix }),
-        digest: hash.digest('hex'),
+        digest: bodyDigest,
         frames,
       }) : undefined
       return { ...result, verified }

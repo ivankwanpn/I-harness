@@ -1,7 +1,8 @@
 import { validateDeliveryFrame } from '../conversation/delivery.ts'
 import { isDeliveryEventType } from '../events/delivery.ts'
 import { createHash } from 'node:crypto'
-import { types } from 'node:util'
+import { Buffer as NodeBuffer } from 'node:buffer'
+import { TextDecoder, types } from 'node:util'
 import { CURRENT_FORMAT_VERSION, type SessionEvent } from '../events/types.ts'
 import type { BatchKey, EncodedFactBatch, JournalMetadata, JournalPrefix, SessionEventView } from '../managed/types.ts'
 import { stringifyJsonData } from './json-data.ts'
@@ -225,6 +226,88 @@ const archiveIndexes = new WeakMap<readonly SessionEventView[], {
   formatVersion: number
   scope: string
 }>()
+const originalFrameBodies = new WeakMap<readonly JournalFrameExtent[], {
+  prefix: Readonly<JournalPrefix>; legacyPrefixDigest: string; bodyDigest: string; scope: string
+}>()
+const nativeBufferPrototype = NodeBuffer.prototype
+const typedArrayPrototype = getPrototypeOf(Uint8Array.prototype)
+const bufferStorage = getOwnPropertyDescriptor(typedArrayPrototype, 'buffer')!.get!
+const bufferOffset = getOwnPropertyDescriptor(typedArrayPrototype, 'byteOffset')!.get!
+const bufferLength = getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength')!.get!
+const nativeBufferFrom = NodeBuffer.from
+const hashPrototype = getPrototypeOf(createHash('sha256'))
+const nativeHashUpdate = getOwnPropertyDescriptor(hashPrototype, 'update')!.value as (bytes: Uint8Array) => unknown
+const nativeHashDigest = getOwnPropertyDescriptor(hashPrototype, 'digest')!.value as (encoding: 'hex') => string
+const originalBufferParent = getPrototypeOf(nativeBufferPrototype)
+const replayMethods = [
+  [NodeBuffer, ['concat']],
+  [nativeBufferPrototype, ['indexOf', 'subarray', 'toString', 'utf8Slice', 'equals', 'at', 'length', 'buffer', 'byteOffset', 'byteLength']],
+  [originalBufferParent, ['at', 'length', 'buffer', 'byteOffset', 'byteLength']],
+  [typedArrayPrototype, ['at', 'length', 'buffer', 'byteOffset', 'byteLength']],
+  [hashPrototype, ['update', 'digest']],
+] as const
+const replayMethodChecks = replayMethods.flatMap(([receiver, keys]) => keys.map(key => ({ receiver, key, field: getOwnPropertyDescriptor(receiver, key) })))
+const strictUtf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+const nativeDecodeUtf8 = TextDecoder.prototype.decode
+
+function originalFrameReplayEnvironment() {
+  return canTransferArchiveIndex() && getPrototypeOf(nativeBufferPrototype) === originalBufferParent && getPrototypeOf(originalBufferParent) === typedArrayPrototype &&
+    replayMethodChecks.every(({ receiver, key, field }) => {
+      const current = getOwnPropertyDescriptor(receiver, key)
+      return !!current === !!field && current?.value === field?.value && current?.get === field?.get && current?.set === field?.set
+    })
+}
+
+function originalBufferBytes(body: Uint8Array) {
+  if (!types.isUint8Array(body) || getPrototypeOf(body) !== nativeBufferPrototype) return undefined
+  const storage = Reflect.apply(bufferStorage, body, []) as ArrayBufferLike
+  if (types.isSharedArrayBuffer(storage)) return undefined
+  return { storage, start: Reflect.apply(bufferOffset, body, []) as number, length: Reflect.apply(bufferLength, body, []) as number }
+}
+
+function ordinaryArchiveScope(header: GenerationHistoryScope): string | undefined {
+  return typeof header.sessionId === 'string' && header.sessionId && !header.semanticSeed &&
+    header.parentSession === undefined && header.seedLength === undefined && canTransferArchiveIndex() ? conversationScopeKey(header) : undefined
+}
+
+function validateNativeArchiveEvents(events: SessionEvent[], prefix: Readonly<JournalPrefix>, formatVersion: number, header: GenerationHistoryScope, scope?: string) {
+  const index = validateDecoderOwnedConversationHistory(events, formatVersion, header)
+  if (scope !== undefined && index.generationScope === scope && ordinaryArchiveScope(header) === scope) {
+    freezeJsonData(events)
+    archiveIndexes.set(events, { index, prefix, formatVersion, scope })
+  }
+}
+
+/** Replay only the exact frame list produced by the original native decoder.
+ * The writer supplies fresh held bytes and still proves the full body and
+ * validates every event and its semantic relationships. */
+export function replayOriginalArchiveFrames(frames: readonly JournalFrameExtent[], body: Buffer, metadata: JournalMetadata, formatVersion: number, header: GenerationHistoryScope) {
+  const proof = originalFrameBodies.get(frames)
+  if (!proof || !originalFrameReplayEnvironment() || formatVersion !== CURRENT_FORMAT_VERSION || !validJournalMetadata(metadata) || metadata.legacyBodyBytes ||
+    metadata.legacyEventCount || metadata.separatorBytes || metadata.legacyPrefixDigest !== proof.legacyPrefixDigest ||
+    ordinaryArchiveScope(header) !== proof.scope) return undefined
+  const bytes = originalBufferBytes(body)
+  if (!bytes || bytes.length !== proof.prefix.bodyBytes) return undefined
+  const rawBody = nativeBufferFrom(bytes.storage, bytes.start, bytes.length), digest = createHash('sha256')
+  Reflect.apply(nativeHashUpdate, digest, [rawBody])
+  if (Reflect.apply(nativeHashDigest, digest, ['hex']) !== proof.bodyDigest) return undefined
+  const events: SessionEvent[] = []
+  for (const { offset, length, firstSeq, count: frameCount } of frames) {
+    const raw = nativeBufferFrom(bytes.storage, bytes.start + offset, length - 1)
+    const frame = nativeParse(Reflect.apply(nativeDecodeUtf8, strictUtf8, [raw])) as { recordKind?: string; version?: number; firstSeq?: number; count?: number; events?: SessionEvent[] }
+    if (!frame || frame.recordKind !== 'session/fact-batch' || frame.version !== 1 || frame.firstSeq !== firstSeq || frame.count !== frameCount ||
+      firstSeq !== events.length || !isArray(frame.events) || frame.events.length !== frameCount) return undefined
+    validateDeliveryFrame(frame.events, formatVersion)
+    for (const event of frame.events) {
+      if (getOwnPropertyDescriptor(event, 'seq')?.value !== events.length) return undefined
+      events.push(event)
+    }
+  }
+  if (events.length !== proof.prefix.eventCount || ordinaryArchiveScope(header) !== proof.scope) return undefined
+  validateNativeArchiveEvents(events, proof.prefix, formatVersion, header, proof.scope)
+  if (!originalFrameReplayEnvironment() || ordinaryArchiveScope(header) !== proof.scope) return undefined
+  return { prefix: proof.prefix, torn: false as const, events }
+}
 
 /** One original frozen decode; the restored writer still owns its prefix. */
 export function takeArchiveConversationIndex(events: readonly SessionEventView[], prefix: Readonly<JournalPrefix>, formatVersion: number, header: GenerationHistoryScope) {
@@ -252,39 +335,48 @@ export function createJournalStreamDecoder(
 export function createArchiveJournalHistoryDecoder(
   metadata: JournalMetadata,
   formatVersion: number,
+  captureBodyDigest = false,
 ) {
   let native = false
   let events: SessionEvent[] | undefined = []
   let frames: JournalFrameExtent[] | undefined = []
+  const bodyHash = captureBodyDigest ? createHash('sha256') : undefined
+  let replayableBytes = captureBodyDigest
+  const originalLegacyDigest = metadata.legacyPrefixDigest
   const decoder = journalStreamDecoder(metadata, formatVersion, unit => {
     for (const event of unit) events!.push(event)
   }, { onFrame(frame) {
     if (!frames) return
     if (frames.length === MAX_ARCHIVE_FRAMES) frames = undefined
-    else frames.push(Object.freeze(frame))
+    else frames.push(nativeFreeze(frame))
   } }, () => { native = false })
   native = formatVersion === CURRENT_FORMAT_VERSION && !metadata.legacyBodyBytes && !metadata.legacyEventCount && !metadata.separatorBytes
   return {
     push(bytes: Uint8Array) {
+      if (bodyHash && frames) {
+        const original = replayableBytes ? originalBufferBytes(bytes) : undefined
+        if (original && originalFrameReplayEnvironment()) bytes = nativeBufferFrom(original.storage, original.start, original.length)
+        else replayableBytes = false
+        Reflect.apply(nativeHashUpdate, bodyHash, [bytes])
+      }
       decoder.push(bytes)
       return frames !== undefined
     },
     finish() {
       const decoded = decoder.finish()
       const { eventCount, bodyBytes, prefixDigest } = decoded.prefix
-      return { ...decoded, frames: frames && Object.freeze(frames), validatedEvents(header: GenerationHistoryScope, onOriginal?: () => void, prepareRestoration = false) {
+      const frameList = frames && nativeFreeze(frames)
+      const bodyDigest = frameList && bodyHash ? Reflect.apply(nativeHashDigest, bodyHash, ['hex']) as string : undefined
+      const prefix = nativeFreeze({ eventCount, bodyBytes, prefixDigest })
+      return { ...decoded, frames: frameList, bodyDigest, validatedEvents(header: GenerationHistoryScope, onOriginal?: () => void, prepareRestoration = false) {
         if (!events) throw new TypeError('Archive history already consumed')
         const history = events
         events = undefined
         if (native && !decoded.torn && !header.semanticSeed && hasNativeSerializer()) {
-          const scope = prepareRestoration && typeof header.sessionId === 'string' && header.sessionId
-            && header.parentSession === undefined && header.seedLength === undefined && canTransferArchiveIndex()
-            ? conversationScopeKey(header) : undefined
-          const index = validateDecoderOwnedConversationHistory(history, formatVersion, header)
-          if (scope !== undefined && index.generationScope === scope && canTransferArchiveIndex() && conversationScopeKey(header) === scope) {
-            freezeJsonData(history)
-            archiveIndexes.set(history, { index, prefix: nativeFreeze({ eventCount, bodyBytes, prefixDigest }), formatVersion, scope })
-          }
+          const scope = (prepareRestoration || replayableBytes) ? ordinaryArchiveScope(header) : undefined
+          validateNativeArchiveEvents(history, prefix, formatVersion, header, prepareRestoration ? scope : undefined)
+          if (replayableBytes && frameList?.length && bodyDigest && scope !== undefined && originalFrameReplayEnvironment() && ordinaryArchiveScope(header) === scope)
+            originalFrameBodies.set(frameList, { prefix, legacyPrefixDigest: originalLegacyDigest, bodyDigest, scope })
           if (hasNativeSerializer()) onOriginal?.()
         } else validateConversationHistory(history, formatVersion, header)
         return history

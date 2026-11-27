@@ -1,5 +1,5 @@
-import { expect, it } from 'vitest'
-import { createArchiveJournalHistoryDecoder, createJournalStreamDecoder, decodeFactBatch, encodeFactBatch, legacyPrefixDigest, readFactJournal, takeArchiveConversationIndex } from '../src/serialization/fact-journal.ts'
+import { expect, it, vi } from 'vitest'
+import { createArchiveJournalHistoryDecoder, createJournalStreamDecoder, decodeFactBatch, encodeFactBatch, legacyPrefixDigest, readFactJournal, replayOriginalArchiveFrames, takeArchiveConversationIndex } from '../src/serialization/fact-journal.ts'
 import { CURRENT_FORMAT_VERSION } from '../src/events/types.ts'
 import { createConversationValidationScan, prepareConversationAppend, takeConversationValidationScan } from '../src/conversation/validation.ts'
 import { IMAGE_MEDIA_TYPES } from '../src/images.ts'
@@ -70,6 +70,44 @@ function nativePrefix() {
   ])
   return { metadata, first, from, suffix }
 }
+
+it('replays only originally validated native frames for the same complete immutable body and scope', () => {
+  const {metadata,first,suffix} = nativePrefix()
+  const header = {sessionId:'archive'}, body = Buffer.concat([first.bytes,suffix.bytes])
+  const decoder = createArchiveJournalHistoryDecoder(metadata,CURRENT_FORMAT_VERSION,true)
+  const split = body.length - 12
+  decoder.push(body.subarray(0,split)); decoder.push(body.subarray(split))
+  const original = decoder.finish()
+  const replay = (frames = original.frames!, bytes: Buffer = body, scope = header) => replayOriginalArchiveFrames(frames,bytes,metadata,CURRENT_FORMAT_VERSION,scope)
+  expect(replay()).toBeUndefined()
+  const events = original.validatedEvents(header)
+  const restored = replay()!
+  expect(restored).toEqual({prefix:original.prefix,torn:false,events})
+  expect(restored.events).not.toBe(events)
+  expect(takeArchiveConversationIndex(restored.events,restored.prefix,CURRENT_FORMAT_VERSION,header)).toBeDefined()
+  expect(replay(Object.freeze([...original.frames!]))).toBeUndefined()
+  expect(replay(original.frames!, Buffer.concat([body,Buffer.from('\n')]))).toBeUndefined()
+  const changed = Buffer.from(body)
+  changed[changed.indexOf(Buffer.from('prior'))] = 120
+  expect(replay(original.frames!, changed)).toBeUndefined()
+  expect(replay(original.frames!, body, {sessionId:'different'})).toBeUndefined()
+  const shared = Buffer.from(new SharedArrayBuffer(body.length)); body.copy(shared)
+  expect(replay(original.frames!, shared)).toBeUndefined()
+  const stockParse = JSON.parse
+  const replaced = vi.spyOn(JSON,'parse').mockImplementation((...args) => stockParse(...args))
+  try { expect(replay()).toBeUndefined() } finally { replaced.mockRestore() }
+})
+
+it('does not enroll replay framing if the original buffer codec was replaced during the decode', () => {
+  const { metadata, first } = nativePrefix(), body = Buffer.from(first.bytes), header = {sessionId:'archive'}
+  const decoder = createArchiveJournalHistoryDecoder(metadata,CURRENT_FORMAT_VERSION,true)
+  const stockIndexOf = Buffer.prototype.indexOf
+  const wrapped = vi.spyOn(Buffer.prototype,'indexOf').mockImplementation(function(this: Buffer, ...args) { return Reflect.apply(stockIndexOf,this,args) })
+  try { decoder.push(body) } finally { wrapped.mockRestore() }
+  const decoded = decoder.finish()
+  expect(decoded.validatedEvents(header)).toMatchObject([{ text:'prior' }])
+  expect(replayOriginalArchiveFrames(decoded.frames!,body,metadata,CURRENT_FORMAT_VERSION,header)).toBeUndefined()
+})
 
 it('validates the full shape before relational errors and never exposes an unvalidated archive', () => {
   const { metadata } = nativePrefix()

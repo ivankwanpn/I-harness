@@ -227,14 +227,14 @@ export function createLoads(
     }
     return { page, ...(decoded.retainDecoded ? { originalSealCurrent: isCurrent } : {}) }
   }
-  function loadThroughTransition<T>(sessionId: string, finalize: (proof: HistoryProof) => Promise<T>, after?: AfterTransition, skipPending = false, allowClean = false) {
-    const run = () => transitionLoadOriginal(sessionId, finalize, after, skipPending, allowClean)
+  function loadThroughTransition<T>(sessionId: string, finalize: (proof: HistoryProof) => Promise<T>, after?: AfterTransition, skipPending = false, allowClean = false, coldPageEvidence?: () => object | undefined) {
+    const run = () => transitionLoadOriginal(sessionId, finalize, after, skipPending, allowClean, coldPageEvidence)
     return withMutationRead ? withMutationRead(sessionId, run) : run()
   }
   function transitionLoad(sessionId: string, after?: AfterTransition, skipPending = false) {
     return loadThroughTransition(sessionId, materialize, after, skipPending)
   }
-  async function transitionLoadOriginal<T>(sessionId: string, finalize: (proof: HistoryProof) => Promise<T>, after?: AfterTransition, skipPending = false, allowClean = false) {
+  async function transitionLoadOriginal<T>(sessionId: string, finalize: (proof: HistoryProof) => Promise<T>, after?: AfterTransition, skipPending = false, allowClean = false, coldPageEvidence?: () => object | undefined) {
       if (!transitions) throw new Error('TASK_TRANSITION_UNSUPPORTED')
         assertWritable(sessionId)
         let pending = skipPending ? undefined : pendingWriteBehind(sessionId)
@@ -283,7 +283,7 @@ export function createLoads(
         }, pending ? () => pending.flush() : undefined, finalize, after, allowClean && !pending?.hasWork ? () => {
           invalidateConversation(sessionId)
           executionChanges?.invalidated(sessionId)
-        } : undefined)
+        } : undefined, coldPageEvidence)
       }
   async function loadOwnedExecution<T>(sessionId: string, restore: (proof: HistoryProof) => Promise<T>): Promise<T> {
     if (!transitions) throw new Error('TASK_TRANSITION_UNSUPPORTED')
@@ -294,7 +294,7 @@ export function createLoads(
       // Only a fresh proof can attach a writer to the replacement artifact.
       legacy = (await materialize(proof)).session
       return undefined
-    }, undefined, false, true)
+    }, undefined, false, true, () => coldHistoryRetired ? undefined : coldHistory.get(sessionId)?.evidence)
     if (result) return result.value
     return transitions.existing(sessionId, async beforeRepair => {
       if (!legacy) throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED')

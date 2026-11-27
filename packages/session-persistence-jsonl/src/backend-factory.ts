@@ -732,18 +732,17 @@ export function createJsonlBackend(root: string, options?: {
     },
   }, originalArchiveRead)
   const hasOriginalArchiveRead = () => Object.getOwnPropertyDescriptor(backend, 'read')?.value === originalArchiveRead
-  if (hasOriginalArchiveRead()) {
-    associateColdArchiveHistoryReader(backend, createColdArchiveHistoryReader({
-      archive: archiveReads, file: filePath,
-      assertOriginal() {
-        assertOriginal()
-        if (!hasOriginalArchiveRead()) throw Error('Original cold archive reader unavailable')
-      },
-      checkDeleted: id => assertNotDeleted('session', id),
-      qualify: assertReadableBootstrapNamespace,
-      prepareHistory: history => capability.prepareHistory(history),
-    }))
-  }
+  const coldArchive = hasOriginalArchiveRead() ? createColdArchiveHistoryReader({
+    archive: archiveReads, file: filePath,
+    assertOriginal() {
+      assertOriginal()
+      if (!hasOriginalArchiveRead()) throw Error('Original cold archive reader unavailable')
+    },
+    checkDeleted: id => assertNotDeleted('session', id),
+    qualify: assertReadableBootstrapNamespace,
+    prepareHistory: history => capability.prepareHistory(history),
+  }) : undefined
+  if (coldArchive) associateColdArchiveHistoryReader(backend, coldArchive.reader)
   nativePrewrite.associate(backend, assertOriginal, captureIO.retainCleanup, (held, actual) => {
     const match = writerMatches.get(held)
     if (!match?.actual || match.actual !== actual) return false
@@ -776,7 +775,7 @@ export function createJsonlBackend(root: string, options?: {
   })
   const hasOrdinaryNamespace = async (id: string) => (await bootstrapNamespace(filePath(id))).length === 0
   const capability = Object.freeze(createJsonlProcessReadCapability({ assertOriginal, root: rootPath, file: filePath, document: docPath, checkDeleted: assertNotDeleted, hasOrdinaryNamespace,
-    isOriginalCleanCheck: check => check === cleanHistory && hasOriginalArchiveRead(),
+    isOriginalCleanCheck: check => check === cleanHistory && hasOriginalArchiveRead(), replayColdHistory: coldArchive?.replayHeldHistory,
     async checkNamespace(id) { if (!await hasOrdinaryNamespace(id)) throw new Error('PROCESS_READ_UNAVAILABLE') } }))
   associateArchiveHistoryPrefixReader(backend,(proof,writer)=>{
     assertOriginal()

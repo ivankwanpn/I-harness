@@ -69,15 +69,17 @@ vi.mock('../../session-persistence/src/coordinator/managed-execution-source.ts',
 
 vi.mock('@i-harness/core-session/internal/archive', async load => {
   const original = await load<typeof import('@i-harness/core-session/internal/archive')>()
-  return { ...original, createArchiveJournalHistoryDecoder: vi.fn(original.createArchiveJournalHistoryDecoder) }
+  return { ...original, createArchiveJournalHistoryDecoder: vi.fn(original.createArchiveJournalHistoryDecoder), replayOriginalArchiveFrames: vi.fn(original.replayOriginalArchiveFrames) }
 })
 
 vi.mock('../../core-session/src/conversation/validation.ts', async load => {
   const original = await load<typeof import('../../core-session/src/conversation/validation.ts')>()
-  return { ...original, createConversationValidationScan: vi.fn(original.createConversationValidationScan) }
+  return { ...original, createConversationValidationScan: vi.fn(original.createConversationValidationScan), validateDecoderOwnedConversationHistory: vi.fn(original.validateDecoderOwnedConversationHistory) }
 })
 
 const decodes = vi.mocked(archive.createArchiveJournalHistoryDecoder)
+const replays = vi.mocked(archive.replayOriginalArchiveFrames)
+const nativeValidations = vi.mocked(validation.validateDecoderOwnedConversationHistory)
 const validationScans = vi.mocked(validation.createConversationValidationScan)
 const tail = { afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: 5, includeTurns: true }
 const originalEvent = {type: 'user/message' as const, text: 'before', provenance: {
@@ -492,6 +494,105 @@ it('expires speculative decoded history before later writable preparation', asyn
     expect(document.view.events[0]).toMatchObject(originalEvent)
     expect(decodes.mock.calls.length).toBeGreaterThan(preOpen)
   } finally { vi.useRealTimers() }
+}))
+
+async function afterDecodedPreparationExpires(work: () => Promise<void>) {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+  try { await work(); await vi.advanceTimersByTimeAsync(PREPARED_HISTORY_LIFETIME_MS + 1) }
+  finally { vi.useRealTimers() }
+}
+
+it('replays both page LRU entries after decoded preparation expires and still validates every history', async () => withHistory(async ({coordinator, root}) => {
+  await afterDecodedPreparationExpires(async () => {
+    for (const id of ['a','b']) expect(await coordinator.readHistoryPage!(id,tail)).toMatchObject({headSeq:1})
+  })
+  decodes.mockClear(); replays.mockClear(); nativeValidations.mockClear(); validationScans.mockClear()
+  for (const id of ['a','b']) {
+    const file = join(root,id+'.jsonl'), before = await readFile(file)
+    const writer = await acquireManagedExecution(coordinator,id)
+    expect(writer.observe().eventCount).toBe(1)
+    expect(Object.hasOwn(writer.owner,'view')).toBe(false)
+    expect(await readFile(file)).toEqual(before)
+  }
+  expect(decodes).not.toHaveBeenCalled()
+  expect(replays).toHaveBeenCalledTimes(2)
+  expect(nativeValidations).toHaveBeenCalledTimes(2)
+  expect(validationScans).not.toHaveBeenCalled()
+}))
+
+it('does not reuse an ordinary snapshot witness for the writer even if it prepared a page cache entry', async () => withHistory(async ({coordinator}) => {
+  await coordinator.snapshot!('a',{prepareHistoryPages:true})
+  decodes.mockClear(); replays.mockClear()
+  const writer = await acquireManagedExecution(coordinator,'a')
+  expect(writer.observe().eventCount).toBe(1)
+  expect(replays).not.toHaveBeenCalled()
+  expect(decodes).toHaveBeenCalledTimes(1)
+}))
+
+it('uses the ordinary writer verification for an evicted page and for changed raw bytes', async () => withHistory(async ({coordinator, root}) => {
+  await coordinator.create({sessionId:'c'}); await coordinator.append('c',[originalEvent]); await coordinator.releaseOwnership('c')
+  await afterDecodedPreparationExpires(async () => {
+    for (const id of ['a','b','c']) expect(await coordinator.readHistoryPage!(id,tail)).toBeDefined()
+  })
+  const path = join(root,'b.jsonl'), original = await readFile(path), end = original.indexOf(10)
+  const header = JSON.parse(original.subarray(0,end).toString('utf8')) as {journal:JournalMetadata}
+  const first = JSON.parse(original.subarray(end+1).toString('utf8')) as {batchId:string}
+  const event = {...originalEvent,text:'after!',seq:0}
+  const changed = Buffer.concat([original.subarray(0,end+1),encodeFactBatch(first.batchId,header.journal.legacyPrefixDigest,[event]).bytes])
+  expect(changed.length).toBe(original.length)
+  await writeFile(path,changed)
+  decodes.mockClear(); replays.mockClear()
+  const evicted = await acquireManagedExecution(coordinator,'a')
+  expect(evicted.observe().eventCount).toBe(1)
+  expect(replays).not.toHaveBeenCalled()
+  const writer = await acquireManagedExecution(coordinator,'b')
+  expect(writer.observe().eventCount).toBe(1)
+  expect((await coordinator.readHistoryPage!('b',tail))?.events).toEqual([event])
+  expect(replays).toHaveBeenCalledTimes(1)
+  expect(replays.mock.results[0]?.value).toBeUndefined()
+  expect(decodes).toHaveBeenCalledTimes(2)
+}))
+
+it('declines replay after a same-length header-only change even though the body is still exact', async () => withHistory(async ({coordinator, root}) => {
+  await afterDecodedPreparationExpires(async () => { expect(await coordinator.readHistoryPage!('a',tail)).toBeDefined() })
+  const path = join(root,'a.jsonl'), original = await readFile(path), end = original.indexOf(10)
+  const line = original.subarray(0,end+1).toString('utf8')
+  const header = line.replace(/"createdAt":"\d{4}/,'"createdAt":"2001')
+  expect(header).not.toBe(line)
+  expect(Buffer.byteLength(header)).toBe(end+1)
+  await writeFile(path,Buffer.concat([Buffer.from(header),original.subarray(end+1)]))
+  decodes.mockClear(); replays.mockClear()
+  const writer = await acquireManagedExecution(coordinator,'a')
+  expect(writer.observe().eventCount).toBe(1)
+  expect((await coordinator.profile('a')).meta.createdAt).toMatch(/^2001-/)
+  expect(replays).not.toHaveBeenCalled()
+  expect(decodes).toHaveBeenCalledTimes(1)
+}))
+
+it('keeps the original torn-tail recovery after a verified page is already cached', async () => withHistory(async ({coordinator, root}) => {
+  await afterDecodedPreparationExpires(async () => { expect(await coordinator.readHistoryPage!('a',tail)).toBeDefined() })
+  const path = join(root,'a.jsonl'), original = await readFile(path)
+  await appendFile(path,'{"unfinished":')
+  replays.mockClear()
+  const writer = await acquireManagedExecution(coordinator,'a')
+  expect(writer.observe().eventCount).toBe(1)
+  expect(await readFile(path)).toEqual(original)
+  expect(replays).not.toHaveBeenCalled()
+}))
+
+it('preserves the original refusal for a corrupt complete frame behind cached framing', async () => withHistory(async ({coordinator, root}) => {
+  await afterDecodedPreparationExpires(async () => { expect(await coordinator.readHistoryPage!('a',tail)).toBeDefined() })
+  const path = join(root,'a.jsonl'), original = await readFile(path)
+  const changed = Buffer.from(original.toString('utf8').replace('"text":"before"','"text":"broken"'))
+  expect(changed.length).toBe(original.length)
+  expect(changed).not.toEqual(original)
+  await writeFile(path,changed)
+  decodes.mockClear(); replays.mockClear()
+  await expect(acquireManagedExecution(coordinator,'a')).rejects.toThrow('TASK_TRANSITION_FAILED')
+  expect(replays).toHaveBeenCalledTimes(1)
+  expect(replays.mock.results[0]?.value).toBeUndefined()
+  expect(decodes).toHaveBeenCalledTimes(1)
+  expect(await readFile(path)).toEqual(changed)
 }))
 
 it('clears a prepared graph and rejects a delayed handoff across coordinator close', async () => withHistory(async ({ backend, coordinator }) => {

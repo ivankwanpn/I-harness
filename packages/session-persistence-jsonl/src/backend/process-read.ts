@@ -8,7 +8,7 @@ import { createArchiveJournalHistoryDecoder } from '@i-harness/core-session/inte
 import { parseHeader } from '../format.ts';
 import { isHeldTaskDocumentScope, SessionFormatUnsupportedError, type HeldTaskDocumentScope } from '@i-harness/session-persistence';
 import { preflightDecodedFactHistory, preflightSessionFormat } from '@i-harness/session-persistence/internal/task-document-operations';
-import { MAX_PREPARED_HISTORY_BYTES, MAX_PREPARED_HISTORY_EVENTS, type PreparedArchiveHistory } from './cold-archive-history.ts';
+import { MAX_PREPARED_HISTORY_BYTES, MAX_PREPARED_HISTORY_EVENTS, type PreparedArchiveHistory, type ReplayColdHistory } from './cold-archive-history.ts';
 import { isOriginalRestorationFramingEnvironment as cleanDecodeEnvironment, type RestoredArchiveFraming, type VerifiedArchiveBody } from './verified-archive-body.ts';
 
 type Identity = { dev: bigint; ino: bigint; size: number; mtimeNs: bigint; ctimeNs: bigint };
@@ -18,7 +18,7 @@ type ColdTranscript = { id: string; witness: Witness; initial: SessionView; reus
 type ColdRead = { kind: 'process'; value: ColdTranscript } | { kind: 'history'; value: PreparedArchiveHistory; expiresAt: number };
 type DecodedHistory = ReturnType<typeof readFactJournal> & { framing?: RestoredArchiveFraming };
 export type CleanHistoryCheck = Readonly<{ before(id: string): Promise<void>; isCanonical(events: SessionEvent[]): boolean }>;
-type Ports = { assertOriginal(): void; root: string; file(id: string): string; document(key: string): string; checkNamespace(id: string): Promise<void>; checkDeleted(kind: string, id: string): Promise<void>; isOriginalCleanCheck?(check: CleanHistoryCheck): boolean; hasOrdinaryNamespace?(id: string): Promise<boolean> };
+type Ports = { assertOriginal(): void; root: string; file(id: string): string; document(key: string): string; checkNamespace(id: string): Promise<void>; checkDeleted(kind: string, id: string): Promise<void>; isOriginalCleanCheck?(check: CleanHistoryCheck): boolean; hasOrdinaryNamespace?(id: string): Promise<boolean>; replayColdHistory?: ReplayColdHistory };
 const bad = (): never => { throw new Error('PROCESS_READ_UNAVAILABLE'); };
 class HistoryLocationChanged extends Error {}
 const changedLocation = (): never => { throw new HistoryLocationChanged(); };
@@ -432,7 +432,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
             if (expected && observedDigest !== expected.digest) bad();
             return result;
         }
-        async function observeOriginal(clean?: CleanHistoryCheck) {
+        async function observeOriginal(clean?: CleanHistoryCheck, coldPageEvidence?: () => object | undefined) {
             scope.assertActive(); ports.assertOriginal(); await ports.checkDeleted('session', id);
             await clean?.before(id);
             let sourceDigest = clean ? undefined : await checkNamespace();
@@ -479,7 +479,13 @@ export function createJsonlProcessReadCapability(ports: Ports) {
                     !Object.hasOwn(raw, 'seedLength') && !Object.hasOwn(raw, 'forkPublication') &&
                     meta.origin !== 'fork' && cleanDecodeEnvironment()) {
                     const headerBytes = captured.bytes.subarray(0, end + 1);
-                    decoded = takePreparedHistory(id, captured.witness, headerBytes, body) ?? decodeCleanHistory(body, meta, headerBytes);
+                    decoded = takePreparedHistory(id, captured.witness, headerBytes, body);
+                    if (!decoded && coldPageEvidence && ports.replayColdHistory) {
+                        const evidence = coldPageEvidence();
+                        scope.assertActive(); ports.assertOriginal();
+                        if (evidence) decoded = ports.replayColdHistory(id, evidence, captured.witness.identity, headerBytes, body, meta);
+                    }
+                    decoded ??= decodeCleanHistory(body, meta, headerBytes);
                     validatedClean = decoded !== undefined;
                 }
                 try { decoded ??= readFactJournal(body, meta.journal!, meta.formatVersion, meta); }
@@ -529,7 +535,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
         }
         const session = Object.freeze({
             observe() { if (this !== session) return Promise.reject(new TypeError('Invalid history receiver')); if (observingClean || retiring && !observing) return Promise.reject(new Error('TASK_HISTORY_UNAVAILABLE')); return observing ??= Promise.resolve().then(async () => await observeOriginal() ?? bad()); },
-            observeClean() { if (this !== session) return Promise.reject(new TypeError('Invalid history receiver')); if (!cleanCheck || observing || retiring) return Promise.reject(new Error('TASK_HISTORY_UNAVAILABLE')); return observingClean ??= Promise.resolve().then(() => observeOriginal(cleanCheck)); },
+            observeClean(coldPageEvidence?: () => object | undefined) { if (this !== session) return Promise.reject(new TypeError('Invalid history receiver')); if (!cleanCheck || observing || retiring) return Promise.reject(new Error('TASK_HISTORY_UNAVAILABLE')); return observingClean ??= Promise.resolve().then(() => observeOriginal(cleanCheck, coldPageEvidence)); },
             hasDebt() { if (this !== session) throw new TypeError('Invalid history receiver'); return [...resources].some(resource => resource.failed) },
             retryResources() { if (this !== session || retiring) return Promise.reject(new TypeError('Invalid history receiver')); return settle(false) },
             settleResources() { if (this !== session) return Promise.reject(new TypeError('Invalid history receiver')); return settle(true) },
