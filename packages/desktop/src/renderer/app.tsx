@@ -30,6 +30,7 @@ import {
   isAssistantPreview,
   updateAssistantPreview,
   MAX_RETAINED_EVENTS,
+  MAX_RETAINED_LIVE,
   type AssistantPreview,
   type EventWindow,
   type WireEvent,
@@ -497,6 +498,15 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       chunkFrame = undefined
       chunkBuffer = []
     }
+    const flushChunks = () => {
+      const buffered = chunkBuffer
+      clearChunks()
+      if (buffered.length === 0 || selection.current !== scope) return
+      const generation = disconnectRevision.current
+      setEventWindow(current => selection.current === scope && disconnectRevision.current === generation
+        ? buffered.reduce((next, item) => applyNotification(next, item), current) : current)
+    }
+    const flushVisibleChunks = () => { if (document.visibilityState !== "hidden") flushChunks() }
     const runtimeAvailable = () => workspaceConnections.get(selectedWorkspaceId)?.phase !== "idle"
     const refreshList = createRefreshScheduler(async () => { if (runtimeAvailable()) await refreshDashboard(selectedWorkspaceId) })
     const refreshTurn = selectedSessionId ? createRefreshScheduler(async () => {
@@ -613,19 +623,19 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       if (info.kind === "chunk") {
         if (!record) return
         chunkBuffer.push(record)
-        if (chunkFrame === undefined) {
-          chunkFrame = requestAnimationFrame(() => {
-            const buffered = chunkBuffer
-            clearChunks()
-            if (buffered.length === 0 || selection.current !== scope) return
-            setEventWindow(current => selection.current === scope
-              ? buffered.reduce((next, item) => applyNotification(next, item), current) : current)
-          })
-        }
+        // Animation frames can stop while the window is hidden. The normal
+        // reducer drains a bounded queue without losing an unfinished stream.
+        if (chunkBuffer.length >= MAX_RETAINED_LIVE) flushChunks()
+        else if (chunkFrame === undefined && document.visibilityState !== "hidden") chunkFrame = requestAnimationFrame(flushChunks)
         return
       }
       if (info.kind === "durable") {
         if (record) {
+          if (record.type === "reasoning" && record.streamId && record.seq !== undefined && Number.isSafeInteger(record.seq) && record.seq >= 0 && chunkBuffer.length) {
+            const through = record.seq
+            chunkBuffer = chunkBuffer.filter(item => item.type !== "reasoning/chunk" || item.streamId !== record.streamId || item.atSeq > through)
+            if (chunkBuffer.length === 0) clearChunks()
+          }
           setEventWindow(current => selection.current === scope ? applyNotification(current, record) : current)
           if ((record.type === "todo/write" || record.type === "goal/change") && workStateSupported.current) void refreshWorkState(selectedWorkspaceId, selectedSessionId)
         }
@@ -640,9 +650,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       if (executionRevision.current === undefined) setRunning(info.status === "queued")
       refresh()
     }
+    document.addEventListener("visibilitychange", flushVisibleChunks)
     selectedWorkspaceEvents.current = handle
     return () => {
       if (selectedWorkspaceEvents.current === handle) selectedWorkspaceEvents.current = undefined
+      document.removeEventListener("visibilitychange", flushVisibleChunks)
       refreshList.dispose(); refreshTurn?.dispose(); clearChunks()
     }
   }, [bridge, interactions.update, refreshDashboard, refreshTasks, refreshWorkState, selectedSessionId, selectedWorkspaceId, workspaceConnections])

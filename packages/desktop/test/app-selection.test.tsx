@@ -4,6 +4,7 @@ import { StrictMode, useLayoutEffect } from "react"
 import { afterEach, expect, it, vi } from "vitest"
 import type { WorkbenchProps } from "../src/renderer/shell/Workbench.tsx"
 import type { WireEvent } from "../src/renderer/session/event-window.ts"
+import * as eventWindow from "../src/renderer/session/event-window.ts"
 import type { DesktopBridge, DesktopRequest } from "../src/shared/bridge.ts"
 const captured = vi.hoisted(() => ({ props: undefined as WorkbenchProps | undefined, onLayout: undefined as ((props: WorkbenchProps) => void) | undefined }))
 vi.mock("../src/renderer/shell/Workbench.tsx", () => ({ Workbench: (props: WorkbenchProps) => {
@@ -1037,6 +1038,78 @@ it("streams two active sessions independently and preserves the preview on selec
   expect(captured.props!.conversation!.assistantPreview?.text).toBe("A starts slowly")
   act(() => emit({ kind: "sdk/disconnected", workspaceId: "w1", message: "test disconnect" }))
   expect(captured.props!.conversation!.assistantPreview).toBeUndefined()
+})
+
+it("retires the selected settled reasoning packets while preserving another stream through visibility changes", async () => {
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  const request = fixture(input => input.kind === "desktop/session/open"
+    ? Promise.resolve({ history: { events: [], startSeq: 0, nextSeq: 0, headSeq: 0 } }) : undefined,
+  listener => { emit = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props?.conversation?.loading).toBe(false))
+  const notify = (event: WireEvent, workspaceId = "w1", sessionId = "a") =>
+    emit({ kind: "sdk/notification", method: "session/event", workspaceId, params: { sessionId, event } })
+  vi.useFakeTimers()
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible")
+  const scheduleFrame = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1)
+  const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {})
+  const apply = vi.spyOn(eventWindow, "applyNotification")
+  try {
+    request.mockClear()
+    act(() => notify({ type: "reasoning/chunk", streamId: "settled", text: "before hide", offset: 0, atSeq: 1 }))
+    expect(scheduleFrame).toHaveBeenCalledTimes(1)
+    visibility.mockReturnValue("hidden")
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"))
+      notify({ type: "reasoning/chunk", streamId: "open", text: "visible", offset: 5, atSeq: 2 })
+      notify({ type: "reasoning/chunk", streamId: "open", text: "keep ", offset: 0, atSeq: 2 })
+      notify({ type: "reasoning", streamId: "open", text: "other workspace", seq: 3 }, "w2")
+      notify({ type: "reasoning", streamId: "open", text: "other session", seq: 3 }, "w1", "b")
+      notify({ type: "reasoning", streamId: "settled", text: "durable text", seq: 3 })
+    })
+    expect(captured.props?.conversation?.rows).toMatchObject([{ id: "reasoning:settled", detail: "durable text" }])
+    expect(scheduleFrame).toHaveBeenCalledTimes(1)
+    visibility.mockReturnValue("visible")
+    act(() => document.dispatchEvent(new Event("visibilitychange")))
+
+    expect(captured.props?.conversation?.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "reasoning:open", detail: "keep visible", transient: true }),
+      expect.objectContaining({ id: "reasoning:settled", detail: "durable text" }),
+    ]))
+    expect(apply.mock.calls.flatMap(([, event]) => event.type === "reasoning/chunk" ? [event.streamId] : [])).toEqual(["open", "open"])
+    expect(cancelFrame).toHaveBeenCalledWith(1)
+    expect(request).not.toHaveBeenCalled()
+  } finally {
+    apply.mockRestore(); cancelFrame.mockRestore(); scheduleFrame.mockRestore(); visibility.mockRestore(); vi.useRealTimers()
+  }
+})
+
+it("drains a full hidden reasoning batch through the existing reducer without dropping the active text", async () => {
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  fixture(input => input.kind === "desktop/session/open"
+    ? Promise.resolve({ history: { events: [], startSeq: 0, nextSeq: 0, headSeq: 0 } }) : undefined,
+  listener => { emit = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props?.conversation?.loading).toBe(false))
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden")
+  const scheduleFrame = vi.spyOn(window, "requestAnimationFrame")
+  const limit = eventWindow.MAX_RETAINED_LIVE
+  try {
+    act(() => {
+      for (let offset = 0; offset <= limit; offset++) {
+        emit({ kind: "sdk/notification", method: "session/event", workspaceId: "w1", params: {
+          sessionId: "a", event: { type: "reasoning/chunk", streamId: "ongoing", text: "x", offset, atSeq: 1 },
+        } })
+      }
+    })
+    expect(scheduleFrame).not.toHaveBeenCalled()
+    expect(captured.props?.conversation?.rows).toMatchObject([{ id: "reasoning:ongoing", detail: "x".repeat(limit), transient: true }])
+    visibility.mockReturnValue("visible")
+    act(() => document.dispatchEvent(new Event("visibilitychange")))
+    expect(captured.props?.conversation?.rows).toMatchObject([{ id: "reasoning:ongoing", detail: "x".repeat(limit + 1), transient: true }])
+  } finally { scheduleFrame.mockRestore(); visibility.mockRestore() }
 })
 
 it("keeps the latest chosen file when an earlier diff arrives late", async () => {
