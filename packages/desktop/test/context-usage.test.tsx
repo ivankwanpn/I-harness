@@ -127,6 +127,8 @@ it("shows a completed turn's actual historical v2 count, budget, source, and mod
   const dialog = screen.getByRole("dialog", { name: "上下文容量" })
   expect(within(dialog).getByText("49,000 / 1,000,000 (4.9%)")).toBeTruthy()
   expect(within(dialog).getByText("上次請求估算")).toBeTruthy()
+  expect(within(dialog).queryByRole("button", { name: "刷新狀態" })).toBeNull()
+  expect(within(dialog).queryByText("顯示上一次請求的估算；下一次請求準備完成後會更新。")).toBeNull()
   expect(within(dialog).getByText("估算輸入 / 模型上下文視窗", { selector: "small" })).toBeTruthy()
   const budget = within(dialog).getByText("可用輸入預算", { selector: "dt" })
   expect(within(budget.parentElement!).getByRole("definition").textContent).toBe("900,000 Token")
@@ -156,6 +158,7 @@ it.each([47200, 0])("keeps the verified previous input %s when the prepared esti
   expect(within(dialog).getByText("模型上下文視窗", { selector: "dt" })).toBeTruthy()
   expect(within(dialog).getByText("fixture-provider / fixture-model")).toBeTruthy()
   expect(within(dialog).queryByRole("progressbar")).toBeNull()
+  expect(within(dialog).getByRole("button", { name: "刷新狀態" })).toBeTruthy()
 })
 
 it("uses the configured 128k model window when admission has an unverified output reserve", async () => {
@@ -218,6 +221,7 @@ it("keeps known v2 overflow and provider recovery visible alongside the historic
   expect(within(dialog).getByRole("progressbar", { name: "估算輸入 / 可用輸入預算" }).getAttribute("max")).toBe("40000")
   expect(within(dialog).getByText("供應商拒絕了目前上下文，需先壓縮或更換模型。")).toBeTruthy()
   expect(within(dialog).getByText("上次請求估算")).toBeTruthy()
+  expect(within(dialog).getByRole("button", { name: "刷新狀態" })).toBeTruthy()
 })
 
 it.each([

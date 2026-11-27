@@ -197,6 +197,11 @@ it('adds a reported input count only to the same historical v2 observation, with
   selected = {...selected,modelId:'m'}
   live = contextStateFromObservation(budget)
   expect(await read(id)).toEqual(expected)
+  live = contextStateFromObservation({ ...budget, freshness: 'stale' })
+  expect(await read(id)).toEqual({ ...live, lastReportedInputTokens: 0 })
+  live = contextStateFromObservation({ ...budget, freshness: 'stale', requestContext: { ...budget.requestContext, branchId: 'b'.repeat(64) } })
+  expect(await read(id)).toEqual(live)
+  live = contextStateFromObservation(budget)
   meta.mockRejectedValueOnce(new Error('Profile unavailable'))
   expect(await read(id)).toEqual(live)
   modelMetadata.mockRejectedValueOnce(new Error('Model settings unavailable'))

@@ -2,7 +2,7 @@ import { captureRequestCandidate } from "../../core-agent/src/agent/request-snap
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
-import { append, contextStateFromBudget, createSession, readSessionContextState } from "../../core-session/src/index.ts"
+import { append, contextStateFromBudget, contextStateFromObservation, createSession, readSessionContextState } from "../../core-session/src/index.ts"
 import { createOwnedBudget } from "../../core-agent/src/agent/budget.ts"
 import { createAnthropicClient } from "../../llm-anthropic/src/index.ts"
 import { ContextUsage } from "../src/renderer/session/ContextUsage.tsx"
@@ -51,16 +51,18 @@ it("keeps historical v1 projected component facts readable without restoring a h
   expect(request).toHaveBeenCalledTimes(1)
 })
 
-it("displays the actual adapter estimate against model capacity without certifying admission or exposing signatures", async () => {
+it.each(["current", "awaiting-projection"] as const)("displays the actual adapter estimate when %s without certifying the input budget", async freshness => {
   const { state } = await projection()
   expect(state).toMatchObject({kind:'unavailable',observation:{version:2,estimate:{kind:'estimated',source:'projected-heuristic'},disposition:'compatibility',reason:'capacity-unknown',components:{kind:'estimated',source:'projected-heuristic'}}})
-  const estimate = state.observation?.estimate
+  const observation = state.observation
+  const estimate = observation?.estimate
   if (estimate?.kind !== "estimated") throw new Error("Prepared estimate is unavailable")
-  await show(state)
+  await show(contextStateFromObservation({ ...observation, freshness }))
   expect(screen.getByRole('button',{name:'上下文容量'}).textContent).toBe(`${(estimate.value / 10000 * 100).toFixed(1)}%`)
   expect(screen.getByRole("progressbar", { name: "估算輸入 / 模型上下文視窗" }).getAttribute("max")).toBe("10000")
-  expect(screen.getByText("目前無法確認此請求的容量限制。")).toBeTruthy()
+  expect(screen.getByText("可用輸入預算尚未確認。")).toBeTruthy()
   expect(screen.queryByText("可用輸入預算")).toBeNull()
+  expect(screen.queryByRole("button", { name: "刷新狀態" }) !== null).toBe(freshness === "current")
   expect(document.body.textContent).not.toMatch(/NaN|Infinity|iVBOR|fixture-signature|controlled replayed plan/)
   expect(JSON.stringify(state)).not.toContain('estimatedInputTokens')
 })

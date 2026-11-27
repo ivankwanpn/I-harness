@@ -216,7 +216,12 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
   const warning = observation?.fullByProvider || observation?.recoveryRequired || observation?.disposition === "reduce"
     || observation?.disposition === "blocked" || (knownPressure && !knownPressure.hardFits)
   const reason = state?.kind === "unavailable" ? admissionReason(state) : undefined
-  const status = reason && Object.hasOwn(unavailableMessages, reason) ? t(unavailableMessages[reason]) : reason
+  const historicalReading = stale && preparedEstimate !== undefined && !warning
+  const canRetry = error !== undefined || state?.kind === "unavailable" && !historicalReading
+  const status = reason === "capacity-unknown" && modelWindow !== undefined && inputBudget === undefined
+    ? t("可用輸入預算尚未確認。")
+    : historicalReading && reason === "Prepared admission is historical" ? undefined
+    : reason && Object.hasOwn(unavailableMessages, reason) ? t(unavailableMessages[reason]) : reason
   const readingDetail = [percent === undefined ? undefined : basis, stale ? t("上次請求估算") : undefined, warning ? status : undefined].filter(Boolean).join(" · ")
   const detailId = `${readingId}-details`
   const systemTokens = snapshot?.systemTokens ?? 0
@@ -263,7 +268,10 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
         </dl> : null}
         {legacyReady ? <small>{t(snapshot ? "根據已準備的供應商輸入估算，包含系統提示與工具定義；與帳單和快取計數分開。" : "根據目前可見的模型訊息估算；不是供應商帳單或快取命中率。")}</small> : null}
       </> : !state && error === undefined ? <p>{t("讀取上下文容量中…")}</p> : null}
-      {error !== undefined || state?.kind === "unavailable" ? <div><p className={warning ? "context-usage-warning" : undefined} role={error !== undefined ? "alert" : undefined}>{error || status || t("無法取得上下文容量。")}</p><Button variant="secondary" size="small" loading={current?.loading} loadingLabel={t("正在處理…")} onClick={() => refresh.current?.invalidate(refreshKey, true)}>{t("刷新狀態")}</Button></div> : null}
+      {status || canRetry ? <div>
+        <p className={warning ? "context-usage-warning" : undefined} role={error !== undefined ? "alert" : undefined}>{error || status || t("無法取得上下文容量。")}</p>
+        {canRetry ? <Button variant="secondary" size="small" loading={current?.loading} loadingLabel={t("正在處理…")} onClick={() => refresh.current?.invalidate(refreshKey, true)}>{t("刷新狀態")}</Button> : null}
+      </div> : null}
       {observation && preparedEstimate ? <div className="context-usage-facts" aria-label={t("已準備的上下文")}>
         <small>{t(sourceLabels[preparedEstimate.source])}</small>
         <dl className="context-usage-fact-group" aria-label={t("輸入分項估算")}>

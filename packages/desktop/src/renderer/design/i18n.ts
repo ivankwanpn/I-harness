@@ -446,6 +446,7 @@ const english = {
   "此模型沒有可用的上下文容量資料。": "Context capacity information is unavailable for this model.",
   "部分供應商端內容無法估算，暫時不能確認可用容量。": "Some provider-side content cannot be estimated, so available capacity cannot be confirmed yet.",
   "目前無法確認此請求的容量限制。": "The capacity limits for this request could not be confirmed.",
+  "可用輸入預算尚未確認。": "The available input budget could not be confirmed.",
   "模型設定的容量限制不一致。": "The model's configured capacity limits conflict.",
   "估算輸入已超過可用輸入預算。": "Estimated input exceeds the available input budget.",
   "請求內容超過供應商的傳輸大小限制。": "The request exceeds the provider's payload size limit.",

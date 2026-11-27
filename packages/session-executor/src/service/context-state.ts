@@ -50,7 +50,9 @@ function historicalState({ budget, recovery }: SavedContextFacts, matchingCoordi
 
 function canObserveReportedInput(state: SessionContextState): boolean {
   const observation = state.observation
-  return observation?.purpose === 'main' && observation.freshness === 'awaiting-projection' && observation.identityCoverage === 'complete' &&
+  // A separate change can stale the live estimate before the accepted
+  // response finishes. Its own measured input is still historical evidence.
+  return observation?.purpose === 'main' && observation.freshness !== 'current' && observation.identityCoverage === 'complete' &&
     observation.bindingConfigFingerprint !== undefined && observation.selectedSemanticId !== undefined && observation.selectedPayloadId !== undefined
 }
 
