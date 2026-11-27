@@ -21,7 +21,7 @@ export interface LegacyStep {
 }
 
 /** Legacy evidence and failure prepass; it never constructs model messages. */
-export function inferLegacy(session: HistoryArchive, visibility: HistoryVisibility, sources: ConversationSources, diagnostics: ConversationDiagnostic[]) {
+export function inferLegacy(session: HistoryArchive, visibility: HistoryVisibility, sources: ConversationSources, diagnostics: ConversationDiagnostic[], firstSemanticsOrdinal?: number) {
   const calls = new Map<string, number[]>()
   const results = new Map<string, number[]>()
   const dispatches = new Map<string, number[]>()
@@ -30,7 +30,11 @@ export function inferLegacy(session: HistoryArchive, visibility: HistoryVisibili
   const suppressedCalls = new Set<string>()
   const suppressedAssistants = new Set<number>()
   const add = (map: Map<string, number[]>, id: string, index: number) => { const entries = map.get(id) ?? []; entries.push(index); map.set(id, entries) }
-  const fenceIndex = [...historyEntries(session)].find(([, event]) => event.type === "conversation/semantics")?.[0] ?? -1
+  // Only the structural index supplies an ordinal. The ordinary lookup must
+  // still observe foreign archive members in its original order.
+  const fenceIndex = firstSemanticsOrdinal === undefined
+    ? [...historyEntries(session)].find(([, event]) => event.type === "conversation/semantics")?.[0] ?? -1
+    : firstSemanticsOrdinal < session.length ? firstSemanticsOrdinal : -1
   const accepted = new Map<number, { event: ExchangeAcceptedEvent; index: number }>()
   const acceptedAssistants = new Set<number>(), acceptedCallSeqs = new Set<number>(), acceptedCallIds = new Set<string>(), unacceptedResults = new Set<number>()
   for (const [index, event] of historyEntries(session)) if (event.type === "model/exchange-accepted" && visibility.selected(event)) {

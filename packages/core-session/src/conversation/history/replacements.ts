@@ -1,7 +1,7 @@
 import { addressKey, compareAddresses, itemRefKey, replacementFormatError as fail, type ConversationAddress, type ConversationItemRef } from '../../events/replacement.ts'
 import { exchangeCompletion } from '../unit-state.ts'
 import type { HistoryItem } from './types.ts'
-import { historyEntries, historyFacts, type HistoryArchive, type HistoryFact } from './facts.ts'
+import { historyEntries, historyFacts, type HistoryArchive, type HistoryFact, type HistoryMarkers } from './facts.ts'
 import { groupConversationHistory } from './group.ts'
 import { historyVisibility } from './visibility.ts'
 import { conversationSeq } from '../../events/conversation.ts'
@@ -22,8 +22,10 @@ const touches = (item: HistoryItem, consumed: ReadonlySet<string>) => [...item.s
 
 /** Consumed sources are monotone independently of the emitted summary's
  * visibility. A future cut can hide a summary, never undo its consumption. */
-export function projectHistory(archive: HistoryArchive, throughSeq?: number) {
-  const grouped = groupConversationHistory(archive, throughSeq)
+export function projectHistory(archive: HistoryArchive, throughSeq?: number, markers?: HistoryMarkers) {
+  const grouped = groupConversationHistory(archive, throughSeq, markers?.firstSemanticsOrdinal)
+  // An owned prefix without a replacement has no sources to consume here.
+  if (markers && (markers.firstReplacementOrdinal === -1 || markers.firstReplacementOrdinal >= archive.length)) return grouped
   let items = grouped.items
   const consumed = new Set<string>(), positions = new Map<number, number>()
   const bySeq = new Map<number, number>()
@@ -49,8 +51,8 @@ export function projectHistory(archive: HistoryArchive, throughSeq?: number) {
 }
 
 /** Prefix-only checks: later results, closures, shadows and cuts are absent. */
-export function validateHistoricalReplacement(archive: HistoryArchive, replacement: HistoryFact): ReadonlySet<number> {
-  const { items } = projectHistory(archive)
+export function validateHistoricalReplacement(archive: HistoryArchive, replacement: HistoryFact, markers?: HistoryMarkers): ReadonlySet<number> {
+  const { items } = projectHistory(archive, undefined, markers)
   const seq = replacement.seq!
   for (const [, fact] of historyEntries(archive)) if (fact.type === 'compaction/replacement' && fact.replacementId === replacement.replacementId) fail('duplicate-id', seq)
   const coverage = replacement.coverage!

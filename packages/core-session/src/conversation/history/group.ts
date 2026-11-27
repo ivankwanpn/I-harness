@@ -30,12 +30,12 @@ class HistoryGrouping {
   private readonly units = new Map<LegacyStep, ConversationUnit>()
   private readonly turns
 
-  constructor(private readonly archive: HistoryArchive, throughSeq?: number) {
+  constructor(private readonly archive: HistoryArchive, throughSeq?: number, firstSemanticsOrdinal?: number) {
     this.turns = historyTurns(archive)
     this.sources = historySources(archive, this.diagnostics)
     this.visibility = historyVisibility(historyFacts(archive), throughSeq)
     this.current = findCurrentRuntimeContext(archive, this.visibility.branch)
-    this.legacy = inferLegacy(archive, this.visibility, this.sources, this.diagnostics)
+    this.legacy = inferLegacy(archive, this.visibility, this.sources, this.diagnostics, firstSemanticsOrdinal)
   }
 
   private makeItem = (kind: HistoryItem["kind"], index: number, part: string, admissionIndex?: number, imageAdmissionIndex?: number): HistoryItem => {
@@ -178,8 +178,8 @@ class HistoryGrouping {
 }
 
 /** The index and projection consume the same logical descriptors/recipes. */
-export function groupConversationHistory(archive: HistoryArchive, throughSeq?: number) {
-  const grouping = new HistoryGrouping(archive, throughSeq)
+export function groupConversationHistory(archive: HistoryArchive, throughSeq?: number, firstSemanticsOrdinal?: number) {
+  const grouping = new HistoryGrouping(archive, throughSeq, firstSemanticsOrdinal)
   for (const [index, fact] of historyEntries(archive)) grouping.advance(index, fact)
   return grouping.finish()
 }

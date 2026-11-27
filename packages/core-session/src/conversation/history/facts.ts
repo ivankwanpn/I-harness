@@ -37,6 +37,11 @@ export interface HistoryFact extends ResultFactMetadata {
   readonly replacementId?: string; readonly coverage?: readonly ConversationCoverage[]; readonly insertBefore?: ConversationItemRef
 }
 export interface HistoryArchive { readonly length: number; get(index: number): HistoryFact }
+/** Positions in the original index's structural history, or -1 for absence. */
+export interface HistoryMarkers {
+  readonly firstSemanticsOrdinal: number
+  readonly firstReplacementOrdinal: number
+}
 
 export function historyFact(event: SessionEventView, index: number, inheritedBoundary = 0): HistoryFact {
   const base = { index, type: event.type, ...(event.seq === undefined ? {} : { seq: event.seq }), ...resultFactMetadata(event) }
