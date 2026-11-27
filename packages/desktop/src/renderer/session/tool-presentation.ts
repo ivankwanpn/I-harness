@@ -93,10 +93,37 @@ export function safeRecordedUrl(value: unknown): string | undefined {
 
 export type ToolImage = { mediaType: string; dataBase64: string; name?: string; width?: number; height?: number }
 const imageTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"])
-export function resultImages(output: unknown): ToolImage[] {
+export function isToolImage(value: unknown): value is ToolImage {
+  const image = record(value)
+  return image !== undefined && typeof image.mediaType === "string" && imageTypes.has(image.mediaType) && typeof image.dataBase64 === "string"
+}
+
+function mcpImage(value: unknown): ToolImage | undefined {
+  const block = record(value)
+  if (block?.type !== "image") return undefined
+  const image = { mediaType: block.mimeType, dataBase64: block.data, name: block.name }
+  return isToolImage(image) ? image : undefined
+}
+
+function resultImageSources(output: unknown) {
   const value = record(output)
-  const direct = Array.isArray(value?.images) ? value.images : []
-  const content = Array.isArray(output) ? output : Array.isArray(value?.content) ? value.content : []
-  const mcp = content.flatMap(item => { const row = record(item); return row?.type === "image" ? [{ mediaType: row.mimeType, dataBase64: row.data, name: row.name }] : [] })
-  return [...direct, ...mcp].filter((item): item is ToolImage => !!record(item) && typeof item.mediaType === "string" && imageTypes.has(item.mediaType) && typeof item.dataBase64 === "string")
+  return {
+    direct: Array.isArray(value?.images) ? value.images : undefined,
+    content: Array.isArray(output) ? output : Array.isArray(value?.content) ? value.content : undefined,
+  }
+}
+
+export function hasResultImages(output: unknown): boolean {
+  const { direct, content } = resultImageSources(output)
+  return direct?.some(isToolImage) === true || content?.some(block => mcpImage(block) !== undefined) === true
+}
+
+export function resultImages(output: unknown): ToolImage[] {
+  const { direct, content } = resultImageSources(output)
+  const images = direct?.filter(isToolImage) ?? []
+  for (const block of content ?? []) {
+    const image = mcpImage(block)
+    if (image) images.push(image)
+  }
+  return images
 }

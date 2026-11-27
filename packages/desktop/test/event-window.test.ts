@@ -52,6 +52,87 @@ describe("Desktop event window", () => {
     expect(cache.get("a")?.events).toEqual(text)
   })
 
+  const image = { mediaType: "image/png", dataBase64: "aGVsbG8=" } as const
+  const artifact = {
+    version: 1,
+    execution: { outcome: "succeeded", dispatch: "dispatched" },
+    preview: "stored output",
+    retention: { kind: "artifact", ref: { version: 1, id: "result", revision: "1", codec: "json-utf8-v1", encodedBytes: 100,
+      contentDigest: "0".repeat(64), completeness: "complete" } },
+  } as const
+  const toolResult = { type: "tool/result", seq: 1, callId: "read", name: "read_image" } as const
+  const codeResult = { type: "code/result", seq: 1, cellId: "cell", callId: "read", name: "read_image" } as const
+  const codeOutput = { type: "code/output", seq: 1, cellId: "cell" } as const
+  const mcpImage = { type: "image", mimeType: image.mediaType, data: image.dataBase64 }
+  const extent = { kind: "framed", first: 1, last: 1 } as const
+  const seedBase = { extent, scope: "turn", origins: [], sourceProvenance: [] } as const
+  const seedInput = { ...seedBase, kind: "input", input: { raw: [], derivedContext: [], media: [] }, messages: [{ role: "user", content: "text" }] } as const
+  const seedGroup = { type: "conversation/seed-group", version: 1, seq: 1, manifestSeq: 0, ordinal: 0 } as const
+  const imagePart = { type: "image", image } as const
+  it.each([
+    ["tool result with an artifact and inline media", { ...toolResult, envelope: { ...artifact, media: [image] } }],
+    ["legacy tool result with images", { ...toolResult, output: { images: [image] } }],
+    ["legacy MCP image blocks", { ...toolResult, output: { content: [mcpImage] } }],
+    ["legacy MCP image array", { ...toolResult, output: [mcpImage] }],
+    ["inline retained legacy image array", { ...toolResult, envelope: { ...artifact, media: [], retention: { kind: "inline", value: [mcpImage], encodedBytes: 64 } } }],
+    ["nested Code Mode tool result", { ...codeResult, envelope: { ...artifact, media: [image] } }],
+    ["Code Mode result envelope", { ...codeOutput, envelope: { ...artifact, media: [image] } }],
+    ["Code Mode image", { ...codeOutput, content: { type: "image", image } }],
+    ["Code Mode audio", { ...codeOutput, content: { type: "audio", audioUrl: "data:audio/wav;base64,YQ==" } }],
+    ["typed Code Mode media in an inline envelope", { ...codeOutput, envelope: { ...artifact, media: [],
+      retention: { kind: "inline", value: { type: "audio", audioUrl: "data:audio/wav;base64,YQ==" }, encodedBytes: 54 } } }],
+    ["inherited user image", { ...seedGroup, group: { extent, items: [{ ...seedInput, input: { ...seedInput.input, media: [{ message: 0, part: 0 }] },
+      messages: [{ role: "user", content: [imagePart] }] }] } }],
+    ["inherited tool result image", { ...seedGroup, group: { extent, items: [{ ...seedBase, kind: "exchange", sourceAcceptance: "inherited-observation",
+      calls: [{ id: "read", name: "read_image", assistantMessage: 0, call: 0, result: 0, outcome: "success", source: [] }],
+      messages: [{ role: "assistant", content: "", toolCalls: [{ id: "read", name: "read_image", args: {} }] },
+        { role: "tool", toolCallId: "read", content: "stored output" }, { role: "user", content: [imagePart] }],
+      results: [{ kind: "legacy", source: [], message: 1, media: [{ message: 2, part: 0 }] }] }] } }],
+  ] satisfies [string, WireEvent][])("omits %s from a reopened preview and preserves the active window", (_label, media) => {
+    const cache = createHistoryPreviewCache()
+    const prior = applyHistory(emptyEventWindow(), page([event(0, "text")], 1))
+    cache.set("a", prior)
+    expect(cache.get("a")?.events).toEqual(prior.events)
+
+    const active = applyHistory(prior, page([media], 2))
+    cache.set("a", active)
+    expect(cache.get("a")).toBeUndefined()
+    expect(active.events.at(-1)).toBe(media)
+  })
+
+  it("retains text, image summaries and artifact references without inline media in a preview", () => {
+    const cache = createHistoryPreviewCache()
+    const events: WireEvent[] = [
+      { ...toolResult, seq: 0, envelope: { ...artifact, media: [] } },
+      { ...toolResult, seq: 1, output: { content: [{ type: "text", text: "result" }], images: [{ mediaType: "image/png", bytes: 5 }] } },
+      { ...codeOutput, seq: 2, content: { type: "text", text: "code output" } },
+      { type: "user/message", seq: 3, text: "image summary", imageSummaries: [{ mediaType: "image/png", bytes: 5 }] },
+      { ...codeOutput, seq: 4, content: { type: "audio", audioUrl: "https://example.invalid/audio.wav", durationMs: 500, bytes: 15 } },
+      { ...seedGroup, seq: 5, group: { extent, items: [seedInput] } },
+      { type: "conversation/seed-results", version: 1, seq: 6, manifestSeq: 0, ordinal: 0,
+        page: { version: 1, ordinal: 0, firstRow: 0, extent, rows: [{ ordinal: 0, protocol: "managed", extent, branchEvidence: [],
+          original: { kind: "local", sessionId: "original", seq: 2, event: "tool/result", slot: "envelope.retention.ref" },
+          basis: { kind: "selected-observation", unit: { kind: "exchange", at: { origin: 0, seq: 1, part: "call" }, closedAt: { origin: 0, seq: 3, part: "end" } } },
+          ref: artifact.retention.ref, use: { kind: "result" } }] } },
+    ]
+    cache.set("a", applyHistory(emptyEventWindow(), page(events, 7)))
+    expect(cache.get("a")?.events).toEqual(events)
+  })
+
+  it.each([
+    { ...toolResult, envelope: { ...artifact, media: null } },
+    { ...toolResult, envelope: { media: [] } },
+    seedGroup,
+    { ...seedGroup, group: { extent, items: [{ kind: "input" }] } },
+    { ...seedGroup, group: { extent, items: [{ kind: "exchange", results: [null] }] } },
+  ])("keeps partial records readable without storing a preview", partial => {
+    const cache = createHistoryPreviewCache()
+    const active = applyHistory(emptyEventWindow(), page([partial as unknown as WireEvent], 2))
+    cache.set("a", active)
+    expect(active.events).toEqual([partial])
+    expect(cache.get("a")).toBeUndefined()
+  })
+
   it("keeps stable rows on empty replay and prefers the last durable record in an unordered page", () => {
     const original = applyHistory(emptyEventWindow(), page([event(0, "zero"), event(2, "old"), event(4, "four")], 5))
     expect(applyHistory(original, page([], 6)).events).toBe(original.events)

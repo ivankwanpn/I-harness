@@ -2,6 +2,7 @@ import type { HistoryRange } from "@i-harness/sdk"
 import { assistantBoundary, isAssistantPreview, updateAssistantPreview, type AssistantPreview } from "../../shared/assistant-preview.ts"
 import { historyEvents, type WireEvent } from "./history-events.ts"
 import { mergeReasoningChunks } from "./reasoning-progress.ts"
+import { hasResultImages, isToolImage, record } from "./tool-presentation.ts"
 
 export { isAssistantPreview, updateAssistantPreview, type AssistantPreview } from "../../shared/assistant-preview.ts"
 export type { WireEvent } from "./history-events.ts"
@@ -23,6 +24,38 @@ export const MAX_RETAINED_LIVE = 200
 export const RECENT_HISTORY_LIMIT = 500
 const MAX_CACHED_SESSIONS = 4
 
+function hasCodeOutputMedia(value: unknown): boolean {
+  const content = record(value)
+  return (content?.type === "image" && isToolImage(content.image))
+    || (content?.type === "audio" && typeof content.audioUrl === "string" && content.audioUrl.startsWith("data:audio/"))
+}
+
+function requiresNativeHistory(event: WireEvent): boolean {
+  if (event.type === "user/message") return event.images !== undefined && (!Array.isArray(event.images) || event.images.length > 0)
+  if (event.type === "conversation/seed-group") {
+    // The bootstrap codec checks that these addresses exactly cover the
+    // inherited image parts. The rest of the seed need not be inspected.
+    const items = event.group?.items
+    return !Array.isArray(items) || items.some(item => {
+      if (item?.kind === "input") return !Array.isArray(item.input?.media) || item.input.media.length > 0
+      if (item?.kind === "exchange") return !Array.isArray(item.results)
+        || item.results.some((result: { media?: unknown } | null) => !Array.isArray(result?.media) || result.media.length > 0)
+      return item?.kind !== "summary"
+    })
+  }
+  if (event.type !== "tool/result" && event.type !== "code/result" && event.type !== "code/output") return false
+  const envelope = event.envelope
+  if (envelope !== undefined) {
+    if (!Array.isArray(envelope?.media) || envelope.media.length > 0) return true
+    const retention = envelope.retention
+    if (retention?.kind === "inline") return hasResultImages(retention.value)
+      || (event.type === "code/output" && hasCodeOutputMedia(retention.value))
+    return retention?.kind !== "artifact" && retention?.kind !== "unavailable"
+  }
+  if (event.type !== "code/output") return hasResultImages(event.output)
+  return hasCodeOutputMedia(event.content)
+}
+
 /** Reopening a conversation paints its last native page while the host
  * refreshes it. Browsing more conversations must not retain every full log. */
 export function createHistoryPreviewCache() {
@@ -39,9 +72,9 @@ export function createHistoryPreviewCache() {
     set(key: string, window: EventWindow) {
       windows.delete(key)
       const events = window.events.length > RECENT_HISTORY_LIMIT ? window.events.slice(-RECENT_HISTORY_LIMIT) : window.events
-      // Image messages carry the original base64. Restore them from native
-      // history on selection instead of keeping their payloads in the cache.
-      if (events.some(event => event.type === "user/message" && event.images?.length)) return
+      // Inline media remains available in native history and the active
+      // window. Avoid holding its encoded bytes in the reopen cache.
+      if (events.some(requiresNativeHistory)) return
       windows.set(key, { ...window, events, live: [], assistantPreview: undefined })
       if (windows.size > MAX_CACHED_SESSIONS) windows.delete(windows.keys().next().value!)
     },
