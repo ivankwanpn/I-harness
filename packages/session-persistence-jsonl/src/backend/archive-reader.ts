@@ -6,8 +6,10 @@ import type { SessionMeta } from '@i-harness/session-persistence';
 import { parseHeader } from '../format.ts';
 import { ArchiveEvidenceMismatch, createColdArchiveFramingRecorder, createVerifiedArchiveBodyDecoder, isOriginalRestorationFramingEnvironment, type RestoredArchiveFraming, type VerifiedArchiveBody } from './verified-archive-body.ts';
 const managed = (v: number) => [6, 7, 8, 9, 10, 11, 12, 13, 14].includes(v);
+const STREAM_READ_BYTES = 64 * 1024;
+const HELD_DEPENDENCY_READ_BYTES = 1024 * 1024;
 type ArchivePrefix = { header: SessionMeta; birth: Buffer };
-type DependencySelection = { ordinals: ReadonlySet<number>; prefix: Readonly<JournalPrefix>; assertCurrent(): void; verified?: VerifiedArchiveBody; restored?: RestoredArchiveFraming; coldHeaderDigest?: string };
+type DependencySelection = { ordinals: ReadonlySet<number>; prefix: Readonly<JournalPrefix>; assertCurrent(): void; verified?: VerifiedArchiveBody; restored?: RestoredArchiveFraming; coldHeaderDigest?: string; held?: true };
 type ArchiveBodyDecoder = { push(bytes: Buffer): void; finish(): {
     prefix: JournalPrefix; torn: boolean; verified?: VerifiedArchiveBody; validatedEvents?(header: SessionMeta, onOriginal?: () => void): SessionEvent[];
 } };
@@ -18,6 +20,7 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
     let events: SessionEvent[] = [];
     const birth: Buffer[] = [];
     let needed = 0, ordinal = 0, decoder: ArchiveBodyDecoder | undefined;
+    let heldReadBuffer: Buffer | undefined;
     function add(bytes: Buffer) { if (bytes.length) { parts.push(Buffer.from(bytes)); partBytes += bytes.length; } }
     function take() { const b = Buffer.concat(parts, partBytes); parts = []; partBytes = 0; return b; }
     function consume(record: Buffer) {
@@ -48,10 +51,15 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
                 };
                 const collect = captureColdFraming && !dependency && lf && header.formatVersion === CURRENT_FORMAT_VERSION && !header.semanticSeed
                     && !journal.legacyEventCount && !journal.legacyBodyBytes && !journal.separatorBytes;
-                decoder = (dependency && createVerifiedArchiveBodyDecoder(journal, header.formatVersion,
-                    dependency.prefix, dependency.ordinals, event => events.push(event), dependency.verified ?? restored?.body, coldHeader !== undefined))
+                const prior = dependency?.verified ?? restored?.body;
+                const verifiedDecoder = dependency && createVerifiedArchiveBodyDecoder(journal, header.formatVersion,
+                    dependency.prefix, dependency.ordinals, event => events.push(event), prior, coldHeader !== undefined,
+                    dependency.held === true && header.formatVersion === CURRENT_FORMAT_VERSION && !header.semanticSeed
+                        && extent > STREAM_READ_BYTES && isOriginalRestorationFramingEnvironment());
+                decoder = verifiedDecoder
                     ?? (collect ? createColdArchiveFramingRecorder(journal, header.formatVersion)
                         : createJournalStreamDecoder(journal, header.formatVersion, accept));
+                if (verifiedDecoder?.recyclesInput) heldReadBuffer = Buffer.allocUnsafe(Math.min(HELD_DEPENDENCY_READ_BYTES, extent));
             }
             if (!needed && !prefixOnly) await qualifyPrefix?.({ header, birth: Buffer.concat(birth) });
             return;
@@ -71,9 +79,10 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
     }
     let position = 0, lastByte: number | undefined;
     while (position < extent) {
-        const buffer = Buffer.allocUnsafe(Math.min(65536, extent - position));
-        const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+        const buffer = heldReadBuffer ?? Buffer.allocUnsafe(Math.min(STREAM_READ_BYTES, extent - position));
+        const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, extent - position), position);
         dependency?.assertCurrent();
+        if (heldReadBuffer && !isOriginalRestorationFramingEnvironment()) heldReadBuffer = undefined;
         if (!bytesRead) throw Error('Archive truncated during observation');
         position += bytesRead;
         const chunk = buffer.subarray(0, bytesRead);

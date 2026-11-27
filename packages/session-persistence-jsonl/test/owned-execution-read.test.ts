@@ -176,6 +176,51 @@ it('uses the same verified frame positions across scopes and extends them across
   } finally {await appended.close()}
  } finally {await scope.close();await f.close()}
 })
+it('reads known held framing in bounded reusable blocks and still checks an unselected frame', async () => {
+ const f = await fixture()
+ const spanning = '跨'.repeat(25_000), unselected = 'original-' + '大'.repeat(380_000)
+ const batch = encodeFactBatch('held-block-test', f.prefix.prefixDigest, [
+  {type:'user/message', text:spanning, seq:2},
+ ])
+ const tail = encodeFactBatch('held-block-tail', factPrefixDigest(f.prefix.prefixDigest, batch.key.batchDigest), [
+  {type:'user/message', text:unselected, seq:3},
+  {type:'plan/mode', mode:'on', seq:4},
+ ])
+ const prefix = {
+  eventCount: 5, bodyBytes: f.prefix.bodyBytes + batch.bytes.length + tail.bytes.length,
+  prefixDigest: factPrefixDigest(tail.key.previousPrefixDigest, tail.key.batchDigest),
+ }
+ const calls: { buffer: Buffer; length: number }[] = []
+ try {
+  await fs.appendFile(f.path, Buffer.concat([batch.bytes, tail.bytes]))
+  const first = openOwnedExecutionDependencies(f.backend, 'a', f.held, prefix)
+  try { await expect(first.readEvent(0)).resolves.toMatchObject({seq:0,mode:'on'}) }
+  finally { await first.close() }
+  vi.mocked(fs.open).mockImplementation(async (...args) => {
+   const handle = await originalOpen(...args)
+   if (args[0] === f.path) {
+    const read = handle.read.bind(handle)
+    handle.read = ((buffer: Buffer, offset: number, length: number, position: number) => {
+     calls.push({buffer,length})
+     return read(buffer, offset, length, position)
+    }) as typeof handle.read
+   }
+   return handle
+  })
+  const next = openOwnedExecutionDependencies(f.backend, 'a', f.held, prefix)
+  try {
+   await expect(next.readEvents!([4,2,0])).resolves.toMatchObject([{seq:4}, {seq:2,text:spanning}, {seq:0}])
+   expect(calls).toHaveLength(3)
+   expect(calls.slice(0,2).map(({length}) => length)).toEqual([64*1024, 1024*1024])
+   expect(calls[2]!.buffer).toBe(calls[1]!.buffer)
+   const bytes = await fs.readFile(f.path, 'utf8'), changed = bytes.replace('original-', 'modified-')
+   expect(changed).not.toBe(bytes)
+   expect(Buffer.byteLength(changed)).toBe(Buffer.byteLength(bytes))
+   await fs.writeFile(f.path, changed)
+   await expect(next.readEvent(0)).rejects.toThrow('Owned dependency prefix mismatch')
+  } finally { await next.close() }
+ } finally { await f.close() }
+})
 it('rejects a same-size change outside the requested frame after indexing the prefix',async()=>{
  const f=await fixture()
  const batch=encodeFactBatch('unselected-test',f.prefix.prefixDigest,[{type:'user/message',text:'untouched',seq:2}])

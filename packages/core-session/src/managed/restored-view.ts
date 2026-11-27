@@ -19,11 +19,12 @@ import { preparePrunedResultProjection } from '../conversation/payload.ts';
 import type { ConversationProjection } from '../conversation/types.ts';
 import type { PreparedConversationArchive, PreparedPrunedResult, PreparedResultProjection } from '../conversation/restoration-types.ts';
 import type { OriginalConversationRestorationSource } from '../conversation/restoration-input.ts';
-import { createConversationValidationScan, takeConversationValidationScan, readConversationDeliveries, readConversationGenerations,prepareConversationAppend,hasConversationToolCall } from '../conversation/validation.ts';
+import { CURRENT_FORMAT_VERSION } from '../events/types.ts';
+import { createConversationValidationScan, takeConversationValidationScan, readConversationDeliveries, readConversationGenerations,prepareConversationAppend,hasConversationToolCall,hasCommittedConversationReference } from '../conversation/validation.ts';
 import { createManagedIntakeIndex } from './intake-index.ts';
 import { prepareSessionEventWithDependencies } from '../events/intake.ts';
 import { freezeJsonData, isCapturedExecutionFoldSnapshot, isStrictFactData } from './capture.ts';
-import { resolveFactGroupWithDependencies,type CapturedFactGroup } from './groups.ts';
+import { exchangePriorReferences, resolveFactGroupWithDependencies,type CapturedFactGroup } from './groups.ts';
 import { validateDeliveryFrame } from '../conversation/delivery.ts';
 import { createConversationSourceCoordinates, archiveConversationSources, retainConversationSourceCoordinates } from '../conversation/sources.ts';
 import { createConversationStateIndex, readIndexedConversationState, type ConversationStateRead } from '../conversation/state.ts';
@@ -390,7 +391,19 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
             try{
                 for(const group of groups){
                     let resolved:ReturnType<typeof resolveFactGroupWithDependencies>;
-                    try{for(;;){try{resolved=resolveFactGroupWithDependencies(group,{eventCount:owned.index.eventCount,readEvent(ordinal){if(!Number.isSafeInteger(ordinal)||ordinal<0||ordinal>=owned.index.eventCount)return undefined;const value=available.get(ordinal);if(!value)throw new Missing(ordinal);return value}},owned.index.eventCount+events.length);break}catch(error){if(!(error instanceof Missing))throw error;await read(error.ordinal)}}}
+                    try{
+                        const references = readBatch && exchangePriorReferences(group);
+                        if (readBatch && references && references.length > 1 && owned.source.formatVersion === CURRENT_FORMAT_VERSION
+                            && !owned.source.header?.semanticSeed && owned.source.header?.parentSession === undefined
+                            && references.every(({ seq, type }) => hasCommittedConversationReference(owned.index, seq, type))) {
+                            const missing = [...new Set(references.map(({ seq }) => seq).filter(seq => !available.has(seq)))];
+                            if (missing.length > 1) {
+                                try { await readBatch(missing); }
+                                catch { current(); /* The original resolver still reads in order when the optional prefetch fails. */ }
+                            }
+                        }
+                        for(;;){try{resolved=resolveFactGroupWithDependencies(group,{eventCount:owned.index.eventCount,readEvent(ordinal){if(!Number.isSafeInteger(ordinal)||ordinal<0||ordinal>=owned.index.eventCount)return undefined;const value=available.get(ordinal);if(!value)throw new Missing(ordinal);return value}},owned.index.eventCount+events.length);break}catch(error){if(!(error instanceof Missing))throw error;await read(error.ordinal)}}
+                    }
                     catch(cause){if(!rejectInvalidGroups||readFailed)throw cause;current();rejected.push({group,cause});continue}
                     const first=events.length;
                     for(const event of resolved){

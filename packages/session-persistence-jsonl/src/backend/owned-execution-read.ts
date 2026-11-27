@@ -36,7 +36,7 @@ export function associateOwnedExecutionReader(backend:PersistenceBackend,ports:{
     await ports.assertNotDeleted('session',id);check()
     const prior = verifiedBodies.get(held)
     const result=await readSessionArchive(handle,extent,false,birth=>ports.qualify(id,held,birth),{
-     ordinals:selected,prefix:expected,assertCurrent:check,...(prior?.restored ? {restored:prior.restored} : {verified:prior?.body}),
+     ordinals:selected,prefix:expected,assertCurrent:check,held:true,...(prior?.restored ? {restored:prior.restored} : {verified:prior?.body}),
     })
     if(result.header.sessionId!==id)throw Error('Owned dependency header mismatch')
     const records=new Map(result.events.map(event=>[event.seq,event]))

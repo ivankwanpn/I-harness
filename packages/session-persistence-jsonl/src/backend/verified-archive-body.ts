@@ -69,12 +69,14 @@ export function createVerifiedArchiveBodyDecoder(
   accept: (event: SessionEvent) => void,
   prior?: VerifiedArchiveBody,
   cold = false,
+  recycledInput = false,
 ) {
   if (metadata.legacyEventCount || metadata.legacyBodyBytes || metadata.separatorBytes) return undefined
   const previous = prior && prior.formatVersion === formatVersion &&
     prior.legacyPrefixDigest === metadata.legacyPrefixDigest &&
     prior.prefix.bodyBytes > 0 && prior.prefix.bodyBytes <= expected.bodyBytes &&
     prior.prefix.eventCount <= expected.eventCount ? prior : undefined
+  const recyclesInput = recycledInput && previous !== undefined
   const selectedFrames = previous ? [...new Set([...ordinals]
     .filter(ordinal => ordinal < previous.prefix.eventCount)
     .map(ordinal => findFrame(previous.frames, ordinal)))].sort((a, b) => a.offset - b.offset) : []
@@ -97,7 +99,8 @@ export function createVerifiedArchiveBodyDecoder(
       if (frame.offset >= end) break
       const frameEnd = frame.offset + frame.length
       const part = bytes.subarray(Math.max(0, frame.offset - position), Math.min(bytes.length, frameEnd - position))
-      if (!selectionFailure) fragments.push(part)
+      // An unfinished selected frame must own bytes across the next push.
+      if (!selectionFailure) fragments.push(recyclesInput && frameEnd > end ? Buffer.from(part) : part)
       if (frameEnd > end) break
       if (!selectionFailure) {
         try {
@@ -119,6 +122,7 @@ export function createVerifiedArchiveBodyDecoder(
   }
 
   return {
+    recyclesInput,
     push(bytes: Buffer) {
       let offset = 0
       if (previous && !decoder) {

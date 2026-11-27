@@ -198,6 +198,24 @@ export function captureFactGroup(draft: FactGroupDraft):
 
 /** Explicit structural slots only: user args/output containing $ref are data. */
 export function isOriginalCapturedFactGroup(group:object):group is CapturedFactGroup{return owned.has(group)}
+
+/** Draft coordinates for a conventional exchange, in the resolver's order.
+ * A caller still has to read each referenced body and resolve the group. */
+export function exchangePriorReferences(group: CapturedFactGroup): readonly { seq: number; type: 'tool/call' | 'step/start' }[] | undefined {
+  if (!owned.has(group) || group.kind !== 'exchange-acceptance') return undefined
+  const field = (value: unknown, key: string | number): unknown => value && typeof value === 'object' ? Object.getOwnPropertyDescriptor(value, key)?.value : undefined
+  const draft = group.accepted, assistant = field(draft, 'assistantSeq'), calls = field(draft, 'callSeqs')
+  if (field(assistant, 'kind') !== 'group' || field(assistant, 'position') !== 0 || field(assistant, 'expectedType') !== 'assistant/message' || !Array.isArray(calls) || !calls.length) return undefined
+  const references: { seq: number; type: 'tool/call' | 'step/start' }[] = []
+  for (let position = 0; position <= calls.length; position++) {
+    const step = position === calls.length, type = step ? 'step/start' : 'tool/call'
+    const ref = step ? field(draft, 'stepStartSeq') : field(calls, position), seq = field(ref, 'seq')
+    if (field(ref, 'kind') !== 'prior' || field(ref, 'expectedType') !== type || typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 0) return undefined
+    references.push({ seq, type })
+  }
+  return references
+}
+
 export function resolveFactGroup(group: CapturedFactGroup, view: SessionView, firstSeq: number): SessionEvent[] {
   return resolveFactGroupWithDependencies(group,{eventCount:view.events.length,readEvent:seq=>view.events[seq]},firstSeq)
 }

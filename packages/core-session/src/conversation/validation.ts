@@ -59,6 +59,11 @@ const immutableManagedInitialShapes = Symbol('immutable managed initial shapes')
 type InitialShapeProof = typeof archiveShapePreflight | typeof immutableManagedInitialShapes;
 const callObservations=new WeakMap<ConversationValidationIndex,(id:string)=>boolean>();
 export function hasConversationToolCall(index:ConversationValidationIndex,id:string):boolean{const read=callObservations.get(index);if(!read)throw TypeError('Original conversation call index required');return read(id)}
+const referenceObservations = new WeakMap<ConversationValidationIndex, (ordinal: number, type: SessionEvent['type']) => boolean>();
+/** A prefetch hint only. Publication still compares the physical record. */
+export function hasCommittedConversationReference(index: ConversationValidationIndex, ordinal: number, type: SessionEvent['type']): boolean {
+    return referenceObservations.get(index)?.(ordinal, type) === true;
+}
 type PreparedConversationAppend=ReturnType<ConversationValidationIndex['stage']>&{discard():void};
 type ReadAppendEvents = (ordinals: readonly number[]) => Promise<readonly SessionEvent[]>;
 const appendPreparations = new WeakMap<ConversationValidationIndex,(events:readonly SessionEvent[],readEvent:(ordinal:number)=>Promise<SessionEvent>,assertCurrent:()=>void,readEvents?:ReadAppendEvents)=>Promise<PreparedConversationAppend>>();
@@ -409,6 +414,10 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
         stage(suffix, options) { return stage(suffix, options); },
     };
     callObservations.set(index,id=>callsById.has(id));
+    referenceObservations.set(index, (ordinal, type) => {
+        const address = addresses.get(ordinal);
+        return address?.index === ordinal && address.type === type && !address.ambiguous;
+    });
     appendPreparations.set(index,async(suffix,readEvent,assertCurrent,readEvents)=>{
         const expected=revision,available=new Map<number,SessionEvent>(),first=count;
         let discarded=false;

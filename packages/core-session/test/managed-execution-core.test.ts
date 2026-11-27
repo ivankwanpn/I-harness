@@ -7,18 +7,60 @@ import { createManagedSessionState } from '../src/managed/view.ts'
 import { createActionCaptures } from '../../session-persistence/src/coordinator/action-captures.ts'
 import { createSourceFacts } from '../../session-persistence/src/coordinator/source-facts.ts'
 
-async function fixture(events: SessionEvent[],controls:{read?():Promise<void>;close?():Promise<void>;beforeAppend?():void}={}) {
+async function fixture(events: SessionEvent[],controls:{read?(ordinal:number):Promise<void>;readBatch?(ordinals: readonly number[]):Promise<void>;close?():Promise<void>;beforeAppend?():void}={}) {
   const token: OwnerToken = Object.freeze({sessionId:'owned',incarnation:'original'})
   let prefix: JournalPrefix = {eventCount:events.length,bodyBytes:0,prefixDigest:'a'.repeat(64)}
-  let held=true, revision=0, reads:number[]=[], opened=0, closed=0,lastScope:any
+  let held=true, revision=0, reads:number[]=[], readBatches:number[][]=[], opened=0, closed=0,lastScope:any
   const source={formatVersion:14,get prefix(){return prefix},assertCurrent(){if(!held)throw Error('lost owner')},async consume(accept:any){for(const event of events)await accept([Object.freeze(event)])},async readEvent(index:number){return events[index]!},async settle(){},async close(){},appendCommitted(batch:any,receipt:any){controls.beforeAppend?.();prefix={eventCount:prefix.eventCount+batch.key.count,bodyBytes:prefix.bodyBytes+batch.bytes.length,prefixDigest:receipt.prefixDigest};revision++}}
-  const binding={token,assertHeld(){if(!held)throw Error('lost owner')},openDependencies(expected:Readonly<JournalPrefix>){opened++;const epoch=revision;let disposed=false;lastScope={assertCurrent(){if(disposed||revision!==epoch||prefix!==expected)throw Error('changed prefix');binding.assertHeld()},async readEvent(index:number){this.assertCurrent();reads.push(index);await controls.read?.();return events[index]!},async close(){await controls.close?.();disposed=true;closed++}};return lastScope}}
+  const binding={token,assertHeld(){if(!held)throw Error('lost owner')},openDependencies(expected:Readonly<JournalPrefix>){opened++;const epoch=revision;let disposed=false;lastScope={assertCurrent(){if(disposed||revision!==epoch||prefix!==expected)throw Error('changed prefix');binding.assertHeld()},async readEvent(index:number){this.assertCurrent();reads.push(index);await controls.read?.(index);return events[index]!},...(controls.readBatch ? {async readEvents(ordinals:readonly number[]){this.assertCurrent();readBatches.push([...ordinals]);await controls.readBatch!(ordinals);return ordinals.map(ordinal=>events[ordinal]!)}} : {}),async close(){await controls.close?.();disposed=true;closed++}};return lastScope}}
   const state=await (managed as any).restoreManagedExecutionState(source,binding)
-  return {state,token,source,binding,events,reads,get lastScope(){return lastScope},get opened(){return opened},get closed(){return closed},lose(){held=false},change(){revision++},receipt(batch:any){return Object.freeze({owner:token,key:batch.key,lastSeq:batch.key.firstSeq+batch.key.count-1,prefixDigest:factPrefixDigest(batch.key.previousPrefixDigest,batch.key.batchDigest)})}}
+  return {state,token,source,binding,events,reads,readBatches,get lastScope(){return lastScope},get opened(){return opened},get closed(){return closed},lose(){held=false},change(){revision++},receipt(batch:any){return Object.freeze({owner:token,key:batch.key,lastSeq:batch.key.firstSeq+batch.key.count-1,prefixDigest:factPrefixDigest(batch.key.previousPrefixDigest,batch.key.batchDigest)})}}
 }
 function group(draft:any){const captured=captureFactGroup(draft);if(captured.kind!=='captured')throw Error(captured.code);return captured.group}
 function commands(){const refused=async():Promise<FactOutcome>=>({kind:'not-issued',code:'FACT_CANCELLED'});return {admit:refused,observe:refused,reconcile:refused}}
 function memberCapture(f:any,captured:any,source:object){return f.state.captureHooks(source,()=>f.binding.assertHeld()).capture(captured,commands())}
+
+const exchangeHistory = (): SessionEvent[] => [
+  {type:'conversation/semantics',version:1,mode:'accepted-exchange-v1',seq:0},
+  {type:'step/start',actionId:'action',attemptId:'attempt',seq:1},
+  {type:'tool/call',callId:'call',name:'read',args:{path:'fixture.txt'},seq:2},
+]
+const exchangeGroup = (callSeq=2) => group({kind:'exchange-acceptance', assistant:{type:'assistant/message',text:'prepared'},
+  accepted:{type:'model/exchange-accepted',version:1,exchangeId:'exchange',actionId:'action',attemptId:'attempt',
+    assistantSeq:{kind:'group',position:0,expectedType:'assistant/message'},
+    callSeqs:[{kind:'prior',seq:callSeq,expectedType:'tool/call'}],stepStartSeq:{kind:'prior',seq:1,expectedType:'step/start'}}})
+
+it('prepares a conventional exchange with one same-prefix dependency read in resolver order', async () => {
+  const f = await fixture(exchangeHistory(), { async readBatch() {} })
+  const staged = await f.state.prepareWrite([exchangeGroup()], true)
+  expect(f.readBatches).toEqual([[2,1]])
+  expect(f.reads).toEqual([])
+  expect(f.opened).toBe(1)
+  expect(f.closed).toBe(1)
+  expect(staged.rejected).toEqual([])
+  expect(staged.events).toMatchObject([{ type:'assistant/message', seq:3 },
+    { type:'model/exchange-accepted', seq:4, assistantSeq:3, callSeqs:[2], stepStartSeq:1 }])
+  staged.discardUnissued()
+  await f.state.close()
+})
+
+it.each(['wrong declared ordinal', 'failed optional batch'] as const)('preserves ordered rejection for an invalid exchange with %s', async kind => {
+  const f = await fixture(exchangeHistory(), {
+    async readBatch() { throw Error('later batch member unavailable') },
+    async read(ordinal) { if (ordinal === 1) throw Error('later member must not be read') },
+  })
+  // A custom reader can disagree with the previously installed structural index.
+  if (kind === 'failed optional batch') f.events[2] = { type:'plan/mode', mode:'on', seq:2 }
+  const invalid = exchangeGroup(kind === 'wrong declared ordinal' ? 0 : 2)
+  const staged = await f.state.prepareWrite([invalid,group({kind:'metadata',event:{type:'plan/mode',mode:'on'}})], true)
+  expect(f.readBatches).toEqual(kind === 'failed optional batch' ? [[2,1]] : [])
+  expect(f.reads).toEqual([kind === 'wrong declared ordinal' ? 0 : 2])
+  expect(f.closed).toBe(1)
+  expect(staged.rejected).toMatchObject([{ group:invalid, cause:{ message:'Invalid fact reference' } }])
+  expect(staged.events).toMatchObject([{ type:'plan/mode', mode:'on', seq:3 }])
+  staged.discardUnissued()
+  await f.state.close()
+})
 
 it('the original private core normalizes a nonresident image admission and matches the complete public writer',async()=>{
   const events:SessionEvent[]=[{type:'agent/input/admitted',version:1,inputId:'image',text:'task',delivery:'queue',intent:'user',images:[{mediaType:'image/png',dataBase64:'eA=='}],seq:0}]
