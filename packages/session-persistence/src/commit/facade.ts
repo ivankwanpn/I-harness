@@ -60,6 +60,8 @@ export function asSessionCoordinator(coordinator: CommitCoordinator, options: Co
   const facade: SessionCoordinator & Pick<CommitCoordinator, 'acquireExecution'> = {
     ...coordinator,
     create: async (meta, policy) => coordinator.create(meta, initialTaskDocument(), policy),
+    ...(taskDocument.empty ? { profileCreateReplay: (sessionId: string) =>
+      coordinator.profileVerifyingTask(sessionId, value => taskDocument.validator.validate(value)) } : {}),
     append: async (id: string, events: Parameters<typeof coordinator.append>[1]) => {
       const result = await coordinator.append(id, events)
       coldWrites.committed(id)

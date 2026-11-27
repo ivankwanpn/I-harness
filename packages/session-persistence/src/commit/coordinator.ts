@@ -17,6 +17,7 @@ import { bootstrapManifest, buildBootstrapHeader, captureBootstrapRequest, captu
 import type { BootstrapRequest } from '../coordinator/bootstrap-types.ts'
 import { openCommitManagedDocument } from './managed.ts'
 import { captureTaskSnapshot } from '../coordinator/task-document-snapshot.ts'
+import { taskDocumentStorageContract } from '../task/storage-contract.ts'
 import { originalManagedDocumentOwner } from '../coordinator/managed-document.ts'
 import { openCommitExecution } from './execution.ts'
 import type { ManagedExecutionAttachment } from '../execution-internal.ts'
@@ -88,6 +89,7 @@ export type CommitCoordinator = {
   revokeManagedDocumentNewWork(sessionId: string): void
   list(onUnreadable?: () => void, onlyId?: string): Promise<string[]>
   profile(sessionId: string): Promise<{ meta: SessionMeta; blank: boolean; updatedAt?: number }>
+  profileVerifyingTask(sessionId: string, validateTask: (value: unknown) => void): ReturnType<CommitCoordinator['profile']>
   updateMeta(sessionId: string, patch: Partial<SessionMeta>): Promise<SessionMeta>
   publishForkTarget(target: { targetSessionId: string; sourceSessionId: string; operationId: string; requestDigest: string; createdAt: string }): Promise<'published' | 'already-published' | 'mismatch'>
   putDocument(key: string, data: unknown): Promise<void>
@@ -372,12 +374,17 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     }
   }
 
-  const profileOf = async (sessionId: string): Promise<{ meta: SessionMeta; blank: boolean; updatedAt?: number }> => {
+  const profileOf = async (sessionId: string, validateTask?: (value: unknown) => void): Promise<{ meta: SessionMeta; blank: boolean; updatedAt?: number }> => {
     try {
       const log = await open(sessionId, 'read')
       try {
         if (log.view().deleted) throw new CommitSessionDeletedError(sessionId)
         const meta = metaOf(log)
+        if (validateTask && !meta.archived) {
+          const task = await getDocumentOf(taskDocumentStorageContract.key(sessionId))
+          if (task === undefined) throw Object.assign(new Error('Draft session creation is incomplete: required Task document is missing'), { code: 'COMMIT_TASK_BIRTH_INCOMPLETE' })
+          validateTask(task)
+        }
         const updatedAt = Date.parse(log.records().at(-1)!.at)
         const blank = !log.view().entries.some(event => event.type === 'turn/start')
         return { meta, blank, updatedAt }
@@ -391,18 +398,19 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       return { meta: legacy.meta, blank: !legacy.events.some(event => event.type === 'turn/start') }
     }
   }
+  const legacyDocument = (key: string) => options.legacy?.readDocument?.(key)
+  const readDocument = async (log: CommitLog, key: string): Promise<unknown | undefined> => {
+    const side = log.view().documents.get(key)
+    if (!side) {
+      const cleared = log.records().some(record => record.ops.some(op => op.kind === 'doc-clear' && op.key === key))
+      return cleared ? undefined : legacyDocument(key)
+    }
+    return JSON.parse(new TextDecoder().decode(await log.readSidecar(side.digest))) as unknown
+  }
   const getDocumentOf = async (key: string): Promise<unknown | undefined> => {
-    const legacyDocument = () => options.legacy?.readDocument ? options.legacy.readDocument(key) : undefined
     let log: CommitLog
-    try { log = await open(DOCUMENT_SESSION, 'read') } catch (error) { if (error instanceof CommitLogNotFoundError) return legacyDocument(); throw error }
-    try {
-      const side = log.view().documents.get(key)
-      if (!side) {
-        const cleared = log.records().some(record => record.ops.some(op => op.kind === 'doc-clear' && op.key === key))
-        return cleared ? undefined : legacyDocument()
-      }
-      return JSON.parse(new TextDecoder().decode(await log.readSidecar(side.digest))) as unknown
-    } finally { await log.close() }
+    try { log = await open(DOCUMENT_SESSION, 'read') } catch (error) { if (error instanceof CommitLogNotFoundError) return legacyDocument(key); throw error }
+    try { return await readDocument(log, key) } finally { await log.close() }
   }
   const inLegacyDocuments = <T>(keys: readonly string[], work: () => Promise<T>): Promise<T> => {
     if (!options.legacy) return work()
@@ -419,17 +427,37 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       })
     })
   }
-  const putDocumentOf = (key: string, data: unknown): Promise<void> => track(writes, async () => {
+  const documentText = (data: unknown) => {
     const text = stringifyJsonData(data)
     if (text === undefined) throw new TypeError('document must be losslessly JSON-serializable')
+    return text
+  }
+  const writeDocument = async (log: CommitLog, key: string, text: string) => {
+    const side = await log.writeSidecar(new TextEncoder().encode(text))
+    await log.append({ ops: [{ kind: 'doc', key, side }] })
+  }
+  const putDocumentOf = (key: string, data: unknown): Promise<void> => track(writes, async () => {
+    const text = documentText(data)
     await inLegacyDocuments([key], async () => {
       const log = await documentLog()
-      try {
-        const side = await log.writeSidecar(new TextEncoder().encode(text))
-        await log.append({ ops: [{ kind: 'doc', key, side }] })
-      } finally { await log.close() }
+      try { await writeDocument(log, key, text) } finally { await log.close() }
     })
   })
+  const withBirthTask = (sessionId: string, task?: unknown) => async (publish: () => Promise<object>) => {
+    const key = taskDocumentStorageContract.key(sessionId)
+    return inLegacyDocuments([key], async () => {
+      const log = await documentLog()
+      try {
+        if (await readDocument(log, key) !== undefined) {
+          throw new CommitLogConflictError(sessionId, 'Unpublished session has an existing Task document')
+        }
+        if (task !== undefined) await writeDocument(log, key, documentText(task))
+        // If publication fails or is uncertain, keep the exact Task data. A
+        // headerless retry cannot claim that document as its own birth.
+        return await publish()
+      } finally { await log.close() }
+    })
+  }
   const ownershipPorts = createCommitOwnershipPorts(root, {
     putDocument(key, data) { assertContinuation(); return putDocumentOf(key, data) },
     getDocument(key) { assertContinuation(); return getDocumentOf(key) },
@@ -500,10 +528,9 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
         const header = toHeader(meta, sessionId, now)
         const log = await inLegacyNamespace(sessionId, async source => {
           await assertNewTarget(sessionId, source, recreateDeleted)
-          return createCommitLog({ ...logOptions(sessionId), recreateDeleted }, { header: header as unknown as Record<string, unknown> })
+          return createCommitLog({ ...logOptions(sessionId), recreateDeleted }, { header: header as unknown as Record<string, unknown> }, withBirthTask(sessionId, task))
         })
         await log.close()
-        if (task !== undefined) await putDocumentOf('task-' + sessionId, task)
         if (recreateDeleted) await clearDocumentsOf(['deletion:' + sessionId])
         return { id: sessionId }
       })
@@ -589,10 +616,9 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
           if (parent) {
             parentIntent = await this.beginIntent(parent, intentId, { kind: 'child-birth', childId: id, requestDigest: captured.invocation.requestDigest }).then(() => true, () => false)
           }
-          const log = await createCommitLog(logOptions(id), { header, entries })
+          const log = await createCommitLog(logOptions(id), { header, entries }, withBirthTask(id, task))
           await log.close()
           if (parentIntent && parent) await this.endIntent(parent, intentId, 'committed').catch(() => {})
-          await initializeTask(id)
             const document=await this.openManagedDocument(id)
           return { id, document, receipt: receiptOf(captured, stage, id, entries, originalManagedDocumentOwner(document,ownershipPorts.ownership)) }
         })
@@ -626,7 +652,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
         const digest = createHash('sha256').update(stringifyJsonData(parent.events.slice(0, cut)) ?? '[]').digest('hex')
         const log = await inLegacyNamespace(childId, async source => {
           await assertNewTarget(childId, source)
-          return createCommitLog(logOptions(childId), { header, entries: parent.events.slice(0, cut), ops: [{ kind: 'seed', parent: parentId, cut, digest }] })
+          return createCommitLog(logOptions(childId), { header, entries: parent.events.slice(0, cut), ops: [{ kind: 'seed', parent: parentId, cut, digest }] }, withBirthTask(childId))
         })
         await log.close()
         return { id: childId }
@@ -781,7 +807,8 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       }
       return visible.sort()
     },
-    profile: profileOf,
+    profile: sessionId => profileOf(sessionId),
+    profileVerifyingTask: (sessionId, validateTask) => profileOf(sessionId, validateTask),
     withExistingSessionBindingObservation: observations.withExistingSessionBindingObservation,
     withSessionBindingObservation: observations.withSessionBindingObservation,
     async updateMeta(sessionId, patch) {

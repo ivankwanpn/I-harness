@@ -199,6 +199,8 @@ export interface SessionCoordinator {
   /** C5: cheap per-session meta profile (header read only; no event decode).
    * Read-only — never acquires the ownership lease. */
   profile(sessionId: string): Promise<{ meta: SessionMeta; blank: boolean; updatedAt?: number }>
+  /** A store may also verify the required birth resources when replaying create. */
+  profileCreateReplay?: SessionCoordinator['profile']
   /** C5: merge a meta patch durably. MUTATING — runs under the ownership
    * lease (M23 discipline, same as append); a conflicting writer fails closed. */
   updateMeta(sessionId: string, patch: Partial<SessionMeta>): Promise<SessionMeta>

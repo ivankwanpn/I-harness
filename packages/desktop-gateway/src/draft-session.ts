@@ -1,6 +1,6 @@
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createHash } from "node:crypto"
-export function createDraftSession(coordinator: Pick<SessionCoordinator, "list" | "profile" | "create" | "flush" | "deletionReceipt">) {
+export function createDraftSession(coordinator: Pick<SessionCoordinator, "list" | "profile" | "profileCreateReplay" | "create" | "flush" | "deletionReceipt">) {
   const pending = new Map<string, Promise<{ sessionId: string }>>()
   return async (clientToken: string) => {
     if (typeof clientToken !== "string" || clientToken.length < 8 || clientToken.length > 128) throw new Error("Invalid draft creation token")
@@ -9,7 +9,7 @@ export function createDraftSession(coordinator: Pick<SessionCoordinator, "list" 
     if (existing) return existing
     const job = Promise.resolve().then(async () => {
       if ((await coordinator.list(undefined, sessionId)).includes(sessionId)) {
-        const { meta } = await coordinator.profile(sessionId)
+        const { meta } = await (coordinator.profileCreateReplay ? coordinator.profileCreateReplay(sessionId) : coordinator.profile(sessionId))
         if (meta.archived) throw new Error("Draft session is archived")
       } else {
         // Some stores allow an explicit new incarnation. A draft retry still

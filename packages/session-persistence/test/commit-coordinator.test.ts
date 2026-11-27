@@ -7,7 +7,7 @@ import { CURRENT_FORMAT_VERSION, EMPTY_SEMANTIC_DEPENDENCY_DIGEST, append, creat
 import { compileSemanticSeed } from '../src/semantic-seed.ts'
 import type { LegacySession, LegacySessionStore } from '../src/commit/legacy.ts'
 import { createCommitCoordinator } from '../src/commit/coordinator.ts'
-import { CommitLogNotFoundError } from '@i-harness/session-commit-log'
+import { CommitLogConflictError, CommitLogNotFoundError } from '@i-harness/session-commit-log'
 
 const roots: string[] = []
 const coordinators: Array<ReturnType<typeof createCommitCoordinator>> = []
@@ -46,6 +46,42 @@ afterEach(async () => {
 })
 
 describe('commit coordinator', () => {
+  it('does not overwrite or adopt a Task document belonging to another birth', async () => {
+    const { coordinator } = await setup()
+    const existingTask = { formatVersion: 2, tasks: [], notifications: [] }
+    const otherTask = { ...existingTask, formatVersion: 1 }
+    await coordinator.create({ sessionId: 'active' }, existingTask)
+    await expect(coordinator.create({ sessionId: 'active' }, otherTask)).rejects.toBeInstanceOf(CommitLogConflictError)
+    expect(await coordinator.getDocument('task-active')).toEqual(existingTask)
+
+    await coordinator.putDocument('task-orphan', existingTask)
+    await expect(coordinator.create({ sessionId: 'orphan' }, otherTask)).rejects.toThrow('Unpublished session has an existing Task document')
+    await expect(coordinator.fork('active', { sessionId: 'orphan' })).rejects.toBeInstanceOf(CommitLogConflictError)
+    expect(await coordinator.list(undefined, 'orphan')).toEqual([])
+    expect(await coordinator.getDocument('task-orphan')).toEqual(existingTask)
+
+    await coordinator.deleteOwnedSession('active', { documents: ['task-active'] })
+    await coordinator.create({ sessionId: 'active', title: 'Explicit recreation' }, otherTask)
+    expect((await coordinator.profile('active')).meta.title).toBe('Explicit recreation')
+    expect(await coordinator.getDocument('task-active')).toEqual(otherTask)
+  })
+
+  it('publishes only the winning Task document when independent writers race for a fresh id', async () => {
+    const { root, coordinator } = await setup()
+    const other = createCommitCoordinator({ root })
+    coordinators.push(other)
+    const firstTask = { formatVersion: 2, tasks: [], notifications: [] }
+    const secondTask = { ...firstTask, formatVersion: 1 }
+    const results = await Promise.allSettled([
+      coordinator.create({ sessionId: 'race', title: 'First' }, firstTask, { recreateDeleted: false }),
+      other.create({ sessionId: 'race', title: 'Second' }, secondTask, { recreateDeleted: false }),
+    ])
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    const firstWon = results[0]!.status === 'fulfilled'
+    expect((await coordinator.profile('race')).meta.title).toBe(firstWon ? 'First' : 'Second')
+    expect(await coordinator.getDocument('task-race')).toEqual(firstWon ? firstTask : secondTask)
+  })
+
   it('releases the ownership pin when the coordinator closes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ih-commit-pin-close-'))
     roots.push(root)
@@ -196,6 +232,7 @@ describe('commit coordinator', () => {
     const profile = await coordinator.profile('old')
     expect(profile.meta.sessionId).toBe('old')
     expect(profile.blank).toBe(false)
+    expect(await coordinator.profileVerifyingTask('old', () => { throw new Error('Legacy has no native Task birth') })).toEqual(profile)
   })
 
   it('forks a committed prefix into a new generation', async () => {
@@ -288,7 +325,15 @@ describe('commit coordinator', () => {
       lineage: { origin: 'fork' as const, parentSession: 'parent' },
       seed: compileSemanticSeed(exported),
     }
-    const born = await coordinator.createChildSession(request, { closure: EMPTY_SEMANTIC_DEPENDENCY_DIGEST })
+    const initialTask = { formatVersion: 2, tasks: [], notifications: [] }
+    const foreignTask = { ...initialTask, formatVersion: 1 }
+    const other = { ...request, invocation: { ...request.invocation, targetSessionId: 'unpublished' } }
+    await coordinator.putDocument('task-unpublished', foreignTask)
+    await expect(coordinator.createChildSession(other, { closure: EMPTY_SEMANTIC_DEPENDENCY_DIGEST, initialTaskDocument: initialTask }))
+      .rejects.toBeInstanceOf(CommitLogConflictError)
+    expect(await coordinator.getDocument('task-unpublished')).toEqual(foreignTask)
+    expect(await coordinator.list(undefined, 'unpublished')).toEqual([])
+    const born = await coordinator.createChildSession(request, { closure: EMPTY_SEMANTIC_DEPENDENCY_DIGEST, initialTaskDocument: initialTask })
     expect(born.id).toBe('target')
     expect(born.document.view.events.at(-1)?.type).toBe('session/bootstrap')
     const seedLength = request.seed.records.length
@@ -300,8 +345,11 @@ describe('commit coordinator', () => {
     const { session } = await coordinator.load('target')
     expect(session.events[0]?.type).toBe('conversation/seed-manifest')
     expect(session.events.at(-1)?.type).toBe('session/bootstrap')
-    const again = await coordinator.createChildSession(request, { closure: EMPTY_SEMANTIC_DEPENDENCY_DIGEST })
+    expect(await coordinator.getDocument('task-target')).toEqual(initialTask)
+    await coordinator.putDocument('task-target', foreignTask)
+    const again = await coordinator.createChildSession(request, { closure: EMPTY_SEMANTIC_DEPENDENCY_DIGEST, initialTaskDocument: initialTask })
     expect(again.id).toBe('target')
+    expect(await coordinator.getDocument('task-target')).toEqual(foreignTask)
     await coordinator.closeManagedDocument('target')
   })
 

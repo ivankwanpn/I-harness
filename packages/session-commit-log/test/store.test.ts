@@ -58,6 +58,31 @@ describe('commit log store', () => {
     await expect(createCommitLog({ root: base, sessionId: 's1' }, { header: { sessionId: 's1' } })).rejects.toBeInstanceOf(CommitLogConflictError)
   })
 
+  it('only accepts the one publication confirmed by the original scope', async () => {
+    const base = await root()
+    const options = { root: base, sessionId: 's1' }, first = { header: { sessionId: 's1' } }
+    let escaped!: () => Promise<object>
+    await expect(createCommitLog(options, first, async publish => {
+      escaped = publish
+      return {}
+    })).rejects.toThrow('publication was not confirmed')
+    expect(() => escaped()).toThrow('publication is unavailable')
+    await expect(openCommitLog(options, 'read')).rejects.toBeInstanceOf(CommitLogNotFoundError)
+    const io: CommitLogIo = { ...nodeIo, async mkdir(path) {
+      expect(() => escaped()).toThrow('publication is unavailable')
+      await nodeIo.mkdir(path)
+    } }
+    const log = await createCommitLog({ ...options, io }, first, async publish => {
+      escaped = publish
+      const receipt = await publish()
+      expect(() => publish()).toThrow('publication is unavailable')
+      return receipt
+    })
+    await log.close()
+    await expect(createCommitLog(options, first, async () => { throw new Error('the scope must not run') }))
+      .rejects.toBeInstanceOf(CommitLogConflictError)
+  })
+
   it('reports a missing session', async () => {
     const base = await root()
     await expect(openCommitLog({ root: base, sessionId: 'missing' }, 'read')).rejects.toBeInstanceOf(CommitLogNotFoundError)

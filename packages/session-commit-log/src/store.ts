@@ -21,7 +21,7 @@ export class CommitLogNotFoundError extends Error {
 }
 export class CommitLogConflictError extends Error {
   readonly code = 'COMMIT_LOG_EXISTS'
-  constructor(sessionId: string) { super(`commit log for session ${JSON.stringify(sessionId)} already exists`); this.name = 'CommitLogConflictError' }
+  constructor(sessionId: string, message = `commit log for session ${JSON.stringify(sessionId)} already exists`) { super(message); this.name = 'CommitLogConflictError' }
 }
 export class CommitLogClosedError extends Error {
   readonly code = 'COMMIT_LOG_CLOSED'
@@ -53,6 +53,9 @@ export type CommitInput = {
 export type CreateInput = CommitInput & {
   readonly header: Readonly<Record<string, unknown>>
 }
+
+/** Hold a trusted prerequisite through the one physical generation publication. */
+type PublicationScope = (publish: () => Promise<object>) => Promise<object>
 
 export type CommitLogMode = 'read' | 'write'
 
@@ -163,7 +166,7 @@ function openState(records: readonly CommitRecord[], view: CommitView, size: num
   return { records: [...records], view, size, closed: false }
 }
 
-export async function createCommitLog(options: CommitLogOptions, first: CreateInput): Promise<CommitLog> {
+export async function createCommitLog(options: CommitLogOptions, first: CreateInput, scope?: PublicationScope): Promise<CommitLog> {
   const io = options.io ?? nodeIo
   const { root, sessionId } = options
   const location = { root, sessionId, io }, captured = structuredClone(first), recreateDeleted = options.recreateDeleted
@@ -183,16 +186,39 @@ export async function createCommitLog(options: CommitLogOptions, first: CreateIn
     const record = decodeCommit(line.slice(0, -1))
     const view = foldCommits([record])
     let deletedGeneration: string | undefined
+    const path = generationPath(root, sessionId, COMMIT_LOG_GENERATION)
     if (recreateDeleted) {
-      const existing = await readGeneration(io, generationPath(root, sessionId, COMMIT_LOG_GENERATION))
+      const existing = await readGeneration(io, path)
       if (existing) {
         if (!foldCommits(scanCommitLog(existing).records).deleted) throw new CommitLogConflictError(sessionId)
         deletedGeneration = sha256Hex(existing)
       }
+    } else if (scope) {
+      const existing = await io.open(path, 'r').catch(error => { if (!isNotFound(error)) throw error })
+      if (existing) {
+        await resources.release(resources.file(existing))
+        throw new CommitLogConflictError(sessionId)
+      }
     }
     // Atomic file replacement keeps the durable tombstone until new birth commits.
-    await publish(io, root, sessionId, line, resources, deletedGeneration)
-    const handle = await io.open(generationPath(root, sessionId, COMMIT_LOG_GENERATION), 'r+')
+    const publishGeneration = () => publish(io, root, sessionId, line, resources, deletedGeneration)
+    if (scope) {
+      const receipt = Object.freeze({})
+      let active = true, issued: Promise<object> | undefined
+      try {
+        const result = await scope(() => {
+          if (!active || issued) throw new Error('Original commit publication is unavailable')
+          issued = Promise.resolve().then(publishGeneration).then(() => receipt)
+          void issued.catch(() => {})
+          return issued
+        })
+        if (result !== receipt) throw new Error('Original commit publication was not confirmed')
+      } finally {
+        active = false
+        await issued?.catch(() => {})
+      }
+    } else await publishGeneration()
+    const handle = await io.open(path, 'r+')
     resources.file(handle)
     const state = openState([record], view, Buffer.byteLength(line))
     state.handle = handle

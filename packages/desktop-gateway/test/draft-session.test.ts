@@ -1,10 +1,14 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { createHash } from "node:crypto"
+import { once } from "node:events"
+import { createServer } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { expect, it, vi } from "vitest"
 import { isRpcSuccess, type RpcMessage } from "@i-harness/sdk"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createCommitCoordinator, createOwnedLegacySessionStore } from "@i-harness/session-persistence/internal/commit"
+import { asSessionCoordinator } from "@i-harness/session-persistence/internal/commit-facade"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createJsonlCommitCoordinator } from "../../session-persistence-jsonl/src/commit-coordinator.ts"
 import { createDraftSession } from "../src/draft-session.ts"
@@ -48,7 +52,7 @@ async function createWorkspace(root: string, name: string, sessionStore: "jsonl"
     return reply.result
   }
   try { await call("initialize") } catch (error) { await host.close(); throw error }
-  return { call, close: () => host.close(), sessionDir }
+  return { call, close: () => host.close(), sessionDir, frames }
 }
 
 it("deduplicates explicit draft creation across concurrent retries and host restart", async () => {
@@ -165,4 +169,108 @@ it("refuses a draft when another writer deleted its session after the absence ch
     await Promise.all([host.close(), writer.close()])
     await rm(root, { recursive: true, force: true })
   }
+})
+
+it("publishes a draft only after its Task document is durable, then admits a real turn after restart", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-draft-task-birth-"))
+  const sessionDir = join(root, "workspace", "sessions")
+  const sessionId = "desktop-draft-" + createHash("sha256").update(token).digest("hex")
+  await mkdir(sessionDir, { recursive: true })
+  const entered = Promise.withResolvers<void>(), taskWrite = Promise.withResolvers<void>()
+  void taskWrite.promise.catch(() => {})
+  const failure = new Error("controlled Task namespace failure")
+  const nativeLegacy = createOwnedLegacySessionStore(createJsonlBackend(sessionDir, { fixedCapabilities: true }),
+    { lock: { enabled: true, lockRoot: sessionDir } })
+  const first = createCommitCoordinator({ root: sessionDir, legacy: {
+    ...nativeLegacy,
+    withDocuments(keys, work) {
+      if (keys.length === 1 && keys[0] === `task-${sessionId}`) {
+        entered.resolve()
+        return taskWrite.promise.then(() => nativeLegacy.withDocuments!(keys, work))
+      }
+      return nativeLegacy.withDocuments!(keys, work)
+    },
+  } })
+  const creating = createDraftSession(asSessionCoordinator(first))(token)
+  const failed = expect(creating).rejects.toBe(failure)
+  let requests = 0
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request) { /* Receive the loopback request. */ }
+    requests++
+    response.writeHead(200, { "Content-Type": "text/event-stream" })
+    response.write('data: ' + JSON.stringify({ type: "response.output_text.delta", delta: "Recovered draft answer" }) + '\n\n')
+    response.end('data: ' + JSON.stringify({ type: "response.completed", response: { usage: { input_tokens: 10, output_tokens: 6 } } }) + '\n\n')
+  })
+  try {
+    try {
+      await Promise.race([entered.promise, creating.then(() => { throw new Error("Draft returned before Task initialization") })])
+      expect(await first.list(undefined, sessionId)).toEqual([])
+    } finally {
+      taskWrite.reject(failure)
+      try { await failed } finally { await first.close() }
+    }
+
+    server.listen(0, "127.0.0.1")
+    await once(server, "listening")
+    const address = server.address()
+    if (!address || typeof address === "string") throw new Error("Missing loopback address")
+    const selection = { provider: "fixture", model: "fixture" }
+    await writeFile(join(root, "settings.json"), JSON.stringify({
+      autoTitle: false, sandboxMode: "read-only", approvalMode: "dangerous", codeMode: { mode: "off" }, compaction: { auto: false },
+      llm: { defaultModel: selection, providers: { fixture: { protocol: "openai-responses", baseURL: `http://127.0.0.1:${address.port}`,
+        apiKeyEnv: "IH_DRAFT_BIRTH_FIXTURE", models: [{ id: "fixture", contextWindow: 128000 }] } } },
+    }))
+    await writeFile(join(root, "credentials.json"), JSON.stringify({ refs: { IH_DRAFT_BIRTH_FIXTURE: "loopback-only" } }))
+    const host = await createWorkspace(root, "workspace", "commit-log")
+    try {
+      expect(await host.call("session/create", { clientToken: token })).toEqual({ sessionId })
+      const workspace = join(root, "workspace")
+      const project = { id: "fixture", name: "Draft birth fixture", roots: [workspace], primaryRoot: workspace }
+      await host.call("desktop/project/sync", { projects: [project] })
+      await host.call("desktop/session/project/bind", { sessionId, projectId: project.id })
+      await host.call("session/model/set", { sessionId, selection })
+      expect(await host.call("desktop/session/input/submit", { sessionId, text: "New draft prompt", delivery: "queue", clientToken: "draft-birth-input" }))
+        .toMatchObject({ accepted: true })
+      await vi.waitFor(() => expect(host.frames).toContainEqual(expect.objectContaining({ method: "session/event", params:
+        expect.objectContaining({ sessionId, event: expect.objectContaining({ type: "turn/end" }) }) })), { timeout: 5000 })
+      expect(await host.call("session/history", { sessionId, afterSeq: 0, limit: 100 })).toMatchObject({ events: expect.arrayContaining([
+        expect.objectContaining({ type: "assistant/message", text: "Recovered draft answer" }),
+        expect.objectContaining({ type: "turn/end" }),
+      ]) })
+      expect(requests).toBe(1)
+    } finally { await host.close() }
+  } finally {
+    server.closeAllConnections()
+    if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()))
+    await rm(root, { recursive: true, force: true })
+  }
+}, 10000)
+
+it("keeps the old incomplete birth readable while refusing to replay its draft creation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-old-incomplete-task-birth-"))
+  const sessionDir = join(root, "workspace", "sessions")
+  const sessionId = "desktop-draft-" + createHash("sha256").update(token).digest("hex")
+  const generation = join(sessionDir, sessionId, "session.v15.jsonl")
+  await mkdir(sessionDir, { recursive: true })
+  const stored = createCommitCoordinator({ root: sessionDir })
+  try {
+    await stored.create({ sessionId })
+    const withoutInitialTask = asSessionCoordinator(stored, { taskDocument: {
+      validator: { validate() { throw new Error("This facade did not require an initial Task document") } },
+    } })
+    expect(await createDraftSession(withoutInitialTask)(token)).toEqual({ sessionId })
+    expect(await stored.getDocument(`task-${sessionId}`)).toBeUndefined()
+  } finally { await stored.close() }
+  const before = await readFile(generation)
+  try {
+    const host = await createWorkspace(root, "workspace", "commit-log")
+    try {
+      expect(await host.call("session/history", { sessionId, afterSeq: 0, limit: 1 })).toMatchObject({ events: [] })
+      await expect(host.call("session/create", { clientToken: token })).rejects.toThrow("Draft session creation is incomplete: required Task document is missing")
+      expect(await readFile(generation)).toEqual(before)
+    } finally { await host.close() }
+    const reopened = createCommitCoordinator({ root: sessionDir })
+    try { expect(await reopened.getDocument(`task-${sessionId}`)).toBeUndefined() }
+    finally { await reopened.close() }
+  } finally { await rm(root, { recursive: true, force: true }) }
 })
