@@ -35,7 +35,9 @@ interface Reference {
 export type GenerationHistoryScope = { sessionId?: string; parentSession?: string; seedLength?: number; semanticSeed?: import('../events/bootstrap.ts').SeedHeader }
 type Action = GenerationActionState
 type CallKind = 'tool/call' | 'code/call'
-type PendingCalls = Record<CallKind, Map<string, Set<number>>>
+// Most call IDs have just one address. Reused IDs can have several open calls.
+type CallAddresses = number | Set<number>
+type PendingCalls = Record<CallKind, Map<string, CallAddresses>>
 const pendingCalls = (): PendingCalls => ({ 'tool/call': new Map(), 'code/call': new Map() })
 const ownField = Object.getOwnPropertyDescriptor, hasOwn = Object.hasOwn
 function ownDataValue(object: object, key: string): unknown {
@@ -49,13 +51,17 @@ function unsettledCall(reference: Reference | undefined): reference is Reference
 function addPending(index: PendingCalls, seq: number, reference: Reference): void {
   if (!unsettledCall(reference)) return
   const calls = index[reference.type], id = reference.callId, bucket = calls.get(id)
-  if (bucket) bucket.add(seq)
-  else calls.set(id, new Set([seq]))
+  if (bucket === undefined) calls.set(id, Number.isSafeInteger(seq) ? seq : new Set([seq]))
+  else if (typeof bucket === 'number') {
+    if (bucket !== seq) calls.set(id, new Set([bucket, seq]))
+  } else bucket.add(seq)
 }
 function removePending(index: PendingCalls, seq: number, reference: Reference | undefined): void {
   if (!unsettledCall(reference)) return
   const calls = index[reference.type], id = reference.callId, bucket = calls.get(id)
-  if (bucket?.delete(seq) && !bucket.size) calls.delete(id)
+  if (typeof bucket === 'number') {
+    if (bucket === seq) calls.delete(id)
+  } else if (bucket?.delete(seq) && bucket.size === 0) calls.delete(id)
 }
 function source(event: SessionEventView): Reference {
   const reference: Reference = { type: event.type }
@@ -208,7 +214,7 @@ export function createGenerationIndex(scope: GenerationHistoryScope = {}, delive
     read: () => Object.freeze([...actions.values()]),
     stage() {
       const next = new Map<string, Action>(), seen = new Set<string>(), refs = new Map<number, Reference>()
-      const stagedCalls = pendingCalls(), settledBuckets = new Set<Set<number>>()
+      const stagedCalls = pendingCalls(), settledBuckets = new Set<CallAddresses>()
       const baseRevision = referenceRevision
       let overlappingOrdinal = false
       const getAction = (id: string) => next.get(id) ?? actions.get(id)
@@ -218,8 +224,8 @@ export function createGenerationIndex(scope: GenerationHistoryScope = {}, delive
         stagedCalls['code/call'].clear()
         settledBuckets.clear()
       }
-      const settleBucket = (bucket: Set<number>, expected: CallKind, id: string) => {
-        for (const seq of bucket) {
+      const settleBucket = (bucket: CallAddresses, expected: CallKind, id: string) => {
+        for (const seq of typeof bucket === 'number' ? [bucket] : bucket) {
           const reference = getRef(seq)
           if (reference?.type === expected && reference.callId === id && ownDataValue(reference, 'settled') !== true)
             refs.set(seq, { ...reference, settled: true })
@@ -256,12 +262,12 @@ export function createGenerationIndex(scope: GenerationHistoryScope = {}, delive
             if (typeof id === 'string' && (type === 'tool/result' || type === 'code/result')) {
               const kind = type === 'tool/result' ? 'tool/call' : 'code/call'
               const committed = pending[kind].get(id)
-              if (committed && !settledBuckets.has(committed)) {
+              if (committed !== undefined && !settledBuckets.has(committed)) {
                 settleBucket(committed, kind, id)
                 settledBuckets.add(committed)
               }
               const staged = stagedCalls[kind].get(id)
-              if (staged) {
+              if (staged !== undefined) {
                 settleBucket(staged, kind, id)
                 stagedCalls[kind].delete(id)
               }
