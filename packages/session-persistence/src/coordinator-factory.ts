@@ -3,14 +3,15 @@ import { associateOriginalResultRevocation } from './coordinator/result-revocati
 import { associateRestoredContextAcquisition } from './restored-context-internal.ts'
 import {associateManagedExecution} from './execution-internal.ts'
 import { attachArchiveReadResources } from './archive-read-internal.ts'
-import { pendingInputSummary, type PersistenceBackend, type CoordinatorOptions, type PendingInputSummary, type SessionCoordinator } from './coordinator/types.ts'
-import { CURRENT_FORMAT_VERSION, readInbox } from '@i-harness/core-session'
+import { pendingInputSummary, type PersistenceBackend, type CoordinatorOptions, type SessionCoordinator } from './coordinator/types.ts'
+import { CURRENT_FORMAT_VERSION, readInbox, type SessionView } from '@i-harness/core-session'
 import { createOwnership } from './coordinator/ownership.ts'
 import { associateOriginalResultOrdering } from './result-ordering-internal.ts'
 import { createColdExecutionWrites, associateColdExecutionWrites } from './coordinator/cold-execution-writes.ts'
 import { createMutations } from './coordinator/mutations.ts'
 import { createDocuments } from './coordinator/documents.ts'
-import { createLoads } from './coordinator/load.ts'
+import { createLoads, type ColdCommittedObservation } from './coordinator/load.ts'
+import { captureSavedContextBinding, savedContextFromSession } from './coordinator/saved-context.ts'
 import { createLifecycle } from './coordinator/lifecycle.ts'
 import { associateProjectBindingWrites } from './coordinator/project-binding-write.ts'
 import { associateDeletionPreparation } from './coordinator/deletion-preparation.ts'
@@ -107,6 +108,25 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     observations.assertOutsideOwnedOperations([invocation.targetSessionId])
     return managed.trackBootstrapInvocation(invocation, run)
   }
+  async function readCommittedObservation<T>(sessionId: string,
+    readOwner: () => Promise<T | undefined>,
+    readCold: () => Promise<ColdCommittedObservation<T> | undefined>,
+    fromSnapshot: (session: SessionView) => T,
+  ): Promise<T> {
+    const live = await readOwner()
+    if (live !== undefined) return live
+    const cold = await readCold(), currentSeal = cold?.originalSealCurrent?.()
+    // A sealed archive can publish its own read before an overlapping writer
+    // installs. A published writer, or one that may have changed the prefix,
+    // must supply its current committed observation instead.
+    if (managed.has(sessionId) && !(currentSeal === true && managed.isPreparingUnpublishedExecution(sessionId))) {
+      const current = await readOwner()
+      if (current !== undefined) return current
+    }
+    if (cold && currentSeal !== false) return cold.value
+    const { session } = await loads.snapshot(sessionId)
+    return await readOwner() ?? fromSnapshot(session)
+  }
   const coordinator: SessionCoordinator = {
     ...(ownership.lockEnabled && backend.readDocumentObserved && (process.platform === 'win32' || process.platform === 'linux') ? { withSessionBindingObservation: observations.withSessionBindingObservation, withExistingSessionBindingObservation: observations.withExistingSessionBindingObservation, retainExistingSessionBindingObservation: observations.retainExistingSessionBindingObservation } : {}),
     bootstrapSemanticTarget(request, guards) { if(CURRENT_FORMAT_VERSION>=14&&!transitionStorage)return Promise.resolve({kind:'not-issued',reason:'unsupported'}); if(managed.captureSelfConflict(request,true))return Promise.resolve({kind:'refused',reason:'conflict'}); return trackBootstrap(request,true,()=>observations.withBootstrapRequest(request, guards, (captured, capturedGuards) => managed.bootstrapSemanticTarget(captured, capturedGuards))) },
@@ -181,20 +201,18 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     },
     async readPendingInputs(sessionId) {
       archiveReads?.assertPublicReadAdmission()
-      let pending: readonly PendingInputSummary[] | undefined = await managed.readPendingInputs(sessionId)
-      if (pending === undefined) {
-        const cold = await loads.readColdPendingInputs(sessionId)
-        const sealCurrent = cold?.originalSealCurrent?.()
-        const reserving = sealCurrent === true && managed.isPreparingUnpublishedExecution(sessionId)
-        if (!reserving && managed.has(sessionId)) pending = await managed.readPendingInputs(sessionId)
-        if (pending === undefined && cold && sealCurrent !== false) pending = cold.items
-        if (pending === undefined) {
-          const snapshot = await loads.snapshot(sessionId)
-          pending = await managed.readPendingInputs(sessionId) ?? readInbox(snapshot.session).pending()
-        }
-      }
+      const pending = await readCommittedObservation(sessionId, () => managed.readPendingInputs(sessionId),
+        () => loads.readColdPendingInputs(sessionId), session => readInbox(session).pending())
       archiveReads?.assertPublicReadAdmission()
       return pending.map(pendingInputSummary)
+    },
+    async readSavedContext(sessionId, binding) {
+      archiveReads?.assertPublicReadAdmission()
+      const capturedBinding = captureSavedContextBinding(binding)
+      const facts = await readCommittedObservation(sessionId, () => managed.readSavedContext(sessionId, capturedBinding),
+        () => loads.readColdSavedContext(sessionId, capturedBinding), session => savedContextFromSession(session, sessionId, capturedBinding))
+      archiveReads?.assertPublicReadAdmission()
+      return facts
     },
     async snapshot(sessionId, options) {
       archiveReads?.assertPublicReadAdmission()

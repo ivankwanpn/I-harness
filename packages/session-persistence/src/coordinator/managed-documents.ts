@@ -7,7 +7,8 @@ import { createManagedRestoredRead, sameArchivePrefix } from './managed-restored
 import type { ManagedRestoredContextRead } from '../restored-context-internal.ts'
 import type { Session, JournalPrefix, OwnedSessionHistoryPage, SessionHistoryPageOptions } from '@i-harness/core-session'
 import { FactRecoveryRequiredError, aggregateErrors, freezeJsonData, readInbox } from '@i-harness/core-session'
-import type { CoordinatorOptions, PersistenceBackend } from './types.ts'
+import type { CoordinatorOptions, PersistenceBackend, SavedContextBinding } from './types.ts'
+import { savedContextFromObservation, savedContextFromSession } from './saved-context.ts'
 import type { Ownership } from './ownership.ts'
 import type { Mutations } from './mutations.ts'
 import { beginManagedTaskMetadataUpdate, captureManagedTaskParentReadiness,originalManagedExecution, invalidateManagedMetadataWitness, createManagedDocument, bindManagedRestoredStage, captureManagedRequiredParent, captureManagedProcessRead } from './managed-document.ts'
@@ -167,15 +168,15 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     id: string,
     existing: ManagedEntry,
     readPrivate: (original: ReturnType<typeof originalManagedExecution>, assertCurrent: () => void) => Promise<T>,
-    readMaterialized: (document: ReturnType<typeof createManagedDocument>) => T,
+    readMaterialized?: (document: ReturnType<typeof createManagedDocument>) => T,
   ): Promise<T> {
-    if (!existing.document || !Object.hasOwn(existing.document, 'view')) ownership.assertOutsideSessionOperation(id)
+    if (!readMaterialized || !existing.document || !Object.hasOwn(existing.document, 'view')) ownership.assertOutsideSessionOperation(id)
     const prior = existing.flight
     const operation = (async () => {
       await prior
       if (documents.get(id) !== existing || existing.revoked || !existing.document) throw new FactRecoveryRequiredError()
       const document = existing.document
-      if (Object.hasOwn(document, 'view')) return readMaterialized(document)
+      if (readMaterialized && Object.hasOwn(document, 'view')) return readMaterialized(document)
       const original = originalManagedExecution(document, ownership)
       const assertCurrent = () => {
         if (documents.get(id) !== existing || existing.revoked || existing.document !== document) throw new FactRecoveryRequiredError()
@@ -370,6 +371,25 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       assertEntry(entry)
       entry.document?.assertObservable()
       return entry.document ? readInbox(entry.document.view).pending() : undefined
+    },
+    async readSavedContext(id: string, binding?: SavedContextBinding) {
+      const entry = documents.get(id)
+      assertEntry(entry)
+      if (!entry) return undefined
+      if (executions.has(entry)) {
+        return readPrivateExecution(id, entry, async (original, assertCurrent) => {
+          const facts = savedContextFromObservation(original.core.observe(), binding)
+          assertCurrent()
+          return facts
+        })
+      }
+      await entry.flight
+      if (documents.get(id) !== entry || entry.revoked) throw new FactRecoveryRequiredError()
+      assertEntry(entry)
+      const document = entry.document
+      if (!document) return undefined
+      document.assertObservable()
+      return savedContextFromSession(document.view, id, binding)
     },
     async readHistoryPage(id: string, options: SessionHistoryPageOptions): Promise<OwnedSessionHistoryPage | undefined> {
       const entry = documents.get(id)

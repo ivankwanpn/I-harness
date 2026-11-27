@@ -9,7 +9,7 @@ import type { ModelClient } from "@i-harness/llm-seam"
 
 /** Real live writer and owned JSONL. Only the first cold read's latency is
  * controlled, so the same overlap can exercise recovering and immutable reads. */
-export async function coldReaderFixture() {
+export async function coldReaderFixture(observeRead: "snapshot" | "readSavedContext" = "snapshot") {
   const root = await mkdtemp(join(tmpdir(), "ih-cold-reader-")), store = join(root, "sessions"), id = "owned"
   const coordinator = createSessionCoordinator(createJsonlBackend(store), { maxDelayMs: 60_000, lock: { enabled: true, lockRoot: store } })
   await coordinator.create({ sessionId: id })
@@ -32,6 +32,12 @@ export async function coldReaderFixture() {
   if (!snapshotDescriptor || !originalSnapshot) throw Error('Original readonly snapshot unavailable')
   coordinator.snapshot = sessionId => inspect(() => originalSnapshot(sessionId), true)
   const restoreSnapshot = () => Object.defineProperty(coordinator, 'snapshot', snapshotDescriptor)
+  const savedDescriptor = Object.getOwnPropertyDescriptor(coordinator, 'readSavedContext')
+  if (observeRead === "readSavedContext") {
+    const originalRead = coordinator.readSavedContext?.bind(coordinator)
+    if (!savedDescriptor || !originalRead) throw Error('Original saved context reader unavailable')
+    coordinator.readSavedContext = (sessionId, binding) => inspect(() => originalRead(sessionId, binding), true)
+  }
   const observed = { ...coordinator,
     load: (sessionId: string) => inspect(() => coordinator.load(sessionId), false),
     loadOwned: (sessionId: string) => inspect(() => coordinator.loadOwned(sessionId), false),
@@ -52,6 +58,6 @@ export async function coldReaderFixture() {
       await coordinator.flush(id)
     },
     async finishTurn() { releaseModel.resolve(); await turn; await coordinator.flush(id) },
-    async close() { releaseRead.resolve(); releaseModel.resolve(); await turn?.catch(() => {}); await service.close(); await coordinator.close(); restoreSnapshot(); await rm(root, { recursive: true, force: true }) },
+    async close() { releaseRead.resolve(); releaseModel.resolve(); await turn?.catch(() => {}); await service.close(); await coordinator.close(); restoreSnapshot(); if (observeRead === "readSavedContext" && savedDescriptor) Object.defineProperty(coordinator, 'readSavedContext', savedDescriptor); await rm(root, { recursive: true, force: true }) },
   }
 }

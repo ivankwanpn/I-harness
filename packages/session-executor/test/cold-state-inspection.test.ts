@@ -10,7 +10,9 @@ import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createDurableSessionLoader, createSessionService } from "../src/index.ts"
 import { coldReaderFixture } from "./helpers/cold-reader.ts"
 import { createOpenAICompatibleClient } from "../../llm-openai-compatible/src/index.ts"
-import type { ContextRecoveryFacts } from "@i-harness/core-session"
+import type { ContextRecoveryFacts, RequestBudgetSnapshot } from "@i-harness/core-session"
+import { readContextCoordinates } from "@i-harness/context-engine"
+import { createContextStateReader } from "../src/service/context-state.ts"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createAgent } from "@i-harness/core-agent"
@@ -55,11 +57,13 @@ it.each([
     expect(assembly.session.events.filter(event => event.type === "context/usage")).toHaveLength(1)
     await live.close()
     const file = join(store, `${id}.jsonl`), before = await readFile(file, "utf8")
+    const fullSnapshot = vi.spyOn(coordinator, "snapshot")
     cold = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), modelBindingFor: resolve, modelMetadataFor: inspect })
     expect(await cold.contextState(id)).toEqual(expected)
     expect(await cold.contextState(id)).toEqual(expected)
     expect(cold.hasAssembly(id)).toBe(false)
     expect(inspect).toHaveBeenCalledTimes(2)
+    expect(fullSnapshot).not.toHaveBeenCalled()
     expect({ prepare: prepare.mock.calls.length, transport: transport.mock.calls.length, authenticate: authenticate.mock.calls.length, resolve: resolve.mock.calls.length }).toEqual(counts)
     expect(await readFile(file, "utf8")).toBe(before)
   } finally { await cold?.close(); await live.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
@@ -126,6 +130,42 @@ it("prefers the live owner published while cold metadata inspection is held", as
   }
 })
 
+it("reads legacy coordinates only to distinguish a matching saved V1 budget", async () => {
+  const session = createSession()
+  append(session, { type: "user/message", text: "original" })
+  const id = "legacy-context"
+  const captured = readContextCoordinates(session, { ownerSessionId: id })
+  if (captured.kind !== "available") throw Error("Missing fixture coordinates")
+  const { semanticRevision, protectionRevision, branchId, contextEpoch } = captured.coordinates
+  const digest = "b".repeat(64)
+  const metadata = { version: 1 as const, modelId: "m", protocol: "p", contextWindow: 1000, identityCoverage: "complete" as const, bindingConfigFingerprint: digest }
+  const budget: RequestBudgetSnapshot = { ...metadata, ownerSessionId: id, bindingFingerprint: digest, bindingRevision: 0,
+    projectionRevision: 0, neutralFingerprint: digest, estimatedInputTokens: 10, admissionInputTokens: 10, estimateSource: "neutral-only",
+    coverage: "neutral-only", confidence: "estimated", roleTokens: { user: 10, assistant: 0, tool: 0 }, systemTokens: 0, schemaTokens: 0,
+    reasoningTokens: 0, outputReserve: 0, capSupport: "unknown", safetyMargin: 0, admission: "fit", recoveryRequired: false, fullByProvider: false,
+    requestContext: { version: 1, semanticRevision, protectionRevision, branchId, contextEpoch, surfaceRevision: digest } }
+  append(session, { type: "context/budget", version: 1, snapshot: budget })
+  const snapshot = vi.fn(async () => session)
+  const saved = vi.fn(async () => ({ budget }))
+  // A settings refresh can update the host's metadata object while the
+  // persistence layer is still reading the previous binding.
+  saved.mockImplementationOnce(async () => {
+    await Promise.resolve()
+    metadata.bindingConfigFingerprint = "c".repeat(64)
+    return { budget }
+  })
+  const read = createContextStateReader({ assertOpen() {}, live: () => undefined, meta: async () => undefined,
+    metadata: async () => metadata, readSavedContext: saved, snapshot })
+  expect(await read(id)).toMatchObject({ kind: "unavailable", reason: "Saved prepared budget is historical; current request surface is unverified" })
+  metadata.bindingConfigFingerprint = digest
+  append(session, { type: "user/message", text: "later" })
+  expect(await read(id)).toMatchObject({ kind: "unavailable", reason: "Saved prepared budget is historical; current context/binding is unverified" })
+  expect(snapshot).toHaveBeenCalledTimes(2)
+  metadata.bindingConfigFingerprint = "c".repeat(64)
+  expect(await read(id)).toMatchObject({ kind: "unavailable", reason: "Saved prepared budget is historical; current context/binding is unverified" })
+  expect(snapshot).toHaveBeenCalledTimes(2)
+})
+
 it.each([false, true])("keeps cold per-ID Context ownership when a static fallback also exists (snapshot=%s)", async snapshotAvailable => {
   const root = await mkdtemp(join(tmpdir(), "ih-context-owner-")), coordinator = createSessionCoordinator(createJsonlBackend(root))
   const staticSession = createSession(), targetSession = createSession()
@@ -148,7 +188,7 @@ it.each([false, true])("keeps cold per-ID Context ownership when a static fallba
 })
 
 it("keeps a cold Context inspection immutable when a live writer starts during its await", async () => {
-  const f = await coldReaderFixture()
+  const f = await coldReaderFixture("readSavedContext")
   const reading = f.service.contextState(f.id)
   try {
     await f.entered; await f.startTurn()

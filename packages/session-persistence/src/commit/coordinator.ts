@@ -1,7 +1,8 @@
 import { createCoordinatorAdmission } from '../coordinator/public-admission.ts'
 import { createHash } from 'node:crypto'
-import { CURRENT_FORMAT_VERSION, FactRecoveryRequiredError, validateSemanticBootstrapHistory, canonicalJsonData, decodeFactBatch, encodeFactBatch, legacyPrefixDigest, readInbox, stringifyJsonData, type FactReceipt, type Session, type SessionEvent } from '@i-harness/core-session'
-import { pendingInputSummary, type PendingInputSummary } from '../coordinator/types.ts'
+import { CURRENT_FORMAT_VERSION, FactRecoveryRequiredError, validateSemanticBootstrapHistory, canonicalJsonData, decodeFactBatch, encodeFactBatch, legacyPrefixDigest, readInbox, stringifyJsonData, type FactReceipt, type Session, type SessionEvent, type SessionView } from '@i-harness/core-session'
+import { pendingInputSummary, type PendingInputSummary, type SavedContextBinding, type SavedContextFacts } from '../coordinator/types.ts'
+import { captureSavedContextBinding, savedContextFromObservation, savedContextFromSession } from '../coordinator/saved-context.ts'
 import { COMMIT_LOG_GENERATION, CommitLogConflictError, CommitLogClosedError, CommitLogCleanupError, createCommitLog as createStoredCommitLog, openCommitLog, CommitLogNotFoundError, type CommitLog, type CommitLogMode, type CommitLogCleanup } from '@i-harness/session-commit-log'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -71,6 +72,7 @@ export type CommitCoordinator = {
   load(sessionId: string): Promise<{ session: Session }>
   snapshot(sessionId: string): Promise<{ session: Session }>
   readPendingInputs(sessionId: string): Promise<readonly PendingInputSummary[]>
+  readSavedContext(sessionId: string, binding?: SavedContextBinding): Promise<SavedContextFacts>
   loadOwned(sessionId: string): Promise<{ session: Session }>
   append(sessionId: string, events: SessionEvent[]): Promise<void>
   openManagedDocument(sessionId: string): Promise<ManagedDocument>
@@ -256,6 +258,25 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     const state = await readState(sessionId)
     preflightSessionFormat(CURRENT_FORMAT_VERSION, state.events, state.meta)
     return buildSession(state.meta, state.events)
+  }
+
+  // Retiring the writer revokes the attachment. Passive inspection can still
+  // read the committed log, or use the successor if one publishes meanwhile.
+  async function readCommittedDisplay<T>(sessionId: string,
+    fromExecution: (execution: ManagedExecutionAttachment) => T,
+    fromSession: (session: SessionView) => T,
+  ): Promise<T> {
+    const current = () => {
+      const entry = managed.get(sessionId)
+      if (!entry || entry.retiring) return undefined
+      if (entry.execution) return fromExecution(entry.execution)
+      entry.document.assertReady()
+      return fromSession(entry.document.view)
+    }
+    const result = current()
+    if (result !== undefined) return result
+    const session = await readSession(sessionId)
+    return current() ?? fromSession(session)
   }
 
   const inLegacyNamespace = <T>(sessionId: string, work: (source: LegacySession | undefined) => Promise<T>): Promise<T> => {
@@ -622,24 +643,18 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     },
     async snapshot(sessionId) { return { session: await readSession(sessionId) } },
     async readPendingInputs(sessionId) {
-      const current = () => {
-        const entry = managed.get(sessionId)
-        if (!entry || entry.retiring) return undefined
-        if (entry.execution) {
-          const observation = entry.execution.observe()
-          const pending = observation.inbox.pending()
-          observation.assertCurrent()
-          return pending
-        }
-        entry.document.assertReady()
-        return readInbox(entry.document.view).pending()
-      }
-      let inputs = current()
-      if (inputs === undefined) {
-        const session = await readSession(sessionId)
-        inputs = current() ?? readInbox(session).pending()
-      }
+      const inputs = await readCommittedDisplay(sessionId, execution => {
+        const observation = execution.observe()
+        const pending = observation.inbox.pending()
+        observation.assertCurrent()
+        return pending
+      }, session => readInbox(session).pending())
       return inputs.map(pendingInputSummary)
+    },
+    async readSavedContext(sessionId, binding) {
+      const capturedBinding = captureSavedContextBinding(binding)
+      return readCommittedDisplay(sessionId, execution => savedContextFromObservation(execution.observe(), capturedBinding),
+        session => savedContextFromSession(session, sessionId, capturedBinding))
     },
     loadOwned(sessionId) {
       return ownedOperation(() => serializeOwnership(sessionId, async () => {

@@ -1,4 +1,4 @@
-import type { OwnedSessionHistoryPage, PendingInput, SessionHistoryPageOptions, SessionView as Session, SessionEvent, SessionHeader } from "@i-harness/core-session"
+import type { ContextRecoveryFacts, DeepReadonly, OwnedSessionHistoryPage, PendingInput, RequestBudgetSnapshot, RequestBudgetSnapshotV2, SessionHistoryPageOptions, SessionView as Session, SessionEvent, SessionHeader } from "@i-harness/core-session"
 import type { SettingsProviderProtocol } from "@i-harness/settings"
 
 /** Displayable durable inbox rows, in admission order. */
@@ -6,6 +6,12 @@ export type PendingInputSummary = Pick<PendingInput, 'inputId' | 'text' | 'inten
 export function pendingInputSummary({ inputId, text, intent, delivery, admittedSeq }: PendingInputSummary): PendingInputSummary {
   return { inputId, text, intent, delivery, admittedSeq }
 }
+
+export type SavedContextBinding = { providerId?: string; modelId: string; protocol: string }
+export type SavedContextFacts = DeepReadonly<{
+  budget?: RequestBudgetSnapshot | RequestBudgetSnapshotV2
+  recovery?: ContextRecoveryFacts
+}>
 
 export interface SessionMeta extends SessionHeader {
   formatVersion: number
@@ -173,6 +179,8 @@ export interface SessionCoordinator {
   readHistoryPage?(sessionId: string, options: SessionHistoryPageOptions, onSnapshotFallback?: (session: Session) => void): Promise<OwnedSessionHistoryPage | undefined>
   /** Read the committed inbox without opening an execution engine or materializing its full Session. */
   readPendingInputs?(sessionId: string): Promise<readonly PendingInputSummary[]>
+  /** Read committed context facts. Recovery defaults to the saved budget's model binding. */
+  readSavedContext?(sessionId: string, binding?: SavedContextBinding): Promise<SavedContextFacts>
   /** Acquire long-term ownership before reading, durably canonicalize crash
    * recovery, and return a writable snapshot whose length equals its next seq. */
   loadOwned(sessionId: string): Promise<{ session: Session }>

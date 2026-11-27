@@ -1,11 +1,12 @@
-import { CURRENT_FORMAT_VERSION, copyConversationData, freezeJsonData, readInbox, stringifyJsonData, validateSubagentHeader, type JournalPrefix, type OwnedSessionHistoryPage, type Session, type SessionView, type SessionEvent, type SessionEventView, type SessionHistoryPageOptions } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, copyConversationData, freezeJsonData, readInbox, stringifyJsonData, validContextEvent, validateSubagentHeader, type JournalPrefix, type OwnedSessionHistoryPage, type Session, type SessionView, type SessionEvent, type SessionEventView, type SessionHistoryPageOptions } from "@i-harness/core-session"
 import { materializeSessionHistoryPage, planSessionHistoryPage, sessionHistoryFact, type SessionHistoryFact } from '@i-harness/core-session/internal/archive'
 import { prepareManagedSessionClone, type ManagedSessionClone } from '@i-harness/core-session/internal/restoration'
 import { repairTurnTail } from "../repair.ts"
 import { preflightSessionFormat, preflightBatchShape, preflightDecodedFactHistory, migrate, guardIgnorable, buildSession } from "../format/validation.ts"
 import { originalColdArchiveHistoryReader, originalDecodedArchiveRead, readArchiveHistoryPrefix, recognizesOriginalCleanHistoryMaterialization, type ColdArchiveHistoryReader } from '../archive-read-internal.ts'
 import { assertUpgradeCapability, ensureWritableFormatUnlocked } from "./writable-format.ts"
-import { pendingInputSummary, type PendingInputSummary, type PersistenceBackend, type SessionMeta } from "./types.ts"
+import { pendingInputSummary, type PendingInputSummary, type PersistenceBackend, type SavedContextBinding, type SavedContextFacts, type SessionMeta } from "./types.ts"
+import { savedContextFromSession } from './saved-context.ts'
 import type { Ownership } from "./ownership.ts"
 import type { Mutations } from "./mutations.ts"
 import { SessionFormatUnsupportedError } from '../format/registry.ts'
@@ -20,14 +21,17 @@ type AfterTransition = (check: (events: readonly SessionEventView[]) => void, ma
 type MaterializedHistory = { session: Session; readonly archivePrefix?: Readonly<JournalPrefix>; readonly managedClone?: ManagedSessionClone }
 type ColdSnapshotFallback = (session: SessionView, isCurrent: () => boolean) => void
 type ColdHistoryPageResult = { page: OwnedSessionHistoryPage; originalSealCurrent?: () => boolean }
-type ColdPendingInputsResult = { items: readonly PendingInputSummary[]; originalSealCurrent?: () => boolean }
+export type ColdCommittedObservation<T> = { value: T; originalSealCurrent?: () => boolean }
 type InitialArchive = Awaited<ReturnType<NonNullable<ColdArchiveHistoryReader['readFullForHistoryPage']>>>
 
 const MAX_COLD_HISTORY_SESSIONS = 2
 const MAX_COLD_HISTORY_FACTS = 16_384
 const MAX_COLD_HISTORY_IMAGE_ID_UNITS = 262_144
 const MAX_COLD_PENDING_ORDINALS = 256
-type ColdHistory = { evidence: object; facts: readonly SessionHistoryFact[]; pendingOrdinals?: readonly number[] }
+const MAX_COLD_CONTEXT_RECOVERY_ORDINALS = 256
+type ColdContextOrdinals = { budget?: number; selected: readonly number[] }
+type ColdHistoryCoordinates = { facts: readonly SessionHistoryFact[]; context?: ColdContextOrdinals }
+type ColdHistory = ColdHistoryCoordinates & { evidence: object; pendingOrdinals?: readonly number[] }
 type InitialColdHistory = {
   decoded: NonNullable<InitialArchive>
   unchanged: boolean
@@ -40,11 +44,13 @@ function pendingOrdinals(pending: readonly PendingInputSummary[]): readonly numb
   return pending.map(input => input.admittedSeq)
 }
 
-function historyFacts(events: readonly SessionEvent[]): SessionHistoryFact[] | undefined {
+function historyCoordinates(sessionId: string, events: readonly SessionEvent[]): ColdHistoryCoordinates | undefined {
   if (events.length > MAX_COLD_HISTORY_FACTS) return undefined
   const facts: SessionHistoryFact[] = []
   const admissions = new Set<string>()
   let imageIdUnits = 0
+  let budget: number | undefined
+  let recoveries: number[] | undefined = []
   for (const event of events) {
     const fact = sessionHistoryFact(event)
     imageIdUnits += (fact.inputId?.length ?? 0) + (fact.imageInputId?.length ?? 0)
@@ -53,9 +59,18 @@ function historyFacts(events: readonly SessionEvent[]): SessionHistoryFact[] | u
     // where its error cannot prevent a changed file from being read afresh.
     if (fact.imageInputId !== undefined && !admissions.has(fact.imageInputId)) return undefined
     if (fact.inputId !== undefined) admissions.add(fact.inputId)
+    if (event.type === 'context/budget' && event.snapshot.ownerSessionId === sessionId) budget = fact.seq
+    if (event.type === 'context/recovery' && event.ownerSessionId === sessionId && recoveries) {
+      if (recoveries.length === MAX_COLD_CONTEXT_RECOVERY_ORDINALS) recoveries = undefined
+      else recoveries.push(fact.seq)
+    }
     facts.push(fact)
   }
-  return facts
+  // The ordinary decoder already validated these events. A narrower cached
+  // lookup also verifies its last budget explicitly before dropping older ones.
+  if (!recoveries || budget !== undefined && !validContextEvent(events[budget])) return { facts }
+  if (budget !== undefined) recoveries.push(budget)
+  return { facts, context: { budget, selected: recoveries.sort((a, b) => a - b) } }
 }
 
 async function materializeHistory(backend: object, proof: HistoryProof, retainArchivePrefix = false): Promise<MaterializedHistory> {
@@ -193,9 +208,9 @@ export function createLoads(
       }
       return undefined
     }
-    const facts = unchanged && evidence ? historyFacts(events) : undefined
-    if (!facts || !evidence) return snapshotFallback()
-    const plan = planSessionHistoryPage(facts, options)
+    const coordinates = unchanged && evidence ? historyCoordinates(sessionId, events) : undefined
+    if (!coordinates || !evidence) return snapshotFallback()
+    const plan = planSessionHistoryPage(coordinates.facts, options)
     if (!plan) return snapshotFallback()
     // Public callers can retain and modify the returned page. Copy only its
     // selected records and any external image admissions, not the entire log.
@@ -205,7 +220,7 @@ export function createLoads(
     const page = materializeSessionHistoryPage(plan, records)
     if (!coldHistory.has(sessionId)) {
       decoded.retainDecoded?.()
-      rememberColdHistory(sessionId, { evidence, facts })
+      rememberColdHistory(sessionId, { evidence, ...coordinates })
     }
     return { page, ...(decoded.retainDecoded ? { originalSealCurrent: isCurrent } : {}) }
   }
@@ -294,13 +309,13 @@ export function createLoads(
       const qualified = visibleHistory(decoded), { visible, unchanged } = qualified
       const { evidence } = decoded
       if (cold && !coldHistoryRetired && originalColdArchiveHistoryReader(backend) === cold) {
-        const facts = unchanged && evidence ? historyFacts(visible) : undefined
-        if (facts && evidence) rememberColdHistory(sessionId, { evidence, facts })
+        const coordinates = unchanged && evidence ? historyCoordinates(sessionId, visible) : undefined
+        if (coordinates && evidence) rememberColdHistory(sessionId, { evidence, ...coordinates })
         else if (coldHistory.get(sessionId) === previous) coldHistory.delete(sessionId)
       }
       return { session: await asSnapshot(decoded, qualified) }
     },
-    async readColdPendingInputs(sessionId: string): Promise<ColdPendingInputsResult | undefined> {
+    async readColdPendingInputs(sessionId: string): Promise<ColdCommittedObservation<readonly PendingInputSummary[]> | undefined> {
       if (coldHistoryRetired) return undefined
       const original = originalColdArchiveHistoryReader(backend)
       if (!original) return undefined
@@ -318,7 +333,7 @@ export function createLoads(
             return pendingInputSummary({ ...event, admittedSeq: ordinal })
           })
           if (coldHistory.get(sessionId) === history) rememberColdHistory(sessionId, history)
-          return { items, originalSealCurrent: isCurrent }
+          return { value: items, originalSealCurrent: isCurrent }
         }
         if (coldHistory.get(sessionId) === history) coldHistory.delete(sessionId)
       }
@@ -335,11 +350,11 @@ export function createLoads(
         else if (ordinals && history && (!cached || cached === history)) {
           // A previously returned page can predate this verified read. Keep
           // pending coordinates tied to the exact current evidence.
-          const facts = historyFacts(decoded.events)
-          if (facts) rememberColdHistory(sessionId, { evidence, facts, pendingOrdinals: ordinals })
+          const coordinates = historyCoordinates(sessionId, decoded.events)
+          if (coordinates) rememberColdHistory(sessionId, { evidence, ...coordinates, pendingOrdinals: ordinals })
         }
       }
-      return { items, ...(retainDecoded ? { originalSealCurrent: isCurrent } : {}) }
+      return { value: items, ...(retainDecoded ? { originalSealCurrent: isCurrent } : {}) }
     },
     async readColdHistoryPage(sessionId: string, options: SessionHistoryPageOptions, onSnapshotFallback?: ColdSnapshotFallback): Promise<ColdHistoryPageResult | undefined> {
       if (coldHistoryRetired) return undefined
@@ -364,6 +379,35 @@ export function createLoads(
       const page = materializeSessionHistoryPage(plan, ordered)
       if (coldHistory.get(sessionId) === history) rememberColdHistory(sessionId, history)
       return { page }
+    },
+    async readColdSavedContext(sessionId: string, binding?: SavedContextBinding): Promise<ColdCommittedObservation<SavedContextFacts> | undefined> {
+      if (coldHistoryRetired) return undefined
+      const original = originalColdArchiveHistoryReader(backend)
+      if (!original) return undefined
+      const isCurrent = originalSealCurrent(original)
+      const history = coldHistory.get(sessionId), context = history?.context
+      if (history && context) {
+        // Every page-local coordinate belongs to this exact verified prefix.
+        // With no saved facts, the empty selection still verifies that prefix.
+        const records = await original.readWindow(sessionId, history.evidence, new Set(context.selected))
+        if (!isCurrent()) return undefined
+        if (records) {
+          const ordered = [...records].sort((a, b) => a.seq! - b.seq!)
+          if (ordered.length !== context.selected.length || ordered.some((event, index) => event.seq !== context.selected[index] ||
+            (event.seq === context.budget ? event.type !== 'context/budget' || event.snapshot.ownerSessionId !== sessionId
+              : event.type !== 'context/recovery' || event.ownerSessionId !== sessionId))) throw new Error('History context ordinal mismatch')
+          const facts = savedContextFromSession({ formatVersion: CURRENT_FORMAT_VERSION, events: ordered }, sessionId, binding)
+          if (coldHistory.get(sessionId) === history) rememberColdHistory(sessionId, history)
+          return { value: facts, originalSealCurrent: isCurrent }
+        }
+        if (coldHistory.get(sessionId) === history) coldHistory.delete(sessionId)
+      }
+      const reading = await readInitialColdHistory(sessionId, original)
+      if (!reading || !isCurrent()) return undefined
+      const snapshot = await reading.snapshot()
+      if (!isCurrent()) return undefined
+      const facts = savedContextFromSession(snapshot, sessionId, binding)
+      return { value: facts, ...(reading.decoded.retainDecoded ? { originalSealCurrent: isCurrent } : {}) }
     },
     retireColdHistory() {
       coldHistoryRetired = true

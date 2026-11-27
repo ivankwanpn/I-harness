@@ -852,6 +852,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     assertOpen() { if (closed) throw new Error("session service closed") },
     live: liveContextState,
     meta: async sessionId => await opts.loadMeta?.(sessionId) ?? (opts.coordinator ? (await opts.coordinator.profile(sessionId)).meta : undefined),
+    readSavedContext: opts.coordinator?.readSavedContext?.bind(opts.coordinator),
     snapshot: async sessionId => opts.coordinator?.snapshot ? (await opts.coordinator.snapshot(sessionId)).session : opts.sessionFor === undefined ? opts.session : undefined,
     ...(opts.modelMetadataFor ? { metadata: opts.modelMetadataFor } : {}),
   })
