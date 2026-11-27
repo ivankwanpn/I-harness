@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
-import { encodeFactBatch, readFactJournal, type JournalMetadata, type RequestBudgetSnapshot, type RequestBudgetSnapshotV2, type SessionEvent } from '@i-harness/core-session'
+import { contextUsageAnchorId, encodeFactBatch, readFactJournal, type JournalMetadata, type RequestBudgetSnapshot, type RequestBudgetSnapshotV2, type SessionEvent } from '@i-harness/core-session'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { acquireManagedExecution } from '../src/execution-internal.ts'
 import { createCommitCoordinator } from '../src/commit/coordinator.ts'
@@ -210,4 +210,41 @@ it('preserves a legacy budget and recovery selection across cold and live commit
   // reader has the same access to committed budget facts as snapshot().
   expect((await coordinator.snapshot!(sessionId)).session.events).toContainEqual(expect.objectContaining({ type: 'context/budget' }))
   await expect(coordinator.readSavedContext!(sessionId)).resolves.toEqual(cold)
+})
+
+it.each(['jsonl', 'commit'] as const)('reads the accepted provider-input total for the same bound budget (%s)', async storage => {
+  const { coordinator } = await fixture(storage === 'commit')
+  const currentBinding = { ...binding, identityCoverage: 'complete', bindingConfigFingerprint: digest } as const
+  const initial = (await coordinator.snapshot!(sessionId)).session.events.length
+  const request = { version:1,ownerSessionId:sessionId,observationLifetimeId:'live',candidateId:'candidate',sendId:'send',
+    semanticId:digest,payloadId:digest,payloadKind:'http-json-body',executionEpochId:'epoch',coldCompatible:false,
+    snapshot:{semanticRevision:digest,protectionRevision:digest,branchId:digest,contextEpoch:digest,surfaceRevision:digest},projectionRevision:0 } as const
+  const receipt = { exchangeId:'exchange',actionId:'action',attemptId:'attempt' }
+  const sample = { version:2,accepted:{acceptedSeq:initial+3,...receipt},request,bindingId:digest,shapeId:digest,pricingVersion:'projected-pricing-v2',
+    normalizationVersion:'input-usage-v1',usageSemantics:'includes-cache',prefixId:digest,unitCount:1,heuristicPrefixTokens:12,
+    reportedInputTokens:41,reportedOutputTokens:5000,cacheReadTokens:13,cacheCreationTokens:2 } as const
+  const budget: RequestBudgetSnapshotV2 = {...v2Budget,...currentBinding,selectedSemanticId:digest,selectedPayloadId:digest}
+  const completed: SessionEvent[] = [
+    {type:'conversation/semantics',version:1,mode:'accepted-exchange-v1'},
+    {type:'step/start',actionId:receipt.actionId,attemptId:receipt.attemptId},
+    {type:'assistant/message',text:'recorded provider answer'},
+    {type:'model/exchange-accepted',version:2,...receipt,request,stepStartSeq:initial+1,assistantSeq:initial+2,callSeqs:[]},
+    {type:'context/usage',version:2,op:'sample',checkpoint:{...sample,anchorId:contextUsageAnchorId(sample)}},
+    {type:'context/budget',version:2,snapshot:budget},
+    {type:'step/end'},
+  ]
+  await coordinator.append(sessionId, completed.map((event, index) => ({ ...event, seq: initial + index })))
+  await coordinator.releaseOwnership(sessionId)
+  if (coordinator.readHistoryPage) await coordinator.readHistoryPage(sessionId,{afterSeq:0,limit:1})
+  await expect(coordinator.readSavedContext!(sessionId,currentBinding)).resolves.toMatchObject({budget,lastReportedInputTokens:41})
+  await expect(coordinator.readSavedContext!(sessionId,{...currentBinding,bindingConfigFingerprint:'b'.repeat(64)})).resolves.not.toHaveProperty('lastReportedInputTokens')
+  await expect(coordinator.readSavedContext!(sessionId)).resolves.not.toHaveProperty('lastReportedInputTokens')
+  const execution = await acquireManagedExecution(coordinator,sessionId)
+  expect(Object.hasOwn(execution.owner,'view')).toBe(false)
+  await expect(coordinator.readSavedContext!(sessionId,currentBinding)).resolves.toMatchObject({lastReportedInputTokens:41})
+  expect(Object.hasOwn(execution.owner,'view')).toBe(false)
+  const nextSeq = execution.observe().eventCount
+  await execution.close()
+  await coordinator.append(sessionId,[{type:'compaction/reset',removedSeqs:[],seq:nextSeq}])
+  await expect(coordinator.readSavedContext!(sessionId,currentBinding)).resolves.not.toHaveProperty('lastReportedInputTokens')
 })

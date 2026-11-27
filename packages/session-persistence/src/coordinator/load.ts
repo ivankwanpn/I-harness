@@ -1,5 +1,5 @@
 import { CURRENT_FORMAT_VERSION, copyConversationData, freezeJsonData, readInbox, stringifyJsonData, validContextEvent, validateSubagentHeader, type JournalPrefix, type OwnedSessionHistoryPage, type Session, type SessionView, type SessionEvent, type SessionEventView, type SessionHistoryPageOptions } from "@i-harness/core-session"
-import { materializeSessionHistoryPage, planSessionHistoryPage, sessionHistoryFact, type SessionHistoryFact } from '@i-harness/core-session/internal/archive'
+import { deriveLastProviderInput, materializeSessionHistoryPage, planSessionHistoryPage, sessionHistoryFact, type SessionHistoryFact } from '@i-harness/core-session/internal/archive'
 import { prepareManagedSessionClone, type ManagedSessionClone } from '@i-harness/core-session/internal/restoration'
 import { repairTurnTail } from "../repair.ts"
 import { preflightSessionFormat, preflightBatchShape, preflightDecodedFactHistory, migrate, guardIgnorable, buildSession } from "../format/validation.ts"
@@ -29,7 +29,7 @@ const MAX_COLD_HISTORY_FACTS = 16_384
 const MAX_COLD_HISTORY_IMAGE_ID_UNITS = 262_144
 const MAX_COLD_PENDING_ORDINALS = 256
 const MAX_COLD_CONTEXT_RECOVERY_ORDINALS = 256
-type ColdContextOrdinals = { budget?: number; selected: readonly number[] }
+type ColdContextOrdinals = { budget?: number; provider?: { accepted: number; sample: number }; selected: readonly number[] }
 type ColdHistoryCoordinates = { facts: readonly SessionHistoryFact[]; context?: ColdContextOrdinals }
 type ColdHistory = ColdHistoryCoordinates & { evidence: object; pendingOrdinals?: readonly number[] }
 type InitialColdHistory = {
@@ -70,7 +70,10 @@ function historyCoordinates(sessionId: string, events: readonly SessionEvent[]):
   // lookup also verifies its last budget explicitly before dropping older ones.
   if (!recoveries || budget !== undefined && !validContextEvent(events[budget])) return { facts }
   if (budget !== undefined) recoveries.push(budget)
-  return { facts, context: { budget, selected: recoveries.sort((a, b) => a - b) } }
+  const report = deriveLastProviderInput(events, sessionId)
+  const provider = report && report.budgetSeq === budget ? { accepted: report.acceptedSeq, sample: report.usageSeq } : undefined
+  if (provider) recoveries.push(provider.accepted, provider.sample)
+  return { facts, context: { budget, provider, selected: recoveries.sort((a, b) => a - b) } }
 }
 
 async function materializeHistory(backend: object, proof: HistoryProof, retainArchivePrefix = false): Promise<MaterializedHistory> {
@@ -393,9 +396,14 @@ export function createLoads(
         if (!isCurrent()) return undefined
         if (records) {
           const ordered = [...records].sort((a, b) => a.seq! - b.seq!)
-          if (ordered.length !== context.selected.length || ordered.some((event, index) => event.seq !== context.selected[index] ||
-            (event.seq === context.budget ? event.type !== 'context/budget' || event.snapshot.ownerSessionId !== sessionId
-              : event.type !== 'context/recovery' || event.ownerSessionId !== sessionId))) throw new Error('History context ordinal mismatch')
+          const ownedContextRecord = (event: SessionEvent) => {
+            if (event.seq === context.budget) return event.type === 'context/budget' && event.snapshot.ownerSessionId === sessionId
+            if (event.seq === context.provider?.accepted) return event.type === 'model/exchange-accepted' && event.version === 2 && event.request.ownerSessionId === sessionId
+            if (event.seq === context.provider?.sample) return event.type === 'context/usage' && event.version === 2 && event.op === 'sample' && event.checkpoint.request.ownerSessionId === sessionId
+            return event.type === 'context/recovery' && event.ownerSessionId === sessionId
+          }
+          if (ordered.length !== context.selected.length || ordered.some((event, index) => event.seq !== context.selected[index] || !ownedContextRecord(event)))
+            throw new Error('History context ordinal mismatch')
           const facts = savedContextFromSession({ formatVersion: CURRENT_FORMAT_VERSION, events: ordered }, sessionId, binding)
           if (coldHistory.get(sessionId) === history) rememberColdHistory(sessionId, history)
           return { value: facts, originalSealCurrent: isCurrent }

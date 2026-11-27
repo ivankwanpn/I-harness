@@ -2,9 +2,10 @@ import { validBudgetSnapshot, type BudgetRead, type RequestBudgetSnapshot } from
 import { validAdmissionObservation, type RequestBudgetSnapshotV2 } from './events/admission.ts'
 
 /** Additive v1 wire contract. A snapshot may be known while admission is unavailable. */
-export type SessionContextState =
+export type SessionContextState = (
   | { kind: "ready"; estimatedTokens: number; contextWindow: number; roleTokens?: RequestBudgetSnapshot["roleTokens"]; snapshot?: RequestBudgetSnapshot; observation?: RequestBudgetSnapshotV2 }
   | { kind: "unavailable"; reason: string; snapshot?: RequestBudgetSnapshot; observation?: RequestBudgetSnapshotV2 }
+  ) & { lastReportedInputTokens?: number }
 
 export function contextStateFromObservation(value: unknown): SessionContextState {
   if (!validAdmissionObservation(value)) return { kind: 'unavailable', reason: 'Prepared admission facts are invalid' }
@@ -35,7 +36,12 @@ export function readSessionContextState(value: unknown, ownerSessionId?: string)
   if (candidate.observation !== undefined) {
     if (!validAdmissionObservation(candidate.observation) || ownerSessionId !== undefined && candidate.observation.ownerSessionId !== ownerSessionId) return invalid()
     const state = contextStateFromObservation(candidate.observation)
-    if (candidate.kind === 'unavailable') return { kind: 'unavailable', reason: typeof candidate.reason === 'string' ? candidate.reason.slice(0, 256) : 'Prepared admission is unavailable', observation: state.observation }
+    const tokens = candidate.lastReportedInputTokens
+    const observation = candidate.observation
+    const reported = typeof tokens === 'number' && Number.isSafeInteger(tokens) && tokens >= 0 && observation.purpose === 'main' &&
+      observation.freshness !== 'current' && observation.identityCoverage === 'complete' && observation.bindingConfigFingerprint !== undefined &&
+      observation.selectedSemanticId !== undefined && observation.selectedPayloadId !== undefined ? { lastReportedInputTokens: tokens } : {}
+    if (candidate.kind === 'unavailable') return { kind: 'unavailable', reason: typeof candidate.reason === 'string' ? candidate.reason.slice(0, 256) : 'Prepared admission is unavailable', observation: state.observation, ...reported }
     if (state.kind !== 'ready' || candidate.estimatedTokens !== state.estimatedTokens || candidate.contextWindow !== state.contextWindow) return invalid()
     return state
   }

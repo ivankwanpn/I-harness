@@ -155,7 +155,7 @@ export async function restoreManagedConversation(input: OriginalConversationRest
     const newScan = () => createConversationValidationScan({ formatVersion, header, readEvent: source.readEvent.bind(source) });
     let scan: ReturnType<typeof newScan> | undefined;
     let transferred: ReturnType<typeof takeArchiveConversationIndex>;
-    const sources = createConversationSourceCoordinates(), state = createConversationStateIndex(), context = createContextStateIndex(), prune = createPruneDependencyIndex(),intake=createManagedIntakeIndex();
+    const sources = createConversationSourceCoordinates(), state = createConversationStateIndex(), context = createContextStateIndex(sessionId), prune = createPruneDependencyIndex(),intake=createManagedIntakeIndex();
     await source.consume(async (unit) => {
         source.assertCurrent();
         if (transferred) failure('CONVERSATION_RESTORATION_PREFIX_MISMATCH');

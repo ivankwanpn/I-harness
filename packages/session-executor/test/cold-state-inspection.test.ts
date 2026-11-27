@@ -4,13 +4,13 @@ import { expect, it, vi } from "vitest"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { append, createSession, metadataFactsFor } from "@i-harness/core-session"
+import { append, contextStateFromObservation, createSession, metadataFactsFor, readSessionContextState } from "@i-harness/core-session"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createDurableSessionLoader, createSessionService } from "../src/index.ts"
 import { coldReaderFixture } from "./helpers/cold-reader.ts"
 import { createOpenAICompatibleClient } from "../../llm-openai-compatible/src/index.ts"
-import type { ContextRecoveryFacts, RequestBudgetSnapshot } from "@i-harness/core-session"
+import type { ContextRecoveryFacts, RequestBudgetSnapshot, RequestBudgetSnapshotV2, SessionContextState } from "@i-harness/core-session"
 import { readContextCoordinates } from "@i-harness/context-engine"
 import { createContextStateReader } from "../src/service/context-state.ts"
 import { createContext } from "@i-harness/core-plugin"
@@ -56,13 +56,16 @@ it.each([
     if (!required) expect(expected).toMatchObject({ observation: { freshness: 'awaiting-projection' } })
     expect(assembly.session.events.filter(event => event.type === "context/usage")).toHaveLength(1)
     await live.close()
+    const metadataBeforeCold = inspect.mock.calls.length
     const file = join(store, `${id}.jsonl`), before = await readFile(file, "utf8")
     const fullSnapshot = vi.spyOn(coordinator, "snapshot")
     cold = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), modelBindingFor: resolve, modelMetadataFor: inspect })
     expect(await cold.contextState(id)).toEqual(expected)
     expect(await cold.contextState(id)).toEqual(expected)
     expect(cold.hasAssembly(id)).toBe(false)
-    expect(inspect).toHaveBeenCalledTimes(2)
+    // A visible provider count repeats only the inexpensive binding lookup.
+    // Snapshot, provider preparation, authentication and transport remain untouched.
+    expect(inspect.mock.calls.length - metadataBeforeCold).toBe(expected.lastReportedInputTokens === undefined ? 2 : 4)
     expect(fullSnapshot).not.toHaveBeenCalled()
     expect({ prepare: prepare.mock.calls.length, transport: transport.mock.calls.length, authenticate: authenticate.mock.calls.length, resolve: resolve.mock.calls.length }).toEqual(counts)
     expect(await readFile(file, "utf8")).toBe(before)
@@ -164,6 +167,52 @@ it("reads legacy coordinates only to distinguish a matching saved V1 budget", as
   metadata.bindingConfigFingerprint = "c".repeat(64)
   expect(await read(id)).toMatchObject({ kind: "unavailable", reason: "Saved prepared budget is historical; current context/binding is unverified" })
   expect(snapshot).toHaveBeenCalledTimes(2)
+})
+
+it('adds a reported input count only to the same historical v2 observation, without changing admission', async () => {
+  const digest = 'a'.repeat(64), id = 'reported-input'
+  const metadata = { version:1,providerId:'test',modelId:'m',protocol:'responses',identityCoverage:'complete',bindingConfigFingerprint:digest } as const
+  const budget: RequestBudgetSnapshotV2 = { ...metadata, version:2,ownerSessionId:id,bindingFingerprint:digest,
+    bindingRevision:0,projectionRevision:0,neutralFingerprint:digest,purpose:'main',estimate:{kind:'unknown',reason:'token-cost-unavailable'},
+    disposition:'compatibility',dimensions:[{dimension:'context',state:'unchecked'}],pressure:{kind:'unavailable',reason:'token-cost-unavailable'},
+    components:{kind:'estimated',source:'projected-heuristic',user:1,assistant:0,tool:0,system:0,schema:0,reasoning:0},
+    output:{capSupport:'unknown',minimumCap:1},recoveryRequired:false,fullByProvider:false,freshness:'awaiting-projection',
+    requestContext:{version:1,semanticRevision:digest,protectionRevision:digest,branchId:digest,contextEpoch:digest,surfaceRevision:digest},
+    selectedSemanticId:digest,selectedPayloadId:digest }
+  let live: SessionContextState | undefined
+  let selected = { ...metadata, modelId: 'm' as string }
+  const report = {budget,lastReportedInputTokens:0}
+  const saved = vi.fn(async () => report)
+  const snapshot = vi.fn(async () => { throw Error('Accepted usage inspection must not materialize a snapshot') })
+  const meta = vi.fn(async () => undefined), modelMetadata = vi.fn(async () => selected)
+  const read = createContextStateReader({assertOpen(){}, live:()=>live,meta,metadata:modelMetadata,readSavedContext:saved,snapshot})
+  const expected = {...contextStateFromObservation(budget),lastReportedInputTokens:0}
+  const cold = await read(id)
+  expect(cold).toEqual(expected)
+  expect(readSessionContextState(cold,id)).toEqual(expected)
+  expect(readSessionContextState({...cold,lastReportedInputTokens:-1},id)).not.toHaveProperty('lastReportedInputTokens')
+  expect(readSessionContextState(cold,'another')).not.toHaveProperty('lastReportedInputTokens')
+  saved.mockImplementationOnce(async () => { selected = {...selected,modelId:'changed-during-read'}; return report })
+  expect(await read(id)).not.toHaveProperty('lastReportedInputTokens')
+  selected = {...selected,modelId:'m'}
+  live = contextStateFromObservation(budget)
+  expect(await read(id)).toEqual(expected)
+  meta.mockRejectedValueOnce(new Error('Profile unavailable'))
+  expect(await read(id)).toEqual(live)
+  modelMetadata.mockRejectedValueOnce(new Error('Model settings unavailable'))
+  expect(await read(id)).toEqual(live)
+  selected = {...selected,modelId:'another'}
+  expect(await read(id)).toEqual(live)
+  selected = {...selected,modelId:'m'}
+  saved.mockImplementationOnce(async()=>{
+    live = contextStateFromObservation({...budget,selectedPayloadId:'b'.repeat(64)})
+    return report
+  })
+  expect(await read(id)).toEqual(live)
+  expect(snapshot).not.toHaveBeenCalled()
+  live = undefined
+  meta.mockRejectedValueOnce(new Error('Profile unavailable'))
+  await expect(read(id)).rejects.toThrow('Profile unavailable')
 })
 
 it.each([false, true])("keeps cold per-ID Context ownership when a static fallback also exists (snapshot=%s)", async snapshotAvailable => {

@@ -4,6 +4,7 @@ import { validContextEvent, type ContextRecoveryFacts, type RequestBudgetSnapsho
 import type { RequestBudgetSnapshotV2 } from '../events/admission.ts';
 import {createPlanModeIndex} from './plan.ts';
 import {createProjectionRewriteIndex} from './rewrite.ts';
+import { stageProviderInput, type ProviderInputState } from './provider-input.ts';
 export function deriveContextRecovery(session: Session, ownerSessionId: string, binding?: {
     providerId?: string;
     modelId: string;
@@ -58,16 +59,18 @@ function selectRecovery(recoveries: ReadonlyMap<string, ContextRecoveryFacts>, b
     return current;
 }
 /** Original incremental recovery/budget observation; no journal or send authority. */
-export function createContextStateIndex() {
+export function createContextStateIndex(sessionId: string) {
     const recoveries = new Map<string, Map<string, ContextRecoveryFacts>>();
     const budgets = new Map<string, RequestBudgetSnapshot | RequestBudgetSnapshotV2>();
     let revision = 0;
+    let providerInput: ProviderInputState = {};
     const plan=createPlanModeIndex(),rewrite=createProjectionRewriteIndex();
     let eventCount=0,prunes=0,contextRevision=0,scheduleRevision=0,sandbox:Readonly<{mode:Extract<import('../managed/types.ts').SessionEventView,{type:'sandbox/mode'}>['mode'];seq:number}>|undefined;
     return {
         stage(events: readonly import('../managed/types.ts').SessionEventView[]) {
             const expected = revision, changed = new Map<string, Map<string, ContextRecoveryFacts>>(), nextBudgets = new Map<string, RequestBudgetSnapshot | RequestBudgetSnapshotV2>();
             const planStage=plan.stage(events),rewriteStage=rewrite.stage(events);let nextPrunes=prunes,nextContext=contextRevision,nextSchedule=scheduleRevision,nextSandbox=sandbox;
+            const nextProviderInput = stageProviderInput(providerInput, events, sessionId);
             for (const [index,event] of events.entries()) {
                 if(event.type==='compaction/prune')nextPrunes++;
                 if(event.type==='context/usage'||event.type==='context/recovery')nextContext++;
@@ -95,6 +98,7 @@ export function createContextStateIndex() {
                     if (revision !== expected)
                         throw new Error('Stale context state suffix');
                     planStage.commit();rewriteStage.commit();prunes=nextPrunes;contextRevision=nextContext;scheduleRevision=nextSchedule;sandbox=nextSandbox;eventCount+=events.length;
+                    providerInput = nextProviderInput;
                     for (const [owner, lane] of changed)
                         recoveries.set(owner, lane);
                     for (const [owner, budget] of nextBudgets)
@@ -105,7 +109,8 @@ export function createContextStateIndex() {
             };
         },
         plan:plan.read,rewrite:rewrite.read,
-        releasePayloads:plan.releasePayloads,
+        releasePayloads(){plan.releasePayloads();providerInput={}},
+        lastReportedInputTokens(){return providerInput.reported?.tokens},
         projectionRevision(){return rewrite.read().markers+prunes},
         contextRevision(){return contextRevision},scheduleRevision(){return scheduleRevision},
         sandboxMode(fromSeq=0){if(!Number.isSafeInteger(fromSeq)||fromSeq<0||fromSeq>eventCount)throw RangeError('Invalid original policy floor');return sandbox&&sandbox.seq>=fromSeq?sandbox.mode:undefined},

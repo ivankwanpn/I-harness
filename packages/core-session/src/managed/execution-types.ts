@@ -97,6 +97,7 @@ readonly schedules:Readonly<{kind:'unavailable';reason:'original-schedule-adapte
  sandboxPolicy(fromSeq?:number):Readonly<{mode:Extract<SessionEventView,{type:'sandbox/mode'}>['mode'];seq:number}>|undefined
  rewrite():Readonly<ProjectionRewrite>
  budget():DeepReadonly<ReturnType<ReturnType<typeof createContextStateIndex>['budget']>>
+ lastReportedInputTokens():number|undefined
  recovery(binding?:Parameters<ReturnType<typeof createContextStateIndex>['recovery']>[1]):DeepReadonly<ReturnType<ReturnType<typeof createContextStateIndex>['recovery']>>
  generations():DeepReadonly<readonly GenerationActionState[]>
  semanticsStartSeq():number|undefined

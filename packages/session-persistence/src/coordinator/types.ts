@@ -7,10 +7,14 @@ export function pendingInputSummary({ inputId, text, intent, delivery, admittedS
   return { inputId, text, intent, delivery, admittedSeq }
 }
 
-export type SavedContextBinding = { providerId?: string; modelId: string; protocol: string }
+export type SavedContextBinding = {
+  providerId?: string; modelId: string; protocol: string
+  identityCoverage?: 'complete' | 'partial'; bindingConfigFingerprint?: string
+}
 export type SavedContextFacts = DeepReadonly<{
   budget?: RequestBudgetSnapshot | RequestBudgetSnapshotV2
   recovery?: ContextRecoveryFacts
+  lastReportedInputTokens?: number
 }>
 
 export interface SessionMeta extends SessionHeader {
