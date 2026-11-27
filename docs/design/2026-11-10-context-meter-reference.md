@@ -37,3 +37,35 @@ Codex：thread context 狀態，不把 request latency 放進 context panel。
 這個 session 是 private runtime，context admission 是 compatibility／unavailable，所以 panel 沒有可顯示的 segmented bar；fallback 正常。
 
 已在一般 session 的 context state 上通過 typecheck 與 build；segmented bar 尚未在 UI 實際看到。
+
+## 2026-11-27 上下文用量的計算口徑
+
+比較範圍是本機 `D:\ih-reference-project` 中的固定版本。下表的數字用途會影響公式，尤其是是否納入上一次輸出，以及分母用模型視窗還是扣除輸出預留後的輸入預算。
+
+| 參考版本 | 畫面如何取得數字 | 對 IH 有用的做法 |
+| --- | --- | --- |
+| DSH 0.2.3-alpha.2 | 從最近一次回報取得輸入量，已拆分的快取讀寫各加一次。再加上從取樣到現在、模型實際可見內容的估算差額。 | 用實測作基準，只估新增內容。畫面可讀持久化投影，執行端對當次準備好的請求另算輸出預留及壓縮門檻。 |
+| Pi 1.5.1 | 優先採用上一筆有效 assistant 回覆的 provider total，含輸入與輸出，並估算回報後的尾段。壓縮後要等新回報才能重新建立這個基準。 | 清楚辨識過期的取樣。舊壓縮邊界、另一個模型或未成功的請求不能直接代表目前內容。 |
+| OpenCode 2.2.6 | UI 選擇當前撤銷邊界之前、最近一次已完成壓縮之後的 assistant 用量，依該回覆的模型取得視窗。執行端可用同供應商的回報加上後續未計量的訊息，沒有基準時會重新估算。 | 讓畫面讀到的數字對得上產生它的模型和分支，後端仍需處理真實的超限拒絕。 |
+| Codex 0.172.0 | 依最近一次 token 回報與有效模型視窗算剩餘比例，TUI 公式另有 12,000-token 基線。會話恢復取持久化的最近回報，壓縮成功後會另估替換後的內容。 | 最近請求和整個會話累計必須分清。IH 的指示器顯示輸入預算使用比例，無須套用 Codex 的固定基線。 |
+| ZCode 3.17.2 | 指示器由主模型完成事件更新，使用含快取的輸入與輸出。壓縮後有 `tokensAfter`，冷開可從目前有效的歷史或壓縮記錄恢復讀數。 | 將廉價、可恢復的顯示資料與當輪輸入的實際檢查分開。 |
+
+原始碼入口位於各參考專案內。
+
+- DSH 的 `packages/llm/token-meter/src/usage-projection.ts` 和 `packages/client/ui-conversation/src/client/context-occupancy.ts`。
+- Pi 的 `packages/coding-agent/src/core/compaction/compaction.ts` 和 `packages/coding-agent/src/core/agent-session.ts`。
+- OpenCode 的 `packages/client/src/solid/usage.ts`、`packages/gui-plugins/src/context/indicator.tsx` 和 `packages/core/src/session/compaction.ts`。
+- Codex 的 `codex-rs/tui/src/token_usage.rs` 與 `codex-rs/core/src/context_manager/history.rs`。
+- ZCode 的 `apps/zcode-cli/packages/contracts/src/model/index.ts` 與 `apps/zcode-cli/packages/bootstrap/src/zcode-protocol/session-mapper.ts`。
+
+### IH 的選擇
+
+IH 的執行端已能以已接受請求的供應商輸入量校準估算。會話、執行身分、模型綁定、請求格式、計價版本及已送出的前綴都相符時，才加上新輸入的估算。供應商已將快取計入總輸入時不再相加。回合結束後未回放的推理或輸出，不應直接計入下一次輸入。這些條件由 `packages/token-meter/src/accepted-calibration.ts` 與 `calibration-usage.ts` 實作。
+
+指示器要回答上次實際用了多少輸入，以及已準備的請求估計占多少視窗。上次的數字須來自可對應主請求的供應商回報。模型視窗有可靠來源時，以同一觀察的輸入估算除以模型視窗，這個比例可跨回合閱讀。能核實的有效輸入預算另列。只有缺少模型視窗而確有輸入預算時，才改以輸入預算為分母並明示。有歷史數字時要標明模型與來源，有估算但無可靠分母時只顯示數量。缺少兩者時顯示未知。即使畫面有歷史數字，送出、壓縮和超限恢復仍須按當前請求獨立驗證。
+
+### 估算與供應商回報的配對
+
+已完成的主模型請求若具有可比對的接受收據、正規化用量與對應的 v2 預算觀察，`session/context` 會附上選用欄位 `lastReportedInputTokens`。數字屬於該次主請求，包含供應商已計入的快取輸入，排除輸出。會話累計、標題產生以及其他會話的呼叫都不能代替這筆讀數。模型設定改變、回退、壓縮或收據無法對齊時省略此欄。這不會把冷會話的顯示數據恢復為可執行的校準憑證，也不改變現有持久格式。
+
+畫面在歷史估算、需要壓縮或供應商拒絕的情況下，仍能同時呈現已有的數字與狀態。模型視窗不明時仍可讀估算數，缺少可驗分母則不顯示百分比。有已匹配的上次供應商讀數時，即使下一次的圖片或不透明內容尚不能估算，仍可查看先前的實測輸入。系統、工具與訊息等分項是各自的估算，經供應商用量校準的總數未必等於分項相加。

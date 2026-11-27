@@ -28,11 +28,29 @@ const unavailableMessages: Record<string, Message> = {
   "Inherited model binding changed before the next logical step": "模型設定已變更，等待下一次請求的容量估算。",
   "This model has no configured context window": "此模型沒有可用的上下文容量資料。",
   "Prepared input includes unpriced fixed provider references": "部分供應商端內容無法估算，暫時不能確認可用容量。",
+  "capacity-unknown": "目前無法確認此請求的容量限制。",
+  "capacity-conflict": "模型設定的容量限制不一致。",
+  "input-overflow": "估算輸入已超過可用輸入預算。",
+  "body-overflow": "請求內容超過供應商的傳輸大小限制。",
+  "output-floor": "剩餘容量不足以保留最低輸出額度。",
+  "output-ceiling": "請求需要的輸出額度超過模型限制。",
+  "strict-capacity-required": "此操作需要可驗證的模型容量限制。",
+  "Context compaction is required": "需要先壓縮上下文才能繼續請求。",
 }
 const sourceLabels = { "projected-heuristic": "已準備輸入的估算", "provider-anchor-plus-projection": "供應商用量加上新增輸入", "neutral-only": "通用格式估算" } as const
 const confidenceLabels = { estimated: "估算值", "calibrated-mixed": "部分依用量校準", "unknown-components": "部分內容成本不確定" } as const
 const coverageLabels = { complete: "已包含完整輸入", "neutral-only": "僅包含通用格式", incomplete: "輸入估算不完整" } as const
 const capLabels = { supported: "已套用", unsupported: "此路由不支援", unknown: "是否套用尚不確定" } as const
+const number = new Intl.NumberFormat("en-US").format
+
+function admissionReason(state: Extract<SessionContextState, { kind: "unavailable" }>): string {
+  const { observation } = state
+  if (observation?.fullByProvider || state.snapshot?.fullByProvider) return "Provider context recovery remains required"
+  if (observation?.recoveryRequired || state.snapshot?.recoveryRequired) return "Context compaction is required"
+  if (observation?.reason && (state.reason === "Prepared admission is historical" || state.reason === "Capacity is unchecked or requires reduction")) return observation.reason
+  if (observation?.disposition === "reduce" || state.snapshot?.admission === "compact") return "Context compaction is required"
+  return state.reason
+}
 
 /** Read-only token-meter estimates refreshed at durable session boundaries. */
 export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { bridge: DesktopBridge; workspaceId: string; sessionId: string; refreshKey?: string }) {
@@ -170,30 +188,46 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
   const current = estimate?.bridge === bridge && estimate.workspaceId === workspaceId && estimate.sessionId === sessionId && estimate.refreshKey === refreshKey ? estimate : undefined
   const state = current?.state
   const error = current?.error
-  const unavailableReason = state?.kind === "unavailable" ? unavailableMessages[state.reason] ? t(unavailableMessages[state.reason]!) : state.reason : undefined
-  // A completed turn leaves the prepared admission historical: the estimate is
-  // still the best known number, so show it (labelled) instead of a dash until
-  // the next request prepares a fresh admission.
-  const historical = state?.kind === "unavailable" && state.observation !== undefined
-    && state.observation.freshness !== "current" && state.observation.estimate.kind === "estimated"
-    && state.observation.pressure.kind === "known" && state.observation.pressure.inputBudget > 0
-    ? state.observation : undefined
-  const ready = state?.kind === "ready" ? state : historical === undefined ? undefined : {
-    estimatedTokens: historical.estimate.kind === "estimated" ? historical.estimate.value : 0,
-    contextWindow: historical.pressure.kind === "known" ? historical.pressure.inputBudget : 0,
-    roleTokens: { user: historical.components.user, assistant: historical.components.assistant, tool: historical.components.tool },
-    observation: historical,
-  }
-  const stale = historical !== undefined
+  const observation = state?.observation
+  const preparedEstimate = observation?.estimate.kind === "estimated" ? observation.estimate : undefined
+  const knownPressure = observation?.pressure.kind === "known" ? observation.pressure : undefined
+  const legacyReady = !observation && state?.kind === "ready" ? state : undefined
   const snapshot = state?.snapshot
-  const percent = ready && ready.contextWindow > 0 ? ready.estimatedTokens / ready.contextWindow * 100 : undefined
-  const systemTokens = snapshot?.systemTokens ?? 0, toolTokens = snapshot?.schemaTokens ?? 0
-  const messageTokens = ready ? Math.max(0, ready.estimatedTokens - systemTokens - toolTokens) : 0
+  const reportedInput = state?.lastReportedInputTokens
+  const stale = observation !== undefined && observation.freshness !== "current"
+  const estimatedTokens = preparedEstimate?.value ?? legacyReady?.estimatedTokens
+  // A shared window can have a computed budget even when admission did not
+  // verify the output reserve. Its count remains readable on its own.
+  const knownBudget = knownPressure?.basis === "input-only" || knownPressure?.basis === "shared-context"
+    && (observation?.output.effectiveCap !== undefined || observation?.output.allowance !== undefined)
+  const inputBudget = knownBudget && knownPressure && knownPressure.inputBudget > 0 ? knownPressure.inputBudget : undefined
+  const contextDimension = observation?.dimensions.find(dimension => dimension.dimension === "context")
+  // A failed context dimension with no pressure may report a conflicting
+  // ceiling. A model window remains displayable when only the reserve is unknown.
+  const contextLimit = observation?.reason !== "capacity-conflict" && contextDimension?.sourceId !== undefined
+    && (contextDimension.state !== "fail" || knownPressure !== undefined) ? contextDimension.limit : undefined
+  const modelWindow = contextLimit !== undefined && contextLimit > 0 ? contextLimit : undefined
+  const denominator = modelWindow ?? inputBudget ?? legacyReady?.contextWindow
+  const basis = modelWindow !== undefined ? t("估算輸入 / 模型上下文視窗")
+    : inputBudget !== undefined ? t("估算輸入 / 可用輸入預算") : undefined
+  const percent = estimatedTokens === undefined || denominator === undefined ? undefined : estimatedTokens / denominator * 100
+  const reading = percent === undefined ? "—" : estimatedTokens !== 0 && percent < 0.1 ? "<0.1%" : `${percent.toFixed(1)}%`
+  const model = observation?.providerId ? `${observation.providerId} / ${observation.modelId}` : observation?.modelId
+  const warning = observation?.fullByProvider || observation?.recoveryRequired || observation?.disposition === "reduce"
+    || observation?.disposition === "blocked" || (knownPressure && !knownPressure.hardFits)
+  const reason = state?.kind === "unavailable" ? admissionReason(state) : undefined
+  const status = reason && Object.hasOwn(unavailableMessages, reason) ? t(unavailableMessages[reason]) : reason
+  const readingDetail = [percent === undefined ? undefined : basis, stale ? t("上次請求估算") : undefined, warning ? status : undefined].filter(Boolean).join(" · ")
+  const detailId = `${readingId}-details`
+  const systemTokens = snapshot?.systemTokens ?? 0
+  const toolTokens = snapshot?.schemaTokens ?? 0
+  const messageTokens = snapshot ? snapshot.roleTokens.user + snapshot.roleTokens.assistant + snapshot.roleTokens.tool : 0
   const breakdownTotal = systemTokens + toolTokens + messageTokens || 1
-  const reading = percent === undefined ? "—" : ready!.estimatedTokens > 0 && percent < 0.1 ? "<0.1%" : `${percent.toFixed(1)}%`
-  const number = (value: number) => new Intl.NumberFormat("en-US").format(value)
+  const capacity = estimatedTokens === undefined ? undefined : denominator === undefined
+    ? t("{count} Token", { count: number(estimatedTokens) }) : `${number(estimatedTokens)} / ${number(denominator)} (${reading})`
+
   return <>
-    <button ref={trigger} type="button" className="icon-button context-usage-trigger" aria-label={t("上下文容量")} aria-describedby={readingId} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? panelId : undefined} title={open ? undefined : `${t("估算上下文容量")} · ${reading}${stale ? ` · ${t("上次請求估算")}` : ""}`} onClick={activate}
+    <button ref={trigger} type="button" className={warning ? "icon-button context-usage-trigger context-usage-trigger-warning" : "icon-button context-usage-trigger"} aria-label={t("上下文容量")} aria-describedby={readingDetail ? `${readingId} ${detailId}` : readingId} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? panelId : undefined} title={open ? undefined : `${t("估算上下文容量")} · ${reading}${readingDetail ? ` · ${readingDetail}` : ""}`} onClick={activate}
       onMouseEnter={preview} onMouseLeave={scheduleClose} onPointerEnter={event => { if (event.pointerType !== "touch") preview() }} onPointerLeave={event => { if (event.pointerType !== "touch") scheduleClose() }}>
       <svg className="context-usage-gauge" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
         <circle className="context-usage-gauge-track" cx="8" cy="8" r="6" />
@@ -201,36 +235,53 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
       </svg>
       <span id={readingId} className="context-usage-reading">{reading}</span>
     </button>
+    {readingDetail ? <span id={detailId} hidden>{readingDetail}</span> : null}
     {open ? createPortal(<div id={panelId} ref={panel} tabIndex={-1} className="context-usage-popover ih-menu-surface" style={{ ...placement, maxHeight: `calc(100vh - ${placement.bottom + 16}px)` }} role="dialog" aria-label={t("上下文容量")}
       onMouseEnter={cancelClose} onMouseLeave={scheduleClose} onPointerEnter={cancelClose} onPointerLeave={event => { if (event.pointerType !== "touch") scheduleClose() }}>
       <strong>{t("估算上下文容量")}</strong>
-      {error !== undefined || state?.kind === "unavailable" ? <div><p role={error !== undefined ? "alert" : undefined}>{error || unavailableReason || t("無法取得上下文容量。")}</p><Button variant="secondary" size="small" loading={current?.loading} loadingLabel={t("正在處理…")} onClick={() => refresh.current?.invalidate(refreshKey, true)}>{t("刷新狀態")}</Button></div> : ready ? <>
-        <p className="context-usage-capacity">{number(ready.estimatedTokens)} / {number(ready.contextWindow)} ({reading})</p>
-        {stale ? <p className="muted">{t("顯示上一次請求的估算；下一次請求準備完成後會更新。")}</p> : null}
-        {snapshot ? <div className="context-usage-breakdown" aria-label={t("訊息來源")}>
+      {observation ? <dl className="context-usage-fact-group">
+        <div className="context-usage-fact"><dt>{t("模型")}</dt><dd>{model}</dd></div>
+        {modelWindow !== undefined && estimatedTokens === undefined ? <div className="context-usage-fact"><dt>{t("模型上下文視窗")}</dt><dd>{t("{count} Token", { count: number(modelWindow) })}</dd></div> : null}
+        {reportedInput !== undefined ? <div className="context-usage-fact"><dt>{t("上次請求輸入（供應商回報）")}</dt><dd>{t("{count} Token", { count: number(reportedInput) })}</dd></div> : null}
+      </dl> : null}
+      {capacity !== undefined ? <>
+        {observation ? <small className="muted">{t(stale ? "上次請求估算" : "本次請求估算")}</small> : null}
+        <p className="context-usage-capacity">{capacity}</p>
+        {basis ? <small className="muted">{basis}</small> : null}
+        {snapshot && legacyReady ? <div className="context-usage-breakdown" aria-label={t("訊息來源")}>
           <div className="context-usage-stack" aria-hidden="true">
             {([['system', systemTokens], ['tools', toolTokens], ['messages', messageTokens]] as const).map(([key, tokens]) =>
-              <span key={key} className={`context-usage-segment context-usage-segment-${key}`} style={{ width: `${(percent ?? 0) * tokens / breakdownTotal}%` }} />)}
+              <span key={key} className={`context-usage-segment context-usage-segment-${key}`} style={{ width: `${Math.min(percent ?? 0, 100) * tokens / breakdownTotal}%` }} />)}
           </div>
-          <dl className="context-usage-fact-group">
-            <div className="context-usage-fact"><dt>{t("系統提示")}</dt><dd>~{number(systemTokens)}</dd></div>
-            <div className="context-usage-fact"><dt>{t("工具定義")}</dt><dd>~{number(toolTokens)}</dd></div>
-            <div className="context-usage-fact"><dt>{t("訊息")}</dt><dd>~{number(messageTokens)}</dd></div>
-          </dl>
-        </div> : <progress max={ready.contextWindow} value={Math.min(ready.estimatedTokens, ready.contextWindow)} aria-label={t("估算已用 Token")} />}
-        {snapshot?.remainingInputBudget !== undefined ? <dl className="context-usage-remaining">
+        </div> : denominator !== undefined && estimatedTokens !== undefined
+          ? <progress max={denominator} value={Math.min(estimatedTokens, denominator)} aria-label={basis ?? t("估算已用 Token")} /> : null}
+        {inputBudget !== undefined && inputBudget !== denominator ? <dl className="context-usage-remaining">
+          <div className="context-usage-fact"><dt>{t("可用輸入預算")}</dt><dd>{t("{count} Token", { count: number(inputBudget) })}</dd></div>
+        </dl> : null}
+        {legacyReady && snapshot?.remainingInputBudget !== undefined ? <dl className="context-usage-remaining">
           <div className="context-usage-fact"><dt>{t("剩餘輸入預算")}</dt><dd>{number(snapshot.remainingInputBudget)}</dd></div>
         </dl> : null}
-
-        <small>{t(snapshot ? "根據已準備的供應商輸入估算，包含系統提示與工具定義；與帳單和快取計數分開。" : "根據目前可見的模型訊息估算；不是供應商帳單或快取命中率。")}</small>
-      </> : <p>{t("讀取上下文容量中…")}</p>}
+        {legacyReady ? <small>{t(snapshot ? "根據已準備的供應商輸入估算，包含系統提示與工具定義；與帳單和快取計數分開。" : "根據目前可見的模型訊息估算；不是供應商帳單或快取命中率。")}</small> : null}
+      </> : !state && error === undefined ? <p>{t("讀取上下文容量中…")}</p> : null}
+      {error !== undefined || state?.kind === "unavailable" ? <div><p className={warning ? "context-usage-warning" : undefined} role={error !== undefined ? "alert" : undefined}>{error || status || t("無法取得上下文容量。")}</p><Button variant="secondary" size="small" loading={current?.loading} loadingLabel={t("正在處理…")} onClick={() => refresh.current?.invalidate(refreshKey, true)}>{t("刷新狀態")}</Button></div> : null}
+      {observation && preparedEstimate ? <div className="context-usage-facts" aria-label={t("已準備的上下文")}>
+        <small>{t(sourceLabels[preparedEstimate.source])}</small>
+        <dl className="context-usage-fact-group" aria-label={t("輸入分項估算")}>
+          <div className="context-usage-fact"><dt>{t("系統提示")}</dt><dd>~{number(observation.components.system)}</dd></div>
+          <div className="context-usage-fact"><dt>{t("工具定義")}</dt><dd>~{number(observation.components.schema)}</dd></div>
+          <div className="context-usage-fact"><dt>{t("訊息")}</dt><dd>~{number(observation.components.user + observation.components.assistant + observation.components.tool)}</dd></div>
+          {observation.components.reasoning > 0 ? <div className="context-usage-fact"><dt>{t("其中重用推理")}</dt><dd>~{number(observation.components.reasoning)}</dd></div> : null}
+        </dl>
+        {preparedEstimate.source === "provider-anchor-plus-projection" ? <small>{t("分項由內容估算，合計可能與校準後的總數不同。")}</small> : null}
+      </div> : null}
       {snapshot ? <div className="context-usage-facts" aria-label={t("已準備的上下文")}>
         <small>{t(sourceLabels[snapshot.estimateSource])} · {t(confidenceLabels[snapshot.confidence])} · {t(coverageLabels[snapshot.coverage])}</small>
         <dl className="context-usage-fact-group">
-          <div className="context-usage-fact"><dt>{t("系統提示")}</dt><dd>{number(snapshot.systemTokens)}</dd></div>
-          <div className="context-usage-fact"><dt>{t("工具定義")}</dt><dd>{number(snapshot.schemaTokens)}</dd></div>
+          <div className="context-usage-fact"><dt>{t("系統提示")}</dt><dd>{legacyReady ? "~" : ""}{number(systemTokens)}</dd></div>
+          <div className="context-usage-fact"><dt>{t("工具定義")}</dt><dd>{legacyReady ? "~" : ""}{number(toolTokens)}</dd></div>
+          {legacyReady ? <div className="context-usage-fact"><dt>{t("訊息")}</dt><dd>~{number(messageTokens)}</dd></div> : null}
           <div className="context-usage-fact"><dt>{t("重用推理")}</dt><dd>{number(snapshot.reasoningTokens)}</dd></div>
-          <div className="context-usage-fact"><dt>{t("上次估算輸入")}</dt><dd>{number(snapshot.estimatedInputTokens)}</dd></div>
+          {!legacyReady ? <div className="context-usage-fact"><dt>{t("上次估算輸入")}</dt><dd>{number(snapshot.estimatedInputTokens)}</dd></div> : null}
         </dl>
         <dl className="context-usage-fact-group">
           <div className="context-usage-fact"><dt>{t("輸出預留")}</dt><dd>{number(snapshot.outputReserve)}</dd></div>
@@ -238,7 +289,7 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
           <div className="context-usage-fact"><dt>{t("安全餘量")}</dt><dd>{number(snapshot.safetyMargin)}</dd></div>
         </dl>
         {snapshot.capSupport === "unsupported" ? <small>{t("此路由未套用傳送給供應商的輸出上限。")}</small> : null}
-        {snapshot.fullByProvider ? <p>{t("供應商拒絕了上下文；請先壓縮或更換模型，再重試。")}</p> : snapshot.admission === "compact" ? <p>{t("需要先壓縮上下文才能繼續請求。")}</p> : null}
+        {legacyReady && snapshot.admission === "compact" ? <p>{t("需要先壓縮上下文才能繼續請求。")}</p> : null}
       </div> : null}
 
     </div>, document.body) : null}

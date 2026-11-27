@@ -51,12 +51,16 @@ it("keeps historical v1 projected component facts readable without restoring a h
   expect(request).toHaveBeenCalledTimes(1)
 })
 
-it("keeps actual v2 uncertainty unavailable without exposing signatures or reading v1 numeric fields", async () => {
+it("displays the actual adapter estimate against model capacity without certifying admission or exposing signatures", async () => {
   const { state } = await projection()
   expect(state).toMatchObject({kind:'unavailable',observation:{version:2,estimate:{kind:'estimated',source:'projected-heuristic'},disposition:'compatibility',reason:'capacity-unknown',components:{kind:'estimated',source:'projected-heuristic'}}})
+  const estimate = state.observation?.estimate
+  if (estimate?.kind !== "estimated") throw new Error("Prepared estimate is unavailable")
   await show(state)
-  expect(screen.getByRole('button',{name:'上下文容量'}).textContent).toBe('—')
-  expect(screen.queryByRole('progressbar')).toBeNull()
+  expect(screen.getByRole('button',{name:'上下文容量'}).textContent).toBe(`${(estimate.value / 10000 * 100).toFixed(1)}%`)
+  expect(screen.getByRole("progressbar", { name: "估算輸入 / 模型上下文視窗" }).getAttribute("max")).toBe("10000")
+  expect(screen.getByText("目前無法確認此請求的容量限制。")).toBeTruthy()
+  expect(screen.queryByText("可用輸入預算")).toBeNull()
   expect(document.body.textContent).not.toMatch(/NaN|Infinity|iVBOR|fixture-signature|controlled replayed plan/)
   expect(JSON.stringify(state)).not.toContain('estimatedInputTokens')
 })

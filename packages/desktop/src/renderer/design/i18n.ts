@@ -420,6 +420,13 @@ const english = {
   "壓縮目前會話上下文": "Compact this conversation's context", "目前無法壓縮上下文": "Cannot compact context right now",
   "上下文容量": "Context capacity", "估算上下文容量": "Estimated context capacity", "估算已用 Token": "Estimated tokens used", "根據目前可見的模型訊息估算；不是供應商帳單或快取命中率。": "Estimated from active model messages; this is not provider billing or a cache hit rate.", "讀取上下文容量中…": "Reading context capacity…", "無法取得上下文容量。": "Context capacity is unavailable.",
   "訊息來源": "Message sources", "使用者訊息": "User messages", "助手訊息": "Assistant messages", "工具訊息": "Tool messages",
+  "本次請求估算": "Current request estimate", "{count} Token": "{count} tokens",
+  "模型上下文視窗": "Model context window",
+  "估算輸入 / 模型上下文視窗": "Estimated input / model context window", "可用輸入預算": "Available input budget",
+  "估算輸入 / 可用輸入預算": "Estimated input / available input budget", "輸入分項估算": "Estimated input breakdown",
+  "分項由內容估算，合計可能與校準後的總數不同。": "The breakdown is estimated from content and may differ from the calibrated total.",
+  "其中重用推理": "Of which reused reasoning",
+  "上次請求輸入（供應商回報）": "Previous request input (provider-reported)",
   "已準備的上下文": "Prepared context facts", "上次估算輸入": "Last estimated input",
   "輸出預留": "Output reserve", "輸出上限": "Output cap", "安全餘量": "Safety margin", "剩餘輸入預算": "Remaining input budget",
   "此路由未套用傳送給供應商的輸出上限。": "No wire output cap was applied.",
@@ -438,6 +445,13 @@ const english = {
   "模型設定已變更，等待下一次請求的容量估算。": "Model settings have changed. Capacity will be estimated for the next request.",
   "此模型沒有可用的上下文容量資料。": "Context capacity information is unavailable for this model.",
   "部分供應商端內容無法估算，暫時不能確認可用容量。": "Some provider-side content cannot be estimated, so available capacity cannot be confirmed yet.",
+  "目前無法確認此請求的容量限制。": "The capacity limits for this request could not be confirmed.",
+  "模型設定的容量限制不一致。": "The model's configured capacity limits conflict.",
+  "估算輸入已超過可用輸入預算。": "Estimated input exceeds the available input budget.",
+  "請求內容超過供應商的傳輸大小限制。": "The request exceeds the provider's payload size limit.",
+  "剩餘容量不足以保留最低輸出額度。": "The remaining capacity cannot accommodate the minimum output allowance.",
+  "請求需要的輸出額度超過模型限制。": "The requested output allowance exceeds the model's limit.",
+  "此操作需要可驗證的模型容量限制。": "This operation requires verified model capacity limits.",
 } as const
 export type Message = keyof typeof english
 export const useLocale = useUiStore

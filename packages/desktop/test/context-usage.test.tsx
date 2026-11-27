@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { StrictMode } from "react"
+import { contextStateFromObservation } from "../../core-session/src/context.ts"
+import type { RequestBudgetSnapshotV2 } from "@i-harness/sdk/context"
 import { afterEach, expect, it, vi } from "vitest"
 import type { DesktopBridge, DesktopEvent } from "../src/shared/bridge.ts"
 import { ContextUsage } from "../src/renderer/session/ContextUsage.tsx"
@@ -26,6 +28,24 @@ function event(record: { type: string; [key: string]: unknown }, workspaceId = "
 }
 
 const ready = (estimatedTokens: number, contextWindow = 100) => ({ kind: "ready", estimatedTokens, contextWindow })
+
+function observation(overrides: Partial<RequestBudgetSnapshotV2> = {}): RequestBudgetSnapshotV2 {
+  const digest = "a".repeat(64)
+  return {
+    version: 2, ownerSessionId: "s", providerId: "fixture-provider", modelId: "fixture-model", protocol: "openai-responses",
+    bindingFingerprint: digest, bindingRevision: 1, projectionRevision: 2, neutralFingerprint: digest, identityCoverage: "complete",
+    bindingConfigFingerprint: digest, selectedSemanticId: digest, selectedPayloadId: digest,
+    purpose: "main", estimate: { kind: "estimated", value: 49000, source: "provider-anchor-plus-projection" },
+    disposition: "admit", dimensions: [{ dimension: "context", state: "pass", limit: 1000000, sourceId: "fixture-window" }],
+    pressure: { kind: "known", basis: "shared-context", input: 49000, inputBudget: 900000,
+      trigger: 880000, target: 800000, hardFits: true, softNeeded: false, targetReady: true },
+    components: { kind: "estimated", source: "projected-heuristic", system: 4014, schema: 298, user: 900, assistant: 450, tool: 150, reasoning: 44 },
+    output: { capSupport: "supported", minimumCap: 1, effectiveCap: 1024 },
+    recoveryRequired: false, fullByProvider: false, freshness: "current",
+    requestContext: { version: 1, semanticRevision: digest, protectionRevision: digest, branchId: digest, contextEpoch: digest, surfaceRevision: digest },
+    ...overrides,
+  }
+}
 const trigger = () => screen.getByRole("button", { name: "上下文容量" })
 const flush = () => act(async () => {})
 const advance = (milliseconds: number) => act(async () => { await vi.advanceTimersByTimeAsync(milliseconds) })
@@ -92,6 +112,112 @@ it("keeps the context total visible when a running gateway has no role breakdown
   fireEvent.click(trigger())
   expect(screen.getByText("12 / 100 (12.0%)")).toBeTruthy()
   expect(screen.queryByText("使用者訊息")).toBeNull()
+})
+
+it("shows a completed turn's actual historical v2 count, budget, source, and model in the popup", async () => {
+  const state = contextStateFromObservation(observation({ freshness: "awaiting-projection" }))
+  expect(state).toMatchObject({ kind: "unavailable", reason: "Prepared admission is historical" })
+  const { bridge } = connection(vi.fn().mockResolvedValue({ ...state, lastReportedInputTokens: 47200 }))
+  render(<ContextUsage bridge={bridge} workspaceId="w" sessionId="s" />)
+  await flush()
+  expect(trigger().textContent).toBe("4.9%")
+  expect(screen.getByRole("button", { name: "上下文容量", description: "4.9% 估算輸入 / 模型上下文視窗 · 上次請求估算" })).toBe(trigger())
+  expect(trigger().getAttribute("title")).toContain("估算輸入 / 模型上下文視窗")
+  fireEvent.click(trigger())
+  const dialog = screen.getByRole("dialog", { name: "上下文容量" })
+  expect(within(dialog).getByText("49,000 / 1,000,000 (4.9%)")).toBeTruthy()
+  expect(within(dialog).getByText("上次請求估算")).toBeTruthy()
+  expect(within(dialog).getByText("估算輸入 / 模型上下文視窗", { selector: "small" })).toBeTruthy()
+  const budget = within(dialog).getByText("可用輸入預算", { selector: "dt" })
+  expect(within(budget.parentElement!).getByRole("definition").textContent).toBe("900,000 Token")
+  expect(within(dialog).getByText("fixture-provider / fixture-model")).toBeTruthy()
+  expect(within(dialog).getByText("供應商用量加上新增輸入")).toBeTruthy()
+  expect(within(dialog).getByText("上次請求輸入（供應商回報）")).toBeTruthy()
+  expect(within(dialog).getByText("47,200 Token")).toBeTruthy()
+  expect(within(dialog).getByText("~4,014")).toBeTruthy()
+  expect(within(dialog).getByText("~298")).toBeTruthy()
+  expect(within(dialog).getByText("~1,500")).toBeTruthy()
+  expect(within(dialog).queryByText("~44,688")).toBeNull()
+})
+
+it.each([47200, 0])("keeps the verified previous input %s when the prepared estimate is unknown", async reported => {
+  const state = contextStateFromObservation(observation({
+    freshness: "awaiting-projection", estimate: { kind: "unknown", reason: "token-cost-unavailable" },
+    pressure: { kind: "unavailable", reason: "token-cost-unavailable" }, disposition: "compatibility", reason: "capacity-unknown",
+  }))
+  const { bridge } = connection(vi.fn().mockResolvedValue({ ...state, lastReportedInputTokens: reported }))
+  render(<ContextUsage bridge={bridge} workspaceId="w" sessionId="s" />)
+  await flush()
+  expect(trigger().textContent).toBe("—")
+  fireEvent.click(trigger())
+  const dialog = screen.getByRole("dialog")
+  const input = within(dialog).getByText("上次請求輸入（供應商回報）", { selector: "dt" })
+  expect(within(input.parentElement!).getByRole("definition").textContent).toBe(`${reported.toLocaleString("en-US")} Token`)
+  expect(within(dialog).getByText("模型上下文視窗", { selector: "dt" })).toBeTruthy()
+  expect(within(dialog).getByText("fixture-provider / fixture-model")).toBeTruthy()
+  expect(within(dialog).queryByRole("progressbar")).toBeNull()
+})
+
+it("uses the configured 128k model window when admission has an unverified output reserve", async () => {
+  const state = contextStateFromObservation(observation({
+    disposition: "compatibility", reason: "capacity-unknown",
+    dimensions: [{ dimension: "context", state: "unchecked", limit: 128000, sourceId: "fixture-context" }],
+    pressure: { kind: "known", basis: "legacy-shared-assumption", input: 49000, inputBudget: 115200,
+      trigger: 110000, target: 100000, hardFits: true, softNeeded: false, targetReady: true },
+    output: { capSupport: "unknown", minimumCap: 1 },
+  }))
+  const { bridge } = connection(vi.fn().mockResolvedValue(state))
+  render(<ContextUsage bridge={bridge} workspaceId="w" sessionId="s" />)
+  await flush()
+  expect(trigger().textContent).toBe("38.3%")
+  fireEvent.click(trigger())
+  const dialog = screen.getByRole("dialog")
+  expect(within(dialog).getByText("49,000 / 128,000 (38.3%)")).toBeTruthy()
+  expect(within(dialog).getByRole("progressbar", { name: "估算輸入 / 模型上下文視窗" }).getAttribute("max")).toBe("128000")
+  expect(within(dialog).queryByText("可用輸入預算")).toBeNull()
+})
+
+it.each(["missing input budget", "conflicting model limits", "conflict with a more specific output error"])("shows known v2 counts with %s and avoids displaying a percentage", async missing => {
+  const conflict = missing === "conflicting model limits"
+  const outputError = missing === "conflict with a more specific output error"
+  const state = contextStateFromObservation(observation({
+    disposition: conflict || outputError ? "blocked" : "compatibility",
+    dimensions: conflict || outputError ? [{ dimension: "context", state: "fail", actual: 200000, limit: 128000, sourceId: "fixture-ceiling" }]
+      : [{ dimension: "input", state: "unchecked" }],
+    pressure: { kind: "unavailable", reason: "unconfigured" },
+    output: { capSupport: "unknown", minimumCap: 1 },
+    reason: conflict ? "capacity-conflict" : outputError ? "output-floor" : "capacity-unknown",
+  }))
+  const { bridge } = connection(vi.fn().mockResolvedValue(state))
+  render(<ContextUsage bridge={bridge} workspaceId="w" sessionId="s" />)
+  await flush()
+  expect(trigger().textContent).toBe("—")
+  fireEvent.click(trigger())
+  const dialog = screen.getByRole("dialog")
+  expect(within(dialog).getByText("49,000 Token")).toBeTruthy()
+  expect(within(dialog).queryByText("模型上下文視窗")).toBeNull()
+  expect(within(dialog).queryByRole("progressbar")).toBeNull()
+  expect(within(dialog).queryByText(/\d+\.\d+%/)).toBeNull()
+})
+
+it("keeps known v2 overflow and provider recovery visible alongside the historical number", async () => {
+  const state = contextStateFromObservation(observation({
+    freshness: "stale", recoveryRequired: true, fullByProvider: true, disposition: "reduce", reason: "input-overflow",
+    dimensions: [{ dimension: "input", state: "fail", actual: 49000, limit: 40000 }],
+    pressure: { kind: "known", basis: "input-only", input: 49000, inputBudget: 40000, trigger: 38000,
+      target: 36000, hardFits: false, softNeeded: true, targetReady: false },
+  }))
+  const { bridge } = connection(vi.fn().mockResolvedValue(state))
+  render(<ContextUsage bridge={bridge} workspaceId="w" sessionId="s" />)
+  await flush()
+  expect(trigger().textContent).toBe("122.5%")
+  expect(trigger().getAttribute("title")).toContain("估算輸入 / 可用輸入預算")
+  fireEvent.click(trigger())
+  const dialog = screen.getByRole("dialog")
+  expect(within(dialog).getByText("49,000 / 40,000 (122.5%)")).toBeTruthy()
+  expect(within(dialog).getByRole("progressbar", { name: "估算輸入 / 可用輸入預算" }).getAttribute("max")).toBe("40000")
+  expect(within(dialog).getByText("供應商拒絕了目前上下文，需先壓縮或更換模型。")).toBeTruthy()
+  expect(within(dialog).getByText("上次請求估算")).toBeTruthy()
 })
 
 it.each([

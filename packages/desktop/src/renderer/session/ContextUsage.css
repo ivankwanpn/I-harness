@@ -22,6 +22,8 @@
 }
 
 .context-usage-gauge-track { stroke: var(--ih-divider); }
+.context-usage-trigger-warning .context-usage-gauge,
+.context-usage-warning { color: var(--ih-warning); }
 .context-usage-popover { overflow-y: auto; overflow-wrap: anywhere; }
 .context-usage-capacity { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .context-usage-remaining { margin: 12px 0 0; font-size: 13px; }
