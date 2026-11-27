@@ -225,6 +225,34 @@ describe("project conversation sidebar", () => {
     } finally { visibility.mockRestore(); vi.useRealTimers() }
   })
 
+  it("rereads the list when standby interrupts the queued foreground opening", async () => {
+    vi.useFakeTimers()
+    try {
+      const { props, bridge, emit } = fixture(input => {
+        if (input.kind === "session/dashboard") return { sessions: [{ id: "current", title: "Current committed row", live: false }] }
+        if (input.kind === "desktop/session/navigation/state") return {
+          s1: { projectId: "p1", pinned: false, unread: false }, // The catalog can still give ownership of archived sessions.
+          current: { projectId: "p1", pinned: false, unread: false },
+        }
+      })
+      const source = { ...props, projects: [projects[0]!], workspaces: [workspaces[0]!], dashboard: dashboard("Retired archive row") }
+      const view = render(<ProjectSidebar {...source} />)
+      expect(bridge.request).not.toHaveBeenCalled()
+      act(() => emit({ kind: "sdk/idle", method: "sdk/idle", workspaceId: "w1", runtimeGeneration: 1 }))
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(screen.queryByText("Retired archive row")).toBeNull()
+      expect(screen.getByText("Current committed row")).toBeTruthy()
+      expect(bridge.request).toHaveBeenCalledWith({ kind: "session/dashboard", workspaceId: "w1" })
+
+      vi.mocked(bridge.request).mockClear()
+      view.rerender(<ProjectSidebar {...source} sessionRevisionsByWorkspace={new Map([["w1", 1]])} />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(screen.queryByText("Retired archive row")).toBeNull()
+      expect(screen.getByText("Current committed row")).toBeTruthy()
+      expect(bridge.request).toHaveBeenCalledWith({ kind: "session/dashboard", workspaceId: "w1" })
+    } finally { vi.useRealTimers() }
+  })
+
   it("does not pair a pre-standby conversation list with new ownership metadata", async () => {
     vi.useFakeTimers()
     try {

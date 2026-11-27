@@ -1,7 +1,7 @@
-/** Coalesce event bursts and keep at most one background refresh in flight. */
+/** Coalesce event bursts into one in-flight read per active generation. */
 export function createRefreshScheduler(refresh: () => Promise<unknown>, delay = 200) {
   let timer: ReturnType<typeof setTimeout> | undefined
-  let running = false
+  let running: object | undefined
   let dirty = false
   let disposed = false
   const schedule = (wait = delay) => {
@@ -11,24 +11,29 @@ export function createRefreshScheduler(refresh: () => Promise<unknown>, delay = 
     timer = setTimeout(() => {
       timer = undefined
       dirty = false
-      running = true
-      void Promise.resolve().then(refresh).catch(() => undefined).finally(() => {
-        running = false
+      const flight = {}
+      running = flight
+      void Promise.resolve().then(() => running === flight ? refresh() : undefined).catch(() => undefined).finally(() => {
+        if (running !== flight) return
+        running = undefined
         if (dirty) schedule()
       })
     }, wait)
   }
-  const cancelPending = () => {
+  const retire = () => {
+    const interrupted = dirty || running !== undefined
     dirty = false
     clearTimeout(timer)
     timer = undefined
+    running = undefined
+    return interrupted
   }
   return {
     schedule,
-    cancelPending,
+    retire,
     dispose() {
       disposed = true
-      cancelPending()
+      retire()
     },
   }
 }

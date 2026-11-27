@@ -57,12 +57,13 @@ export interface SidebarWorkspaceReader {
 }
 
 /** Every project that displays this workspace consumes the same paired snapshot. */
-export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, details, readOpeningDashboard, readers, setSnapshots }: {
+export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, details, snapshot, readOpeningDashboard, readers, setSnapshots }: {
   bridge: DesktopBridge
   workspaceId: string
   mode: SidebarReadMode
   revision?: number
   details?: SessionDashboardResult
+  snapshot?: SidebarWorkspaceSnapshot
   readOpeningDashboard?: ProjectSidebarProps["readOpeningDashboard"]
   readers: RefObject<Map<string, SidebarWorkspaceReader>>
   setSnapshots: Dispatch<SetStateAction<Record<string, SidebarWorkspaceSnapshot>>>
@@ -70,6 +71,10 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
   const en = useLocale(state => state.locale) === "en"
   const foreground = useRef(details)
   foreground.current = details
+  const retiredOpening = useRef<{ details?: SessionDashboardResult } | undefined>(undefined)
+  if (retiredOpening.current && retiredOpening.current.details !== details) retiredOpening.current = undefined
+  const latestSnapshot = useRef(snapshot)
+  latestSnapshot.current = snapshot
   const paired = useRef<SessionDashboardResult | undefined>(undefined)
   useEffect(() => {
     let active = true
@@ -86,7 +91,7 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
       const ticket = generation
       const current = () => active && generation === ticket
       const supplied = foreground.current
-      const opening = initial && mode === "foreground"
+      const opening = initial && mode === "foreground" && !retiredOpening.current
       initial = false
       let dashboard: SessionDashboardResult | undefined
       let error: string | undefined
@@ -126,7 +131,9 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
     })
     const retireReads = () => {
       generation++
-      refresh.cancelPending()
+      initial = false
+      retiredOpening.current = { details: foreground.current }
+      return refresh.retire()
     }
     const reader: SidebarWorkspaceReader = {
       mode,
@@ -135,7 +142,13 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
           && confirmedSessionNavigation(confirmedRows?.[id])
       },
       refresh: refresh.schedule,
-      standby() { if (active) retireReads() },
+      standby() {
+        if (!active || !retireReads()) return
+        const last = latestSnapshot.current
+        // IPC has already retired the active route. Only replace interrupted
+        // discovery or an unconfirmed open list through the cold catalog.
+        if (mode === "owners" || !last?.dashboard || last.dashboard.listingUnavailable || !last.navigation) refresh.schedule(0)
+      },
       disconnect(message) {
         if (!active) return
         retireReads()
