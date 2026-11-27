@@ -42,6 +42,14 @@ it('inspects a held managed request without claiming a legacy assembly',async()=
   const budget=await service.contextState('main')
   expect(budget.observation ?? budget.snapshot).toBeDefined()
   expect(loadMeta).not.toHaveBeenCalled()
+  // A durable input can exist before the service front has scheduled a turn.
+  const { inbox } = (await service.managedInputFor!('main'))!
+  await inbox.admit({ inputId: 'external', text: 'next turn', intent: 'user', delivery: 'queue' })
+  expect(service.inspectActivity!('main')).toMatchObject({ running: false, queued: 1, active: true })
+  expect(service.queue('main')).toMatchObject([{ id: 'external', text: 'next turn', state: 'queued' }])
+  await inbox.cancel('external', 'user')
+  expect(service.queue('main')).toEqual([])
+  expect(service.inspectActivity!('main')).toMatchObject({ running: false, queued: 0, active: false })
  }finally{release.resolve();await turn.catch(()=>{});await service.close();await coordinator.close()}
 },30000)
 

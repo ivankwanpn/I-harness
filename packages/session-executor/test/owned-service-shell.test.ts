@@ -1,4 +1,12 @@
 import {expect,it,vi} from 'vitest'
+const deliveryProbe=vi.hoisted(()=>({measure:false,passes:0}))
+vi.mock('../src/service/delivery-drain.ts',async load=>{
+ const actual=await load<typeof import('../src/service/delivery-drain.ts')>()
+ return {...actual,createDeliveryDrain(options:Parameters<typeof actual.createDeliveryDrain>[0]){
+   if(!deliveryProbe.measure)return actual.createDeliveryDrain(options)
+   return actual.createDeliveryDrain({...options,async reconcile(){deliveryProbe.passes++;await options.reconcile()}})
+ }}
+})
 const receiptProbe=vi.hoisted(()=>({enabled:false,allow:false,key:'',keys:[] as string[],notify:()=>{}}))
 vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async load=>{const original=await load<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>();return {...original,createFactJournalBackend(...args:Parameters<typeof original.createFactJournalBackend>){const backend=original.createFactJournalBackend(...args),append=backend.appendOwnedBatch,reconcile=backend.reconcileOwnedBatch;return {...backend,async appendOwnedBatch(...input:Parameters<typeof append>){const result=await append(...input),bytes=Buffer.from(input[3].bytes).toString('utf8');if(receiptProbe.enabled&&bytes.includes('\"type\":\"agent/delivery-received\"')&&bytes.includes('\"kind\":\"exec\"')){receiptProbe.key=input[3].key.batchId;receiptProbe.keys.push(receiptProbe.key);receiptProbe.notify();return {kind:'unknown' as const,key:input[3].key}}return result},async reconcileOwnedBatch(...input:Parameters<typeof reconcile>){if(input[3].key.batchId===receiptProbe.key){receiptProbe.keys.push(input[3].key.batchId);if(!receiptProbe.allow)return {kind:'unknown' as const,key:input[3].key}}return reconcile(...input)}}}}})
 import {mkdir,mkdtemp} from 'node:fs/promises'
@@ -21,6 +29,7 @@ import {createSessionService} from '../src/service.ts'
 import {originalManagedRuntimeFor} from '../src/host-managed-execution.ts'
 import {acquireAssemblyResultStore} from '../src/lifecycle/result-store.ts'
 import {createProjectInstructionEnvironment} from '../src/context/instructions/host.ts'
+import {setImmediate as nextTurn} from 'node:timers/promises'
 
 it('uses the current project for the owned WSL shell default after its workspace is removed', async () => {
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-wsl-project-'))
@@ -95,11 +104,20 @@ it.each(['session','service'] as const)('retires private delivery at clean %s cl
  const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[],ownedShell:{executionFor(id){return {...execution,defaultOwner:{sessionId:id}}},async acquireOutput(_id,retain){retain(()=>output.close());return {service:output}},agentShell:()=>({id:'controlled',label:'controlled',command:'controlled',dialect:'posix'})}},model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),contextWindow:4096,maxOutputTokens:128})
  const warn=vi.spyOn(console,'warn')
  try{
+  deliveryProbe.measure=true
   await service.submit('main','run controlled',new AbortController().signal)
   expect(JSON.stringify(server.requests[0]!.body)).toContain('"name":"shell"')
   expect(launches).toBe(1)
   expect(server.requests).toHaveLength(2)
   const runtime=originalManagedRuntimeFor(service,'main')!
+  await nextTurn()
+  const before=deliveryProbe.passes
+  expect(before).toBeGreaterThan(0)
+  const ordinary=runtime.execution.owner.beginAction()
+  try { expect((await ordinary.facts.metadata.admit({type:'plan/mode',mode:'on'})).kind).toBe('committed') }
+  finally { ordinary.finish() }
+  await nextTurn()
+  expect(deliveryProbe.passes).toBe(before)
   const stopped=Promise.withResolvers<{error:unknown;terminal:boolean}>()
   const off=subscribeManagedExecutionReadiness(runtime.domain,()=>{},(error,terminal)=>stopped.resolve({error,terminal}))
   try{
@@ -109,7 +127,7 @@ it.each(['session','service'] as const)('retires private delivery at clean %s cl
   }finally{off()}
   expect(warn.mock.calls.map(args=>args.map(String).join(' ')).filter(message=>message.includes('private delivery readiness unavailable'))).toEqual([])
   expect(releases).toBe(1)
- }finally{warn.mockRestore();done.resolve();await service.close();await coordinator.close();await server.close()}
+ }finally{deliveryProbe.measure=false;warn.mockRestore();done.resolve();await service.close();await coordinator.close();await server.close()}
 },60000)
 
 it('wakes the original private service after a background Shell receipt',async()=>{
@@ -235,7 +253,7 @@ it('waits for original native resource release acknowledgement during service cl
 },90000)
 
 
-it('preserves a real steer before delayed native completion and product read',async()=>{
+it('preserves a real steer and consumes a background Shell receipt installed during its active turn',async()=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-shell-steer-'))
  const backend=createJsonlBackend(join(root,'sessions')),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract);await coordinator.create({sessionId:'main'})
  const output=createContextOutputService({root:join(root,'results'),workspaceId:'fixture',config:{enabled:false}});let launches=0,releases=0
@@ -243,10 +261,35 @@ it('preserves a real steer before delayed native completion and product read',as
  const native:TransportExecutionBackend={async probe(){return{id:'controlled',availability:'available',assurance:'unverified',features:{writeIsolation:false,readIsolation:false,denyPaths:false,pipes:true,pty:false,retainedTree:true}}},async prepare(spec,policy){return {policy,async rollback(){},async commit(check){check();launches++;const lease=createExecutionLease({receipt:{executionId:'native-actual',backendId:'controlled',policyFingerprint:policy.fingerprint,owner:spec.owner,assurance:'unverified'},rootExited:done.promise.then(()=>({exitCode:0})),waitTreeEmpty:()=>done.promise,settleIo:async()=>{},async releaseResources(){releases++},async terminate(){done.resolve()}});return {...lease,get settled(){return lease.settled},pid:1,io:{async write(){},async endInput(){},output:(async function*(){yield {channel:'stdout' as const,data:Buffer.from('actual native output')};await done.promise})()}}}}}}
  const execution={defaultOwner:{sessionId:'main'},selectBackend:()=>native,resolvePolicy:(owner:Parameters<typeof compileExecutionPolicy>[0]['owner'])=>compileExecutionPolicy({mode:'danger-full-access',owner,authority:{kind:'unbound',revision:'fixture',workspaceRoot:root}}),validateAuthority(){}}
  const wire=(tool:boolean)=>`data: ${JSON.stringify({choices:[{delta:tool?{tool_calls:[{index:0,id:'shell-1',function:{name:'shell',arguments:JSON.stringify({command:'controlled',background:true})}}]}:{content:'done'},finish_reason:tool?'tool_calls':'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
- const woken=Promise.withResolvers<void>()
- const server=await createLoopbackProvider('/v1/chat/completions',[async r=>{r.end(wire(true))},async r=>{r.end(wire(false))},async r=>{r.end(wire(false))},async (r,request)=>{const messages=request.body.messages as {content?:string}[],content=messages.find(m=>typeof m.content==='string'&&m.content.startsWith('<exec_result>'))?.content;if(!content)throw Error('Original receipt missing');const data=JSON.parse(content.split('\n')[1]!);const call={choices:[{delta:{tool_calls:[{index:0,id:'read-1',function:{name:'context_output_read',arguments:JSON.stringify({ref:data.frames.retention.ref,maxBytes:1000})}}]},finish_reason:'tool_calls'}]};r.end(`data: ${JSON.stringify(call)}\n\ndata: [DONE]\n\n`)},async r=>{woken.resolve();r.end(wire(false))}])
+ const woken=Promise.withResolvers<void>(), foregroundEntered=Promise.withResolvers<void>(), releaseForeground=Promise.withResolvers<void>()
+ const receiptInstalled=Promise.withResolvers<string>()
+ const server=await createLoopbackProvider('/v1/chat/completions',[async r=>{r.end(wire(true))},async r=>{r.end(wire(false))},async r=>{foregroundEntered.resolve();await releaseForeground.promise;r.end(wire(false))},async (r,request)=>{const messages=request.body.messages as {content?:string}[],content=messages.find(m=>typeof m.content==='string'&&m.content.startsWith('<exec_result>'))?.content;if(!content)throw Error('Original receipt missing');const data=JSON.parse(content.split('\n')[1]!);const call={choices:[{delta:{tool_calls:[{index:0,id:'read-1',function:{name:'context_output_read',arguments:JSON.stringify({ref:data.frames.retention.ref,maxBytes:1000})}}]},finish_reason:'tool_calls'}]};r.end(`data: ${JSON.stringify(call)}\n\ndata: [DONE]\n\n`)},async r=>{woken.resolve();r.end(wire(false))}])
  const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[],ownedShell:{executionFor(id){return {...execution,defaultOwner:{sessionId:id}}},async acquireOutput(_id,retain){retain(()=>output.close());return {service:output}},agentShell:()=>({id:'controlled',label:'controlled',command:'controlled',dialect:'posix'})}},model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),contextWindow:4096,maxOutputTokens:128})
- try{await service.submit('main','run controlled',new AbortController().signal);expect(launches).toBe(1);expect(server.requests).toHaveLength(2);const inbox=await service.receivedInputFor('main');await inbox.admit({inputId:'steer',text:'steer while running',delivery:'steer',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}});await service.submit('main','steer while running',new AbortController().signal,{admittedInputId:'steer'});done.resolve();await Promise.race([woken.promise,new Promise((_,reject)=>setTimeout(()=>reject(Error('original receipt did not wake service')),35000))]);expect(server.requests).toHaveLength(5);expect(JSON.stringify(server.requests[3]!.body)).toContain('exec_result');expect(JSON.stringify(server.requests[4]!.body)).toContain(Buffer.from('actual native output').toString('base64'))}finally{done.resolve();await service.close();await coordinator.close();await server.close()}
+ let steering:Promise<void>|undefined,unsubscribe:(()=>void)|undefined
+ try{
+  await service.submit('main','run controlled',new AbortController().signal)
+  expect(launches).toBe(1);expect(server.requests).toHaveLength(2)
+  const runtime=originalManagedRuntimeFor(service,'main')!
+  unsubscribe=subscribeManagedExecution(runtime.domain,event=>{
+   if(event.type==='agent/delivery-received'&&event.key.kind==='exec')receiptInstalled.resolve(event.inputId)
+  })
+  const inbox=await service.receivedInputFor('main')
+  await inbox.admit({inputId:'steer',text:'steer while running',delivery:'steer',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  steering=service.submit('main','steer while running',new AbortController().signal,{admittedInputId:'steer'})
+  await Promise.race([foregroundEntered.promise,steering.then(()=>{throw Error('Steer finished before reaching its original request')})])
+  done.resolve()
+  const inputId=await Promise.race([receiptInstalled.promise,new Promise<never>((_,reject)=>setTimeout(()=>reject(Error('Original receipt was not installed during the held turn')),20_000).unref())])
+  expect(service.inspectActivity?.('main')).toMatchObject({running:true})
+  expect(server.requests).toHaveLength(3)
+  releaseForeground.resolve();await steering
+  await Promise.race([woken.promise,new Promise<never>((_,reject)=>setTimeout(()=>reject(Error('original receipt did not wake service')),20_000).unref())])
+  expect(server.requests).toHaveLength(5)
+  expect(JSON.stringify(server.requests[3]!.body)).toContain('exec_result')
+  expect(JSON.stringify(server.requests[4]!.body)).toContain(Buffer.from('actual native output').toString('base64'))
+  const events=(await backend.read('main')).events
+  expect(events.filter(event=>event.type==='agent/delivery-received'&&event.inputId===inputId)).toHaveLength(1)
+  expect(events.filter(event=>event.type==='agent/input/promoted'&&event.inputId===inputId)).toHaveLength(1)
+ }finally{unsubscribe?.();done.resolve();releaseForeground.resolve();await steering?.catch(()=>{});await service.close();await coordinator.close();await server.close()}
  expect(releases).toBe(1)
 },90000)
 

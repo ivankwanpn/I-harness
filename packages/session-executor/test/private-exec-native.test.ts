@@ -61,9 +61,10 @@ it.each(['healthy','denial','stop','unknown','receipt-unknown'] as const)('runs 
   expect(await output.readExecResult({sessionId:'parent'},{ref})).toMatchObject({frames:[{data:Buffer.from('native actual output').toString('base64')}]})
   await expect(output.readExecResult({sessionId:'foreign'},{ref})).rejects.toThrow()
   if(mode==='receipt-unknown'){
-    const first=delivery.reconcileExecCandidates();void first.catch(()=>{});await unknown.promise;await expect(first).rejects.toThrow();expect(()=>execution.observe()).toThrow();probe.allow=true
+    const first=delivery.reconcileExecCandidates();void first.catch(()=>{});await unknown.promise;await expect(first).rejects.toThrow();expect(delivery.hasUnsettledDelivery()).toBe(true);expect(()=>execution.observe()).toThrow();probe.allow=true
     await delivery.reconcileExecCandidates();expect(probe.keys.length).toBeGreaterThan(1);expect(new Set(probe.keys).size).toBe(1)
   }else await delivery.reconcileExecCandidates()
+  expect(delivery.hasUnsettledDelivery()).toBe(false)
   expect(execution.observe().delivery.execPending()).toHaveLength(0);expect(execution.observe().inbox.pending().filter(input=>input.synthetic?.description?.startsWith('Exec '))).toHaveLength(1);expect(received.filter(event=>event.type==='agent/delivery-received'&&event.key.kind==='exec')).toHaveLength(1)
  }finally{probe.allow=true;probe.enabled=false;completed.resolve();releasePrepare.resolve();off();for(const source of sources)await source.close();invocation.invalidate();action.finish();await native.service.dispose();await inputs.close();await output.close();await coordinator.close()}
  expect(releases).toBe(1)

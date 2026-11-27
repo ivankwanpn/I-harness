@@ -16,7 +16,8 @@ import {createOwnedPostTurnLifetime} from './service/owned-post-turn.ts'
 import {mountOwnedShell,type OwnedShellOptions} from './owned-shell.ts'
 import {mountOwnedCode,type OwnedCodeOutput} from './owned-code.ts'
 import {createContextOutputTools} from '@i-harness/context-output'
-import {receivedExecutionInputsFor} from './lifecycle/execution-inputs.ts'
+import {executablePendingInputs, receivedExecutionInputsFor} from './lifecycle/execution-inputs.ts'
+import type { ExecutionObservation } from '@i-harness/core-session/internal/execution'
 import {createToolResultRetention} from './lifecycle/result-retention.ts'
 import {subscribeManagedExecution,subscribeManagedExecutionReadiness} from '@i-harness/core-session/internal/execution'
 import {supportsManagedServiceOptions} from './service/execution-mode.ts'
@@ -79,6 +80,11 @@ import type { ResultPageQuery, ResultPageResult } from '@i-harness/context-outpu
 const d = diagnosticsFor("session")
 const changesExecutionQueue = (type: SessionEvent["type"]) =>
   type === "agent/input/admitted" || type === "agent/input/promoted" || type === "agent/input/cancelled"
+const privateDeliveryProducers = new Set<string>(['session.delivery.exec', 'session.delivery.code', 'session.delivery.subagent', 'session.delivery.workflow', 'session.delivery.team'])
+const privateDeliveryChanges = new Set<SessionEvent['type']>([
+  'agent/delivery-received', 'agent/delivery-generation', 'agent/delivery-source', 'agent/delivery-handoff',
+  'exec/end', 'code/end', 'workflow/end', 'subagent/end', 'rewind/point',
+])
 import {
   createSessionAssembly,
   ModelUnavailableError,
@@ -731,8 +737,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
   const queues = new Map<string, SessionQueueState>()
 
-  function queueState(sessionId: string): { running: boolean; queued: number } {
-    const items = queue(sessionId)
+  function queueState(sessionId: string, observation?: ExecutionObservation): { running: boolean; queued: number } {
+    const items = queue(sessionId, observation)
     return { running: items.some(item => item.state === "running"), queued: items.filter(item => item.state === "queued").length }
   }
 
@@ -1320,18 +1326,29 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         privateDrain=createDeliveryDrain({
           current:()=>!retired&&!closed&&!closing.has(sessionId)&&!failedClose.has(sessionId)&&managedRuntimes.get(sessionId)===published,
           reconcile:async()=>{await originalRecipient.settle();await taskLifecycle?.drain();await originalRecipient.reconcileExecCandidates();await originalRecipient.reconcileCodeCandidates();await originalRecipient.reconcileWorkflowCandidates()},
-          pending:()=>{const observation=entry.execution.observe();return observation.inbox.pending().filter(input=>['session.delivery.exec','session.delivery.code','session.delivery.subagent','session.delivery.workflow','session.delivery.team'].includes(input.provenance?.producer??'')&&observation.inbox.isExecutable(input.inputId)).map(input=>input.inputId)},
+          pending:()=>{const observation=entry.execution.observe();return observation.inbox.pending().filter(input=>privateDeliveryProducers.has(input.provenance?.producer??'')&&observation.inbox.isExecutable(input.inputId)).map(input=>input.inputId)},
           schedule(inputId,settled){if(retired||managedRuntimes.get(sessionId)!==published)return false;const input=entry.execution.observe().inbox.pending().find(value=>value.inputId===inputId);if(!input)return false;if(queues.get(sessionId)?.byId.get(inputId)?.scheduled||published.lane.currentInput()?.inputId===inputId)return false;void submit(sessionId,input.text,new AbortController().signal,{admittedInputId:inputId}).then(settled,error=>{if(!closed&&!closing.has(sessionId)&&!retired)d.warn('[i-harness] private delivery wake failed: '+String(error));settled()});return true},
           report:error=>d.warn('[i-harness] private delivery reconciliation failed: '+String(error)),
         })
         const drain=privateDrain
-        unsubscribeReadiness=subscribeManagedExecutionReadiness(runtime.domain,()=>drain.signal(),(error,terminal)=>{if(terminal)drain.retire();if(!retired)d.warn('[i-harness] private delivery readiness unavailable: '+String(error))})
+        let interrupted=false
+        unsubscribeReadiness=subscribeManagedExecutionReadiness(runtime.domain,()=>{
+          const recovering=interrupted
+          interrupted=false
+          drain.progress(recovering||originalRecipient.hasUnsettledDelivery())
+        },(error,terminal)=>{
+          interrupted=true
+          if(terminal)drain.retire()
+          if(!retired)d.warn('[i-harness] private delivery readiness unavailable: '+String(error))
+        })
       }
       const originalRuntime = runtime
       unsubscribe = subscribeManagedExecution(runtime.domain, event => {
         if (retired || managedRuntimes.get(sessionId) !== originalRuntime) return
         if (changesExecutionQueue(event.type)) notifyExecutionState(sessionId)
-        if (privateDrain && ['agent/delivery-received','agent/delivery-generation','agent/delivery-source','exec/end','code/end','workflow/end','subagent/end','agent/delivery-handoff','agent/input/promoted','agent/input/cancelled','turn/end'].includes(event.type)) privateDrain.signal()
+        if (!privateDrain) return
+        if (privateDeliveryChanges.has(event.type) || event.type === 'agent/input/admitted' && privateDeliveryProducers.has(event.provenance?.producer ?? '')) privateDrain.signal()
+        else if (event.type === 'agent/input/promoted' || event.type === 'agent/input/cancelled' || event.type === 'turn/end') privateDrain.progress(recipient?.hasUnsettledDelivery())
       })
       assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime);if(shellMount){managedShellOwners.set(sessionId,shellMount);mounted.add(async()=>{managedShellOwners.delete(sessionId)})}published=true;managedPrepubSettlers.delete(sessionId);if(rewindMount)managedRewinds.set(sessionId,{handle:rewindMount,runtime});if(title)managedTitles.set(sessionId,title);if(recipient)managedRecipients.set(sessionId,recipient);if(codeMount)managedCodeMounts.set(sessionId,codeMount);if(taskLifecycle)managedTaskOwners.set(sessionId,taskLifecycle);if(workflowMount){const mounted=workflowMount,executor=mounted.executor,list=executor.listJobs.bind(executor),kill=executor.killJob.bind(executor),journal=mounted.reconcileCapturedHandoffs.bind(mounted);managedWorkflowOwners.set(sessionId,{list,kill,journal})}
       if (privateDrain) deliveryDrains.set(sessionId, privateDrain)
@@ -1576,12 +1593,18 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   // the running row is first, the rest FIFO. Finished lane-only records are
   // purged here; scheduled submissions remain until their promise cleanup.
 
-  function queue(sessionId: string): SessionQueueItem[] {
+  function queue(sessionId: string, observation?: ExecutionObservation): SessionQueueItem[] {
     const lane = laneControls(sessionId)
-    const st = sessionQueueState(sessionId)
     // Revoked private facts cannot be observed while the original close joins.
-    const pending = managedRuntimes.has(sessionId) && (closed || closing.has(sessionId)) ? [] : lane?.pending() ?? []
+    const runtime = managedRuntimes.get(sessionId)
+    const pending = runtime
+      ? (closed || closing.has(sessionId) ? [] : executablePendingInputs(observation ?? runtime.execution.observe()))
+      : lane?.pending() ?? []
     const current = lane?.currentInput() ?? undefined
+    // Passive reads of cold/empty rows do not establish lasting queue owners.
+    const existing = queues.get(sessionId)
+    if (!existing?.byId.size && !pending.length && !current) return []
+    const st = existing ?? sessionQueueState(sessionId)
     const pendingIds = new Set(pending.map((p) => p.inputId))
 
     // Adopt lane-only rows (steers admitted directly into the inbox — the
@@ -1992,23 +2015,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     ])],
     inspectActivity(sessionId) {
       const assembly = assemblies.get(sessionId), runtime = managedRuntimes.get(sessionId)
-      const state = queueState(sessionId)
+      const observation = runtime && !closed && !closing.has(sessionId) ? runtime.execution.observe() : undefined
+      const state = queueState(sessionId, observation)
       const tasks = service.tasks(sessionId).filter(task => task.status === 'queued' || task.status === 'running' || task.status === 'waiting').length
-      let resources = false
-      try {
-        resources = (managedCodeMounts.get(sessionId)?.liveCells?.().length ?? 0) > 0
-        resources ||= managedShellOwners.get(sessionId)?.hasActiveJobs() ?? false
-        if (assembly) {
-          const live = assembly.liveResources?.()
-          resources ||= !!(live?.codeCells.length || live?.terminals.some(terminal => terminal.status === 'running')
-            || live?.backgroundJobs?.length || (assembly.hasActiveBackgroundJobs?.() ?? assembly.backgroundJobs?.().some(job => job.status === 'running')))
-          resources ||= foldScheduleEvents(assembly.session.events, assembly.session.header?.seedLength ?? 0).active.length > 0
-        }
-        if (runtime && opts.managedRuntime?.originalSchedule) {
-          const schedules = runtime.execution.observe().schedules
-          resources ||= schedules.kind !== 'available' || (schedules.snapshot as { active: readonly unknown[] }).active.length > 0
-        }
-      } catch { resources = true }
       const codeStop = managedCodeStops.get(sessionId)
       const stopPending = deliveryStops.get(sessionId)?.acknowledged === false
         || managedStopReceipts.get(sessionId)?.acknowledged === false
@@ -2017,9 +2026,24 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         || loadingWriters.has(sessionId) || firstPartyFlights.has(sessionId) || chains.has(sessionId) || closing.has(sessionId)
         || failedClose.has(sessionId) || notificationAdmissions.has(sessionId)
         || managedPrepubSettlers.has(sessionId) || deliveryDrains.get(sessionId)?.hasActiveWork() || stopPending
-      return { live: !!assembly || !!runtime, ...state, tasks, active: state.running || state.queued > 0 || tasks > 0 || resources || pending }
+      let active = state.running || state.queued > 0 || tasks > 0 || pending
+      try {
+        active ||= (managedCodeMounts.get(sessionId)?.liveCells?.().length ?? 0) > 0
+        active ||= managedShellOwners.get(sessionId)?.hasActiveJobs() ?? false
+        if (!active && assembly) {
+          const live = assembly.liveResources?.()
+          active = !!(live?.codeCells.length || live?.terminals.some(terminal => terminal.status === 'running')
+            || live?.backgroundJobs?.length || (assembly.hasActiveBackgroundJobs?.() ?? assembly.backgroundJobs?.().some(job => job.status === 'running')))
+          active ||= foldScheduleEvents(assembly.session.events, assembly.session.header?.seedLength ?? 0).active.length > 0
+        }
+        if (!active && runtime && opts.managedRuntime?.originalSchedule) {
+          const schedules = observation?.schedules
+          active = schedules?.kind !== 'available' || (schedules.snapshot as { active: readonly unknown[] }).active.length > 0
+        }
+      } catch { active = true }
+      return { live: !!assembly || !!runtime, ...state, tasks, active }
     },
-    queueState,
+    queueState: sessionId => queueState(sessionId),
     onManagedRuntimeLifecycle:(listener,options)=>{if(closed)return()=>{};managedLifecycleListeners.add(listener);if(options?.includeExisting)for(const [sessionId,record] of managedPublications)if(!record.retired)try{listener({sessionId,owner:record.owner,kind:'published'})}catch{/* Observer isolation. */};return()=>{managedLifecycleListeners.delete(listener)}},
     onExecutionState: listener => {
       if (closed) return () => {}

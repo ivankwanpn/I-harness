@@ -19,7 +19,7 @@ export function createDeliveryDrain(options: {
   schedule(inputId: string, settled: () => void): boolean
   report(error: unknown): void
 }) {
-  let dirty = false, retired = false, running: Promise<void> | undefined
+  let dirty = false, retired = false, waitingForProgress = false, running: Promise<void> | undefined
   let timer: ReturnType<typeof setTimeout> | undefined, backoff = 0
   let signalRevision = 0
   const inFlight = new Map<string, { signalRevision: number }>()
@@ -34,7 +34,11 @@ export function createDeliveryDrain(options: {
         if (retired || !options.current()) return
         // Source failure cannot erase already committed eligible inputs. The
         // actual owner readiness still gates registration on the normal lane.
-        for (const inputId of options.pending()) {
+        let pendingInputs: readonly string[]
+        try { pendingInputs = options.pending() }
+        catch (error) { waitingForProgress = true; throw error }
+        waitingForProgress = failed || pendingInputs.length > 0
+        for (const inputId of pendingInputs) {
           if (retired || !options.current()) return
           if (inFlight.has(inputId)) continue
           const registration = { signalRevision }
@@ -63,8 +67,14 @@ export function createDeliveryDrain(options: {
     void pending.then(() => { running = undefined; if (dirty && !retired && options.current()) void run() }, () => { running = undefined; if (dirty && !retired && options.current()) void run() })
     return pending
   }
+  const signal = () => { if (retired) return; signalRevision++; clear(); dirty = true; void run() }
   return {
-    signal() { if (retired) return; signalRevision++; clear(); dirty = true; void run() },
+    signal,
+    // A writer/lane edge can unblock real work, including a pass whose
+    // original read has not yet reported failure. Idle edges need no scan.
+    progress(owed = false) {
+      if (owed || waitingForProgress || running !== undefined || inFlight.size > 0) signal()
+    },
     reconcile() { if (retired) return Promise.resolve(); signalRevision++; clear(); dirty = true; return run() },
     // A dormant retry has no admitted reconciliation or scheduled input.
     hasActiveWork() { return !retired && (dirty || running !== undefined || inFlight.size > 0) && options.current() },

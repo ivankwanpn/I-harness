@@ -18,13 +18,52 @@ it('preserves an original readiness signal arriving before a blocked observation
    drain.signal()
    await entered.promise
    expect(drain.hasActiveWork()).toBe(true)
-   drain.signal()
+   drain.progress()
    release.resolve()
    await scheduled.promise
    await drain.join()
    expect(reads).toBe(2)
    expect(drain.hasActiveWork()).toBe(false)
  } finally { drain.retire(); await drain.join().catch(()=>{}) }
+})
+
+it('ignores empty readiness after startup but preserves recovery of real source debt and queued input', async () => {
+  let attempts = 0, pending = false, fail = false
+  const registered: (() => void)[] = []
+  const drain = createDeliveryDrain({ current: () => true,
+    async reconcile() { attempts++; if (fail) throw new Error('Original read still blocked') },
+    pending: () => pending ? ['original-input'] : [],
+    schedule(inputId, settled) { expect(inputId).toBe('original-input'); registered.push(settled); return true },
+    report() {},
+  })
+  try {
+    await drain.reconcile()
+    drain.progress(); drain.progress()
+    await drain.join()
+    expect(attempts).toBe(1)
+
+    fail = true
+    drain.progress(true)
+    await drain.join()
+    expect(attempts).toBe(2)
+    expect(drain.hasActiveWork()).toBe(false)
+    fail = false
+    pending = true
+    drain.progress()
+    await drain.join()
+    expect(attempts).toBe(3)
+    expect(registered).toHaveLength(1)
+
+    pending = false
+    registered[0]!()
+    drain.progress()
+    await drain.join()
+    expect(attempts).toBe(4)
+    drain.progress()
+    await drain.join()
+    expect(attempts).toBe(4)
+    expect(registered).toHaveLength(1)
+  } finally { drain.retire(); await drain.join() }
 })
 import { receivedInputsFor } from '../src/lifecycle/received-inputs.ts'
 import { createSessionService } from '../src/service.ts'

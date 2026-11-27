@@ -1,5 +1,14 @@
 import {expect,it,vi} from 'vitest'
-const probe=vi.hoisted(()=>({handoffKey:'',closeKey:'',holdHandoff:false,holdClose:false,failClose:false,appends:[] as string[],reconciles:[] as string[]}))
+const probe=vi.hoisted(()=>({handoffKey:'',closeKey:'',holdHandoff:false,holdClose:false,failClose:false,appends:[] as string[],reconciles:[] as string[],closeObservations:[] as string[]}))
+vi.mock('../../session-persistence/src/coordinator/received-input-source.ts',async load=>{
+ const actual=await load<typeof import('../../session-persistence/src/coordinator/received-input-source.ts')>()
+ return {...actual,createReceivedInputSource(...[drain,operations,released]:Parameters<typeof actual.createReceivedInputSource>){
+  return actual.createReceivedInputSource(drain,{...operations,status(group){
+   if(group.kind==='delivery-generation'&&group.event.op==='close')probe.closeObservations.push(group.event.fenceId)
+   return operations.status(group)
+  }},released)
+ }}
+})
 vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async load=>{
  const original=await load<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>()
  return {...original,createFactJournalBackend(...args:Parameters<typeof original.createFactJournalBackend>){
@@ -29,7 +38,7 @@ import {acquireManagedExecution} from '../../session-persistence/src/execution-i
 import {receivedExecutionInputsFor} from '../src/lifecycle/execution-inputs.ts'
 
 async function fixture(kind:'code'|'exec'='code'){
- Object.assign(probe,{handoffKey:'',closeKey:'',holdHandoff:false,holdClose:false,failClose:false,appends:[],reconciles:[]})
+ Object.assign(probe,{handoffKey:'',closeKey:'',holdHandoff:false,holdClose:false,failClose:false,appends:[],reconciles:[],closeObservations:[]})
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'private-recipient-stop-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
  await coordinator.create({sessionId:'parent'})
  const execution=await acquireManagedExecution(coordinator,'parent'),domain=createManagedExecutionDomain(execution.identity,execution.owner,createContext()),inputs=receivedExecutionInputsFor(execution),recipient=inputs.codeDelivery(domain),action=execution.owner.beginAction(),producer=action.registerSettlementSource(async()=>{})
@@ -79,9 +88,17 @@ it('returns only same-owner acknowledged close receipts and refuses copied recei
   expect(()=>f.recipient.requestClose('foreign' as never)).toThrow()
   expect(f.prepared.isCurrent()).toBe(true)
   const stop=f.recipient.requestClose('user-stop'),seqs=await stop.settled
+  const second=f.recipient.requestClose('user-stop')
+  const secondSeq=await second.settled
+  expect(second.fenceId).not.toBe(stop.fenceId)
+  expect(secondSeq[0]).toBeGreaterThan(seqs[0]!)
+  expect(f.recipient.hasUnsettledDelivery()).toBe(false)
+  probe.closeObservations.length=0
   await f.recipient.settle()
+  expect(probe.closeObservations).toEqual([])
   const receipt=await f.recipient.closeReceipt(stop.fenceId)
   expect(receipt).toEqual({fenceId:stop.fenceId,closeSeq:seqs[0],durability:'durable'})
+  expect([...new Set(probe.closeObservations)]).toEqual([stop.fenceId])
   await expect(f.recipient.closeReceipt('foreign')).rejects.toThrow()
   await expect(f.recipient.closeReceipt.call({...f.recipient},stop.fenceId)).rejects.toThrow()
   await expect(f.recipient.closeReceipt({toString(){throw false}} as never)).rejects.toThrow()
@@ -97,6 +114,7 @@ it('preserves falsey close recovery failure and retries the same retained source
   probe.holdClose=true;probe.failClose=true
   const stop=f.recipient.requestClose('user-stop')
   await expect(stop.settled).rejects.toBe(false)
+  expect(f.recipient.hasUnsettledDelivery()).toBe(true)
   await expect(f.recipient.closeReceipt(stop.fenceId)).rejects.toBe(false)
   const failure=await f.inputs.close().catch(error=>error)
   expect(failure).toBeInstanceOf(AggregateError)
@@ -104,6 +122,7 @@ it('preserves falsey close recovery failure and retries the same retained source
   probe.holdClose=false;probe.failClose=false
   const receipt=await f.recipient.closeReceipt(stop.fenceId)
   expect(receipt).toMatchObject({fenceId:stop.fenceId,durability:'durable'})
+  expect(f.recipient.hasUnsettledDelivery()).toBe(false)
   await f.inputs.close()
   expect((await f.backend.read('parent')).events.filter(e=>e.type==='agent/delivery-generation'&&e.op==='close')).toHaveLength(1)
   expect(probe.appends.filter(key=>key===probe.closeKey)).toHaveLength(1)
