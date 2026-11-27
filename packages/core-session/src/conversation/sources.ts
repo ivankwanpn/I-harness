@@ -1,7 +1,8 @@
 import { eventArchive, type ConversationEventArchive } from './archive.ts'
-import type { SessionView as Session } from "../managed/types.ts"
+import type { SessionView as Session, SessionEventView } from "../managed/types.ts"
 import type { ConversationDiagnostic, ConversationProvenance, ConversationSourceRef } from "./types.ts"
 import type { ConversationPayloadReader } from './payload.ts'
+import type { ConversationSourceCoordinateView } from './restoration-types.ts'
 import { createCapturedConversationProvenance, createConversationSourceRef } from '../serialization/context-data.ts'
 
 const indexedChecks = new WeakMap<object, { ref: ConversationSources['ref']; check(eventIndex: number): void }>()
@@ -17,18 +18,32 @@ export function archiveConversationSources(archive: ConversationEventArchive, ow
   const coordinates = options.coordinates === undefined ? undefined : coordinateViews.get(options.coordinates)
   if (options.coordinates && (!coordinates || !coordinates.current() || options.coordinates.eventCount !== archive.length)) throw new TypeError('Invalid or stale source coordinates')
   const assertCurrent = () => { if (coordinates && !coordinates.current()) throw new TypeError('Stale source coordinates') }
-  const seqAt = (index: number) => { if (!Number.isSafeInteger(index) || index < 0 || index >= archive.length) throw new RangeError('Conversation source index out of bounds'); return coordinates ? coordinates.seqs[index] : archive.get(index).seq }
+  let seqs: unknown[] | undefined
+  if (coordinates?.exceptions) {
+    seqs = Array.from({ length: coordinates.eventCount }, (_, index) => index)
+    for (let entry: SequenceException | undefined = coordinates.exceptions; entry; entry = entry.previous) seqs[entry.index] = entry.seq
+  }
+  const seqAt = (index: number) => {
+    if (!Number.isSafeInteger(index) || index < 0 || index >= archive.length) throw new RangeError('Conversation source index out of bounds')
+    if (!coordinates) return archive.get(index).seq
+    return seqs ? seqs[index] : index
+  }
+  const ordinalCount = coordinates && !seqs ? coordinates.eventCount : undefined
+  const candidateStart = ordinalCount === undefined ? undefined : options.candidate?.baseCount
+  const originalOrdinal = (seq: number) => ordinalCount !== undefined && seq < ordinalCount && !(candidateStart !== undefined && seq >= candidateStart)
   const counts = new Map<number, number>()
   const valid = (seq: unknown): seq is number => typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0
   const positions = new Map<number, number>()
-  let fenceIndex = -1
-  for (let index = 0; index < archive.length; index++) {
-    const seq = seqAt(index)
-    if (valid(seq) && !(options.candidate && index >= options.candidate.baseCount)) {
-      counts.set(seq, (counts.get(seq) ?? 0) + 1)
-      if (!positions.has(seq)) positions.set(seq, index)
+  let fenceIndex = coordinates?.fenceIndex ?? -1
+  if (ordinalCount === undefined) {
+    for (let index = 0; index < archive.length; index++) {
+      const seq = seqAt(index)
+      if (valid(seq) && !(options.candidate && index >= options.candidate.baseCount)) {
+        counts.set(seq, (counts.get(seq) ?? 0) + 1)
+        if (!positions.has(seq)) positions.set(seq, index)
+      }
+      if (!coordinates && fenceIndex < 0 && archive.get(index).type === "conversation/semantics") fenceIndex = index
     }
-    if (fenceIndex < 0 && (coordinates ? coordinates.fenceIndex === index : archive.get(index).type === "conversation/semantics")) fenceIndex = index
   }
   const cache = new Map<string, ConversationSourceRef>()
   const ref = (eventIndex: number, part: string): ConversationSourceRef => {
@@ -38,16 +53,18 @@ export function archiveConversationSources(archive: ConversationEventArchive, ow
     if (source) return source
     const seq = seqAt(eventIndex)
     const prospective = options.candidate !== undefined && eventIndex >= options.candidate.baseCount
-    const addressable = !prospective && valid(seq) && counts.get(seq) === 1
+    const addressable = !prospective && valid(seq) && (ordinalCount !== undefined ? originalOrdinal(seq) : counts.get(seq) === 1)
     const coordinate = prospective ? `candidate:${options.candidate!.id}:${eventIndex - options.candidate!.baseCount}` : addressable ? seq : `event:${eventIndex}`
     source = createConversationSourceRef(JSON.stringify([ownerSessionId ?? null, coordinate, part]), eventIndex, part, addressable ? seq : undefined)
     cache.set(key, source)
     return source
   }
-  for (let index = 0; index < archive.length; index++) {
-    const seq = seqAt(index)
-    const code = seq === undefined ? "missing-source-seq" : !valid(seq) ? "invalid-source-seq" : counts.get(seq)! > 1 ? "duplicate-source-seq" : undefined
-    if (code && !(options.candidate && index >= options.candidate.baseCount)) diagnostics.push({ code, sourceIds: [ref(index, "event").id] })
+  if (ordinalCount === undefined) {
+    for (let index = 0; index < archive.length; index++) {
+      const seq = seqAt(index)
+      const code = seq === undefined ? "missing-source-seq" : !valid(seq) ? "invalid-source-seq" : counts.get(seq)! > 1 ? "duplicate-source-seq" : undefined
+      if (code && !(options.candidate && index >= options.candidate.baseCount)) diagnostics.push({ code, sourceIds: [ref(index, "event").id] })
+    }
   }
   const provenance = (eventIndex: number, part: string, admissionIndex?: number, captureClosed = false): ConversationProvenance => {
     assertCurrent()
@@ -104,7 +121,12 @@ export function archiveConversationSources(archive: ConversationEventArchive, ow
   function isInherited(index: number): boolean {
     return (options.header?.parentSession !== undefined || options.header?.semanticSeed !== undefined) && index < (options.header.seedLength ?? 0)
   }
-  const sources = { ref, provenance, indexOfSeq: (seq: number) => { assertCurrent(); return positions.get(seq) ?? -1 } }
+  const sources = { ref, provenance, indexOfSeq(seq: number) {
+    assertCurrent()
+    if (ordinalCount === undefined) return positions.get(seq) ?? -1
+    // A numeric lookup for -0 locates ordinal +0, as in the sequence map.
+    return valid(seq) && originalOrdinal(seq) ? Math.abs(seq) : -1
+  } }
   if (coordinates) indexedChecks.set(sources, { ref, check(eventIndex) { assertCurrent(); seqAt(eventIndex) } })
   return sources
 }
@@ -115,22 +137,42 @@ export function conversationSources(session: Session, ownerSessionId: string | u
 }
 
 export type ConversationSources = Pick<ReturnType<typeof conversationSources>, 'ref' | 'provenance'>
-import type { SessionEventView } from '../managed/types.ts'
-import type { ConversationSourceCoordinateView } from './restoration-types.ts'
-const coordinateViews = new WeakMap<ConversationSourceCoordinateView, { seqs: unknown[]; fenceIndex: number; current(): boolean }>()
+/** Immutable exceptions let retained prefixes and prospective branches share the original coordinates. */
+type SequenceException = { readonly index: number; readonly seq: unknown; readonly previous?: SequenceException }
+type CoordinatePrefix = { eventCount: number; exceptions?: SequenceException; fenceIndex: number }
+const coordinateViews = new WeakMap<ConversationSourceCoordinateView, CoordinatePrefix & { current(): boolean }>()
+
+function appendCoordinates(prefix: CoordinatePrefix, events: readonly SessionEventView[]): CoordinatePrefix {
+  let exceptions = prefix.exceptions
+  let fenceIndex = prefix.fenceIndex
+  for (let offset = 0; offset < events.length; offset++) {
+    const index = prefix.eventCount + offset, event = events[offset]!
+    const seq = event.seq
+    if (!Object.is(seq, index)) exceptions = { index, seq, previous: exceptions }
+    if (fenceIndex < 0 && event.type === 'conversation/semantics') fenceIndex = index
+  }
+  return { eventCount: prefix.eventCount + events.length, exceptions, fenceIndex }
+}
+
+function coordinateView(prefix: CoordinatePrefix, current: () => boolean): ConversationSourceCoordinateView {
+  const view = Object.freeze({ eventCount: prefix.eventCount }) as ConversationSourceCoordinateView
+  coordinateViews.set(view, { ...prefix, current })
+  return view
+}
+
 export function createConversationSourceCoordinates() {
-  let seqs: unknown[] = [], revision = 0, fenceIndex = -1
+  let prefix: CoordinatePrefix = { eventCount: 0, fenceIndex: -1 }
+  let revision = 0
   const read = (): ConversationSourceCoordinateView => {
-    const version = revision, view = Object.freeze({ eventCount: seqs.length }) as ConversationSourceCoordinateView
-    coordinateViews.set(view, { seqs, fenceIndex, current: () => revision === version })
-    return view
+    const version = revision
+    return coordinateView(prefix, () => revision === version)
   }
   return { read, stage(events: readonly SessionEventView[]) {
-    const version = revision, next = seqs.concat(events.map(event => event.seq)), offset = events.findIndex(event => event.type === 'conversation/semantics'), nextFence = fenceIndex >= 0 ? fenceIndex : offset < 0 ? -1 : seqs.length + offset
+    const version = revision, next = appendCoordinates(prefix, events)
     events = [] // Staged commits retain structural coordinates only.
     return { commit() {
       if (revision !== version) throw new TypeError('Stale source coordinate stage')
-      seqs = next; fenceIndex = nextFence; revision++; return read()
+      prefix = next; revision++; return read()
     } }
   } }
 }
@@ -138,8 +180,7 @@ export function createConversationSourceCoordinates() {
 /** Prospective structural coordinates over an ORIGINAL live view; no commit. */
 export function extendConversationSourceCoordinates(view:ConversationSourceCoordinateView,events:readonly SessionEventView[]):ConversationSourceCoordinateView {
  const original=coordinateViews.get(view);if(!original||!original.current())throw new TypeError('Invalid or stale source coordinates')
- const offset=events.findIndex(e=>e.type==='conversation/semantics'),result=Object.freeze({eventCount:view.eventCount+events.length}) as ConversationSourceCoordinateView
- coordinateViews.set(result,{seqs:original.seqs.concat(events.map(e=>e.seq)),fenceIndex:original.fenceIndex>=0?original.fenceIndex:offset<0?-1:view.eventCount+offset,current:()=>original.current()});return result
+ return coordinateView(appendCoordinates(original, events), original.current)
 }
 
 /** Retain original prefix coordinates under the original writer's lifetime guard. */
@@ -147,7 +188,5 @@ export function retainConversationSourceCoordinates(view: ConversationSourceCoor
   const original = coordinateViews.get(view)
   if (!original || !original.current()) throw new TypeError('Invalid or stale source coordinates')
   assertCurrent()
-  const retained = Object.freeze({eventCount: view.eventCount}) as ConversationSourceCoordinateView
-  coordinateViews.set(retained, {seqs: original.seqs, fenceIndex: original.fenceIndex, current: () => { assertCurrent(); return true }})
-  return retained
+  return coordinateView(original, () => { assertCurrent(); return true })
 }

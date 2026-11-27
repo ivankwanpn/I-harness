@@ -1,7 +1,9 @@
 import { deriveMessagesUpTo } from '../src/projection/messages.ts'
 import { createHash } from 'node:crypto'
 import { eventArchive } from '../src/conversation/archive.ts'
-import { archiveConversationSources, createConversationSourceCoordinates } from '../src/conversation/sources.ts'
+import { archiveConversationSources, createConversationSourceCoordinates, extendConversationSourceCoordinates, retainConversationSourceCoordinates } from '../src/conversation/sources.ts'
+import type { ConversationSourceCoordinateView } from '../src/conversation/restoration-types.ts'
+import type { ConversationDiagnostic } from '../src/conversation/types.ts'
 import { captureData, isCapturedData } from '../src/serialization/context-data.ts'
 import { describe, expect, it } from "vitest"
 import {
@@ -61,6 +63,41 @@ describe("semantic conversation projection", () => {
     expect(captureData(nonfinite)).toBe(nonfinite)
     index.stage([{ type: 'turn/start', seq: 2 }]).commit()
     expect(() => sources.ref(1, 'message')).toThrow('Stale source coordinates')
+  })
+
+  it('matches original sequence lookups and diagnostics across retained prefixes and prospective branches', () => {
+    const events = (seqs: (number | undefined)[]) => seqs.map(seq => ({ type: 'turn/start' as const, seq }))
+    function compare(rows: SessionEvent[], coordinates: ConversationSourceCoordinateView, baseCount?: number) {
+      const archive = eventArchive(rows)
+      const candidate = baseCount === undefined ? undefined : { id: 'preview', baseCount }
+      const check = (coordinates?: ConversationSourceCoordinateView) => {
+        const diagnostics: ConversationDiagnostic[] = []
+        const sources = archiveConversationSources(archive, 'owner', diagnostics, { candidate, coordinates })
+        return {
+          refs: rows.map((_, index) => sources.ref(index, 'step')),
+          positions: [-1, -0, 0, 1, 2, 3, 4, 9, NaN].map(seq => sources.indexOfSeq(seq)),
+          diagnostics,
+        }
+      }
+      expect(check(coordinates)).toEqual(check())
+    }
+    const index = createConversationSourceCoordinates()
+    const prefix = events([0, 1, 2])
+    const committed = index.stage(prefix).commit()
+    let open = true
+    const held = retainConversationSourceCoordinates(committed, () => { if (!open) throw Error('expired') })
+    compare(prefix, held)
+    const additions = events([3, 4])
+    compare([...prefix, ...additions], extendConversationSourceCoordinates(held, additions), prefix.length)
+    const legacy = events([1, undefined, -0, Infinity])
+    compare([...prefix, ...legacy], extendConversationSourceCoordinates(held, legacy), prefix.length)
+    const staged = index.stage(legacy)
+    legacy[0]!.seq = 9
+    compare([...prefix, ...events([1, undefined, -0, Infinity])], staged.commit())
+    expect(() => compare(prefix, committed)).toThrow('stale source coordinates')
+    compare(prefix, held)
+    open = false
+    expect(() => compare(prefix, held)).toThrow('expired')
   })
 
   it('exposes only physical unit DTOs through the actual owner source factory', () => {
