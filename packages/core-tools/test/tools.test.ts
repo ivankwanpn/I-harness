@@ -63,6 +63,37 @@ describe("tool registry", () => {
     expect(after).toEqual(["read", "a-deferred"])
   })
 
+  it("appends new promotion batches without reordering previous schemas or search results", () => {
+    const reg = createToolRegistry(makeCtx())
+    reg.register(tool("read"))
+    for (const name of ["acquire", "zoom", "annotate", "write"]) reg.register(tool(name, "deferred"))
+    reg.promote(["zoom", "write"])
+    const previous = reg.schemas()
+    expect(previous.map(schema => schema.name)).toEqual(["read", "write", "zoom"])
+
+    const ranked = ["annotate", "zoom", "acquire"].map(name => ({ name, description: name, inputSchema: {}, exposure: "deferred" as const }))
+    reg.installSearch(() => ranked)
+    expect(reg.search("related tools")).toEqual(ranked)
+    expect(reg.schemas().slice(0, previous.length)).toEqual(previous)
+    expect(reg.schemas().map(schema => schema.name)).toEqual(["read", "write", "zoom", "acquire", "annotate"])
+
+    reg.unregister("write")
+    reg.register(tool("write", "deferred"))
+    reg.promote(["write", "zoom"])
+    expect(reg.schemas().map(schema => schema.name)).toEqual(["read", "zoom", "acquire", "annotate", "write"])
+  })
+
+  it("appends a previously discovered tool when it registers after an earlier catalogue read", () => {
+    const reg = createToolRegistry(makeCtx())
+    reg.register(tool("zulu", "deferred"))
+    const matches = ["alpha", "zulu"].map(name => ({ name, description: name, inputSchema: {}, exposure: "deferred" as const }))
+    reg.installSearch(() => matches)
+    expect(reg.search("discover")).toBe(matches)
+    expect(reg.schemas().map(schema => schema.name)).toEqual(["zulu"])
+    reg.register(tool("alpha", "deferred"))
+    expect(reg.schemas().map(schema => schema.name)).toEqual(["zulu", "alpha"])
+  })
+
   it("throws on same-layer duplicate tool name (audit F03-5)", () => {
     const ctx = makeCtx()
     const reg = createToolRegistry(ctx)

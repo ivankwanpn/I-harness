@@ -19,7 +19,10 @@ export function createCatalog() {
   // Deferred tools whose names were returned by the search engine are promoted
   // into schemas() output (but never hidden tools). Additive metadata: a name
   // stays promoted for the registry's lifetime.
-  const promoted = new Set<string>()
+  // A searched name can be registered later. Assign its position only when
+  // schemas() first exposes it in a successful catalogue read.
+  const promoted = new Map<string, number | undefined>()
+  let lastVisibleBatch = 0
   // Pluggable search engine hook, installed via installSearch(). Until then,
   // search() fails loud rather than returning an empty corpus.
   let searchFn: ((query: string, opts?: { limit?: number }) => ToolSchema[]) | undefined
@@ -48,33 +51,31 @@ export function createCatalog() {
     promoted.delete(name)
   }
 
+  function recordPromotion(name: string): void {
+    if (!promoted.has(name)) promoted.set(name, undefined)
+  }
+
   function schemas(): ToolSchema[] {
-    // Hidden tools never surface in schemas(); deferred tools surface only
-    // after promotion via search().
-    //
-    // M5/D1: the tool array is the FIRST thing in the cached prompt, so a change
-    // to it is a cache break at byte 0 — the WHOLE prompt, not just the tool
-    // span. Two ways it could churn, both closed here:
-    //   1. Map insertion order is mount order (plugin load, MCP connect), so two
-    //      assemblies of the same session could disagree. Sorting makes the
-    //      array a function of its CONTENTS, not of when things registered.
-    //   2. Promotion used to insert a deferred tool at its registration index,
-    //      shifting every tool after it. Ranking deferred ones last makes
-    //      promotion an APPEND, so what was already sent stays byte-identical.
-    // Compared by code unit, not `localeCompare`: the latter follows the host's
-    // locale/ICU, which would reintroduce machine-dependent bytes.
-    return [...tools.values()]
+    // Direct tools and each newly exposed batch have stable code-unit order.
+    // Later discoveries append after the tool definitions already sent.
+    const nextBatch = lastVisibleBatch + 1
+    const rank = (tool: Tool): number => tool.exposure === "deferred" ? promoted.get(tool.name) ?? nextBatch : 0
+    const visible = [...tools.values()]
       .filter((t) => t.exposure !== "hidden" && (t.exposure !== "deferred" || promoted.has(t.name)))
-      .sort((a, b) => {
-        const rank = (t: Tool): number => (t.exposure === "deferred" ? 1 : 0)
-        return rank(a) - rank(b) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
-      })
+      .sort((a, b) => rank(a) - rank(b) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
       .map((t) => ({
         name: t.name,
         description: t.description,
         inputSchema: t.inputSchema,
         exposure: t.exposure ?? "direct",
       }))
+    for (const schema of visible) {
+      if (schema.exposure === "deferred" && promoted.has(schema.name) && promoted.get(schema.name) === undefined) {
+        promoted.set(schema.name, nextBatch)
+        lastVisibleBatch = nextBatch
+      }
+    }
+    return visible
   }
 
   // Pluggable search hook (opencode-fork mechanism). installSearch replaces the
@@ -87,13 +88,13 @@ export function createCatalog() {
   function search(query: string, opts?: { limit?: number }): ToolSchema[] {
     if (!searchFn) throw new Error("no search engine installed")
     const matches = searchFn(query, opts)
-    for (const m of matches) promoted.add(m.name)
+    for (const match of matches) recordPromotion(match.name)
     return matches
   }
 
   function promote(names: readonly string[]): void {
     for (const name of names) if (!tools.has(name)) throw new Error(`unknown tool: ${name}`)
-    for (const name of names) if (tools.get(name)!.exposure === "deferred") promoted.add(name)
+    for (const name of names) if (tools.get(name)!.exposure === "deferred") recordPromotion(name)
   }
 
   // Raw metadata of all deferred tools, used as the search corpus by the
