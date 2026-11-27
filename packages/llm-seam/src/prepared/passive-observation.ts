@@ -1,13 +1,12 @@
 import type { GenerationEvent } from '@i-harness/core-session'
-import type { LLMStreamEvent, LLMRequest, ModelClient } from '../index.ts'
+import type { LLMStreamEvent, ModelClient } from '../index.ts'
 import type { PreparedRequestMeasurement } from '@i-harness/token-meter'
 import type { GenerationReservation, GenerationIssue } from './generation.ts'
 import type { PreparedModelRequest } from './types.ts'
 import { preparedExecutionSource } from './owned-terminal.ts'
-import { withOwnedPreparedRequests } from './owned-wrappers.ts'
+import { prepareOwnedRequest, withOwnedPreparedRequests, type PreparedRequestAttribution } from './owned-wrappers.ts'
 import { randomUUID } from 'node:crypto'
-import { prepareModelRequest } from './fallback.ts'
-import { preparedModelClient, snapshotModelData } from './wrappers.ts'
+import { preparedModelClient } from './wrappers.ts'
 
 export interface PassiveAttribution { providerId:string; modelId:string; workspace:string; projectId?:string; billing:'api'|'subscription'|'unknown' }
 export interface PassiveReservationIdentity {ownerSessionId:string;actionId:string;attemptId:string;ordinal:number;lane:string;cause:string;incarnation:string;rebind:number;semanticId:string;payloadId:string;payloadKind:string}
@@ -30,13 +29,14 @@ export function registerOriginalPassiveReservation(reservation:GenerationReserva
 export function registerOriginalPassiveClient(client:ModelClient,attribution:PassiveAttribution):void {clients.set(client,Object.freeze({...attribution}))}
 /** Fixed preparation forwarding with optional synchronous metadata/diagnostics.
  * No selector, transport, retry or authority operation belongs to this bridge. */
-export function withOriginalPassiveClientAttribution(client:ModelClient,attribution:PassiveAttribution,observer?:OriginalPassiveObserver,captureRequest?:(request:LLMRequest)=>OriginalPassiveRequestContext):ModelClient{
+export function withOriginalPassiveClientAttribution(client:ModelClient,attribution:PassiveAttribution,observer?:OriginalPassiveObserver,captureRequest?:(request:PreparedRequestAttribution)=>OriginalPassiveRequestContext):ModelClient{
  registerOriginalPassiveClient(client,attribution)
  if(observer)clientObservers.set(client,observer)
- const fixed=withOwnedPreparedRequests(client,inner=>inner)
- if(!captureRequest)return fixed
+ if(!captureRequest)return withOwnedPreparedRequests(client,inner=>inner)
  const outer=preparedModelClient(async request=>{
-  const captured=snapshotModelData(request),value=await prepareModelRequest(fixed,captured),source=preparedExecutionSource(value)
+  let captured!:PreparedRequestAttribution
+  const value=await prepareOwnedRequest(client,request,inner=>inner,undefined,attribution=>{captured=attribution})
+  const source=preparedExecutionSource(value)
   // Only this actual constructor may enrich its own selected source. An outer
   // wrapper must never replace an already-known inner A with later outer B.
   if(prepared.get(source)===clients.get(client)){

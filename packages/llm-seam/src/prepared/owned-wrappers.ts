@@ -1,4 +1,4 @@
-import type { LLMStreamEvent, ModelClient } from '../index.ts'
+import type { LLMRequest, LLMStreamEvent, ModelClient } from '../index.ts'
 import type { PreparedRequestMeasurement } from '@i-harness/token-meter'
 import { prepareModelRequest } from './fallback.ts'
 import { preparedControls, preparedModelClient, snapshotModelData, wrapPreparedRequest } from './wrappers.ts'
@@ -6,20 +6,32 @@ import { isOwnedPreparedTerminal, ownPreparedTerminal } from './owned-terminal.t
 import { rememberModelSource } from './client-source.ts'
 import type { PreparedModelRequest } from './types.ts'
 
+type OwnedRequestWrapper = (inner: ModelClient, measurement: PreparedRequestMeasurement) => ModelClient
+export type PreparedRequestAttribution = Readonly<Pick<LLMRequest, 'sessionId' | 'requestScope'>>
+
+export async function prepareOwnedRequest(
+  client: ModelClient, request: LLMRequest, wrap: OwnedRequestWrapper, retryPolicy?: import('@i-harness/core-session').GenerationRetry,
+  captureAttribution?: (attribution: PreparedRequestAttribution) => void,
+): Promise<PreparedModelRequest> {
+  const captured = snapshotModelData(request)
+  // Snapshot the session fields before handing the detached request to an
+  // inner prepare callback. The affinity scope still has its original identity.
+  captureAttribution?.({ sessionId: captured.sessionId, requestScope: captured.requestScope })
+  const prepared = await prepareModelRequest(client, captured)
+  captured.signal?.throwIfAborted()
+  function compose(inner: PreparedModelRequest): PreparedModelRequest {
+    const result = wrapPreparedRequest(inner, (stream, control, measurement) => wrap({ stream: executionRequest => stream(preparedControls(captured, executionRequest)) }, measurement)
+      .stream({ ...captured, ...preparedControls(captured, control) }), retryPolicy ?? inner.retryPolicy)
+    return isOwnedPreparedTerminal(inner) || inner.localExecutionIdentity
+      ? ownPreparedTerminal(result, { source: inner, withOutputCap: cap => compose(inner.withOutputCap(cap)) }) : result
+  }
+  return compose(prepared)
+}
+
 /** Package-private: only the fixed retry/wait/observation implementations use
  * this composition entry. Public arbitrary callback wrappers remain unowned. */
-export function withOwnedPreparedRequests(client: ModelClient, wrap: (inner: ModelClient, measurement: PreparedRequestMeasurement) => ModelClient, retryPolicy?: import('@i-harness/core-session').GenerationRetry): ModelClient {
-  const outer = preparedModelClient(async request => {
-    const captured = snapshotModelData(request), prepared = await prepareModelRequest(client, captured)
-    captured.signal?.throwIfAborted()
-    function compose(inner: PreparedModelRequest): PreparedModelRequest {
-      const result = wrapPreparedRequest(inner, (stream, control, measurement) => wrap({ stream: executionRequest => stream(preparedControls(captured, executionRequest)) }, measurement)
-        .stream({ ...captured, ...preparedControls(captured, control) }), retryPolicy ?? inner.retryPolicy)
-      return isOwnedPreparedTerminal(inner) || inner.localExecutionIdentity
-        ? ownPreparedTerminal(result, { source: inner, withOutputCap: cap => compose(inner.withOutputCap(cap)) }) : result
-    }
-    return compose(prepared)
-  })
+export function withOwnedPreparedRequests(client: ModelClient, wrap: OwnedRequestWrapper, retryPolicy?: import('@i-harness/core-session').GenerationRetry): ModelClient {
+  const outer = preparedModelClient(request => prepareOwnedRequest(client, request, wrap, retryPolicy))
   const wrapped = { ...outer, get executionIdentity() { return client.executionIdentity } }
   rememberModelSource(wrapped, () => client)
   return wrapped

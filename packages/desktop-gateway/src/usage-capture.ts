@@ -44,12 +44,12 @@ export function createUsageCapture(options: {
         // outside capture so usage from failed attempts is not discarded by it.
         const client = build({ ...profile, retryPolicy: undefined }, model, extra)
         if(options.observationMode){
-          const attributed=withOriginalPassiveClientAttribution(client,{providerId:profile.name,modelId:model??profile.defaultModel??'unknown',workspace:options.workspace,billing:profile.codexSubscription?'subscription':'api'},options.passiveObserver,request=>{
+          const attributed=withOriginalPassiveClientAttribution(client,{providerId:profile.name,modelId:model??profile.defaultModel??'unknown',workspace:options.workspace,billing:profile.codexSubscription?'subscription':'api'},options.passiveObserver,({sessionId,requestScope})=>{
             let projectId:string|undefined
-            if(request.sessionId&&options.projectSnapshotFor)try{projectId=options.projectSnapshotFor(request.sessionId)}catch{failedAttributions++;notifyWarning()}
+            if(sessionId&&options.projectSnapshotFor)try{projectId=options.projectSnapshotFor(sessionId)}catch{failedAttributions++;notifyWarning()}
             return {projectId,start(measurement){
               const id=randomUUID(),startedAt=now();let firstTokenMs:number|undefined
-              const timing = options.timing?.provider(request)
+              const timing = options.timing?.provider({sessionId,requestScope})
               return {issue: timing?.issue, event(event){
                 timing?.event(event)
                 if(firstTokenMs===undefined&&((event.type==='text/chunk'||event.type==='reasoning')&&event.text.length>0||event.type==='tool_call'))firstTokenMs=Math.max(0,now()-startedAt)
@@ -57,7 +57,7 @@ export function createUsageCapture(options: {
                 timing?.finish(status)
                 let requestMetrics:UsageRecord['requestMetrics']
                 try{const {input,packet,output}=measurement;requestMetrics=validateRequestMetrics({version:1,coverage:input.coverage,...packet,systemTokens:input.components.system.heuristicTokens,schemaTokens:input.components.toolSchemas.heuristicTokens,reasoningTokens:input.components.replayedReasoning.heuristicTokens,imageCount:input.components.images.imageCount,capSupport:output.capSupport,configuredOutputCap:output.configuredCap,effectiveOutputCap:output.effectiveCap,minimumOutputCap:output.minimumCap,reasoningBudget:output.reasoningBudget})}catch{/* Optional diagnostics. */}
-                try{options.onRequestFacts?.({id,projectId,sessionId:request.sessionId,providerId:profile.name,modelId:model??profile.defaultModel??'unknown',status,durationMs:Math.max(0,now()-startedAt),...(firstTokenMs===undefined?{}:{firstTokenMs}),...(requestMetrics===undefined?{}:{requestMetrics})})}catch{/* Observer isolation. */}
+                try{options.onRequestFacts?.({id,projectId,sessionId,providerId:profile.name,modelId:model??profile.defaultModel??'unknown',status,durationMs:Math.max(0,now()-startedAt),...(firstTokenMs===undefined?{}:{firstTokenMs}),...(requestMetrics===undefined?{}:{requestMetrics})})}catch{/* Observer isolation. */}
               }}
             }}
           })
