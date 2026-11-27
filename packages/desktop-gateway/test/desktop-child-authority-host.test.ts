@@ -11,7 +11,7 @@ import { createDesktopHost } from "../src/host.ts"
 import { createHostFixtureTrace } from "./host-fixture-trace.ts"
 import { createHostFixtureModel } from "./host-fixture-model.ts"
 import { append, createSession, deriveMessages, fromJSONL, toJSONL } from '@i-harness/core-session'
-import { createLoopbackProvider, writeSplitSse } from "../../core-agent/test/helpers/provider-loopback.ts"
+import { createLoopbackProvider, writeSplitSse, type LoopbackRound } from "../../core-agent/test/helpers/provider-loopback.ts"
 
 function hostRpc(host: Awaited<ReturnType<typeof createDesktopHost>>, frames: RpcMessage[], trace: ReturnType<typeof createHostFixtureTrace>) {
   let nextId = 0
@@ -136,8 +136,8 @@ it.skipIf(process.platform !== "win32").each(["off", "only"] as const)("a real r
     'if (search.name !== "grep" || ALL_TOOLS.map(tool => tool.name).join(",") !== "grep") throw Error("Unexpected role tool catalog");',
     'text({ checkedTool: search.name, result: await tools.grep({ pattern: "scope marker", mode: "literal" }) });',
   ].join("\n")
-  const call = (name: string, args: object, index = 0) => {
-    const item = { id: name, call_id: name, type: "function_call", name, arguments: "" }
+  const call = (name: string, args: object, index = 0, callId = name) => {
+    const item = { id: callId, call_id: callId, type: "function_call", name, arguments: "" }
     const encoded = JSON.stringify(args)
     return [
       { type: "response.output_item.added", output_index: index, item },
@@ -145,7 +145,7 @@ it.skipIf(process.platform !== "win32").each(["off", "only"] as const)("a real r
       { type: "response.output_item.done", output_index: index, item: { ...item, arguments: encoded } },
     ]
   }
-  const server = await createLoopbackProvider("/v1/responses", [
+  const rounds: LoopbackRound[] = [
     async (response, request) => {
       expect(request.body.model).toBe("fixture-parent")
       if (codeOnly) expect(schemas(request.body)).toEqual(codeTools)
@@ -179,8 +179,39 @@ it.skipIf(process.platform !== "win32").each(["off", "only"] as const)("a real r
       expect(JSON.stringify(request.body.input)).toContain(childAnswer)
       await writeSplitSse(response, [text(parentAnswer), completes])
     },
-  ])
+  ]
+  const server = await createLoopbackProvider("/v1/responses", rounds)
+  const frames: RpcMessage[] = []
+  const childStarted = Promise.withResolvers<void>()
   let host: Awaited<ReturnType<typeof createDesktopHost>> | undefined
+  async function openHost() {
+    frames.length = 0
+    host = await trace.run("host/create", () => createDesktopHost({
+      workspace, sessionDir: sessions, settingsPath, credentialsPath, sessionStore: "jsonl",
+      onWrite: frame => { trace.observe(frame); frames.push(frame) },
+    }))
+    const rpc = hostRpc(host, frames, trace)
+    await rpc("initialize")
+    await rpc("desktop/project/sync", { projects: [
+      { id: "bound", name: "Bound project", roots: [workspace], primaryRoot: workspace },
+      { id: "other", name: "Other project", roots: [sibling], primaryRoot: sibling },
+    ] })
+    return rpc
+  }
+  async function submit(rpc: ReturnType<typeof hostRpc>, sessionId: string, prompt: string, clientToken: string) {
+    await expect(rpc("desktop/session/input/submit", {
+      sessionId, text: prompt, delivery: "queue", clientToken,
+    })).resolves.toMatchObject({ accepted: true })
+    await trace.run("parent/turn-end", () => vi.waitFor(() => {
+      if (server.errors.length) return
+      expect(frames.some(frame => {
+        if (!("method" in frame) || frame.method !== "session/event") return false
+        const params = frame.params as { sessionId?: string; event?: { type?: string } }
+        return params.sessionId === sessionId && params.event?.type === "turn/end"
+      })).toBe(true)
+    }, { timeout: 25_000 }))
+    expect(server.errors).toEqual([])
+  }
   try {
     await Promise.all([mkdir(workspace), mkdir(sibling), mkdir(join(root, "plugins"))])
     await Promise.all([
@@ -199,31 +230,10 @@ it.skipIf(process.platform !== "win32").each(["off", "only"] as const)("a real r
         } } },
       })),
     ])
-    const frames: RpcMessage[] = []
-    host = await trace.run("host/create", () => createDesktopHost({
-      workspace, sessionDir: sessions, settingsPath, credentialsPath, sessionStore: "jsonl",
-      onWrite: frame => { trace.observe(frame); frames.push(frame) },
-    }))
-    const rpc = hostRpc(host, frames, trace)
-    await rpc("initialize")
-    await rpc("desktop/project/sync", { projects: [
-      { id: "bound", name: "Bound project", roots: [workspace], primaryRoot: workspace },
-      { id: "other", name: "Other project", roots: [sibling], primaryRoot: sibling },
-    ] })
+    const rpc = await openHost()
     const { sessionId } = await rpc("session/create") as { sessionId: string }
     await rpc("desktop/session/project/bind", { sessionId, projectId: "bound" })
-    await expect(rpc("desktop/session/input/submit", {
-      sessionId, text: "Delegate the search", delivery: "queue", clientToken: "task-child-scoped-search",
-    })).resolves.toMatchObject({ accepted: true })
-    await trace.run("parent/turn-end", () => vi.waitFor(() => {
-      if (server.errors.length) return
-      expect(frames.some(frame => {
-        if (!("method" in frame) || frame.method !== "session/event") return false
-        const params = frame.params as { sessionId?: string; event?: { type?: string } }
-        return params.sessionId === sessionId && params.event?.type === "turn/end"
-      })).toBe(true)
-    }, { timeout: 25_000 }))
-    expect(server.errors).toEqual([])
+    await submit(rpc, sessionId, "Delegate the search", "task-child-scoped-search")
     expect(server.requests).toHaveLength(4)
     const catalog = await rpc("desktop/session/subagents/list", { sessionId }) as { agents: Array<{ sessionId: string; path: string }> }
     expect(catalog.agents).toEqual([expect.objectContaining({ path: "root/scout", roleName: "explore", status: "completed" })])
@@ -237,7 +247,9 @@ it.skipIf(process.platform !== "win32").each(["off", "only"] as const)("a real r
 
     await trace.run("host/close", () => host!.close())
     host = undefined
-    const durable = fromJSONL(await readFile(join(sessions, childSessionId + ".jsonl"), "utf8"))
+    const journalPath = join(sessions, childSessionId + ".jsonl")
+    const original = await readFile(journalPath)
+    const durable = fromJSONL(original.toString("utf8"))
     expect(durable.header).toMatchObject({ parentSession: sessionId, origin: "subagent" })
     expect(durable.events).toContainEqual(expect.objectContaining({ type: "assistant/message", text: childAnswer }))
     const results = codeOnly ? durable.events.filter(event => event.type === "code/result") : durable.events.filter(event => event.type === "tool/result")
@@ -257,7 +269,84 @@ it.skipIf(process.platform !== "win32").each(["off", "only"] as const)("a real r
       expect(durable.events).toContainEqual(expect.objectContaining({ type: "code/cell", cellId: invocation!.cellId, state: "completed" }))
     } else expect(resultFor("glob")).toMatchObject({ kind: "inline", value: { matches: ["found.txt"] } })
     expect(resultFor("grep")).toMatchObject({ kind: "inline", value: { matches: [expect.objectContaining({ path: "found.txt", text: allowed })] } })
+
+    if (codeOnly) return
+    const priorLastSeq = durable.events.at(-1)?.seq
+    if (priorLastSeq === undefined) throw Error("Original child journal has no committed sequence")
+    const followup = "Find the resident marker in the bound project."
+    const second = "resident marker in the bound project", secondDecoy = "resident marker in the other project"
+    const resumedAnswer = "Original child completed the followup"
+    await Promise.all([
+      writeFile(join(workspace, "second.txt"), second + "\n"),
+      writeFile(join(sibling, "second.txt"), secondDecoy + "\n"),
+    ])
+    let parentRounds = 0, childRounds = 0
+    const resume: LoopbackRound = async (response, request) => {
+      const input = JSON.stringify(request.body.input)
+      if (request.body.model === "fixture-parent") {
+        const items = request.body.input as { call_id?: string; output?: string }[]
+        const output = (id: string) => items.find(item => item.call_id === id && item.output !== undefined)?.output
+        if (++parentRounds === 1) {
+          expect(input).toContain(parentAnswer)
+          await writeSplitSse(response, [...call("followup_task", { target: "root/scout", message: followup }), completes])
+        } else if (parentRounds === 2) {
+          expect(JSON.parse(output("followup_task") ?? "null")).toMatchObject({ delivered: true })
+          // Wait for the new child turn to start, so wait_agent observes that
+          // turn instead of returning the result of the previous one.
+          await childStarted.promise
+          await writeSplitSse(response, [...call("wait_agent", { target: "root/scout" }), completes])
+        } else {
+          expect(output("wait_agent")).toContain(resumedAnswer)
+          expect(output("wait_agent")).toContain(childSessionId)
+          await writeSplitSse(response, [text("Parent delivered the followup"), completes])
+        }
+      } else {
+        expect(request.body.model).toBe("fixture-child")
+        expect(schemas(request.body)).toEqual(roleTools)
+        expect(input).toContain(followup)
+        if (++childRounds === 1) {
+          childStarted.resolve()
+          await writeSplitSse(response, [...call("grep", { pattern: "resident marker", mode: "literal" }, 0, "resident-grep"), completes])
+        } else {
+          expect(input).toContain(second)
+          expect(input).not.toContain(secondDecoy)
+          await writeSplitSse(response, [text(resumedAnswer), completes])
+        }
+      }
+    }
+    rounds.push(resume, resume, resume, resume, resume)
+    const restarted = await openHost()
+    const cold = await restarted("desktop/session/subagents/list", { sessionId }) as typeof catalog
+    expect(cold.agents).toEqual([expect.objectContaining({ sessionId: childSessionId, path: "root/scout", live: false, status: "completed" })])
+    expect(await restarted("desktop/session/project/state", { sessionId: childSessionId })).toMatchObject({ projectId: "bound" })
+    await submit(restarted, sessionId, "Delegate the followup search", "task-child-resident-search")
+    const resumed = await vi.waitFor(async () => {
+      expect(server.errors).toEqual([])
+      const history = await restarted("desktop/session/subagents/history", {
+        sessionId, childSessionId, afterSeq: priorLastSeq + 1,
+      }) as HistoryRange
+      expect(history.events.some(event => event.type === "turn/end" && (event.seq ?? -1) > priorLastSeq)).toBe(true)
+      return history
+    }, { timeout: 25_000 })
+    expect([parentRounds, childRounds]).toEqual([3, 2])
+    expect(resumed.events).toContainEqual(expect.objectContaining({ type: "subagent/inbox", message: followup }))
+    expect(resumed.events).toContainEqual(expect.objectContaining({ type: "assistant/message", text: resumedAnswer }))
+    const resumedGrep = resumed.events.filter(event => event.type === "tool/result")
+      .find(event => event.name === "grep" && event.callId === "resident-grep" && (event.seq ?? -1) > priorLastSeq)
+    const grepSeq = resumedGrep?.seq
+    if (grepSeq === undefined) throw Error("The new child turn has no committed grep result")
+    expect(resumedGrep?.envelope).toMatchObject({
+      execution: { outcome: "succeeded", dispatch: "dispatched" },
+      retention: { kind: "inline", value: { matches: [expect.objectContaining({ path: "second.txt", text: second })] } },
+    })
+    expect(resumed.events.some(event => event.type === "turn/end" && (event.seq ?? -1) > grepSeq)).toBe(true)
+    await trace.run("host/close", () => host!.close())
+    host = undefined
+    const saved = await readFile(journalPath)
+    expect(saved.subarray(0, original.length).equals(original)).toBe(true)
+    expect(fromJSONL(saved.toString("utf8")).events.slice(durable.events.length)).toContainEqual(resumedGrep)
   } finally {
+    childStarted.resolve()
     try { await host?.close() } finally { await server.close(); await rm(root, { recursive: true, force: true }) }
   }
-}, 45_000)
+}, 60_000)
