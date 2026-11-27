@@ -60,11 +60,17 @@ it("mounts and closes the original LSP owner on the same tool registry", async (
 it("joins a held MCP refresh before closing the original generation", async () => {
   const { captureExecutionHookChannel } = await import("@i-harness/core-plugin")
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  let changed: (() => void) | undefined, calls = 0, transportClosed = false
+  let changed: (() => void) | undefined, calls = 0, transportClosed = false, wire: AbortSignal | undefined
   const ctx = createContext(), tools = createToolRegistry(ctx)
   const catalog = createOwnedPluginCatalog({ ctx, tools, roles: createRoleRegistry(), workspace: process.cwd(), globalSkillDir: process.cwd(), report: () => {}, mcpDeps: { async connect(_config, opts) {
     changed = opts?.onToolsChanged
-    return { async listTools() { if (++calls > 1) { entered.resolve(); await release.promise } return { tools: [{ name: "echo", inputSchema: { type: "object" } }] } }, async callTool() { return { content: [] } }, async listResources() { return [] }, async readResource() { return {} }, async close() { transportClosed = true } }
+    return { async listTools(_cursor, opts) {
+      const tools = [{ name: "echo", inputSchema: { type: "object" } }]
+      if (++calls === 1) return { tools }
+      wire = opts?.signal
+      entered.resolve(); await release.promise
+      return { tools, nextCursor: "retired-page" }
+    }, async callTool() { return { content: [] } }, async listResources() { return [] }, async readResource() { return {} }, async close() { transportClosed = true } }
   } } })
   await catalog.capabilities.update({ pluginMcp: [{ transport: "stdio", serverName: "held", command: "fixture", args: [] }] })
   changed!()
@@ -76,10 +82,46 @@ it("joins a held MCP refresh before closing the original generation", async () =
   await new Promise(resolve => setImmediate(resolve))
   expect(finished).toBe(false)
   expect(transportClosed).toBe(false)
+  expect(wire?.aborted).toBe(true)
   release.resolve()
   await step
   await closing
   expect(transportClosed).toBe(true)
+  expect(calls).toBe(2)
+})
+
+it("does not reuse a retired MCP connection when the same configuration is restored", async () => {
+  const ctx = createContext(), tools = createToolRegistry(ctx)
+  const refusal = new Error("fixture transport close rejected")
+  let connects = 0, closes = 0, allowClose = false
+  const catalog = createOwnedPluginCatalog({ ctx, tools, roles: createRoleRegistry(), workspace: process.cwd(), globalSkillDir: process.cwd(), report() {}, mcpDeps: {
+    async connect() {
+      const generation = ++connects
+      return {
+        async listTools() { return { tools: [{ name: `generation${generation}`, inputSchema: { type: "object" } }] } },
+        async callTool() { return { content: [] } }, async listResources() { return [] }, async readResource() { return {} },
+        async close() { closes++; if (!allowClose) throw refusal },
+      }
+    },
+  } })
+  const original = { pluginMcp: [{ transport: "stdio" as const, serverName: "fixture", command: "unused", args: [] }] }
+  try {
+    await catalog.capabilities.update(original)
+    expect(tools.get("mcp__fixture__generation1")).toBeDefined()
+    await expect(catalog.capabilities.update({})).rejects.toBe(refusal)
+    expect(tools.get("mcp__fixture__generation1")).toBeUndefined()
+    await expect(catalog.capabilities.update(original)).rejects.toBe(refusal)
+    expect(catalog.mcpResults.get("fixture")).toBe(false)
+    expect(connects).toBe(1)
+    expect(closes).toBe(2)
+    allowClose = true
+    await catalog.capabilities.update(original)
+    expect(connects).toBe(2)
+    expect(closes).toBe(3)
+    expect(tools.get("mcp__fixture__generation2")).toBeDefined()
+    expect(catalog.mcpResults.get("fixture")).toBe(true)
+  } finally { allowClose = true; await catalog.close() }
+  expect(closes).toBe(4)
 })
 
 it("joins a held LSP initialization before disposing its captured handle", async () => {

@@ -28,18 +28,26 @@ export function createOwnedPluginCatalog(options: OwnedPluginCatalogOptions) {
   const skillDirs: string[] = [], handles: McpMountHandle[] = []
   const lspHandles = new Set<LspMountHandle>(), pendingLsp = new Set<Promise<void>>()
   const pendingRefresh = new Set<Promise<void>>()
+  const refreshLifetime = new AbortController()
   const mcpResults = new Map<string, boolean>(), roleResults = new Map<string, boolean>()
   const skills = registerSkills(options.ctx, options.tools, { workspace: options.workspace, extraDirs: skillDirs, ...(options.globalSkillDir === undefined ? {} : { globalDir: options.globalSkillDir }) })
   const capabilities = createPluginCapabilities({ skillDirs, handles, roles: options.roles, mcpResults, roleResults,
     mount: config => mountMcpClient(options.ctx, options.tools, options.prepareMcpConfig?.(config) ?? config, { ...options.mcpDeps, workspace: options.workspace }), warn: options.report })
   let closed = false, closeFlight: Promise<void> | undefined, skillsClosed = false
-  onExecutionEvent(options.ctx, "agent/pre-step", () => {
+  onExecutionEvent(options.ctx, "agent/pre-step", payload => {
     if (closed) return
+    const turn = (payload as { signal?: unknown } | null | undefined)?.signal
+    const signal = turn instanceof AbortSignal ? AbortSignal.any([turn, refreshLifetime.signal]) : refreshLifetime.signal
     const refresh = (async () => {
-    for (const handle of [...handles]) {
-      if (!handle.catalogDirty()) continue
-      try { await handle.refreshCatalog() } catch (error) { options.report(`MCP ${handle.serverName} catalogue refresh failed: ${String(error)}`) }
-    }
+      for (const handle of [...handles]) {
+        if (signal.aborted) return
+        if (!handle.catalogDirty()) continue
+        try { await handle.refreshCatalog(signal) }
+        catch (error) {
+          if (signal.aborted) return
+          options.report(`MCP ${handle.serverName} catalogue refresh failed: ${String(error)}`)
+        }
+      }
     })()
     pendingRefresh.add(refresh)
     void refresh.then(() => pendingRefresh.delete(refresh), () => pendingRefresh.delete(refresh))
@@ -59,8 +67,9 @@ export function createOwnedPluginCatalog(options: OwnedPluginCatalogOptions) {
     close(): Promise<void> {
       if (closeFlight) return closeFlight
       closed = true
-      const flight = (async () => {
+      const flight = Promise.resolve().then(async () => {
         const failures: unknown[] = []
+        refreshLifetime.abort()
         await Promise.allSettled([...pendingRefresh])
         await Promise.allSettled([...pendingLsp])
         try { await capabilities.dispose() } catch (error) { failures.push(error) }
@@ -68,7 +77,7 @@ export function createOwnedPluginCatalog(options: OwnedPluginCatalogOptions) {
         if (!skillsClosed) try { await skills.unmount(); skillsClosed = true } catch (error) { failures.push(error) }
         if (failures.length === 1) throw failures[0]
         if (failures.length) throw new AggregateError(failures, "Owned plugin catalog cleanup failed")
-      })()
+      })
       closeFlight = flight
       void flight.catch(() => { if (closeFlight === flight) closeFlight = undefined })
       return flight

@@ -1,4 +1,4 @@
-import type { McpMountHandle, McpServerConfig } from "@i-harness/mcp-client"
+import { readMcpFailedMountCleanup, type McpMountHandle, type McpServerConfig } from "@i-harness/mcp-client"
 import type { RoleRegistry, SubagentRole } from "@i-harness/subagent"
 
 export interface PluginCapabilities {
@@ -14,7 +14,14 @@ export function createPluginCapabilities(deps: {
   mount(config: McpServerConfig): Promise<McpMountHandle>
   warn(message: string): void
 }) {
-  const servers = new Map<string, { signature: string; handle: McpMountHandle }>()
+  type OwnedServer = {
+    signature: string
+    close(): Promise<void>
+    handle?: McpMountHandle
+    retiring?: true
+    removing?: Promise<void>
+  }
+  const servers = new Map<string, OwnedServer>()
   type InstalledRole = { role: SubagentRole; cleanup?: import('@i-harness/subagent').RoleCleanup; removing?: Promise<void>; failure?: { cause: unknown } }
   const roles = new Map<string, InstalledRole>()
   let tail = Promise.resolve()
@@ -42,28 +49,43 @@ export function createPluginCapabilities(deps: {
     for (const [name, entry] of [...roles]) try { await removeRole(name, entry) } catch (cause) { errors.push(cause) }
     reportFailures(errors)
   }
-  const removeServer = async (name: string) => {
-    const entry = servers.get(name)!
-    await entry.handle.unmount()
-    servers.delete(name)
-    const index = deps.handles.indexOf(entry.handle)
-    if (index >= 0) deps.handles.splice(index, 1)
+  const removeServer = (name: string, entry: OwnedServer): Promise<void> => {
+    if (entry.removing) return entry.removing
+    entry.retiring = true
+    deps.mcpResults.set(name, false)
+    const pending = Promise.resolve().then(async () => {
+      if (servers.get(name) !== entry) return
+      await entry.close()
+      servers.delete(name)
+      if (entry.handle) {
+        const index = deps.handles.indexOf(entry.handle)
+        if (index >= 0) deps.handles.splice(index, 1)
+      }
+    })
+    entry.removing = pending
+    void pending.then(() => { entry.removing = undefined }, () => { entry.removing = undefined })
+    return pending
   }
   const apply = async (next: PluginCapabilities, strict = true) => {
     const failures: unknown[] = []
     deps.skillDirs.splice(0, deps.skillDirs.length, ...(next.skills?.extraDirs ?? []))
     const nextServers = new Map((next.pluginMcp ?? []).map((config) => [config.serverName, config]))
     for (const [name, old] of servers) {
-      if (!nextServers.has(name) || JSON.stringify(nextServers.get(name)) !== old.signature) await removeServer(name)
+      if (old.retiring || !nextServers.has(name) || JSON.stringify(nextServers.get(name)) !== old.signature) await removeServer(name, old)
     }
     deps.mcpResults.clear()
     for (const [name, config] of nextServers) {
       if (servers.has(name)) { deps.mcpResults.set(name, true); continue }
+      const signature = JSON.stringify(config)
       try {
         const handle = await deps.mount(config)
-        servers.set(name, { signature: JSON.stringify(config), handle }); deps.handles.push(handle)
+        servers.set(name, { signature, handle, close: () => handle.unmount() }); deps.handles.push(handle)
         deps.mcpResults.set(name, true)
-      } catch (error) { failures.push(error); deps.mcpResults.set(name, false); deps.warn(`Plugin MCP ${name}: ${String(error)}`) }
+      } catch (error) {
+        const close = readMcpFailedMountCleanup(error)
+        if (close) servers.set(name, { signature, close, retiring: true })
+        failures.push(error); deps.mcpResults.set(name, false); deps.warn(`Plugin MCP ${name}: ${String(error)}`)
+      }
     }
     const nextRoles = new Map((next.pluginAgents ?? []).map((role) => [role.name, { ...role, ...(next.pluginAgentsEphemeral ? { ephemeral: true } : {}) }]))
     for (const [name, old] of roles) {
@@ -102,7 +124,7 @@ export function createPluginCapabilities(deps: {
       const errors: unknown[] = []
       try { await retireRoles() } catch (cause) { errors.push(cause) }
       // A failed role retirement cannot skip independent original MCP owners.
-      for (const name of [...servers.keys()]) try { await removeServer(name) } catch (cause) { errors.push(cause) }
+      for (const [name, entry] of [...servers]) try { await removeServer(name, entry) } catch (cause) { errors.push(cause) }
       deps.skillDirs.splice(0); deps.mcpResults.clear(); deps.roleResults.clear()
       reportFailures(errors)
     },

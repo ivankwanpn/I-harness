@@ -72,6 +72,7 @@ import { createSkillsSection, registerSkills, scanMentionedSkillNames, SKILL_MEN
 import { registerWorkflow, type WorkflowMountHandle } from "@i-harness/workflow"
 import {
   mountMcpClient,
+  readMcpFailedMountCleanup,
   type McpMountHandle,
   type McpOAuthConfig,
   type McpServerConfig,
@@ -1196,7 +1197,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   }
   const mcpDeps = { workspace: opts.workspace, ...(opts.telemetry ? { onStatus: mcpStatusHook } : {}) }
 
-  const mcpHandles: McpMountHandle[] = []
+  const mcpHandles: McpMountHandle[] = [], pluginMcpHandles: McpMountHandle[] = []
+  let failedDirectMcpCleanup: (() => Promise<void>) | undefined
   let pluginCapabilities: ReturnType<typeof createPluginCapabilities> | undefined
   const lspHandles: LspMountHandle[] = []
   let flushSubagentPersistence: (() => Promise<void>) | undefined
@@ -1270,7 +1272,11 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     retireInstructionHost = childInstructionHost.retire.bind(childInstructionHost)
     closeInstructionHost = childInstructionHost.close.bind(childInstructionHost)
     for (const cfg of opts.mcp ?? []) {
-      mcpHandles.push(await mountMcpClient(ctx, tools, prepareMcpConfig(cfg), mcpDeps))
+      try { mcpHandles.push(await mountMcpClient(ctx, tools, prepareMcpConfig(cfg), mcpDeps)) }
+      catch (error) {
+        failedDirectMcpCleanup = readMcpFailedMountCleanup(error)
+        throw error
+      }
     }
     // Plugin MCP servers — per-server containment (live-agent precedent): a
     // server this host cannot serve degrades to a warn; the result map reports.
@@ -1294,14 +1300,18 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // drain is not retried until a full drain budget has passed, and a refresh
     // asked for mid-connect returns without draining. This handler's job is the
     // attempt; the cadence is the supervisor's.
-    // Registered after BOTH MCP loops; `mcpHandles` is typed McpMountHandle[],
-    // so the lsp handles (separate arrays) are never asked these questions.
-    ctx.on("agent/pre-step", async () => {
-      for (const mcpHandle of [...mcpHandles]) {
+    // Direct and plugin MCP share the refresh boundary while keeping their
+    // original teardown owners. LSP handles are independent.
+    ctx.on("agent/pre-step", async payload => {
+      const turn = (payload as { signal?: unknown } | null | undefined)?.signal
+      const signal = turn instanceof AbortSignal ? turn : undefined
+      for (const mcpHandle of [...mcpHandles, ...pluginMcpHandles]) {
+        if (signal?.aborted) return
         if (!mcpHandle.catalogDirty()) continue
         try {
-          await mcpHandle.refreshCatalog()
+          await mcpHandle.refreshCatalog(signal)
         } catch (err) {
+          if (signal?.aborted) return
           d.warn(
             `[i-harness] mcp-server(${mcpHandle.serverName}) catalogue refresh failed: ${err instanceof Error ? err.message : String(err)}`,
           )
@@ -1459,7 +1469,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     await subagent.ready
     const pluginAgentResults = new Map<string, boolean>()
     pluginCapabilities = createPluginCapabilities({
-      skillDirs: pluginSkillDirs, handles: mcpHandles, roles: subagent.roles,
+      skillDirs: pluginSkillDirs, handles: pluginMcpHandles, roles: subagent.roles,
       mcpResults: pluginMcpResults, roleResults: pluginAgentResults,
       mount: (config) => mountMcpClient(ctx, tools, prepareMcpConfig(config), mcpDeps),
       warn: (message) => d.warn(message),
@@ -1864,6 +1874,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     rewindSubscription?.()
     rewindSubscription = undefined
     await phase('rewind', () => rewindDrain)
+    const failedMount = failedDirectMcpCleanup
+    if (failedMount) await phase(failedMount, async () => { await failedMount(); failedDirectMcpCleanup = undefined })
     // Unmount in REVERSE mount order (last-mounted unmounts first), best-effort:
     const mounts = [...mcpHandles, ...lspHandles]
     for (const handle of mounts.reverse()) {
