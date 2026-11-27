@@ -13,6 +13,19 @@ import type { OriginalLegacyOrderingParticipant, OriginalOrderingRegistration, O
 import { captureResultTargetIds } from './result-revocation-data.ts'
 
 type Claim = { assertHeld(): void; retainLive(): void; release(): Promise<void> }
+const originalDocumentLeases = new WeakMap<SessionLock, { owner: object; key: string; read: () => boolean }>()
+
+export function bindOriginalDocumentLeaseHeld(owner: Ownership, key: string, lease: SessionLock): (() => boolean) | undefined {
+  const original = originalDocumentLeases.get(lease)
+  if (original?.owner !== owner || original.key !== key) return
+  if (Object.getOwnPropertyDescriptor(lease, 'held')?.get !== original.read) return
+  return () => {
+    if (Object.getOwnPropertyDescriptor(lease, 'held')?.get === original.read) return Reflect.apply(original.read, lease, [])
+    let held = false
+    withImmediateArtifactCurrentChecks(() => { held = lease.held })
+    return held
+  }
+}
 export interface OwnershipCleanup { assertSettled(): void; close(): Promise<void> }
 export interface OriginalOwnershipBatch { assertCovered(ids: readonly string[]): void; close(): Promise<void> }
 const batchOwners = new WeakMap<object, (ids: readonly string[], retain: (cleanup: OwnershipCleanup) => void, origin?: OriginalOrderingOrigin) => Promise<OriginalOwnershipBatch>>()
@@ -563,7 +576,11 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
       capture.assertCurrent(); record.guard.assertHeld()
     } catch (error) { try { await disposeDocumentLease(record) } catch (cleanup) { throw new AggregateError([error, cleanup], 'Document identity cleanup failed') }; throw error }
     const lease = record.lease!
-    return { get held() { capture.assertCurrent(); return lease.held }, release: () => disposeDocumentLease(record) }
+    const documentLease = { get held() { capture.assertCurrent(); return lease.held }, release: () => disposeDocumentLease(record) }
+    if (isOriginalCanonicalExclusion(artifacts)) {
+      originalDocumentLeases.set(documentLease, { owner, key, read: Object.getOwnPropertyDescriptor(documentLease, 'held')!.get! })
+    }
+    return documentLease
     } finally { finished = true; done.resolve() }
   }
   async function ensureOwnership(id: string) {

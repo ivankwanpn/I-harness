@@ -2,9 +2,9 @@ import type {SettlementFacts,ProducerFactOutcome} from '@i-harness/core-session'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { types } from 'node:util'
 import {bindOriginalCurrentnessMethod,runOriginalCurrentnessRead,runOpaqueCurrentnessRead} from '../../../core-session/src/managed/currentness-guards.ts'
-import {createArtifactCurrentGuard,associateArtifactCurrentnessReader} from './artifact-path-association.ts'
+import {createArtifactCurrentGuard,associateArtifactCurrentnessReader,withImmediateArtifactCurrentChecks} from './artifact-path-association.ts'
 import type { Ownership } from './ownership.ts'
-import {compareOriginalExclusionScopes} from './ownership.ts'
+import {bindOriginalDocumentLeaseHeld,captureHeldOwnershipClaim,compareOriginalExclusionScopes} from './ownership.ts'
 import type {ManagedExecutionOwner} from '@i-harness/core-session/internal/execution'
 import type { OpenTaskDocumentSession, TaskDocumentWitness, TaskObservation, Confirmation } from './task-document-types.ts'
 import { originalTaskWriteLifetime, type OriginalTaskWriteLifetime } from './task-write-lifetime.ts'
@@ -125,8 +125,19 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
     const assertSessionIdentity = () => {
       if (session && sessionDescriptors) for (const key of ['observe', 'confirm', 'settleResources', 'stageWrite']) { const now = Object.getOwnPropertyDescriptor(session, key), original = sessionDescriptors[key]; if (!now && !original && key === 'stageWrite') continue; if (!now || !original || !('value' in now) || !('value' in original) || now.value !== original.value) throw new TypeError('Changed task backend session') }
     }
-    const active = () => {
-      if (revoked || closed) fail(); assertConfiguration(); captured.assertCurrent(); pin?.assertHeld(); if (lease && !lease.held) fail();assertSessionIdentity()
+    const active = (original?: { parent: () => unknown; pin: { assertHeld(): void }; leaseHeld: () => boolean }) => {
+      if (revoked || closed) fail()
+      assertConfiguration()
+      if (original) {
+        original.parent()
+        original.pin.assertHeld()
+        if (!original.leaseHeld()) fail()
+      } else {
+        captured.assertCurrent()
+        pin?.assertHeld()
+        if (lease && !lease.held) fail()
+      }
+      assertSessionIdentity()
     }
     const originalCurrent=()=>{assertConfiguration();if(!originalParentCheck)fail();originalParentCheck!();pin?.assertHeld();if(!lease?.held)fail();assertSessionIdentity()}
     const scopeActive=()=>{if(!required&&nativeLifetime?.issued())nativeLifetime.assertIssued();else active()}
@@ -172,7 +183,19 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
       lease = required?await acquireLease(`task-${captured.id}`,original=>requiredLeaseCleanup.push(original)):await acquireLease(`task-${captured.id}`); releaseLease = method(lease, 'release')
       if(required){if(!captured.acquireWriter)fail();const writer=await captured.acquireWriter!();releaseWriter=method(writer,'release');resumeWriter=method(writer,'resume');parkWriter=method(writer,'park')}
       active()
-      const scope = issueHeldTaskDocumentScope(ownership, captured.id, pin, { assertActive: scopeActive, captureIssued, assertOriginal:originalCurrent })
+      const parent = !required && bindOriginalCurrentnessMethod(captured, 'assertCurrent')
+      const leaseHeld = parent && bindOriginalDocumentLeaseHeld(ownership, `task-${captured.id}`, lease)
+      let assertActive = scopeActive
+      if (parent && leaseHeld) {
+        const original = { parent, leaseHeld, pin: captureHeldOwnershipClaim(ownership, captured.id, pin) }
+        // Share the exact native checks within one call from the document reader.
+        // Every separate IO check and any write or opaque callback rechecks paths.
+        assertActive = createArtifactCurrentGuard(() => {
+          if (staging || stageConsumed) withImmediateArtifactCurrentChecks(scopeActive)
+          else active(original)
+        })
+      }
+      const scope = issueHeldTaskDocumentScope(ownership, captured.id, pin, { assertActive, captureIssued, assertOriginal:originalCurrent })
       session = open(scope); rawObserve = method(session, 'observe'); rawConfirm = method(session, 'confirm'); settleResources = method(session, 'settleResources'); if (Object.hasOwn(session, 'stageWrite')) rawStage = method(session, 'stageWrite'); sessionDescriptors = Object.getOwnPropertyDescriptors(session); active()
     })
     record.readKey=`task-${captured.id}`

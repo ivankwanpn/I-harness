@@ -6,6 +6,7 @@ const probe=vi.hoisted(()=>({captures:0,opens:0,next:1n,nodes:new Map<string,{id
 vi.mock('../src/coordinator/binding-observation.ts',async load=>{const actual=await load<typeof import('../src/coordinator/binding-observation.ts')>();return {...actual,createBindingObservations(...args:Parameters<typeof actual.createBindingObservations>){const owner=actual.createBindingObservations(...args);probe.owners.set(args[1],owner);return owner}}})
 vi.mock('../src/coordinator/ownership.ts',async load=>{const actual=await load<typeof import('../src/coordinator/ownership.ts')>();return {...actual,createOwnership(...args:Parameters<typeof actual.createOwnership>){const owner=actual.createOwnership(...args);latestOwners.push(owner);return owner}}})
 const latestOwners=vi.hoisted(()=>[] as import('../src/coordinator/ownership.ts').Ownership[])
+const taskScopeObserver = vi.hoisted(() => ({ capture: undefined as ((scope: import('../src/coordinator/task-document-types.ts').HeldTaskDocumentScope) => void) | undefined }))
 vi.mock('../src/coordinator/managed-execution-source.ts',async load=>{const actual=await load<typeof import('../src/coordinator/managed-execution-source.ts')>();return {...actual,createManagedExecutionSource(...args:Parameters<typeof actual.createManagedExecutionSource>){const source=actual.createManagedExecutionSource(...args);if(probe.sourceCurrent){const original=source.assertCurrent;source.assertCurrent=()=>{original();probe.sourceCurrent?.();original()}}return source}}})
 vi.mock('../src/coordinator/settlement-source.ts',async load=>{const actual=await load<typeof import('../src/coordinator/settlement-source.ts')>();return {...actual,createSettlementSource(...args:Parameters<typeof actual.createSettlementSource>){const operations=args[1],capture=operations.captureMembers;if(!probe.sourceHeld||!capture)return actual.createSettlementSource(...args);operations.captureMembers=source=>{const original=source.assertHeld;source.assertHeld=()=>{original();probe.sourceHeld?.();original()};return Reflect.apply(capture,operations,[source])};try{return actual.createSettlementSource(...args)}finally{operations.captureMembers=capture}}}})
 vi.mock('@i-harness/fs-lock/internal/artifact-path',async source=>{
@@ -18,7 +19,7 @@ vi.mock('@i-harness/fs-lock',async()=>{
  const {createHash}=await import('node:crypto'),{heldLock}=await import('../../fs-lock/src/win32.ts')
  return {lockPathFor:(root:string,id:string)=>win32.join(root,'.i-harness-locks',createHash('sha256').update(id).digest('hex').slice(0,24)+'.lock'),async acquireSessionLock({lockPath}:{lockPath:string}){return heldLock({createFileW(){throw Error('Unexpected native acquisition')},lockFileEx(){throw Error('Unexpected native acquisition')},unlockFileEx:()=>1,closeHandle:()=>1,getLastError:()=>0},1n,lockPath,2n)}}
 })
-vi.mock('../../session-persistence-jsonl/src/backend/task-document-observation.ts',async load=>{const actual=await load<typeof import('../../session-persistence-jsonl/src/backend/task-document-observation.ts')>();return {...actual,createTaskDocumentObservation(...args:Parameters<typeof actual.createTaskDocumentObservation>){const original=actual.createTaskDocumentObservation(...args);return {...original,confirm:original.confirm.bind(original),stageWrite:original.stageWrite.bind(original),stageInitialize:original.stageInitialize.bind(original),settleResources:original.settleResources.bind(original),async observe(){const result=await original.observe();await probe.onObserve?.(args[2].parentSessionId);return result}}}}})
+vi.mock('../../session-persistence-jsonl/src/backend/task-document-observation.ts',async load=>{const actual=await load<typeof import('../../session-persistence-jsonl/src/backend/task-document-observation.ts')>();return {...actual,createTaskDocumentObservation(...args:Parameters<typeof actual.createTaskDocumentObservation>){taskScopeObserver.capture?.(args[2]);const original=actual.createTaskDocumentObservation(...args);return {...original,confirm:original.confirm.bind(original),stageWrite:original.stageWrite.bind(original),stageInitialize:original.stageInitialize.bind(original),settleResources:original.settleResources.bind(original),async observe(){const result=await original.observe();await probe.onObserve?.(args[2].parentSessionId);return result}}}}})
 import {composeJsonlTaskTransitionCoordinator} from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import {createJsonlBackend} from '../../session-persistence-jsonl/src/backend-factory.ts'
 import {taskDocumentStorageContract} from '../../subagent/src/task/storage-contract.ts'
@@ -31,6 +32,44 @@ import {createOwnership} from '../src/coordinator/ownership.ts'
 import {createOriginalJsonlPathResolution} from '../src/coordinator/canonical-path-resolution.ts'
 type QueryContext={owner:Ownership;backend:ReturnType<typeof createJsonlBackend>;root:string;admission:object;measure(work:()=>void):{captures:number;opens:number}}
 const measure=(work:()=>void)=>{const before={captures:probe.captures,opens:probe.opens};work();return {captures:probe.captures-before.captures,opens:probe.opens-before.opens}}
+
+it('groups original Task load checks and rechecks a changed getter and a released lease', async () => {
+  const { acquireManagedExecution } = await import('../src/execution-internal.ts')
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'canonical-task-load-'))
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
+  const operations = taskDocumentOperationsFor(coordinator)!
+  let operation: Awaited<ReturnType<typeof operations.begin>> | undefined
+  let scope: import('../src/coordinator/task-document-types.ts').HeldTaskDocumentScope | undefined
+  try {
+    await coordinator.create({ sessionId: 'parent' })
+    const execution = await acquireManagedExecution(coordinator, 'parent')
+    const ownership = latestOwners.at(-1)!, acquireLease = ownership.acquireDocumentLease
+    let lease: Awaited<ReturnType<typeof acquireLease>> | undefined
+    ownership.acquireDocumentLease = async (...args) => lease = await acquireLease(...args)
+    taskScopeObserver.capture = original => { scope = original }
+    operation = await operations.begin(operations.parent(execution.owner))
+    const observed = await operation.observe()
+    expect(observed.kind).toBe('present')
+    if (observed.kind !== 'present') throw new Error('Missing original Task document')
+    expect((await operation.confirm(observed.witness)).kind).toBe('confirmed')
+    expect(measure(() => scope!.assertActive())).toEqual({ captures: 0, opens: 10 })
+
+    const held = Object.getOwnPropertyDescriptor(lease!, 'held')!
+    let customReads = 0
+    Object.defineProperty(lease!, 'held', { ...held, get() { customReads++; return false } })
+    try { expect(() => scope!.assertActive()).toThrow('TASK_DOCUMENT_CONFLICT') }
+    finally { Object.defineProperty(lease!, 'held', held) }
+    expect(customReads).toBe(1)
+
+    await lease!.release()
+    expect(() => scope!.assertActive()).toThrow('TASK_DOCUMENT_CONFLICT')
+  } finally {
+    taskScopeObserver.capture = undefined
+    await operation?.close()
+    await coordinator.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
 
 async function methodContexts(check:(context:QueryContext)=>void|Promise<void>){
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'canonical-query-'))
