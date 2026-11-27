@@ -4,6 +4,7 @@ import type { DesktopBridge, DesktopRequest } from "../../shared/bridge.ts"
 import { useText } from "../design/i18n.ts"
 import { Button } from "../vendor/opencode/Button.tsx"
 import { useNativeBrowserViewport } from "./useNativeBrowserViewport.ts"
+import { usePanePolling } from "../shell/use-pane-polling.ts"
 import "./browser-pane.css"
 
 interface Tab { id: string; url: string; title: string; loading: boolean; canGoBack: boolean; canGoForward: boolean; error?: string }
@@ -26,6 +27,7 @@ function rememberTab(bridge: DesktopBridge, workspaceId: string, id?: string) {
 }
 
 export function BrowserPane({ bridge, workspaceId, visible = true }: { bridge: DesktopBridge; workspaceId: string; visible?: boolean }) {
+  const startPolling = usePanePolling(visible)
   const t = useText()
   const viewport = useRef<HTMLDivElement>(null)
   const live = useRef<Scope>(undefined)
@@ -43,7 +45,6 @@ export function BrowserPane({ bridge, workspaceId, visible = true }: { bridge: D
     live.current = scope
     addressFocused.current = false
     setSnapshot(emptyView(bridge, workspaceId))
-    let timer: ReturnType<typeof setTimeout> | undefined
     scope.read = async (preferred) => {
       const ticket = ++scope.ticket
       try {
@@ -53,14 +54,12 @@ export function BrowserPane({ bridge, workspaceId, visible = true }: { bridge: D
         setSnapshot(old => ({ ...old, tabs: rows, listError: undefined, selected: rows.some(row => row.id === preferred) ? preferred : rows.some(row => row.id === old.selected) ? old.selected : rows.some(row => row.id === remembered) ? remembered : rows[0]?.id }))
       } catch (reason) { if (scope.active && scope.ticket === ticket) patch(scope, { listError: String(reason) }) }
     }
-    const poll = async () => {
-      if (!scope.active) return
+    const stopPolling = startPolling(async () => {
       if (!scope.locked) await scope.read()
-      if (scope.active) timer = setTimeout(() => { void poll() }, 500)
-    }
-    void poll()
-    return () => { scope.active = false; clearTimeout(timer) }
-  }, [bridge, workspaceId])
+      return 500
+    })
+    return () => { scope.active = false; stopPolling() }
+  }, [bridge, workspaceId, startPolling])
 
   useEffect(() => { if (view.tabs !== undefined) rememberTab(bridge, workspaceId, selected) }, [bridge, workspaceId, view.tabs, selected])
 

@@ -43,6 +43,28 @@ function legacyOverlay(role: "dialog" | "alertdialog" | "menu") {
   return overlay
 }
 
+it("keeps the selected tab without polling a hidden panel or minimized window", async () => {
+  const f = fixture()
+  const reads = () => f.request.mock.calls.filter(([request]) => request.kind === "browser/list").length
+  const view = render(<BrowserPane bridge={f.bridge} workspaceId="w" />)
+  await tick()
+  fireEvent.click(screen.getByRole("tab", { name: "second" }))
+  view.rerender(<BrowserPane bridge={f.bridge} workspaceId="w" visible={false} />)
+  const before = reads()
+  await tick(2000)
+  expect(reads() - before).toBe(0)
+  Object.defineProperty(document, "hidden", { configurable: true, value: true })
+  act(() => document.dispatchEvent(new Event("visibilitychange")))
+  view.rerender(<BrowserPane bridge={f.bridge} workspaceId="w" visible />)
+  await tick(2000)
+  expect(reads()).toBe(before)
+  Object.defineProperty(document, "hidden", { configurable: true, value: false })
+  act(() => document.dispatchEvent(new Event("visibilitychange")))
+  await tick()
+  expect(reads()).toBe(before + 1)
+  expect(screen.getByRole("tab", { name: "second" }).getAttribute("aria-selected")).toBe("true")
+})
+
 it("distinguishes a pending initial tab list from a confirmed empty browser", async () => {
   const pending = deferred()
   const f = fixture()

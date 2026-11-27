@@ -35,7 +35,7 @@ afterEach(() => {
 async function tick(duration = 20) { await act(async () => { await vi.advanceTimersByTimeAsync(duration) }) }
 function fixture() {
   let fontFamily = "Cascadia Code, monospace"
-  let output = { data: "READY", nextOffset: 5, truncated: false, status: "running" } as { data: string; nextOffset: number; truncated: boolean; status: "running" | "exited"; exitCode?: number }
+  let output = { data: "READY", nextOffset: 5, truncated: false, status: "running" } as { data: string; nextOffset: number; truncated: boolean; outputPending?: boolean; status: "running" | "exited"; exitCode?: number }
   const request = vi.fn(async (value: DesktopRequest) => {
     if (value.kind === "desktop/local/state") return { terminalFontFamily: fontFamily }
     if (value.kind === "desktop/terminal/list") return [{ id: "t", status: "running", command: "bash" }]
@@ -70,6 +70,41 @@ it("refreshes the saved font on returning to a retained pane without recreating 
   expect(f.instances[0].options.fontFamily).toBe("Updated font, monospace")
 })
 
+it("pauses hidden reads and resumes from the same terminal cursor", async () => {
+  const value = fixture()
+  const offsets = () => value.request.mock.calls.flatMap(([request]) => request.kind === "desktop/terminal/read" ? [request.offset] : [])
+  const view = render(<TerminalPane bridge={value.bridge} workspaceId="w" active />)
+  await tick()
+  view.rerender(<TerminalPane bridge={value.bridge} workspaceId="w" active={false} />)
+  await tick(2000)
+  expect(offsets()).toEqual([0])
+  value.setOutput({ data: "DONE", nextOffset: 9, truncated: false, status: "exited", exitCode: 0 })
+  view.rerender(<TerminalPane bridge={value.bridge} workspaceId="w" active />)
+  await tick()
+  expect(offsets()).toEqual([0, 5])
+  expect(f.instances).toHaveLength(1)
+  expect(f.instances[0].writes).toEqual(["READY", "DONE"])
+  await tick(2000)
+  expect(offsets()).toEqual([0, 5])
+})
+
+it("joins an outstanding terminal read when the panel is hidden and immediately restored", async () => {
+  const value = fixture()
+  const first = Promise.withResolvers<{ data: string; status: "running"; nextOffset: number; truncated: boolean }>()
+  const read = value.request.getMockImplementation()!
+  value.request.mockImplementation(request => request.kind === "desktop/terminal/read" && request.offset === 0 ? first.promise : read(request))
+  value.setOutput({ data: "B", status: "exited", nextOffset: 2, truncated: false })
+  const view = render(<TerminalPane bridge={value.bridge} workspaceId="w" active />)
+  await tick()
+  view.rerender(<TerminalPane bridge={value.bridge} workspaceId="w" active={false} />)
+  view.rerender(<TerminalPane bridge={value.bridge} workspaceId="w" active />)
+  await tick()
+  expect(value.request.mock.calls.filter(([request]) => request.kind === "desktop/terminal/read")).toHaveLength(1)
+  await act(async () => first.resolve({ data: "A", status: "running", nextOffset: 1, truncated: false }))
+  await tick()
+  expect(f.instances[0].writes).toEqual(["A", "B"])
+})
+
 it("updates theme and font size in place while preserving output offset, scrollback and input", async () => {
   const value = fixture()
   render(<TerminalPane bridge={value.bridge} workspaceId="w" />)
@@ -95,6 +130,18 @@ it("updates theme and font size in place while preserving output offset, scrollb
   expect(f.instances).toHaveLength(1)
   expect(f.disposed).not.toHaveBeenCalled()
   expect(f.reset).not.toHaveBeenCalled()
+})
+
+it("displays the last terminal output even when the root process exited earlier", async () => {
+  const value = fixture()
+  value.setOutput({ data: "", nextOffset: 0, truncated: false, status: "exited", exitCode: 3, outputPending: true })
+  render(<TerminalPane bridge={value.bridge} workspaceId="w" />)
+  await tick()
+  expect(screen.queryByText(/代碼 3/)).toBeNull()
+  value.setOutput({ data: "last line", nextOffset: 9, truncated: false, status: "exited", exitCode: 3 })
+  await tick(120)
+  expect(f.instances[0].writes).toEqual(["last line"])
+  expect(screen.getByRole("status").textContent).toContain("代碼 3")
 })
 
 it("applies an updated native font after focus without rebuilding or resetting the emulator", async () => {

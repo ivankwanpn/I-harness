@@ -6,10 +6,11 @@ import "@xterm/xterm/css/xterm.css"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useText } from "../design/i18n.ts"
 import { useUiStore, type Appearance } from "../shell/ui-store.ts"
+import { usePanePolling } from "../shell/use-pane-polling.ts"
 import { Button } from "../vendor/opencode/Button.tsx"
 import "./terminal-pane.css"
 interface Entry { id: string; command?: string; status: "running" | "exited"; exitCode?: number }
-interface Output { data: string; nextOffset: number; truncated: boolean; dropped?: boolean; status: "running" | "exited"; exitCode?: number }
+interface Output { data: string; nextOffset: number; truncated: boolean; dropped?: boolean; outputPending?: boolean; status: "running" | "exited"; exitCode?: number }
 
 function terminalLabel(entry: Entry): string {
   const executable = entry.command?.split(/[\\/]/).at(-1)
@@ -28,7 +29,8 @@ function appearanceOptions(fontFamily: string, fontSize: number, appearance: App
   return { fontFamily, fontSize, theme: { background, foreground, cursor: foreground, cursorAccent: background, selectionBackground, selectionForeground: background } }
 }
 
-function Emulator({ bridge, workspaceId, id, fontFamily }: { bridge: DesktopBridge; workspaceId: string; id: string; fontFamily: string }) {
+function Emulator({ bridge, workspaceId, id, fontFamily, visible }: { bridge: DesktopBridge; workspaceId: string; id: string; fontFamily: string; visible: boolean }) {
+  const startPolling = usePanePolling(visible)
   const element = useRef<HTMLDivElement>(null)
   const emulator = useRef<{ terminal: Terminal; resize(): void }>(undefined)
   const [error, setError] = useState<string>()
@@ -46,7 +48,6 @@ function Emulator({ bridge, workspaceId, id, fontFamily }: { bridge: DesktopBrid
     if (!element.current) return
     setError(undefined); setExited(undefined); setDropped(false)
     let active = true; let offset = 0
-    let timer: ReturnType<typeof setTimeout> | undefined
     let frame: number | undefined
     let inputQueue = Promise.resolve()
     let inputBytes = 0
@@ -75,9 +76,7 @@ function Emulator({ bridge, workspaceId, id, fontFamily }: { bridge: DesktopBrid
         for (let start = 0; start < data.length; start += 32768) await bridge.request({ kind: "desktop/terminal/write", workspaceId, id, data: data.slice(start, start + 32768) })
       }).catch((reason: unknown) => { if (active) setError(String(reason)) }).finally(() => { inputBytes -= data.length })
     })
-    const poll = async () => {
-      if (!active) return
-      if (document.hidden) { timer = setTimeout(() => { void poll() }, 1000); return }
+    const stopPolling = startPolling(async () => {
       try {
         const output = await bridge.request({ kind: "desktop/terminal/read", workspaceId, id, offset }) as Output
         if (!active) return
@@ -85,13 +84,13 @@ function Emulator({ bridge, workspaceId, id, fontFamily }: { bridge: DesktopBrid
         if (output.dropped) { terminal.reset(); setDropped(true) }
         if (output.data) await new Promise<void>((resolve) => terminal.write(output.data, resolve))
         if (!active) return
-        if (output.status === "exited" && !output.truncated) { setExited({ code: typeof output.exitCode === "number" && Number.isInteger(output.exitCode) ? output.exitCode : undefined }); return }
-        timer = setTimeout(() => { void poll() }, output.truncated ? 10 : 120)
+        if (output.status === "exited" && !output.truncated && !output.outputPending) { setExited({ code: typeof output.exitCode === "number" && Number.isInteger(output.exitCode) ? output.exitCode : undefined }); return }
+        return output.truncated ? 10 : 120
       } catch (reason) { if (active) setError(String(reason)) }
-    }
-    void poll(); terminal.focus()
-    return () => { active = false; clearTimeout(timer); if (frame !== undefined) cancelAnimationFrame(frame); observer.disconnect(); appearanceObserver.disconnect(); emulator.current = undefined; input.dispose(); terminal.dispose() }
-  }, [bridge, workspaceId, id, retry])
+    })
+    terminal.focus()
+    return () => { active = false; stopPolling(); if (frame !== undefined) cancelAnimationFrame(frame); observer.disconnect(); appearanceObserver.disconnect(); emulator.current = undefined; input.dispose(); terminal.dispose() }
+  }, [bridge, workspaceId, id, retry, startPolling])
   useEffect(() => {
     const current = emulator.current
     if (!current) return
@@ -155,6 +154,6 @@ export function TerminalPane({ bridge, workspaceId, active: visible = true }: { 
     </div>
     <p className="muted">{t("此終端使用本機使用者權限，並非 Agent 沙箱。")}</p>
     {error ? <p role="alert">{error}<Button size="small" disabled={busy} onClick={() => setReload(reload + 1)}>{t("重試")}</Button></p> : null}
-    {selected ? fontFamily === undefined ? <p role="status">{t("正在載入終端…")}</p> : <Emulator key={selected} bridge={bridge} workspaceId={workspaceId} id={selected} fontFamily={fontFamily} /> : <div className="ih-empty-state">{t("新增終端以開啟工作區 shell。")}</div>}
+    {selected ? fontFamily === undefined ? <p role="status">{t("正在載入終端…")}</p> : <Emulator key={selected} bridge={bridge} workspaceId={workspaceId} id={selected} fontFamily={fontFamily} visible={visible} /> : <div className="ih-empty-state">{t("新增終端以開啟工作區 shell。")}</div>}
   </section>
 }

@@ -36,6 +36,8 @@ export interface TerminalView {
 export interface TerminalRunSpec { id: string; pid: number; cols: number; rows: number }
 export interface TerminalReadResult {
   dropped?: boolean
+  /** The root has exited but the native output stream is still draining. */
+  outputPending?: boolean
   id: string
   data: string
   nextOffset: number
@@ -83,13 +85,14 @@ class TerminalRecord {
   settlement?: ExecutionSettlement
   cleanupDetail?: string
   outputFailure?: string
+  outputFinished = false
   outputDone: Promise<void>
 
   constructor(readonly spec: TerminalOpenSpec, readonly execution: SupervisedExecution) {
     this.owner = execution.policy.owner
     this.cols = spec.cols ?? DEFAULT_COLS
     this.rows = spec.rows ?? DEFAULT_ROWS
-    this.outputDone = this.consume()
+    this.outputDone = this.consume().finally(() => { this.outputFinished = true })
     void this.outputDone.catch(cause => { this.outputFailure = String(cause) })
     void execution.handle.rootExited.then(root => {
       this.root = root
@@ -137,10 +140,22 @@ class TerminalRecord {
     if (this.pendingCR) { this.pendingCR = false; this.appendRetained("\r") }
   }
 
-  textSince(offset: number): string {
-    const combined = this.chunks.join("")
-    const relative = Math.max(0, offset - this.startOffset)
-    return relative >= combined.length ? "" : combined.slice(relative)
+  readWindow(offset: number, limit: number): Pick<TerminalReadResult, "data" | "nextOffset" | "truncated"> {
+    const start = Math.max(offset, this.startOffset)
+    const end = this.startOffset + this.retainedLength
+    const length = Math.min(limit, Math.max(0, end - start))
+    const nextOffset = start + length
+    let data = ""
+    if (length > 0) {
+      let position = this.startOffset
+      for (const chunk of this.chunks) {
+        const boundary = position + chunk.length
+        if (boundary > start) data += chunk.slice(Math.max(0, start - position), nextOffset - position)
+        if (boundary >= nextOffset) break
+        position = boundary
+      }
+    }
+    return { data, nextOffset, truncated: nextOffset < end }
   }
 }
 
@@ -265,10 +280,9 @@ export function createTerminalService(exec: ExecService): TerminalService {
       const offset = opts?.offset ?? 0
       const maxBytes = opts?.maxBytes ?? DEFAULT_MAX_READ_BYTES
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error("Invalid terminal cursor")
-      const text = record.textSince(offset)
-      const data = text.slice(0, maxBytes)
-      return { id, data, nextOffset: Math.max(offset, record.startOffset) + data.length,
-        ...(offset < record.startOffset ? { dropped: true } : {}), truncated: text.length > data.length,
+      return { id, ...record.readWindow(offset, maxBytes),
+        ...(offset < record.startOffset ? { dropped: true } : {}),
+        ...(record.status === "exited" && !record.outputFinished ? { outputPending: true } : {}),
         status: record.status, ...(record.exitCode === undefined ? {} : { exitCode: record.exitCode }) }
     },
     async signal(id, signal, opts) {

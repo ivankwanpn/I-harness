@@ -6,10 +6,12 @@ function fixture() {
   const queued: Uint8Array[] = []
   let wake: (() => void) | undefined
   let ended = false
+  const root = Promise.withResolvers<{ exitCode: number }>()
+  const finishOutput = () => { ended = true; wake?.() }
   const settled = { kind: "settled" as const, root: { exitCode: 0 }, treeEmpty: true as const, ioSettled: true as const, resourcesReleased: true as const }
   const handle = {
     pid: 42,
-    rootExited: new Promise(() => {}),
+    rootExited: root.promise,
     settled: new Promise(() => {}),
     io: { output: { async *[Symbol.asyncIterator]() {
       while (!ended || queued.length) {
@@ -20,10 +22,41 @@ function fixture() {
   }
   const exec = {
     launchTransport: async () => ({ id: "execution-fixture", policy: { owner: { sessionId: "standalone-exec" } }, handle }) as unknown as SupervisedExecution,
-    cancelExecution: async () => { ended = true; wake?.(); return settled },
+    cancelExecution: async () => { finishOutput(); return settled },
   } as unknown as ExecService
-  return { exec, push(data: string | Uint8Array) { queued.push(Buffer.from(data)); wake?.() } }
+  return { exec, exit: () => root.resolve({ exitCode: 0 }), finishOutput, push(data: string | Uint8Array) { queued.push(Buffer.from(data)); wake?.() } }
 }
+
+it("reads bounded UTF-16 windows across frames and preserves zero-length and future cursors", async () => {
+  const source = fixture(), service = createTerminalService(source.exec)
+  const { id } = await service.open({ command: "fixture", rawOutput: true })
+  const chunks = ["1".repeat(4500), "🐋".repeat(2250), "尾聲"]
+  for (const text of chunks) source.push(text)
+  const combined = chunks.join("")
+  try {
+    await vi.waitFor(() => expect(service.read(id, { offset: 9000 }).data).toBe("尾聲"))
+    for (const offset of [0, 4499, 4501, 8999, 9000, combined.length, 12000]) {
+      for (const maxBytes of [0, 1, 3, 4502, 15000]) {
+        const data = combined.slice(offset, offset + maxBytes)
+        expect(service.read(id, { offset, maxBytes })).toMatchObject({ data,
+          nextOffset: offset + data.length, truncated: offset + data.length < combined.length })
+      }
+    }
+  } finally { await service.dispose() }
+})
+
+it("keeps the output readable between root exit and the final decoded frame", async () => {
+  const source = fixture(), service = createTerminalService(source.exec)
+  const { id } = await service.open({ command: "fixture" })
+  try {
+    source.exit()
+    await vi.waitFor(() => expect(service.read(id)).toMatchObject({ data: "", status: "exited", outputPending: true, exitCode: 0 }))
+    source.push("tail\r")
+    source.finishOutput()
+    await vi.waitFor(() => expect(service.read(id)).toMatchObject({ data: "tail\r", nextOffset: 5 }))
+    expect(service.read(id, { offset: 5 }).outputPending).toBeUndefined()
+  } finally { await service.dispose() }
+})
 
 it("keeps absolute cursors after trimming a full output ring", async () => {
   const source = fixture()
