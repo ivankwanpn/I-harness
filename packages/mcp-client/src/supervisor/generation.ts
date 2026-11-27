@@ -1,10 +1,10 @@
-import type { ConnectedMcpClient, McpConnectOptions } from "../client.ts"
+import { readMcpFailedConnectionCleanup, type ConnectedMcpClient, type McpConnectOptions } from "../client.ts"
 import { McpServerUnavailableError } from "../errors.ts"
 import type { McpServerConfig } from "../types.ts"
 import type { SupervisorDeps } from "./types.ts"
 import type { SupervisorStatus } from "./status.ts"
 import type { SupervisorCatalogue } from "./catalogue.ts"
-import { closeWithin, OVERLAP_GUARD_MS } from "./disposal.ts"
+import { waitForMcpClose, type SupervisorLifetime } from "./disposal.ts"
 
 /** Sole current-generation authority and stable proxy; startup remains a mount failure. */
 export function createSupervisorGeneration(
@@ -14,10 +14,11 @@ export function createSupervisorGeneration(
   reconnectEnabled: boolean,
   status: Pick<SupervisorStatus, "isClosed" | "emitStatus" | "recordError" | "setState">,
   catalogue: Pick<SupervisorCatalogue, "resetForGeneration" | "resyncTools" | "markCatalogDirty">,
+  lifetime: Pick<SupervisorLifetime, "beginConnect" | "retire">,
   generationDown: (gen: ConnectedMcpClient) => void,
   armStability: (gen: ConnectedMcpClient) => void,
 ) {
-  let current: ConnectedMcpClient | undefined
+  let current: ConnectedMcpClient | undefined, currentAttempt: object | undefined
 
   const unavailable = (): McpServerUnavailableError => {
     deps.onToolUnavailable?.()
@@ -29,10 +30,6 @@ export function createSupervisorGeneration(
   // call time, so a call during an outage fails fast instead of hanging on a
   // dead transport.
   const proxy: ConnectedMcpClient = {
-    // M6-D2/D3: `opts` travels with the call. Dropping it here would keep the
-    // drain's per-page bound (timeout / maxTotalTimeout) from ever reaching the
-    // SDK on the production path — the drain would be bounded in total but no
-    // single page request would carry its share of the budget.
     async listTools(cursor, opts) {
       const gen = current
       if (gen === undefined) throw unavailable()
@@ -48,6 +45,12 @@ export function createSupervisorGeneration(
       if (gen === undefined) throw unavailable()
       return gen.listResources(server, signal)
     },
+    async listResourceTemplates(signal) {
+      const gen = current
+      if (gen === undefined) throw unavailable()
+      if (!gen.listResourceTemplates) throw new Error(`mcp-server(${serverName}): resources/templates/list unsupported by this build's client`)
+      return gen.listResourceTemplates(signal)
+    },
     async readResource(server, uri, signal) {
       const gen = current
       if (gen === undefined) throw unavailable()
@@ -56,64 +59,76 @@ export function createSupervisorGeneration(
     async close() {
       const gen = current
       if (gen === undefined) throw unavailable()
-      return gen.close()
+      return lifetime.retire(gen)
     },
   }
 
-  const adopt = (gen: ConnectedMcpClient): void => {
-    current = gen
-    // M6-D3: a new generation starts CLEAN — its connect() just drained the
-    // catalogue, and anything the previous generation announced is about a
-    // list that no longer exists. Its failed-refresh backoff dies with it too:
-    // the generation drains itself below (attempt/start), and whatever went
-    // wrong on the previous generation's drain is not this one's.
-    catalogue.resetForGeneration()
-    // Observe transport death only when the reconnect machinery is on — the
-    // default (no reconnect config) must behave exactly like a one-shot mount.
-    if (reconnectEnabled) gen.onDisconnect?.(() => generationDown(gen))
+  const withdraw = () => { current = undefined; currentAttempt = undefined }
+  const beginConnect = () => {
+    const finish = lifetime.beginConnect(), token = {}
+    const finishFailure = (error: unknown) => {
+      const close = readMcpFailedConnectionCleanup(error)
+      const owner = close ? { close } : undefined
+      finish(owner)
+      return owner
+    }
+    const isCurrent = () => currentAttempt === token && !status.isClosed()
+    const options: McpConnectOptions = { onToolsChanged() {
+      if (isCurrent()) catalogue.markCatalogDirty()
+    } }
+    return { finish, finishFailure, options, isCurrent, adopt(gen: ConnectedMcpClient) {
+      current = gen
+      currentAttempt = token
+      // The first full drain observes startup announcements. After adoption
+      // only this generation may mark its catalogue dirty.
+      catalogue.resetForGeneration()
+      if (reconnectEnabled) gen.onDisconnect?.(() => { if (isCurrent()) generationDown(gen) })
+    } }
   }
-
-  // Preserve the shared marker's original callback lifetime, including retired clients.
-  const connectOptions: McpConnectOptions = { onToolsChanged: catalogue.markCatalogDirty }
 
   const start = async (): Promise<void> => {
     if (status.isClosed()) throw new Error(`mcp-client(${serverName}): supervisor already closed`)
     status.emitStatus("connecting")
+    if (status.isClosed()) throw new Error(`mcp-client(${serverName}): supervisor closed during startup`)
+    const attempt = beginConnect()
     let gen: ConnectedMcpClient
     try {
-      gen = await deps.connect(config, connectOptions)
+      gen = await deps.connect(config, attempt.options)
     } catch (err) {
+      attempt.finishFailure(err)
       // Startup failure is a MOUNT failure (scheduler applies failOnStartupError
       // semantics) — the reconnect loop only engages once a generation exists.
       status.recordError(err)
       throw err
     }
+    attempt.finish(gen)
     if (status.isClosed()) {
-      await closeWithin(gen, OVERLAP_GUARD_MS)
+      await waitForMcpClose(lifetime.retire(gen), serverName).catch(() => { /* Close still owns unresolved cleanup. */ })
       throw new Error(`mcp-client(${serverName}): supervisor closed during startup`)
     }
-    adopt(gen)
     try {
+      attempt.adopt(gen)
+      if (!attempt.isCurrent()) throw new Error(`mcp-client(${serverName}): generation retired during startup`)
       await catalogue.resyncTools()
+      if (!attempt.isCurrent()) throw new Error(`mcp-client(${serverName}): generation retired during startup`)
     } catch (err) {
-      // Startup sync failure: also a mount failure — close the live generation
-      // (bounded by the overlap guard so no child process lingers) and propagate.
-      current = undefined
-      await closeWithin(gen, OVERLAP_GUARD_MS)
-      status.recordError(err)
+      if (attempt.isCurrent()) {
+        status.recordError(err)
+        withdraw()
+        await waitForMcpClose(lifetime.retire(gen), serverName).catch(() => { /* The original mount retains cleanup. */ })
+      }
       throw err
     }
     status.setState("ready")
     status.emitStatus("ready")
-    if (reconnectEnabled) armStability(gen)
+    if (reconnectEnabled && attempt.isCurrent()) armStability(gen)
   }
 
   return {
     current: () => current,
-    withdraw: (): void => { current = undefined },
+    withdraw,
     proxy,
-    connectOptions,
-    adopt,
+    beginConnect,
     start,
   }
 }

@@ -9,6 +9,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js"
 import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js"
 import type { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import { pathToFileURL } from "node:url"
 import { basename, isAbsolute, resolve } from "node:path"
 import { z } from "zod"
@@ -17,6 +18,7 @@ import { createOAuthCallbackServer, type OAuthCallbackServer } from "./oauth-cal
 import { createOAuthClientProvider, type IHOAuthClientProvider } from "./oauth.ts"
 import { McpOAuthError } from "./errors.ts"
 import type { McpServerConfig } from "./types.ts"
+import { waitForMcpClose } from "./supervisor/disposal.ts"
 
 export interface McpTool {
   name: string
@@ -53,7 +55,7 @@ export interface ConnectedMcpClient {
   /** M6-D2: `opts` is optional — the drain passes the page's bound (the
    *  remaining total budget) through to the SDK request; every pre-existing
    *  fake/implementation that omits it keeps compiling unchanged. */
-  listTools(cursor?: string, opts?: { timeout?: number; maxTotalTimeout?: number }): Promise<{ tools: McpTool[]; nextCursor?: string }>
+  listTools(cursor?: string, opts?: { timeout?: number; maxTotalTimeout?: number; signal?: AbortSignal }): Promise<{ tools: McpTool[]; nextCursor?: string }>
   callTool(name: string, args: unknown, signal?: AbortSignal): Promise<McpCallResult>
   listResources(server?: string, signal?: AbortSignal): Promise<unknown[]>
   readResource(server: string, uri: string, signal?: AbortSignal): Promise<unknown>
@@ -82,6 +84,47 @@ export interface McpConnectOptions {
   workspace?: string
   /** Fired when the server announces `notifications/tools/list_changed`. */
   onToolsChanged?: () => void
+}
+
+const failedStdioCleanups = new WeakMap<object, () => Promise<void>>()
+const clientInfo = { name: "i-harness-mcp-client", version: "0.1.0" }
+
+/** Only a failed connector can transfer the original physical close. */
+export function readMcpFailedConnectionCleanup(error: unknown): (() => Promise<void>) | undefined {
+  return typeof error === "object" && error !== null ? failedStdioCleanups.get(error) : undefined
+}
+
+class StdioMcpClient extends Client {
+  #initializing = true
+  #startupClose?: Promise<void>
+
+  constructor(private readonly stdio: Transport) { super(clientInfo) }
+
+  override close(): Promise<void> {
+    if (this.#startupClose) return this.#startupClose
+    const attempt = this.stdio.close()
+    // SDK initialize discards its close promise. Observe it while retaining
+    // this exact error/receipt for the connector and eventual cleanup owner.
+    void attempt.catch(() => {})
+    if (this.#initializing) this.#startupClose = attempt
+    return attempt
+  }
+
+  async initialize(serverName: string): Promise<void> {
+    try { await this.connect(this.stdio) }
+    catch (error) {
+      try { await waitForMcpClose(this.close(), serverName) }
+      catch (cleanup) {
+        const failure = new AggregateError([error, cleanup], `MCP ${serverName} initialization and original transport cleanup failed`, { cause: error })
+        failedStdioCleanups.set(failure, () => this.close())
+        throw failure
+      }
+      throw error
+    } finally {
+      this.#initializing = false
+      this.#startupClose = undefined
+    }
+  }
 }
 
 const MAX_AUTH_ATTEMPTS = 3
@@ -158,7 +201,8 @@ export async function createConnectedClient(config: McpServerConfig, opts?: McpC
   }
   try {
     const attachment: McpAuthAttachment | undefined = oauthProvider ? { provider: oauthProvider } : undefined
-    const client = new Client({ name: "i-harness-mcp-client", version: "0.1.0" })
+    const stdio = config.transport === "stdio" ? new StdioMcpClient(await createTransport(config)) : undefined
+    const client = stdio ?? new Client(clientInfo)
     const timeout = config.toolCallTimeoutMs ?? 60_000
     // SDK Client (Protocol) fires `onclose` both when the transport dies on its
     // own and when close() is called deliberately — the supervisor treats
@@ -206,6 +250,8 @@ export async function createConnectedClient(config: McpServerConfig, opts?: McpC
         oauthProvider,
         config as McpServerConfig & { transport: "streamable-http" },
       )
+    } else if (stdio) {
+      await stdio.initialize(config.serverName)
     } else {
       const transport = await createTransport(config)
       await client.connect(transport)

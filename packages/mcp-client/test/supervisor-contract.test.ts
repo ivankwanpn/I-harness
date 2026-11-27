@@ -52,6 +52,7 @@ describe("supervisor extraction contracts", () => {
         ["cursor", opts], ["raw", args, signal], ["filter", signal], ["server", "uri", signal], [],
       ])
       await supervisor.close()
+      expect(calls).toHaveLength(5) // The proxy and supervisor share the same released generation.
     } finally { vi.useRealTimers() }
   })
 
@@ -99,18 +100,22 @@ describe("supervisor extraction contracts", () => {
       connect: (_config, opts) => { options = opts; return new Promise((done) => { resolve = done }) },
     })
     const starting = supervisor.start()
-    await supervisor.close()
+    const closing = supervisor.close()
+    let closed = false
+    void closing.then(() => { closed = true })
     await expect(supervisor.refreshCatalog()).rejects.toBeInstanceOf(McpServerUnavailableError)
     expect(unavailable).not.toHaveBeenCalled()
     await expect(supervisor.client().listTools()).rejects.toBeInstanceOf(McpServerUnavailableError)
     expect(unavailable).toHaveBeenCalledTimes(1)
+    expect(closed).toBe(false)
     const gen = generation()
     gen.close = vi.fn(async () => { options?.onToolsChanged?.() })
     resolve!(gen)
     await expect(starting).rejects.toThrow("supervisor closed during startup")
+    await closing
     expect(gen.close).toHaveBeenCalledTimes(1)
     expect(status).toHaveBeenCalledTimes(1)
-    // Existing callback lifetime: even after close, the shared marker remains callable.
-    expect(supervisor.catalogDirty()).toBe(true)
+    // A late startup callback has no live generation whose catalogue it can dirty.
+    expect(supervisor.catalogDirty()).toBe(false)
   })
 })

@@ -49,6 +49,15 @@ export function createMcpTool(
   }
 }
 
+/** The disposer belongs to this registry and this particular tool definition. */
+export function registerMcpTool(tools: ToolRegistry, tool: Tool): () => void {
+  const name = tool.name
+  tools.register(tool)
+  return () => {
+    if (tools.get(name) === tool) tools.unregister(name)
+  }
+}
+
 // Two-phase sync: fetch (drain cursor, no registry touch) → swap (dispose
 // previous generation, register the new one).
 //
@@ -64,6 +73,12 @@ export async function syncTools(
   config: McpServerConfig,
   previous: Map<string, () => void> = new Map(),
 ): Promise<Map<string, () => void>> {
+  const catalogue = await readToolCatalogue((cursor, opts) => client.listTools(cursor, opts), config)
+  return installToolCatalogue(catalogue, client, tools, config, previous)
+}
+
+/** Fetch the whole list without changing the registry. */
+export async function readToolCatalogue(listPage: ConnectedMcpClient["listTools"], config: McpServerConfig, signal?: AbortSignal) {
   const serverName = config.serverName
   const next = new Map<string, { rawName: string; tool: McpTool }>()
   // M26-B1c: blocked/direct 過濾（Phase 1 打包：blocked 根本不進 next）。
@@ -87,10 +102,7 @@ export async function syncTools(
   // to it. It still rides along: a supported field, sent so the intent travels
   // with the request.
   // So a single hanging page cannot outlive the budget. NOTE: that bound holds
-  // on the production path only because the supervisor's proxy forwards these
-  // opts to the generation client — the proxy is what every tool closure and
-  // this drain actually call (M6-D3 fixed the proxy that used to drop the
-  // second argument).
+  // on the production path when these opts reach the selected generation.
   const deadline = Date.now() + (config.catalogTimeoutMs ?? 60_000)
   const pageTimeoutCap = config.toolCallTimeoutMs ?? 60_000
   let cursor: string | undefined
@@ -98,14 +110,17 @@ export async function syncTools(
   const seenCursors = new Set<string>()
   let items = 0
   do {
+    signal?.throwIfAborted()
     const remaining = deadline - Date.now()
     if (remaining <= 0) {
       throw new McpCatalogError("timeout", `mcp-client(${serverName}): catalogue drain exceeded its timeout`)
     }
-    const response = await client.listTools(cursor, {
+    const response = await listPage(cursor, {
       timeout: Math.min(remaining, pageTimeoutCap),
       maxTotalTimeout: remaining,
+      ...(signal ? { signal } : {}),
     })
+    signal?.throwIfAborted()
     for (const tool of response.tools) {
       listedNames.add(tool.name)
       if (blocked.has(tool.name)) {
@@ -145,14 +160,25 @@ export async function syncTools(
     if (!listedNames.has(name)) d.warn(`mcp-client(${serverName}): "${name}" is in blockedTools/directTools but the server never lists it`)
   }
 
-  // Phase 2: swap generations.
+  return { serverName, direct, next }
+}
+
+/** The registry swap and the caller's publication of its disposers are synchronous. */
+export function installToolCatalogue(
+  catalogue: Awaited<ReturnType<typeof readToolCatalogue>>,
+  client: ConnectedMcpClient,
+  tools: ToolRegistry,
+  config: McpServerConfig,
+  previous: Map<string, () => void>,
+): Map<string, () => void> {
+  const { serverName, direct, next } = catalogue
   for (const dispose of previous.values()) dispose()
   const disposers = new Map<string, () => void>()
   try {
     for (const [publicName, { rawName, tool }] of next) {
       const exposure = direct.size > 0 && !direct.has(tool.name) ? "deferred" : "direct"
-      tools.register(createMcpTool(client, publicName, rawName, tool, config, exposure))
-      disposers.set(publicName, () => tools.unregister(publicName))
+      const definition = createMcpTool(client, publicName, rawName, tool, config, exposure)
+      disposers.set(publicName, registerMcpTool(tools, definition))
     }
   } catch (err) {
     // rollback: unregister everything registered so far in this generation

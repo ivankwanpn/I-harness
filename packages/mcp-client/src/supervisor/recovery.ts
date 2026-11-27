@@ -5,19 +5,21 @@ import type { SupervisorStatus } from "./status.ts"
 import { errText } from "./status.ts"
 import type { SupervisorCatalogue } from "./catalogue.ts"
 import type { SupervisorGeneration } from "./generation.ts"
-import { closeWithin, OVERLAP_GUARD_MS, unref } from "./disposal.ts"
+import { unref, waitForMcpClose, type SupervisorLifetime } from "./disposal.ts"
 
 /** Owns retry/stability timers and cycle decisions; it never mirrors the generation. */
 export function createSupervisorRecovery(
   config: McpServerConfig,
   deps: Pick<SupervisorDeps, "connect">,
+  serverName: string,
   initialDelayMs: number,
   maxDelayMs: number,
   maxRetries: number,
   status: Pick<SupervisorStatus,
     "state" | "setState" | "isClosed" | "attempts" | "setAttempts" | "lastError" | "recordError" | "emitStatus">,
-  generation: Pick<SupervisorGeneration, "current" | "withdraw" | "connectOptions" | "adopt">,
+  generation: Pick<SupervisorGeneration, "current" | "withdraw" | "beginConnect">,
   catalogue: Pick<SupervisorCatalogue, "clearDirty" | "unregisterAll" | "resyncTools">,
+  lifetime: Pick<SupervisorLifetime, "retire">,
 ) {
   let retryTimer: ReturnType<typeof setTimeout> | undefined
   let stabilityTimer: ReturnType<typeof setTimeout> | undefined
@@ -48,7 +50,7 @@ export function createSupervisorRecovery(
     status.emitStatus("lost", status.attempts(), status.lastError())
   }
 
-  const failCycle = (err: unknown | undefined): void => {
+  const failCycle = (err: unknown | undefined, predecessor?: Promise<void>): void => {
     if (status.isClosed()) return
     if (err !== undefined) status.recordError(err)
     const next = status.attempts() + 1
@@ -58,6 +60,7 @@ export function createSupervisorRecovery(
     }
     status.setState("reconnecting")
     status.emitStatus("reconnecting", next, status.lastError())
+    if (status.isClosed()) return
     // Idempotent scheduling: drop any pending retry timer BEFORE arming the
     // next one — two failCycle runs for one failed cycle must never leave two
     // armed timers (both would fire → attempt(n+1) runs twice → deps.connect
@@ -67,7 +70,7 @@ export function createSupervisorRecovery(
     const delay = Math.min(maxDelayMs, initialDelayMs * 2 ** (next - 1))
     retryTimer = setTimeout(() => {
       retryTimer = undefined
-      void attempt(next)
+      void attempt(next, predecessor)
     }, delay)
     unref(retryTimer)
   }
@@ -82,7 +85,7 @@ export function createSupervisorRecovery(
     // already rebuilt.
     catalogue.clearDirty()
     clearStability()
-    failCycle(undefined)
+    failCycle(undefined, lifetime.retire(gen))
   }
 
   const armStability = (gen: ConnectedMcpClient): void => {
@@ -96,68 +99,49 @@ export function createSupervisorRecovery(
     unref(stabilityTimer)
   }
 
-  const attempt = async (n: number): Promise<void> => {
+  const attempt = async (n: number, predecessor?: Promise<void>): Promise<void> => {
     if (status.isClosed()) return
     status.setAttempts(n)
+    if (predecessor) {
+      try { await waitForMcpClose(predecessor, serverName) }
+      catch (error) {
+        if (!status.isClosed()) goLost(`Original generation still owned (overlap guard): ${errText(error)}`)
+        return
+      }
+    }
+    if (status.isClosed()) return
+    const connection = generation.beginConnect()
     let gen: ConnectedMcpClient
     try {
-      gen = await deps.connect(config, generation.connectOptions)
+      gen = await deps.connect(config, connection.options)
     } catch (err) {
-      failCycle(err)
+      const owner = connection.finishFailure(err)
+      if (!status.isClosed()) failCycle(err, owner ? lifetime.retire(owner) : undefined)
       return
     }
-    if (status.isClosed()) {
-      await closeWithin(gen, OVERLAP_GUARD_MS)
-      return
-    }
-    generation.adopt(gen)
+    connection.finish(gen)
+    if (status.isClosed()) return
     try {
+      connection.adopt(gen)
+      if (!connection.isCurrent()) return
       await catalogue.resyncTools()
     } catch (err) {
-      if (status.isClosed()) {
-        await closeWithin(gen, OVERLAP_GUARD_MS)
-        return
-      }
-      // Ownership guard (mid-resync death race): if the transport died while
-      // resync was in flight, the synchronous generationDown path has already
-      // claimed this generation (gen !== generation.current()), run failCycle and scheduled
-      // the retry. Running failCycle again here would double-schedule the
-      // retry (leaked timer → attempt(n+1) fires twice → two overlapping
-      // generations) or emit "lost" twice. generationDown owns this failure —
-      // only make sure the dead generation is closed and let the
-      // already-scheduled retry proceed.
-      if (gen !== generation.current()) {
-        await closeWithin(gen, OVERLAP_GUARD_MS)
-        return
-      }
-      // We still own the generation (its death has not been observed): fail
-      // this cycle. The failed generation must be closed before the next one
-      // spawns — if it cannot close within the overlap guard, stop
-      // reconnecting rather than risk two overlapping stdio child processes.
+      // Close or transport death already owns cleanup and any retry when the
+      // in-flight catalogue returned after this connection lost currentness.
+      if (!connection.isCurrent()) return
       generation.withdraw()
-      const didClose = await closeWithin(gen, OVERLAP_GUARD_MS)
-      if (status.isClosed()) return
-      if (!didClose) {
-        goLost(`${errText(err)} (generation failed to close within ${OVERLAP_GUARD_MS}ms — overlap guard)`)
+      try { await waitForMcpClose(lifetime.retire(gen), serverName) }
+      catch (cleanup) {
+        if (!status.isClosed()) goLost(`${errText(err)} (overlap guard: ${errText(cleanup)})`)
         return
       }
       failCycle(err)
       return
     }
-    // Ready guard: the generation may die while resync is in flight even
-    // though resync itself completes — generationDown has then already
-    // claimed the death (gen !== generation.current()), run failCycle and scheduled the
-    // retry. Declaring "ready" here would emit ready while the server is
-    // actually down (current undefined, retry pending); treat the attempt as
-    // failed instead — same ownership path as the catch above (no second
-    // failCycle).
-    if (gen !== generation.current()) {
-      await closeWithin(gen, OVERLAP_GUARD_MS)
-      return
-    }
+    if (!connection.isCurrent()) return
     status.setState("ready")
     status.emitStatus("ready")
-    armStability(gen)
+    if (connection.isCurrent()) armStability(gen)
   }
 
   return { clearRetry, clearStability, generationDown, armStability }

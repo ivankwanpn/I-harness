@@ -37,7 +37,8 @@ export interface McpSupervisor {
   state(): McpServerState
   /** Establish the first generation (connect + tool sync). Startup failure rejects — mount-level semantics, not the reconnect loop. */
   start(): Promise<void>
-  /** Stop the reconnect loop, unregister all tools, close the current generation. Idempotent; no events after close. */
+  /** Stop new work and attempt cleanup within a deadline. Concurrent calls join;
+   * an unproved release rejects while the original resources stay owned. */
   close(): Promise<void>
   /** M6-D3: true when the server announced `notifications/tools/list_changed`
    *  and no rebuild has consumed it yet. The consumer — session-executor's
@@ -56,5 +57,5 @@ export interface McpSupervisor {
    *  that drain IS the rebuild), or a previous drain FAILED within the last
    *  `catalogTimeoutMs` (the failed drain's own budget of quiet, which is what
    *  keeps a stalled server from costing a drain timeout at every boundary). */
-  refreshCatalog(): Promise<void>
+  refreshCatalog(signal?: AbortSignal): Promise<void>
 }

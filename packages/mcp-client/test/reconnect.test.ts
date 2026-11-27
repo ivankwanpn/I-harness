@@ -81,6 +81,77 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
   }
 }
 
+it("partial resource registration leaves an existing tool from another owner intact", async () => {
+  const ctx = createContext(), tools = createToolRegistry(ctx)
+  const reserved = { name: "list_mcp_resource_templates__conflict", description: "existing owner", inputSchema: {}, async execute() { return [] } }
+  tools.register(reserved)
+  await expect(mountMcpClient(ctx, tools, { transport: "stdio", serverName: "conflict", command: "x", args: [] },
+    { connect: async () => makeFakeGen("generation", ["echo"]) })).rejects.toThrow("duplicate tool registration")
+  expect(tools.get(reserved.name)).toBe(reserved)
+  expect(tools.get("list_mcp_resources__conflict")).toBeUndefined()
+  expect(tools.get("mcp__conflict__echo")).toBeUndefined()
+})
+
+it("a late tools/list cannot publish into a registry after the mount was replaced", async () => {
+  const ctx = createContext(), tools = createToolRegistry(ctx)
+  const config: McpServerConfig = { transport: "stdio", serverName: "catalogue", command: "x", args: [] }
+  const first = makeFakeGen("old", ["echo"]), next = makeFakeGen("new", ["echo"])
+  const oldMount = await mountMcpClient(ctx, tools, config, { connect: async () => first })
+  const page = Promise.withResolvers<{ tools: { name: string }[] }>()
+  first.listTools = () => page.promise
+  const late = oldMount.refreshCatalog().then(() => undefined, reason => reason)
+  await oldMount.unmount()
+  const nextMount = await mountMcpClient(ctx, tools, config, { connect: async () => next })
+  try {
+    page.resolve({ tools: [{ name: "retired" }] })
+    expect(await late).toBeInstanceOf(McpServerUnavailableError)
+    expect(tools.get("mcp__catalogue__echo")?.description).toBe("new:echo")
+    expect(tools.get("mcp__catalogue__retired")).toBeUndefined()
+  } finally {
+    await nextMount.unmount()
+  }
+})
+
+it.each([false, true])("refreshes a replacement generation before an old page returns (reused client: %s)", async reuseClient => {
+  const ctx = createContext(), tools = createToolRegistry(ctx)
+  const first = makeFakeGen("old", ["echo"]), next = makeFakeGen("new", ["echo"])
+  let connects = 0
+  const mount = await mountMcpClient(ctx, tools, {
+    transport: "stdio", serverName: "catalogue", command: "x", args: [],
+    reconnect: { enabled: true, initialDelayMs: 1, maxDelayMs: 20, maxRetries: 2 },
+  }, { connect: async (_config, options) => {
+    const generation = connects++ === 0 ? first : next
+    generation.onToolsChanged = options?.onToolsChanged
+    return reuseClient ? Object.assign(first, generation) : generation
+  } })
+  const page = Promise.withResolvers<{ tools: { name: string }[]; nextCursor: string }>()
+  first.listTools = () => page.promise
+  const late = mount.refreshCatalog().then(() => undefined, reason => reason)
+  try {
+    first.die()
+    await waitFor(() => tools.get("mcp__catalogue__echo")?.description === "new:echo")
+    next.setTools(["echo", "new_tool"])
+    next.notifyToolsChanged()
+    const fresh = mount.refreshCatalog()
+    await waitFor(() => tools.get("mcp__catalogue__new_tool") !== undefined)
+    await fresh
+    page.resolve({ tools: [{ name: "retired" }], nextCursor: "previous-generation-page" })
+    expect(await late).toBeInstanceOf(McpServerUnavailableError)
+    expect(next.listToolCalls.map(call => call.cursor)).not.toContain("previous-generation-page")
+    expect(tools.get("mcp__catalogue__retired")).toBeUndefined()
+    expect(tools.get("mcp__catalogue__new_tool")?.description).toBe("new:new_tool")
+    // Failure or completion of the retired read must not back off the new one.
+    next.setTools(["latest"])
+    next.notifyToolsChanged()
+    await mount.refreshCatalog()
+    expect(tools.get("mcp__catalogue__latest")?.description).toBe("new:latest")
+  } finally {
+    page.resolve({ tools: [], nextCursor: "previous-generation-page" })
+    await late
+    await mount.unmount()
+  }
+})
+
 // Bug 1 regression fake: listTools hangs in flight until die() is called,
 // mirroring the real interleaving where the transport dies with a request
 // pending — the SDK fires onclose (synchronous generationDown → failCycle)

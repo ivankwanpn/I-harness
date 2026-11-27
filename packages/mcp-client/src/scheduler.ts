@@ -2,7 +2,7 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import { diagnosticsFor } from "@i-harness/diagnostics"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import { createConnectedClient, type ConnectedMcpClient, type McpConnectOptions } from "./client.ts"
-import { createMcpSupervisor, type McpServerStatusEvent, type McpSupervisor } from "./supervisor.ts"
+import { createMcpSupervisorOwner, type McpServerStatusEvent, type McpSupervisor } from "./supervisor.ts"
 import { McpServerUnavailableError } from "./errors.ts"
 import { validateMcpConfig, type McpServerConfig } from "./types.ts"
 
@@ -27,7 +27,7 @@ export interface McpMountHandle {
    *  mid-connect/reconnect (its own drain is the rebuild), or a previous drain
    *  failed inside its backoff window. Either way `catalogDirty()` stays true,
    *  so "ask the flag, then refresh" is the caller's contract. */
-  refreshCatalog(): Promise<void>
+  refreshCatalog(signal?: AbortSignal): Promise<void>
   unmount(): Promise<void>
 }
 
@@ -60,7 +60,13 @@ const defaultStatusLogger = (ev: McpServerStatusEvent): void => {
 // use the same logical server name without shadowing each other's tools.
 // Mount-level only: supervisor reconnects reuse the same reservation (same
 // server, new generation).
-const reservations = new WeakMap<ToolRegistry, Set<string>>()
+const reservations = new WeakMap<ToolRegistry, Map<string, object>>()
+const failedMountCleanups = new WeakMap<object, () => Promise<void>>()
+
+/** Recover only the exact unpublished owner exposed by a failed mount. */
+export function readMcpFailedMountCleanup(error: unknown): (() => Promise<void>) | undefined {
+  return typeof error === "object" && error !== null ? failedMountCleanups.get(error) : undefined
+}
 
 export async function mountMcpClient(
   _ctx: PluginContext,
@@ -70,28 +76,27 @@ export async function mountMcpClient(
 ): Promise<McpMountHandle> {
   validateMcpConfig(config)
   let liveServerNames = reservations.get(tools)
-  if (!liveServerNames) { liveServerNames = new Set(); reservations.set(tools, liveServerNames) }
-  if (liveServerNames.has(config.serverName)) {
-    throw new Error(`mcp-client: serverName "${config.serverName}" is already reserved by a live instance`)
+  if (!liveServerNames) { liveServerNames = new Map(); reservations.set(tools, liveServerNames) }
+  const serverName = config.serverName
+  if (liveServerNames.has(serverName)) {
+    throw new Error(`mcp-client: serverName "${serverName}" is already reserved by a live instance`)
   }
-  liveServerNames.add(config.serverName)
+  const reservation = {}
+  liveServerNames.set(serverName, reservation)
 
   // The supervisor owns the generation lifecycle: connect, per-generation tool
   // re-sync, reconnect/backoff, registry unregistration on "lost", and closing.
   let supervisor: McpSupervisor | undefined
-  let unmounted = false
-  const unmount = async (): Promise<void> => {
-    // Idempotent: unmount twice (or after a failed mount) releases once — the
-    // flag also guarantees the reservation dies even when connect() failed
-    // before anything was registered.
-    if (unmounted) return
-    unmounted = true
-    try {
-      await supervisor?.close()
-    } finally {
-      liveServerNames.delete(config.serverName)
-      supervisor = undefined
+  const release = () => {
+    if (liveServerNames.get(serverName) === reservation) liveServerNames.delete(serverName)
+    supervisor = undefined
+  }
+  const unmount = (): Promise<void> => {
+    if (!supervisor) {
+      release()
+      return Promise.resolve()
     }
+    return supervisor.close()
   }
 
   // M6-D3: the two catalogue surfaces. Both route through the MUTABLE
@@ -99,25 +104,32 @@ export async function mountMcpClient(
   // after unmount — or after a mount that came up empty — sees "nothing live":
   // clean, and unavailable on refresh, instead of a stale handle.
   const handle: McpMountHandle = {
-    serverName: config.serverName,
+    serverName,
     catalogDirty: () => supervisor?.catalogDirty() ?? false,
-    refreshCatalog: async () => {
+    refreshCatalog: async (signal) => {
       const live = supervisor
       if (live === undefined) throw new McpServerUnavailableError(config.serverName)
-      await live.refreshCatalog()
+      await live.refreshCatalog(signal)
     },
     unmount,
   }
 
   try {
-    supervisor = createMcpSupervisor(config, {
+    const owned = createMcpSupervisorOwner(config, {
       tools,
       connect: (c, o) => (deps?.connect ?? createConnectedClient)(c, deps?.workspace === undefined ? o : { ...o, workspace: deps.workspace }),
       onStatus: deps?.onStatus ?? defaultStatusLogger,
     })
+    supervisor = owned.supervisor
+    void owned.released.then(release)
     await supervisor.start()
   } catch (err) {
-    await unmount()
+    try { await unmount() }
+    catch (cleanup) {
+      const failure = new AggregateError([err, cleanup], `MCP ${serverName} startup and original cleanup failed`, { cause: err })
+      failedMountCleanups.set(failure, unmount)
+      throw failure
+    }
     if (config.failOnStartupError !== false) throw err
     d.warn(`mcp-client(${config.serverName}): start failed (failOnStartupError=false), mounted empty — ${String(err)}`)
   }

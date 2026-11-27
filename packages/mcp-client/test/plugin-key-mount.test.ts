@@ -60,6 +60,8 @@ describe("plugin MCP mount seam (D-MCP-1)", () => {
       const readName = fitPublicName(`read_mcp_resource__${serverName}`)
       expect(readName).toMatch(/^read_mcp_resource__plugin_Marketplace_A__proxy_echo_[0-9a-f]{12}$/)
       expect(tools.get(readName)).toBeDefined()
+      const templates = tools.get(fitPublicName(`list_mcp_resource_templates__${serverName}`))!
+      await expect(templates.execute({}, {})).resolves.toEqual([{ name: "note", uriTemplate: "note://{id}" }])
       // …and the simple-name contract still holds byte-for-byte (every test
       // that predates the plugin seam uses names like these).
       expect(fitPublicName("list_mcp_resources__files")).toBe("list_mcp_resources__files")

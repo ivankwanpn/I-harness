@@ -21,7 +21,7 @@ const SDK_TYPES_URL = new URL("../node_modules/@modelcontextprotocol/sdk/dist/es
 const FAKE_SERVER = `
 import { Server } from ${JSON.stringify(SDK_SERVER_URL)}
 import { StdioServerTransport } from ${JSON.stringify(SDK_STDIO_URL)}
-import { CallToolRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema } from ${JSON.stringify(SDK_TYPES_URL)}
+import { CallToolRequestSchema, ListResourcesRequestSchema, ListResourceTemplatesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema } from ${JSON.stringify(SDK_TYPES_URL)}
 const server = new Server({ name: "fake", version: "0.1.0" }, { capabilities: { tools: {}, resources: {} } })
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
@@ -34,6 +34,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 })
 server.setRequestHandler(ListResourcesRequestSchema, async () => ({
   resources: [{ uri: "note://a", name: "a", description: "note a" }],
+}))
+server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
+  resourceTemplates: [{ name: "note", uriTemplate: "note://{id}" }],
 }))
 server.setRequestHandler(ReadResourceRequestSchema, async (req) => ({
   contents: [{ uri: req.params.uri, mimeType: "text/plain", text: "hello resource" }],
