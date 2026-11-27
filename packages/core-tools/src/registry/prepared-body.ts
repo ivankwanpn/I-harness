@@ -190,6 +190,34 @@ export function assertPreparedExecutionOwnerContext(prepared: PreparedCall, cont
   if (preparedExecutionOwnerContext(prepared) !== context) throw new Error('Original prepared execution context required')
 }
 
+const localExecTools = new WeakSet<Tool>()
+/** Inheritance may reuse the compatibility tools, but this instance holds a
+ * native execution host for one registry and one caller. */
+export function isOriginalLocalExecTool(tool: Tool): boolean {
+  return localExecTools.has(tool)
+}
+
+/** The existing prepared body authorizes each foreground search helper. It
+ * issues neither a process reservation nor a durable Shell delivery source. */
+export function bindPreparedScopedExecLeaf(registry: ToolRegistry, context: ToolExecutionOwnerConfiguration, tool: Tool, leaf: Tool['execute']) {
+  const name = tool.name, owner = captureExecutionOwnerContext(context.context, context)
+  if (!owner || !['grep', 'glob'].includes(name) || localExecTools.has(tool)) throw Error('Original scoped search leaf required')
+  localExecTools.add(tool)
+  return (exec: ToolExec): (() => void) => {
+    const body = byExec.get(exec), frame = active.getStore()
+    if (!body || !frame || frame.body !== body || body.registry !== registry || body.tool !== tool || body.leaf !== leaf
+      || body.call.name !== name || body.foreignContext) throw Error('Original prepared search invocation required')
+    const sameOwner = 'kind' in owner
+      ? body.managed?.domain === owner.domain && body.managed.context === owner.context && !!(body.permit || body.codeInvocation)
+      : body.context?.view === owner.view && body.context.factOwner === owner.factOwner
+        && body.context.context === owner.context && body.context.sessionId === owner.sessionId
+    if (!sameOwner) throw Error('Original scoped search owner required')
+    const current = () => check(body, frame)
+    current()
+    return current
+  }
+}
+
 const terminalToolNames = new Set([
   'terminal_open', 'terminal_send', 'terminal_read', 'terminal_signal', 'terminal_close', 'terminal_list',
   'process_spawn', 'process_kill', 'process_resize_pty',

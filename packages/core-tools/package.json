@@ -8,6 +8,7 @@
     "./context-remaining": "./src/context-remaining.ts",
     "./internal/task-caller": "./src/task-caller.ts",
     "./internal/terminal-origin": "./src/terminal-origin.ts",
+    "./internal/scoped-exec-origin": "./src/scoped-exec-origin.ts",
     "./internal/workflow-origin": "./src/workflow-origin.ts",
     "./internal/code-origin": "./src/code-origin.ts",
     "./model-origin": "./src/model-origin.ts"
