@@ -97,3 +97,7 @@ IH 的執行端已能以已接受請求的供應商輸入量校準估算。會�
 現在同一次模型嘗試只要收到明確的無效標記，後續部分用量更新就會保留它。原始數字仍供診斷，正常回覆照常落盤，校準器會略過這次取樣。下一次獨立嘗試可再採用有效回報。Messages 和 Bedrock 的普通輸入不含快取，已明確送出的非數字快取欄位也會標為無效。Messages 在部分回報允許的空值維持原本的合併行為。定向回歸收據為 `usage-measurement-validity-core.log`、`usage-measurement-validity-meter.log`、`llm-anthropic-invalid-counter-all.log` 及 `llm-bedrock-invalid-counter-final.log`。[Messages 的欄位定義](https://github.com/anthropics/anthropic-sdk-typescript/blob/main/src/resources/messages/messages.ts)
 
 舊會話的用量紀錄只保存總額及當時可對應的請求，單憑該筆紀錄無法重算原始 TTL 分項。有保留獨立用量觀察的環境，可用同一個實際模型送出識別和當時的無效標記核對特定案例。冷開會話時，歷史數字僅供顯示，新執行期會從自己的有效供應商回報開始校準。
+
+在固定版 `6d54960c`，同一組 Responses 回覆仍完成正常對話，無效的 4,321 留在原始用量觀察，主會話沒有產生這筆校準。下一輪先採本機估算，之後收到有效的 5,432 才建立新樣本。兩版的兩筆實際 HTTP 請求內容一致。Windows 桌面的三輪圖片測試也再次通過。收據為 `gateway-usage-validity-6fac-vs-6d54960c.json` 及 `native-media-6d54960c-receipt.json`。
+
+Messages 案例中，第一輪原始輸入為 7，快取讀取卻是字串 `"3000"`。舊版顯示實測 7，新版只保留原始診斷及正常回覆。第二輪帶有合法的輸入 7、快取讀取 3,000、快取建立 400。後續部分更新回報輸出 11 且輸入欄為空，最終正確得到 3,407 個輸入 token。這次兩版後續發送的 `max_tokens` 的確不同，原因是原先的錯誤低估曾擴大剩餘輸出空間。其餘請求欄位相同。收據為 `gateway-messages-validity-6fac2a36-receipt.json` 及 `gateway-messages-validity-6d54960c-receipt.json`。
