@@ -370,7 +370,9 @@ export function createLoads(
       const records = await original.readWindow(sessionId, history.evidence, new Set(plan.ordinals))
       if (!records) {
         if (coldHistory.get(sessionId) === history) coldHistory.delete(sessionId)
-        return undefined
+        // A changed witness needs the current original decode. Join other
+        // cold observations instead of making the SDK take a second snapshot.
+        return await readInitialColdHistoryPage(sessionId, options, original, onSnapshotFallback)
       }
       if (originalColdArchiveHistoryReader(backend) !== original) return undefined
       const byOrdinal = new Map(records.map(event => [event.seq, event]))

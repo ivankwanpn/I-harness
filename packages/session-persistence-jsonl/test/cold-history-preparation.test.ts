@@ -2,10 +2,10 @@ import * as archive from '@i-harness/core-session/internal/archive'
 import * as validation from '../../core-session/src/conversation/validation.ts'
 import { committedFactSeqs, encodeFactBatch, factPrefixDigest, legacyPrefixDigest, readFactJournal, type JournalMetadata, type SessionEvent, type SessionView } from '@i-harness/core-session'
 import { originalColdArchiveHistoryReader } from '@i-harness/session-persistence/internal/archive-read'
-import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, readFile, rename, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { setImmediate as nextTurn } from 'node:timers/promises'
+import { setImmediate as nextTurn, setTimeout as delay } from 'node:timers/promises'
 import { expect, it, vi } from 'vitest'
 import { createJsonlBackend } from '../src/index.ts'
 import { PREPARED_HISTORY_LIFETIME_MS } from '../src/backend/process-read.ts'
@@ -16,8 +16,26 @@ const barrier = vi.hoisted(() => ({
   afterSealedPage: undefined as (() => Promise<void>) | undefined,
   beforeRestore: undefined as (() => Promise<void>) | undefined,
   readOrdinals: undefined as ((ordinals: readonly number[]) => void) | undefined,
+  readWindowBytes: undefined as ((ordinals: readonly number[]) => void | Promise<void>) | undefined,
+  readFullArchive: undefined as ((capturesFraming: boolean) => void) | undefined,
+  afterFullArchiveRead: undefined as (() => Promise<void>) | undefined,
   beforePending: undefined as (() => void) | undefined,
 }))
+
+vi.mock('../src/backend/archive-reader.ts', async load => {
+  const original = await load<typeof import('../src/backend/archive-reader.ts')>()
+  return {
+    ...original,
+    async readSessionArchive(...args: Parameters<typeof original.readSessionArchive>) {
+      const selected = args[4]
+      if (selected && barrier.readWindowBytes) await barrier.readWindowBytes([...selected.ordinals])
+      if (!args[2] && !selected) barrier.readFullArchive?.(args[5] === true)
+      const result = await original.readSessionArchive(...args)
+      if (args[5] && !selected && barrier.afterFullArchiveRead) await barrier.afterFullArchiveRead()
+      return result
+    },
+  }
+})
 
 vi.mock('../../core-session/src/inbox-view.ts', async load => {
   const original = await load<typeof import('../../core-session/src/inbox-view.ts')>()
@@ -119,6 +137,20 @@ async function appendRawEvents(root: string, events: readonly SessionEvent[]) {
   await appendFile(path, frame.bytes)
 }
 
+async function rewriteRawLastEvent(root: string, event: SessionEvent, replaceFile = false) {
+  const path = join(root, 'a.jsonl'), bytes = await readFile(path)
+  const last = bytes.lastIndexOf(10, bytes.length - 2) + 1
+  const frame = JSON.parse(bytes.subarray(last).toString('utf8')) as { batchId: string; previousPrefixDigest: string }
+  const replaced = Buffer.concat([bytes.subarray(0, last), encodeFactBatch(frame.batchId, frame.previousPrefixDigest, [event]).bytes])
+  expect(replaced.length).toBe(bytes.length)
+  expect(replaced).not.toEqual(bytes)
+  if (replaceFile) {
+    const replacement = path + '.replacement'
+    await writeFile(replacement, replaced)
+    await rename(replacement, path)
+  } else await writeFile(path, replaced)
+}
+
 it.each(['history first', 'pending first'] as const)('shares one initial native decode when %s', async order => withHistory(async ({ coordinator, root }) => {
   await appendRawEvents(root, [admitted('keep', 'pending'), admitted('done', 'completed'),
     {type:'agent/input/promoted',version:1,inputId:'done'}, admitted('cancelled','cancelled'),
@@ -203,18 +235,151 @@ it('requalifies cached pending records after a valid same-size overwrite', async
   await appendRawEvents(root, [admitted('keep', 'before')])
   expect(await coordinator.readHistoryPage!('a', tail)).toMatchObject({headSeq:2})
   expect(await coordinator.readPendingInputs!('a')).toEqual([{inputId:'keep',text:'before',intent:'user',delivery:'queue',admittedSeq:1}])
-  const path = join(root, 'a.jsonl'), source = await readFile(path)
-  const last = source.lastIndexOf(10, source.length - 2) + 1
-  const frame = JSON.parse(source.subarray(last).toString('utf8')) as { batchId: string; previousPrefixDigest: string }
-  const rewritten = Buffer.concat([source.subarray(0, last), encodeFactBatch(frame.batchId, frame.previousPrefixDigest, [
-    {...admitted('keep', 'after!'), seq:1},
-  ]).bytes])
-  expect(rewritten.length).toBe(source.length)
-  expect(rewritten).not.toEqual(source)
-  await writeFile(path, rewritten)
+  await rewriteRawLastEvent(root, {...admitted('keep', 'after!'), seq:1})
   decodes.mockClear()
   expect(await coordinator.readPendingInputs!('a')).toEqual([{inputId:'keep',text:'after!',intent:'user',delivery:'queue',admittedSeq:1}])
   expect(decodes).toHaveBeenCalledTimes(1)
+}))
+
+it.each(['append', 'same-size rewrite', 'same-size path replacement'] as const)('shares a current native decode across cold observations after %s', async change => withHistory(async ({ coordinator, root }) => {
+  await appendRawEvents(root, [admitted('old', 'before')])
+  const observe = () => Promise.all([
+    coordinator.readHistoryPage!('a', tail),
+    coordinator.readPendingInputs!('a'),
+    coordinator.readSavedContext!('a'),
+  ])
+  const [initial, initialPending] = await observe()
+  expect(initial).toMatchObject({ headSeq: 2 })
+  expect(initialPending).toEqual([{inputId:'old',text:'before',intent:'user',delivery:'queue',admittedSeq:1}])
+  if (change === 'append') {
+    await appendRawEvents(root, [{ type: 'agent/input/cancelled', version: 1, inputId: 'old' }, admitted('new', 'after!')])
+  } else {
+    await rewriteRawLastEvent(root, { ...admitted('new', 'after!'), seq: 1 }, change === 'same-size path replacement')
+  }
+  decodes.mockClear()
+  const [current, currentPending, context] = await observe()
+  const expectedSeq = change === 'append' ? 3 : 1
+  expect(current).toMatchObject({ headSeq: expectedSeq + 1 })
+  expect(current?.events.at(-1)).toMatchObject({ seq: expectedSeq, inputId: 'new', text: 'after!' })
+  expect(currentPending).toEqual([{inputId:'new',text:'after!',intent:'user',delivery:'queue',admittedSeq:expectedSeq}])
+  expect(context).toEqual({})
+  expect(decodes).toHaveBeenCalledTimes(1)
+  await expect(observe()).resolves.toEqual([current, currentPending, context])
+  expect(decodes).toHaveBeenCalledTimes(1)
+  expect(coordinator.ownerOf('a')).toBe(false)
+}))
+
+it('rejects a completed original decode when a later pending reader joins after a same-size rewrite', async () => withHistory(async ({ coordinator, root }) => {
+  await appendRawEvents(root, [admitted('old', 'before')])
+  await utimes(join(root, 'a.jsonl'), 1, 1)
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  barrier.afterFullArchiveRead = async () => {
+    barrier.afterFullArchiveRead = undefined
+    entered.resolve()
+    await release.promise
+  }
+  const fullReads: boolean[] = []
+  barrier.readFullArchive = capturesFraming => { fullReads.push(capturesFraming) }
+  const page = coordinator.readHistoryPage!('a', tail)
+  let pending: ReturnType<NonNullable<typeof coordinator.readPendingInputs>> | undefined
+  try {
+    await entered.promise
+    expect(fullReads).toEqual([true])
+    await rewriteRawLastEvent(root, { ...admitted('new', 'after!'), seq: 1 })
+    pending = coordinator.readPendingInputs!('a')
+    await nextTurn()
+    expect(fullReads).toEqual([true])
+    release.resolve()
+    await expect(page).resolves.toBeUndefined()
+    await expect(pending).resolves.toEqual([{inputId:'new',text:'after!',intent:'user',delivery:'queue',admittedSeq:1}])
+    expect(fullReads).toEqual([true, false])
+  } finally {
+    barrier.readFullArchive = undefined
+    barrier.afterFullArchiveRead = undefined
+    release.resolve()
+    await Promise.allSettled([page, pending])
+  }
+}))
+
+it('unions pre-read cold coordinates and returns independently mutable records in ordinal order', async () => withHistory(async ({ backend, root }) => {
+  const depth = 512
+  const deep = '{"item":'.repeat(depth) + 'null' + '}'.repeat(depth)
+  const args = JSON.parse('{"z":"last","10":"ten","2":"two","__proto__":{"value":3},"toJSON":"literal","list":[1,{"value":4},["five"]],"deep":' + deep + '}')
+  await appendRawEvents(root, [admitted('queued', 'pending'), { type: 'tool/call', callId: 'benign', name: 'fixture', args }])
+  const reader = originalColdArchiveHistoryReader(backend)!
+  const original = (await reader.readFullForHistoryPage!('a'))!
+  const issued: number[][] = []
+  barrier.readWindowBytes = ordinals => { issued.push([...ordinals]) }
+  try {
+    const reversed = new Set([2, 1, 0])
+    const requests = [
+      reader.readWindow('a', original.evidence!, reversed),
+      reader.readWindow('a', original.evidence!, new Set([0, 2])),
+      reader.readWindow('a', original.evidence!, new Set()),
+    ]
+    reversed.clear()
+    const [page, overlap, empty] = await Promise.all(requests)
+    expect(issued).toEqual([[2, 1, 0]])
+    expect(page?.map(event => event.seq)).toEqual([0, 1, 2])
+    expect(overlap?.map(event => event.seq)).toEqual([0, 2])
+    expect(empty).toEqual([])
+    const separate = await reader.readWindow('a', original.evidence!, new Set([0, 2]))
+    expect(JSON.stringify(overlap)).toBe(JSON.stringify(separate))
+    const left = page?.[0], right = overlap?.[0]
+    if (left?.type !== 'user/message' || right?.type !== 'user/message') throw Error('Expected original user records')
+    expect(Reflect.set(left.provenance!, 'producer', 'public edit')).toBe(true)
+    expect(right.provenance?.producer).toBe('fixture')
+    const leftCall = page?.[2], rightCall = overlap?.[1]
+    if (leftCall?.type !== 'tool/call' || rightCall?.type !== 'tool/call') throw Error('Expected original tool records')
+    type ToolArgs = { __proto__: { value: number }; list: [number, { value: number }, string[]] }
+    const originalArgs = leftCall.args as ToolArgs, separateArgs = rightCall.args as ToolArgs
+    expect(Object.getPrototypeOf(separateArgs)).toBe(Object.prototype)
+    expect(Object.hasOwn(separateArgs, '__proto__')).toBe(true)
+    separateArgs.__proto__.value = 91
+    separateArgs.list[1].value = 92
+    separateArgs.list[2].push('edit')
+    expect(originalArgs.__proto__.value).toBe(3)
+    expect(originalArgs.list).toEqual([1, { value: 4 }, ['five']])
+  } finally { barrier.readWindowBytes = undefined }
+}))
+
+it('does not join an already opened extent across a real append', async () => withHistory(async ({ backend, root }) => {
+  const reader = originalColdArchiveHistoryReader(backend)!
+  const original = (await reader.readFullForHistoryPage!('a'))!
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  barrier.readWindowBytes = async () => { entered.resolve(); await release.promise }
+  const held = reader.readWindow('a', original.evidence!, new Set([0]))
+  try {
+    await entered.promise
+    await appendRawEvents(root, [admitted('after', 'new bytes')])
+    const late = reader.readWindow('a', original.evidence!, new Set([0]))
+    await expect(Promise.race([late, delay(750, 'held old extent', {ref: false})])).resolves.toBeUndefined()
+    release.resolve()
+    await expect(held).resolves.toBeUndefined()
+    const current = await reader.readFullForHistoryPage!('a')
+    expect(current?.events.at(-1)).toMatchObject({ seq: 1, inputId: 'after', text: 'new bytes' })
+  } finally { barrier.readWindowBytes = undefined; release.resolve(); await held }
+}))
+
+it('fences every joined cold window on close and rejects later reads', async () => withHistory(async ({ backend, coordinator }) => {
+  const reader = originalColdArchiveHistoryReader(backend)!
+  const original = (await reader.readFullForHistoryPage!('a'))!
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  barrier.readWindowBytes = async () => { entered.resolve(); await release.promise }
+  const joined = Promise.allSettled([
+    reader.readWindow('a', original.evidence!, new Set([0])),
+    reader.readWindow('a', original.evidence!, new Set()),
+  ])
+  let closing: Promise<void> | undefined
+  try {
+    await entered.promise
+    closing = coordinator.close()
+    await nextTurn()
+    await expect(reader.readWindow('a', original.evidence!, new Set([0]))).rejects.toThrow('ARCHIVE_READ_UNAVAILABLE')
+    release.resolve()
+    expect((await joined).map(result => result.status)).toEqual(['rejected', 'rejected'])
+    await expect(closing).resolves.toBeUndefined()
+  } finally { barrier.readWindowBytes = undefined; release.resolve(); await joined; await closing }
 }))
 
 it('derives pending from the same decoded ignorable history while detaching the mutable public fallback', async () => withHistory(async ({ coordinator, root }) => {
