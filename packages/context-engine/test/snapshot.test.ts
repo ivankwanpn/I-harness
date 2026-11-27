@@ -133,12 +133,12 @@ it('advances archive coordinates across a managed audit append and still checks 
   expect(next.identity.coordinates.semanticRevision).not.toBe(advanced.identity.coordinates.semanticRevision)
 })
 
-it('keeps the semantic v1 digest for sealed projections with Unicode and omitted optional fields', () => {
+it.each(['字\n🧭\uDC00', ('x'.repeat(4095) + '🧭\uD800字\n').repeat(9)])('keeps the semantic v1 digest for Unicode projection %#', text => {
   const owner = 'owner-香港-\uD800'
   const call = { id: 'call-🐟', eventIndex: 1, seq: 1, part: 'call', addressable: true }
   const dispatch = { id: 'audit-dispatch', eventIndex: 2, seq: 2, part: 'dispatch', addressable: true }
   const provenance = { kind: 'model', authority: 'observation', scope: 'turn', evidence: [call] } as const
-  const messages = [{ role: 'assistant', content: '字\n🧭\uDC00' }] as const
+  const messages = [{ role: 'assistant', content: text }] as const
   const conversation = {
     version: 1, archiveEventCount: 3, items: [{ id: 'exchange-1', kind: 'exchange', sources: [call, dispatch], provenance, messages,
       exchange: { id: 'exchange-1', state: 'unresolved', acceptance: 'explicit', calls: [{ name: '讀取', callId: 'c', outcome: 'pending', call, dispatch }] } }],
@@ -153,6 +153,24 @@ it('keeps the semantic v1 digest for sealed projections with Unicode and omitted
   expect(semanticContextRevision(owner, captureContextPayload(conversation))).toBe(expected)
   call.seq = -0
   expect(() => semanticContextRevision(owner, conversation)).toThrow('CONTEXT_SNAPSHOT_UNSUPPORTED')
+})
+
+it('preserves the canonical join when the process supplies its own implementation', () => {
+  const owner = 'custom-join'
+  const conversation = captureContextPayload({ version: 1, archiveEventCount: 0, items: [], diagnostics: [] } as const)
+  const before = semanticContextRevision(owner, conversation)
+  const original = Array.prototype.join
+  let actual: string, expected: string
+  try {
+    Array.prototype.join = function (separator) {
+      const joined = original.call(this, separator)
+      return separator === '' && joined === '["custom-join",[]]' ? 'observed-' + joined : joined
+    }
+    actual = semanticContextRevision(owner, conversation)
+    expected = contextRevision('semantic', [owner, []])
+  } finally { Array.prototype.join = original }
+  expect(actual).toBe(expected)
+  expect(actual).not.toBe(before)
 })
 
 it('keeps captured evidence detached from foreign wrappers and rejects corrupt coordinates', () => {
