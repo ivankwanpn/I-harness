@@ -5,6 +5,7 @@ import {createToolRegistryWithModelOrigin} from '@i-harness/core-tools/model-ori
 import {registerContextRemaining} from '@i-harness/core-tools'
 import type {Tool,ToolResultRetention} from '@i-harness/core-tools'
 import type {ModelClient} from '@i-harness/llm-seam'
+import type {ExecutionObservation} from '@i-harness/core-session/internal/execution'
 import {isManagedExecutionAttachment,type ManagedExecutionAttachment} from '../../session-persistence/src/execution-internal.ts'
 import {receivedExecutionInputsFor} from './lifecycle/execution-inputs.ts'
 import {createExecutionGenerationLifecycle} from './lifecycle/generation-actions.ts'
@@ -110,6 +111,19 @@ export interface OwnedDefaultSurface {
  reconcileAuthority():Promise<void>
  prepareModelSurface?(signal:AbortSignal):Promise<void>
 }
+type ObservedModelSurface = (observation: ExecutionObservation) => ReturnType<NonNullable<OwnedDefaultSurface['modelSurface']>>
+const observedModelSurfaces = new WeakMap<OwnedDefaultSurface, Readonly<{ execution: ManagedExecutionAttachment; read: ObservedModelSurface }>>()
+
+/** The source's synchronous projection can use the executor wrapper's
+ * observation for this read only. Its public surface still owns standalone reads. */
+export function associateObservedModelSurface(original: ManagedRegistryConstruction, surface: OwnedDefaultSurface, read: ObservedModelSurface): void {
+ original.assertLifetimeCurrent()
+ if (!isManagedExecutionAttachment(original.execution) || types.isProxy(surface) || !Object.isFrozen(surface)
+  || typeof read !== 'function' || types.isProxy(read) || observedModelSurfaces.has(surface))
+  throw TypeError('Original model surface required')
+ observedModelSurfaces.set(surface, Object.freeze({ execution: original.execution, read }))
+}
+
 export type ManagedRegistryFactory=(original:ManagedRegistryConstruction)=>void|OwnedDefaultSurface|Promise<void|OwnedDefaultSurface>
 type ResolvedManagedModel=Pick<ManagedExecutionRuntimeOptions,'model'|'contextWindow'|'maxOutputTokens'|'reasoningEffort'|'budgetBinding'|'contextMetadata'>
 function prepare(options:Omit<ManagedExecutionRuntimeOptions,keyof ResolvedManagedModel>,deferFilesystem=false){
@@ -244,6 +258,8 @@ export async function createManagedExecutionRuntimeWithRegistry(options:Omit<Man
  try{assertCurrent();if(options.prepareFilesystem){if(!options.originalFilesystem)throw TypeError('Original filesystem required for rewind');const rewind=await options.prepareFilesystem(original);assertCurrent();prepared.mountFilesystem(rewind);assertCurrent()}defaultSurface=await options.configureRegistry(original)}finally{retaining=false}
  if(defaultSurface){
   const originalSurface=defaultSurface,names=['systemPrompt','modelToolSchemas','modelOverheadTokens','prepareInput','reconcileAuthority'] as const
+  const observedSurface=observedModelSurfaces.get(originalSurface)
+  if(observedSurface&&observedSurface.execution!==prepared.execution)throw TypeError('Original model surface execution changed')
   if(types.isProxy(originalSurface))throw TypeError('Original default surface required')
   const optional = ['modelSurface', 'prepareModelSurface'] as const
   const fields = [...names, ...optional].map(name => [name, Object.getOwnPropertyDescriptor(originalSurface, name)] as const)
@@ -264,7 +280,7 @@ export async function createManagedExecutionRuntimeWithRegistry(options:Omit<Man
   const observation=prepared.execution.observe()
   observation.assertCurrent()
   checkMethods()
-  const value=Reflect.apply(method[name],originalSurface,[])
+  const value=name==='modelSurface'&&observedSurface?observedSurface.read(observation):Reflect.apply(method[name],originalSurface,[])
   checkMethods()
   observation.assertCurrent()
   assertLifetimeCurrent()

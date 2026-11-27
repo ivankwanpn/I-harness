@@ -2,7 +2,7 @@ import type { ToolSchema } from '@i-harness/llm-seam'
 import type { ExecutionObservation } from '@i-harness/core-session/internal/execution'
 import { approxTokens } from '../../compaction/src/index.ts'
 import { DEFAULT_AGENT_PRESET, parsePreset } from '../../preset/src/index.ts'
-import type { ManagedRegistryConstruction, OwnedDefaultSurface } from '../../session-executor/src/managed-assembly.ts'
+import { associateObservedModelSurface, type ManagedRegistryConstruction, type OwnedDefaultSurface } from '../../session-executor/src/managed-assembly.ts'
 export type { OwnedDefaultSurface } from '../../session-executor/src/managed-assembly.ts'
 import { createOwnedMetadataContext } from '../../session-executor/src/lifecycle/owned-metadata-context.ts'
 import { mountOwnedPlan } from './owned-plan.ts'
@@ -48,12 +48,15 @@ export async function createOwnedDefaultSurface(original:ManagedRegistryConstruc
  }
  const systemPrompt=()=>readProjection(prompt)
  const modelToolSchemas=()=>readProjection(()=>options.schemas())
- const modelSurface=()=>readProjection(observation=>({systemPrompt:prompt(observation),baseInstructions:base,tools:options.schemas()}))
+ const renderSurface=(observation:ExecutionObservation)=>({systemPrompt:prompt(observation),baseInstructions:base,tools:options.schemas()})
+ const modelSurface=()=>readProjection(renderSurface)
  const modelOverheadTokens=()=>{
   if(options.overheadTokens!==undefined)return options.overheadTokens
   const {systemPrompt,tools}=modelSurface()
   return approxTokens(systemPrompt)+approxTokens(JSON.stringify(tools))
  }
  const prepareSurface=options.prepareModelSurface
- return Object.freeze({systemPrompt,modelToolSchemas,modelSurface,modelOverheadTokens,async prepareInput(text:string){original.assertCurrent();const result=await options.prepareInput(text);original.assertCurrent();return result},async reconcileAuthority(){original.assertCurrent();await options.reconcileAuthority();original.assertCurrent()},...prepareSurface?{async prepareModelSurface(signal:AbortSignal){original.assertCurrent();if(options.prepareModelSurface!==prepareSurface)throw Error('Original model surface preparation changed');await prepareSurface(signal);original.assertCurrent();if(options.prepareModelSurface!==prepareSurface)throw Error('Original model surface preparation changed')}}:{}})
+ const surface=Object.freeze({systemPrompt,modelToolSchemas,modelSurface,modelOverheadTokens,async prepareInput(text:string){original.assertCurrent();const result=await options.prepareInput(text);original.assertCurrent();return result},async reconcileAuthority(){original.assertCurrent();await options.reconcileAuthority();original.assertCurrent()},...prepareSurface?{async prepareModelSurface(signal:AbortSignal){original.assertCurrent();if(options.prepareModelSurface!==prepareSurface)throw Error('Original model surface preparation changed');await prepareSurface(signal);original.assertCurrent();if(options.prepareModelSurface!==prepareSurface)throw Error('Original model surface preparation changed')}}:{}})
+ associateObservedModelSurface(original,surface,renderSurface)
+ return surface
 }
