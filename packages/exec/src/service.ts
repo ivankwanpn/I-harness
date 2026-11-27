@@ -10,8 +10,14 @@ export function createWorkflowStepFactory(pair: ReturnType<typeof createExecServ
   assertOriginalExecPair(pair)
   return constructWorkflowStepFactory(pair.port, scope)
 }
-const originalPairs = new WeakSet<object>()
+const originalPairs = new WeakMap<object, ReturnType<typeof createJobServiceWithReservation>['pty']>()
 export function assertOriginalExecPair(pair: object): void { if(!originalPairs.has(pair))throw new Error('Original Exec construction pair required') }
+/** The separate PTY entry borrows the exact same registered native owner. */
+export function readOriginalPtyTransport(pair: object) {
+  const pty = originalPairs.get(pair)
+  if (!pty) throw Error('Original Exec construction pair required')
+  return pty
+}
 
 export function createExecService(options: ExecServiceOptions = {}): NativeExecService {
   return createExecServiceWithReservation(options).service
@@ -21,7 +27,8 @@ export function createExecService(options: ExecServiceOptions = {}): NativeExecS
 export function createExecServiceWithReservation(options: ExecServiceOptions = {}) {
   const host = options.execution ?? defaultHost(resolve(options.workspaceRoot ?? process.cwd()), options.sandbox !== undefined, options.standaloneOwner)
   const supervisor = host.supervisor ?? createExecutionSupervisor()
-  const pair=createJobServiceWithReservation(options, host, supervisor)
-  originalPairs.add(pair)
-  return Object.freeze(pair)
+  const { service, port, pty } = createJobServiceWithReservation(options, host, supervisor)
+  const pair = Object.freeze({ service, port })
+  originalPairs.set(pair, pty)
+  return pair
 }

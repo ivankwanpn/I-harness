@@ -22,7 +22,7 @@ export type AgentProcessCommand =
   | { action: "job/cancel"; id: string; backend?: "shell" | "child" | "workflow"; instanceId?: string; sourceId?: string }
 export interface AgentProcessesView {
   sessionId: string; live: boolean
-  terminals: (Omit<TerminalView, "pid" | "command" | "cols" | "rows" | "beganAt"> & { pid?: number; command?: string; cols?: number; rows?: number; beganAt?: string; live: boolean; canControl: boolean; outputAvailable?: boolean; outputReason?: string })[]
+  terminals: (Omit<TerminalView, "pid" | "command" | "cols" | "rows" | "beganAt"> & { pid?: number; command?: string; cols?: number; rows?: number; beganAt?: string; live: boolean; canControl: boolean; canClose?: true; outputAvailable?: boolean; outputReason?: string })[]
   jobs: (JobView & { ownerSessionId: string; live: boolean; canCancel: boolean; backend?: "shell" | "child" | "workflow"; nativeJob?: NativeIdentity; declaration?: Pick<SavedCall, "surface" | "cellId" | "callId" | "callIndex" | "resultIndex" | "callSeq" | "resultSeq">; outputDisposition?: "saved-preview" | "retained-unverified" | "unavailable" | "conflict" })[]
 }
 export type AgentProcessesRequest =
@@ -191,7 +191,9 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: S
       context.selectTerminals([...savedPtys.values()])
       const terminals = new Map([...savedPtys.values()].map(({ text: _text, truncated: _truncated, dropped: _dropped, endOffset: _offset, evidence: _evidence, ...row }) => [row.id, row]))
       for (const row of assembly?.liveResources?.().terminals ?? []) if (row.ownerSessionId === sessionId) terminals.set(row.id, { ...row, live: true, canControl: row.status === "running", outputAvailable: true })
-      for (const row of managed?.terminals ?? []) if (row.ownerSessionId === sessionId) terminals.set(row.id, { ...row, live: true, canControl: false, outputAvailable: true })
+      for (const row of managed?.terminals ?? []) if (row.ownerSessionId === sessionId) terminals.set(row.id, {
+        ...row, live: true, canControl: false, ...(row.status === "running" ? { canClose: true as const } : {}), outputAvailable: true,
+      })
       for (const job of background) jobs.set(job.kind + ":" + job.id, { jobId: job.id, kind: job.kind, label: job.id, status: job.status, outputAvailable: Boolean(job.output), ...(job.kind === "shell" ? { nativeJob: job.nativeJob } : {}) })
       return { sessionId, live: Boolean(assembly || managed), terminals: [...terminals.values()].slice(-200),
         jobs: [...jobs.values(), ...saved.filter(row => !row.nativeJob || !background.some(active => active.kind === "shell" && active.nativeJob?.instanceId === row.nativeJob?.instanceId))].slice(-200).map(job => {
@@ -225,11 +227,13 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: S
       const fields = allowed[String(command.action)]
       if (!fields || Object.keys(command).some(key => !["action", "id", ...fields].includes(key))) throw new Error("Unsupported process command")
       const assembly = service.liveAssembly(sessionId)
-      if (!assembly && command.action === "read") {
+      if (!assembly && (command.action === "read" || command.action === "close")) {
         const runtime = originalManagedRuntimeFor(service, sessionId)
         if (runtime) {
-          if (meta.archived) throw new Error("Archived conversation cannot read a live process")
-          const result = runtime.readTerminal(id, { offset: boundedInteger(command.offset, 0, Number.MAX_SAFE_INTEGER, 0), maxBytes: 32768 })
+          if (meta.archived) throw new Error("Archived conversation cannot access a live process")
+          const result = command.action === "read"
+            ? runtime.readTerminal(id, { offset: boundedInteger(command.offset, 0, Number.MAX_SAFE_INTEGER, 0), maxBytes: 32768 })
+            : await runtime.closeTerminal(id)
           if (!result) throw new Error("Terminal has no live process owner in this session")
           return result
         }

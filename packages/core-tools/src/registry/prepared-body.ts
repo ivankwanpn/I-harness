@@ -189,6 +189,52 @@ export function getPreparedInvocationAdmissionWait(prepared:PreparedCall):Promis
 export function assertPreparedExecutionOwnerContext(prepared: PreparedCall, context: ToolExecutionOwnerContext | undefined): void {
   if (preparedExecutionOwnerContext(prepared) !== context) throw new Error('Original prepared execution context required')
 }
+
+const terminalToolNames = new Set([
+  'terminal_open', 'terminal_send', 'terminal_read', 'terminal_signal', 'terminal_close', 'terminal_list',
+  'process_spawn', 'process_kill', 'process_resize_pty',
+])
+
+/** The monitor survives awaits within the prepared body only. A successfully
+ * admitted PTY then lives under the original transport owner until settlement. */
+export function createPreparedTerminalInvocationOwner(domain: ManagedExecutionDomain) {
+  const invocations = new WeakMap<object, { name: string; current(): void }>()
+  return Object.freeze({
+    bind(tool: Tool, leaf: Tool['execute']) {
+      const name = tool.name
+      if (!terminalToolNames.has(name)) throw Error('Original Terminal tool required')
+      return (exec: ToolExec): object => {
+        const body = byExec.get(exec), frame = active.getStore()
+        if (!body || !frame || frame.body !== body || body.tool !== tool || body.leaf !== leaf
+          || body.call.name !== name || body.managed?.domain !== domain || (!body.permit && !body.codeInvocation)) {
+          throw Error('Original managed Terminal invocation required')
+        }
+        const current = () => {
+          check(body, frame)
+          const refusal = opaqueBody(body, () => body.managed!.context.checkGuards('tools/execute', body.call))
+          if (refusal !== undefined) throw Error('guard denied: ' + refusal)
+          check(body, frame)
+        }
+        current()
+        // Replaying a timed-out side effect could open a second process or
+        // send the same input twice. Explicit later calls are independent.
+        if (name !== 'terminal_read' && name !== 'terminal_list') {
+          if (body.claimed) throw Error('Original Terminal invocation already claimed')
+          body.claimed = true
+        }
+        const invocation = Object.freeze({})
+        invocations.set(invocation, { name, current })
+        return invocation
+      }
+    },
+    assert(invocation: object | undefined, allowed: readonly string[]) {
+      const original = invocation && invocations.get(invocation)
+      if (!original || !allowed.includes(original.name)) throw Error('Original managed Terminal invocation required')
+      original.current()
+    },
+  })
+}
+
 /** Factory-local association. Neither the entry nor its claim is installed on a ToolExec or argument. */
 export function bindPreparedShellLeaf(tool: Tool, leaf: Tool['execute']) {
   const entry = Object.freeze({ enter(exec: ToolExec): PreparedShellBodyClaim | undefined {

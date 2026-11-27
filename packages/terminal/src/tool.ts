@@ -4,7 +4,7 @@ import type { EscalationApprover, SandboxDenial, SandboxExecutionPolicy, Sandbox
 import type { ExecService } from "@i-harness/exec"
 import { currentExecCaller, withExecCallerScope } from "@i-harness/exec"
 import { ESCALATION_TARGETS, SandboxUnavailableError, denialFor, resolveCallPolicy } from "@i-harness/sandbox"
-import { createTerminalService, type TerminalService, type TerminalSignalName } from "./service.ts"
+import { createTerminalService, type ManagedTerminalTransport, type TerminalService, type TerminalSignalName } from "./service.ts"
 
 export interface TerminalToolDeps {
   service: TerminalService
@@ -23,6 +23,25 @@ export interface TerminalToolDeps {
   // holds the `ToolExec` a prompt must name. Absent → an escalation request is
   // refused (fail closed), never silently allowed.
   escalationApprover?: EscalationApprover<unknown, string>
+  /** Original managed-registry binding fixed by the session executor. */
+  bindInvocation?(tool: Tool, leaf: Tool["execute"]): (exec: ToolExec) => object
+}
+
+type TerminalDefinition = Omit<Tool, "execute"> & {
+  execute(args: never, exec: ToolExec, invocation?: object): Promise<unknown>
+}
+
+function bindTerminalTools(deps: TerminalToolDeps, definitions: TerminalDefinition[]): Tool[] {
+  const { bindInvocation } = deps
+  if (!bindInvocation) return definitions
+  return definitions.map(definition => {
+    const tool: Tool = {
+      ...definition,
+      async execute(args, exec) { return definition.execute(args as never, exec, enter(exec)) },
+    }
+    const enter = bindInvocation(tool, tool.execute)
+    return tool
+  })
 }
 
 /** Current Windows backends do not support confined PTY. POSIX admission probes
@@ -126,7 +145,7 @@ function asTrustedToolCaller<T>(exec: ToolExec, call: () => T): T {
 // process_kill and process_resize_pty below are the same class.
 export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
   const { service } = deps
-  return [
+  return bindTerminalTools(deps, [
     {
       name: "terminal_open",
       description:
@@ -146,7 +165,7 @@ export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
         },
         required: ["command"],
       },
-      execute: async (args: { command: string; args?: string[]; cwd?: string; cols?: number; rows?: number; sandbox_permissions?: string; justification?: string }, exec: ToolExec) => {
+      execute: async (args: { command: string; args?: string[]; cwd?: string; cols?: number; rows?: number; sandbox_permissions?: string; justification?: string }, exec: ToolExec, invocation) => {
         // M62: this call CREATES the capability, so it is the one place a
         // confined mode is checked by the selected backend. Current Windows
         // backends refuse PTY before launch; POSIX can admit where supported.
@@ -168,7 +187,7 @@ export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
           ...(args.rows !== undefined ? { rows: args.rows } : {}),
           ...(ladder.policy === undefined ? {} : { sandbox: ladder.policy }),
         }
-        try { return await asTrustedToolCaller(exec, () => service.open(spec, { sessionId: exec.sessionId, abortSignal: exec.abortSignal })) }
+        try { return await asTrustedToolCaller(exec, () => service.open(spec, { sessionId: exec.sessionId, abortSignal: exec.abortSignal, ...(invocation ? { invocation } : {}) })) }
         catch (cause) {
           if (mode !== undefined && cause instanceof SandboxUnavailableError) return terminalRefusal(mode, cause.message)
           throw cause
@@ -189,7 +208,7 @@ export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
         },
         required: ["id", "data"],
       },
-      execute: async (args: { id: string; data: string; sandbox_permissions?: string; justification?: string }, exec: ToolExec) => {
+      execute: async (args: { id: string; data: string; sandbox_permissions?: string; justification?: string }, exec: ToolExec, invocation) => {
         // Windows confined PTY is unsupported. On POSIX the service compares
         // the current granted mode with the handle's admitted mode.
         const ladder = await resolveTerminalCall(deps, exec, "terminal_send", args, `write to terminal ${args.id}`)
@@ -201,7 +220,7 @@ export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
             `refusing to write to terminal ${args.id} under ${mode}: the PTY was started outside this mode and driving it would run unrestricted.`,
           )
         }
-        try { await service.send(args.id, args.data, { sessionId: exec.sessionId, ...(ladder.policy === undefined ? {} : { sandbox: ladder.policy }) }) }
+        try { await service.send(args.id, args.data, { sessionId: exec.sessionId, ...(ladder.policy === undefined ? {} : { sandbox: ladder.policy }), ...(invocation ? { invocation } : {}) }) }
         catch (cause) {
           if (mode !== undefined && cause instanceof Error && cause.message.startsWith("TERMINAL_POLICY_MISMATCH")) return terminalRefusal(mode, cause.message)
           throw cause
@@ -247,13 +266,13 @@ export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
       isReadOnly: true,
       execute: async (_args, exec: ToolExec) => ({ terminals: service.list({ sessionId: exec.sessionId }) }),
     },
-  ]
+  ])
 }
 
 // M26-B8：進程控制面——terminal service 的薄包（spawn/kill/resize_pty）。
 export function createProcessTools(deps: TerminalToolDeps): Tool[] {
   const { service } = deps
-  return [
+  return bindTerminalTools(deps, [
     {
       name: "process_spawn",
       description:
@@ -271,7 +290,7 @@ export function createProcessTools(deps: TerminalToolDeps): Tool[] {
         },
         required: ["command"],
       },
-      execute: async (args: { command: string; args?: string[]; cwd?: string; env?: Record<string, string>; sandbox_permissions?: string; justification?: string }, exec: ToolExec) => {
+      execute: async (args: { command: string; args?: string[]; cwd?: string; env?: Record<string, string>; sandbox_permissions?: string; justification?: string }, exec: ToolExec, invocation) => {
         // process_spawn uses the same PTY admission as terminal_open.
         const ladder = await resolveTerminalCall(deps, exec, "process_spawn", args, `spawn a pty-backed process running ${args.command}`)
         if (ladder.kind === "refused") return ladder.refusal
@@ -285,7 +304,7 @@ export function createProcessTools(deps: TerminalToolDeps): Tool[] {
         const cwd = args.cwd ?? deps.cwd
         try { return await asTrustedToolCaller(exec, () => service.open(
           { command: args.command, ...(args.args !== undefined ? { args: args.args } : {}), ...(cwd !== undefined ? { cwd } : {}), ...(args.env !== undefined ? { env: args.env } : {}), ...(ladder.policy === undefined ? {} : { sandbox: ladder.policy }) },
-          { sessionId: exec.sessionId, abortSignal: exec.abortSignal },
+          { sessionId: exec.sessionId, abortSignal: exec.abortSignal, ...(invocation ? { invocation } : {}) },
         )) } catch (cause) {
           if (mode !== undefined && cause instanceof SandboxUnavailableError) return terminalRefusal(mode, cause.message)
           throw cause
@@ -310,10 +329,10 @@ export function createProcessTools(deps: TerminalToolDeps): Tool[] {
       execute: async (args: { id: string; cols: number; rows: number }, exec: ToolExec) =>
         service.resize(args.id, args.cols, args.rows, { sessionId: exec.sessionId }),
     },
-  ]
+  ])
 }
 
-export interface TerminalMountHandle { dispose(): Promise<void> }
+export interface TerminalMountHandle { readonly service: ReturnType<typeof createTerminalService>; dispose(): Promise<void> }
 export function registerTerminal(
   ctx: PluginContext,
   tools: { register(t: Tool): void },
@@ -328,17 +347,19 @@ export function registerTerminal(
     // TerminalToolDeps.escalationApprover. Without this hop the ladder would be
     // unreachable at runtime while every type still checked.
     escalationApprover?: EscalationApprover<unknown, string>
+    managed?: ManagedTerminalTransport & { bindInvocation: NonNullable<TerminalToolDeps["bindInvocation"]> }
   },
 ): TerminalMountHandle {
   if (!opts?.execService) throw new Error("Terminal requires the assembly ExecService")
-  const service = createTerminalService(opts.execService)
+  const service = createTerminalService(opts.execService, opts.managed)
   ctx.services.register("terminal/service", service)
   const deps: TerminalToolDeps = {
     service,
     ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
     ...(opts?.sandboxPolicy !== undefined ? { sandboxPolicy: opts.sandboxPolicy } : {}),
     ...(opts?.escalationApprover !== undefined ? { escalationApprover: opts.escalationApprover } : {}),
+    ...(opts.managed === undefined ? {} : { bindInvocation: opts.managed.bindInvocation }),
   }
   for (const tool of [...createTerminalTools(deps), ...createProcessTools(deps)]) tools.register(tool)
-  return { dispose: () => service.dispose() }
+  return Object.freeze({ service, dispose: () => service.dispose() })
 }

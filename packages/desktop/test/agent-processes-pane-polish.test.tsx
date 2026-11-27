@@ -83,6 +83,26 @@ it("replaces full job snapshots when refreshing instead of duplicating the captu
   await waitFor(() => expect(view.container.querySelector("pre")?.textContent).toBe("first snapshot\nnew evidence"))
 })
 
+it("offers attached output and close for a managed terminal without advertising input or signals", async () => {
+  const commands: unknown[] = []
+  const request = async (input: AgentProcessesRequest) => {
+    if (input.kind === "desktop/session/processes/control") {
+      commands.push(input.command)
+      return input.command.action === "read" ? { data: "owned output", nextOffset: 12 } : {}
+    }
+    return { ...base, jobs: [], terminals: [{ ...terminal, canControl: false, canClose: true as const }] }
+  }
+  render(<AgentProcessesPane bridge={{ request }} workspaceId="w" sessionId="s" />)
+  fireEvent.click(await screen.findByRole("button", { name: "附接輸出" }))
+  await screen.findByText("owned output")
+  expect(screen.queryByRole("textbox", { name: "終端輸入" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "Ctrl+C" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "調整 PTY 大小" })).toBeNull()
+  fireEvent.click(screen.getByRole("button", { name: "關閉程序" }))
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "確認執行" }))
+  await waitFor(() => expect(commands).toEqual([{ action: "read", id: "t1", offset: 0 }, { action: "close", id: "t1" }]))
+})
+
 it("opens and refreshes the exact historical native job when a new runtime reuses the short ID", async () => {
   const older = { ...job, backend: "shell" as const, label: "Previous command", status: "completed" as const, live: false, canCancel: false,
     nativeJob: { version: 1 as const, jobId: job.jobId, ownerSessionId: "s", instanceId: "older-instance", sourceId: "process:previous" } }

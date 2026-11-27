@@ -7,7 +7,7 @@ import type { SessionCoordinator } from '@i-harness/session-persistence'
 import { INVALID_PARAMS, isRpcSuccess, type RpcMessage } from '@i-harness/sdk'
 import { createSdkServer } from '@i-harness/sdk/server'
 import { fromJSONL } from '@i-harness/core-session'
-import type { LLMRequest } from '@i-harness/llm-seam'
+import type { LLMRequest, LLMStreamEvent } from '@i-harness/llm-seam'
 import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { originalManagedExecutionFor } from '../../session-executor/src/host-managed-execution.ts'
 import * as projectScope from '../src/project-scope.ts'
@@ -37,14 +37,15 @@ function holdProcessCapture(id: string) {
   return { entered: entered.promise, release: release.resolve }
 }
 
-async function fixture(beforeReply?: (request: LLMRequest) => Promise<void>, jobs?: { commands(): readonly string[] }) {
+type FixtureToolCall = Extract<LLMStreamEvent, { type: 'tool_call' }>['call']
+async function fixture(beforeReply?: (request: LLMRequest) => Promise<void>, tools?: () => readonly FixtureToolCall[]) {
   const root = await mkdtemp(join(tmpdir(), 'ih-project-checked-input-'))
   const workspace = join(root, 'workspace'), other = join(root, 'other'), sessionDir = join(root, 'sessions')
   await Promise.all([mkdir(workspace), mkdir(other)])
   const settingsPath = join(root, 'settings.json'), credentialsPath = join(root, 'credentials.json')
   const shell = process.platform === 'win32' ? 'pwsh' : 'bash'
-  await writeFile(settingsPath, JSON.stringify({ autoTitle: false, sandboxMode: jobs ? 'danger-full-access' : 'read-only', codeMode: { mode: 'off' },
-    ...(jobs ? { approvalMode: 'full-access', agentShell: shell } : {}),
+  await writeFile(settingsPath, JSON.stringify({ autoTitle: false, sandboxMode: tools ? 'danger-full-access' : 'read-only', codeMode: { mode: 'off' },
+    ...(tools ? { approvalMode: 'full-access', agentShell: shell } : {}),
     instructions: { enabled: true }, compaction: { auto: false }, llm: { providers: { fixture: { protocol: 'openai-completions', baseURL: 'http://127.0.0.1:1',
       apiKeyEnv: 'IH_PROJECT_CHECK_FIXTURE', models: [{ id: 'fixture', contextWindow: 32000 }] } },
     defaultModel: { provider: 'fixture', model: 'fixture' } } }))
@@ -58,19 +59,12 @@ async function fixture(beforeReply?: (request: LLMRequest) => Promise<void>, job
   })
   const serviceFactory = vi.spyOn(executor, 'createSessionService').mockImplementation(options => service = makeService(options))
   const frames: RpcMessage[] = []
-  let launched = false
   const produceReply = vi.fn(async function* (request: LLMRequest) {
     await beforeReply?.(request)
     request.signal?.throwIfAborted()
-    if (jobs && !launched) {
-      launched = true
-      for (const [index, command] of jobs.commands().entries()) {
-        yield { type: 'tool_call' as const, call: { id: `process-launch-${index}`, name: shell, args: { command, background: true } } }
-      }
-      yield { type: 'end' as const }
-      return
-    }
-    yield { type: 'text/chunk' as const, text: 'fixture answer' }
+    const calls = tools?.() ?? []
+    for (const call of calls) yield { type: 'tool_call' as const, call }
+    if (!calls.length) yield { type: 'text/chunk' as const, text: 'fixture answer' }
     yield { type: 'end' as const }
   })
   let host: Awaited<ReturnType<typeof createDesktopHost>> | undefined
@@ -182,7 +176,7 @@ it('reads Processes during and after a private turn without opening a compatibil
     expect(await read(sessionId)).toEqual(privateView)
     expect(await read(coldId)).toEqual({ sessionId: coldId, live: false, terminals: [], jobs: [] })
     expect(await f.call('desktop/session/processes/control', { sessionId, command: { action: 'close', id: 'missing-pty' } })).toMatchObject({
-      error: { message: expect.stringContaining('unavailable for this private runtime') },
+      error: { message: 'Terminal has no live process owner in this session' },
     })
     release.resolve()
     await f.finished(sessionId)
@@ -288,8 +282,8 @@ it('defers a cold warm so the first explicit compaction can use the original Ses
 }, 45_000)
 
 it('cancels only the selected live native job through the original private owner', async () => {
-  let commands: string[] = []
-  const f = await fixture(undefined, { commands: () => commands })
+  let calls: FixtureToolCall[] = []
+  const f = await fixture(undefined, () => calls.splice(0))
   const id = 'private-process-control'
   try {
     await f.succeed('initialize')
@@ -301,7 +295,9 @@ it('cancels only the selected live native job through the original private owner
       ? "'" + value.replaceAll("'", "''") + "'"
       : "'" + value.replaceAll("'", "'\\''") + "'"
     const command = `${process.platform === 'win32' ? '& ' : ''}${quote(process.execPath)} ${quote(script)}`
-    commands = [command + ' first', command + ' second']
+    calls = ['first', 'second'].map(label => ({
+      id: 'process-launch-' + label, name: process.platform === 'win32' ? 'pwsh' : 'bash', args: { command: command + ' ' + label, background: true },
+    }))
     expect(await f.succeed('session/warm', { sessionId: id })).toEqual({ ready: false, deferred: true })
     expect(await f.succeed('desktop/session/input/submit', submit(id))).toMatchObject({ accepted: true })
     await f.finished(id)
@@ -345,6 +341,72 @@ it('cancels only the selected live native job through the original private owner
     await f.idle()
     expect(originalManagedExecutionFor(f.service, id)).toBe(execution)
     expect(f.service.liveAssembly(id)).toBeUndefined()
+  } finally { await f.close() }
+}, 90_000)
+
+it('lists and controls only original managed PTY output and close through the public process routes', async () => {
+  let calls: FixtureToolCall[] = []
+  const f = await fixture(undefined, () => calls.splice(0))
+  const id = 'private-pty', other = 'unrelated-pty-owner'
+  try {
+    await f.succeed('initialize')
+    await f.coordinator.create({ sessionId: id })
+    await f.coordinator.create({ sessionId: other })
+    const script = join(f.workspace, 'pty-fixture.cjs')
+    await writeFile(script, 'console.log("fixture PTY " + process.argv[2]);setInterval(()=>{},1000);setTimeout(()=>process.exit(99),45000)')
+    calls = ['closable', 'revoked'].map(label => ({
+      id: 'pty-' + label, name: label === 'closable' ? 'terminal_open' : 'process_spawn',
+      args: { command: process.execPath, args: [script, label] },
+    }))
+    const list = async () => (await f.succeed('desktop/session/processes/read', { sessionId: id }) as AgentProcessesView).terminals
+    expect(await f.succeed('session/warm', { sessionId: id })).toEqual({ ready: false, deferred: true })
+    expect(await list()).toEqual([])
+    expect(await f.succeed('desktop/session/input/submit', submit(id))).toMatchObject({ accepted: true })
+    await f.finished(id)
+    expect(f.service.liveAssembly(id)).toBeUndefined()
+    const events = fromJSONL((await f.saved(id)).toString()).events
+    const terminalId = (label: string): string => {
+      const result = events.find(event => event.type === 'tool/result' && event.callId === 'pty-' + label)
+      if (result?.type !== 'tool/result' || result.envelope?.retention.kind !== 'inline') throw Error('Missing original PTY launch result')
+      const output = result.envelope.retention.value as { id?: unknown }
+      if (typeof output.id !== 'string') throw Error('PTY launch did not return an original handle: ' + JSON.stringify(output))
+      return output.id
+    }
+    const first = terminalId('closable'), second = terminalId('revoked')
+    const control = (sessionId: string, command: object) => f.call('desktop/session/processes/control', { sessionId, command })
+    await vi.waitFor(async () => {
+      const rows = await list()
+      for (const idOfTerminal of [first, second]) expect(rows).toContainEqual(expect.objectContaining({
+        id: idOfTerminal, ownerSessionId: id, live: true, canControl: false, canClose: true, status: 'running',
+      }))
+    }, { timeout: 15_000 })
+    await vi.waitFor(async () => {
+      expect(await f.succeed('desktop/session/processes/control', { sessionId: id, command: { action: 'read', id: first } }))
+        .toMatchObject({ data: expect.stringContaining('fixture PTY closable'), nextOffset: expect.any(Number), status: 'running' })
+    }, { timeout: 15_000 })
+    expect(await f.succeed('desktop/session/input/submit', submit(other))).toMatchObject({ accepted: true })
+    await f.finished(other)
+    expect(originalManagedExecutionFor(f.service, other)).toBeDefined()
+    for (const action of ['read', 'close']) {
+      expect(await control(other, { action, id: first })).toMatchObject({ error: { message: expect.stringMatching(/owner|terminal/i) } })
+    }
+    expect(await control(id, { action: 'send', id: first, data: 'fixture unsolicited input' }))
+      .toMatchObject({ error: { message: expect.stringContaining('unavailable for this private runtime') } })
+    expect(await f.succeed('desktop/session/processes/control', { sessionId: id, command: { action: 'close', id: first } }))
+      .toMatchObject({ id: first, ownerSessionId: id, status: 'exited' })
+    expect((await list()).some(row => row.id === first && row.live)).toBe(false)
+    expect((await list()).find(row => row.id === second)).toMatchObject({ canClose: true, status: 'running' })
+    expect(await control(id, { action: 'close', id: first })).toMatchObject({ error: { message: expect.stringMatching(/owner|terminal/i) } })
+    expect(await f.succeed('desktop/agent-settings/configure', { sandboxMode: 'read-only', approvalMode: 'dangerous' }))
+      .toMatchObject({ effective: { sandboxMode: 'read-only' } })
+    await vi.waitFor(async () => {
+      const row = (await list()).find(row => row.id === second)
+      expect(row?.canClose).toBeUndefined()
+      expect(row?.status).not.toBe('running')
+    }, { timeout: 15_000 })
+    expect(await control(id, { action: 'send', id: second, data: 'fixture input after revocation' })).toMatchObject({ error: { message: expect.any(String) } })
+    await f.service.closeSession(id)
+    expect(await control(id, { action: 'read', id: second })).toMatchObject({ error: { message: expect.stringContaining('No live process owner') } })
   } finally { await f.close() }
 }, 90_000)
 

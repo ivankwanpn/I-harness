@@ -10,6 +10,7 @@ import { createJobObservation } from "./observation.ts"
 import { view } from "./views.ts"
 import { createJobRetention } from './retention.ts'
 import { isOriginalStepBinding, type OriginalStepBinding } from '../workflow-step.ts'
+import type { NativeAdmissionOwner, OriginalExecutionAdmission } from '../supervision/contracts.ts'
 
 /** Detach one reader without canceling original settlement or another reader. */
 function joinReader<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -42,6 +43,38 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
   let hostDisposed = false
 
   const { launchTransport, canAccess } = createTransportLaunch(options, host, supervisor, () => disposed)
+  const pendingPtyCleanup = new Set<OriginalExecutionAdmission>()
+
+  async function launchPtyTransport(request: import('../index.ts').ExecTransportRequest, assertCurrent: () => void) {
+    if (request.transport !== 'pty' || request.lifetime !== 'retain-tree' || !request.sandbox?.authoritySnapshot) {
+      throw Error('Original PTY admission policy required')
+    }
+    assertCurrent()
+    for (const previous of pendingPtyCleanup) {
+      const outcome = await previous.retryCleanup()
+      if (outcome.kind === 'failed') throw new Error('Original PTY admission cleanup is incomplete', { cause: outcome.cause })
+      pendingPtyCleanup.delete(previous)
+    }
+    let current: (() => void) | undefined = assertCurrent
+    let admission: OriginalExecutionAdmission | undefined
+    const gate: NativeAdmissionOwner = {
+      begin() { current?.() },
+      attach(value) { admission = value },
+      assertCurrent() { current?.() },
+    }
+    try {
+      return await launchTransport(request, false, gate)
+    } catch (cause) {
+      if (admission && (await admission.observeCleanup()).kind === 'failed') pendingPtyCleanup.add(admission)
+      throw cause
+    } finally {
+      // Only native policy/ownership persists after admission. The body, its
+      // model permit and any abandoned preparation stay off the live handle.
+      current = undefined
+      admission = undefined
+    }
+  }
+
   const resultRetention = options.resultRetention
   const retention = createJobRetention(resultRetention, capture => captureJobs.get(capture), publishCollection)
   const factory = createCaptureFactory(options, supervisor, launchTransport, retention, resultRetention)
@@ -383,6 +416,7 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
         for (const job of jobs.values()) { const owner = captureAttempts.get(job.capture); if (owner) attempts.add(owner) }
         const outcomes = await Promise.allSettled([native, ...[...attempts].map(owner => owner.retire())])
         const failures = outcomes.flatMap(outcome => outcome.status === 'rejected' ? [outcome.reason] : [])
+        if (outcomes[0]?.status === 'fulfilled') pendingPtyCleanup.clear()
         const deliveries=new Set([...pendingInstances.values()].flatMap(entry=>entry.delivery?[entry.delivery]:[]))
         for(const job of jobs.values()){const delivery=captureDeliveries.get(job.capture);if(delivery)deliveries.add(delivery)}
         for(const result of await Promise.allSettled([...deliveries].map(owner=>owner.close())))if(result.status==='rejected')failures.push(result.reason)
@@ -482,5 +516,6 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
       }
     },
   })
-  return { service, port }
+  const pty = Object.freeze({ launch: launchPtyTransport, hasPendingCleanup: () => pendingPtyCleanup.size > 0 })
+  return { service, port, pty }
 }

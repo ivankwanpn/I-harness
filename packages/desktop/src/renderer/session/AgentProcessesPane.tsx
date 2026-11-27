@@ -94,7 +94,7 @@ function ProcessesScope({ bridge, workspaceId, sessionId, cols, rows, setCols, s
     if (!state?.live || state.sessionId !== sessionId) return false
     if (command.action === "job/cancel") { const job = jobFor(command); return !!(job?.live && job.canCancel) }
     const terminal = terminalFor(command.id, state)
-    return !!(terminal?.live && terminal.canControl)
+    return !!(terminal?.live && (terminal.canControl || command.action === "close" && terminal.canClose))
   }
   function attach(address: OutputTarget, more = false) {
     const { id, kind } = address
@@ -164,7 +164,8 @@ function ProcessesScope({ bridge, workspaceId, sessionId, cols, rows, setCols, s
       {!row.live && row.status === "running" ? <p className="execution-surface-note">{t("已儲存狀態，未確認仍在執行")}</p> : null}
       {row.outputReason ? <p className="execution-surface-note">{row.outputReason}</p> : null}
       <div className="execution-record-actions">{terminalFor(row.id) && (row.live || row.outputAvailable) ? <Button size="small" disabled={view.busy} onClick={() => attach({ kind: "terminal", id: row.id })}>{t(row.live ? "附接輸出" : "查看輸出")}</Button> : null}
-        {canControl({ action: "close", id: row.id }) ? <><Button size="small" disabled={view.busy} onClick={() => openConfirmation({ action: "signal", id: row.id, signal: "INT" }, row.command ?? tt("PTY 程序", "PTY process"))}>Ctrl+C</Button><Button variant="danger" size="small" disabled={view.busy} onClick={() => openConfirmation({ action: "signal", id: row.id, signal: "TERM" }, row.command ?? tt("PTY 程序", "PTY process"))}>{t("終止程序")}</Button><Button variant="danger" size="small" disabled={view.busy} onClick={() => openConfirmation({ action: "signal", id: row.id, signal: "KILL" }, row.command ?? tt("PTY 程序", "PTY process"))}>{t("強制終止")}</Button><Button size="small" disabled={view.busy} onClick={() => openConfirmation({ action: "close", id: row.id }, row.command ?? tt("PTY 程序", "PTY process"))}>{t("關閉程序")}</Button></> : null}
+        {canControl({ action: "signal", id: row.id }) ? <><Button size="small" disabled={view.busy} onClick={() => openConfirmation({ action: "signal", id: row.id, signal: "INT" }, row.command ?? tt("PTY 程序", "PTY process"))}>Ctrl+C</Button><Button variant="danger" size="small" disabled={view.busy} onClick={() => openConfirmation({ action: "signal", id: row.id, signal: "TERM" }, row.command ?? tt("PTY 程序", "PTY process"))}>{t("終止程序")}</Button><Button variant="danger" size="small" disabled={view.busy} onClick={() => openConfirmation({ action: "signal", id: row.id, signal: "KILL" }, row.command ?? tt("PTY 程序", "PTY process"))}>{t("強制終止")}</Button></> : null}
+        {canControl({ action: "close", id: row.id }) ? <Button size="small" disabled={view.busy} onClick={() => openConfirmation({ action: "close", id: row.id }, row.command ?? tt("PTY 程序", "PTY process"))}>{t("關閉程序")}</Button> : null}
       </div><RawRecordedRecord value={row} />
     </article>)}</div>
     <h3>{t("背景工作")}</h3>

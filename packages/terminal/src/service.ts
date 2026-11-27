@@ -1,7 +1,8 @@
 import { StringDecoder } from "node:string_decoder"
+import { randomUUID } from "node:crypto"
 import { resolve } from "node:path"
-import { currentExecCaller, withExecCallerScope, type ExecService, type SupervisedExecution } from "@i-harness/exec"
-import type { ExecutionOwner, ExecutionSettlement, RootExit, SandboxExecutionPolicy } from "@i-harness/sandbox"
+import { currentExecCaller, withExecCallerScope, type ExecService, type ExecTransportRequest, type SupervisedExecution } from "@i-harness/exec"
+import type { CompiledSandboxPolicy, ExecutionOwner, ExecutionSettlement, RootExit, SandboxExecutionPolicy } from "@i-harness/sandbox"
 
 export interface TerminalOpenSpec {
   /** Preserve CR/LF and control sequences for terminal emulators. */
@@ -46,8 +47,8 @@ export interface TerminalReadResult {
   exitCode?: number
 }
 export interface TerminalService {
-  open(spec: TerminalOpenSpec, opts?: { sessionId?: string; abortSignal?: AbortSignal }): Promise<TerminalRunSpec>
-  send(id: string, data: string, opts?: { sessionId?: string; sandbox?: SandboxExecutionPolicy }): Promise<void>
+  open(spec: TerminalOpenSpec, opts?: { sessionId?: string; abortSignal?: AbortSignal; invocation?: object }): Promise<TerminalRunSpec>
+  send(id: string, data: string, opts?: { sessionId?: string; sandbox?: SandboxExecutionPolicy; invocation?: object }): Promise<void>
   read(id: string, opts?: { offset?: number; maxBytes?: number; sessionId?: string }): TerminalReadResult
   signal(id: string, signal: TerminalSignalName, opts?: { sessionId?: string }): Promise<TerminalView>
   close(id: string, opts?: { sessionId?: string }): Promise<TerminalView>
@@ -62,6 +63,12 @@ export interface TerminalService {
   dispose(): Promise<void>
 }
 
+export interface ManagedTerminalTransport {
+  assertInvocation(invocation: object | undefined, names: readonly string[]): void
+  launch(request: ExecTransportRequest, assertCurrent: () => void): Promise<SupervisedExecution>
+  assertPolicy(policy: SandboxExecutionPolicy, admitted: CompiledSandboxPolicy): void
+}
+
 const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 24
 const DEFAULT_MAX_READ_BYTES = 64_000
@@ -69,7 +76,7 @@ const RING_MAX = 1_000_000
 
 class TerminalRecord {
   static counter = 0
-  readonly id = `term-${++TerminalRecord.counter}`
+  readonly id: string
   readonly beganAt = new Date().toISOString()
   readonly owner: Readonly<ExecutionOwner>
   readonly decoder = new StringDecoder("utf8")
@@ -88,7 +95,8 @@ class TerminalRecord {
   outputFinished = false
   outputDone: Promise<void>
 
-  constructor(readonly spec: TerminalOpenSpec, readonly execution: SupervisedExecution) {
+  constructor(readonly spec: TerminalOpenSpec, readonly execution: SupervisedExecution, managed: boolean) {
+    this.id = managed ? `term-${randomUUID()}` : `term-${++TerminalRecord.counter}`
     this.owner = execution.policy.owner
     this.cols = spec.cols ?? DEFAULT_COLS
     this.rows = spec.rows ?? DEFAULT_ROWS
@@ -160,8 +168,10 @@ class TerminalRecord {
 }
 
 /** The only process owner is ExecService. This service keeps presentation views. */
-export function createTerminalService(exec: ExecService): TerminalService {
+export function createTerminalService(exec: ExecService, managed?: ManagedTerminalTransport): TerminalService & { hasActiveWork(): boolean } {
   const records = new Map<string, TerminalRecord>()
+  const abandoned = new Set<TerminalRecord>()
+  const activeRecords = new Set<TerminalRecord>()
   const pending = new Set<{ controller: AbortController; attempt: Promise<TerminalRunSpec> }>()
   let disposed = false
 
@@ -208,13 +218,28 @@ export function createTerminalService(exec: ExecService): TerminalService {
       throw new Error(`Terminal cleanup incomplete: ${record.cleanupDetail}`)
     }
     await record.outputDone
+    activeRecords.delete(record)
     record.cleanupDetail = undefined
     return settlement
+  }
+
+  function retainTerminal(spec: TerminalOpenSpec, execution: SupervisedExecution, publish: boolean) {
+    const record = new TerminalRecord(spec, execution, managed !== undefined)
+    if (publish) records.set(record.id, record)
+    else abandoned.add(record)
+    activeRecords.add(record)
+    const finished = Promise.allSettled([execution.handle.settled, record.outputDone])
+    void finished.then(([settlement]) => {
+      if (settlement?.status === "fulfilled" && settlement.value.kind === "settled") activeRecords.delete(record)
+    })
+    return record
   }
 
   return {
     open(spec, opts) {
       if (disposed) throw new Error("terminal service disposed")
+      const assertCurrent = () => managed?.assertInvocation(opts?.invocation, ["terminal_open", "process_spawn"])
+      assertCurrent()
       const controller = new AbortController()
       const externalAbort = () => controller.abort(opts?.abortSignal?.reason ?? "cancelled")
       opts?.abortSignal?.addEventListener("abort", externalAbort, { once: true })
@@ -238,24 +263,39 @@ export function createTerminalService(exec: ExecService): TerminalService {
         ...(spec.args === undefined ? {} : { args: [...spec.args] }),
         ...(spec.env === undefined ? {} : { env: { ...spec.env } }),
       }
-      const execution = await exec.launchTransport({
+      const request: ExecTransportRequest = {
         argv: [spec.command, ...(spec.args ?? [])], cwd,
         ...(spec.env === undefined ? {} : { env: spec.env }),
         transport: "pty", lifetime: "retain-tree", argumentEncoding: "crt",
         pty: { cols, rows }, ...(spec.sandbox === undefined ? {} : { sandbox: spec.sandbox }),
         abortSignal: controller.signal,
-      })
+      }
+      for (const record of abandoned) {
+        await stop(record)
+        abandoned.delete(record)
+      }
+      if (disposed) throw new Error("terminal service disposed during admission")
+      assertCurrent()
+      const execution = managed ? await managed.launch(request, assertCurrent) : await exec.launchTransport(request)
       // The receipt is the authority; an optional trusted dispatch assertion
       // cannot select an owner or change the already admitted execution.
-      if (disposed || (opts?.sessionId !== undefined && opts.sessionId !== execution.policy.owner.sessionId)) {
-        const abandoned = new TerminalRecord(presentationSpec, execution)
-        records.set(abandoned.id, abandoned)
-        await stop(abandoned)
-        records.delete(abandoned.id)
-        throw new Error(disposed ? "terminal service disposed during admission" : "TERMINAL_OWNER_MISMATCH: caller differs from admitted owner")
+      try {
+        if (disposed) throw new Error("terminal service disposed during admission")
+        if (opts?.sessionId !== undefined && opts.sessionId !== execution.policy.owner.sessionId)
+          throw new Error("TERMINAL_OWNER_MISMATCH: caller differs from admitted owner")
+        assertCurrent()
+        if (managed) {
+          if (!request.sandbox) throw Error("Original terminal launch policy required")
+          managed.assertPolicy(request.sandbox, execution.policy)
+        }
+      } catch (cause) {
+        const record = retainTerminal(presentationSpec, execution, false)
+        try { await stop(record) }
+        catch (cleanup) { throw new AggregateError([cause, cleanup], "Terminal admission cleanup incomplete", { cause }) }
+        abandoned.delete(record)
+        throw cause
       }
-      const record = new TerminalRecord(presentationSpec, execution)
-      records.set(record.id, record)
+      const record = retainTerminal(presentationSpec, execution, true)
       return { id: record.id, pid: execution.handle.pid, cols, rows }
       })()
       const entry = { controller, attempt }
@@ -265,13 +305,21 @@ export function createTerminalService(exec: ExecService): TerminalService {
     },
     async send(id, data, opts) {
       const record = getOwned(id, opts?.sessionId)
+      const assertWrite = () => {
+        if (!managed) return
+        managed.assertInvocation(opts?.invocation, ["terminal_send"])
+        if (!opts?.sandbox) throw Error("Original terminal write policy required")
+        managed.assertPolicy(opts.sandbox, record.execution.policy)
+      }
       const rank = { "read-only": 0, "workspace-write": 1, "danger-full-access": 2 }
       if (rank[opts?.sandbox?.mode ?? "danger-full-access"] < rank[record.execution.policy.mode]) {
         throw new Error(`TERMINAL_POLICY_MISMATCH: terminal ${id} was admitted under ${record.execution.policy.mode}`)
       }
+      assertWrite()
       if (record.status === "exited") throw new Error(`Terminal ${id} has exited`)
       const bytes = Buffer.from(data)
       for (let offset = 0; offset < bytes.length; offset += 16_384) {
+        if (offset) assertWrite()
         await record.execution.handle.io.write(bytes.subarray(offset, Math.min(offset + 16_384, bytes.length)))
       }
     },
@@ -320,6 +368,9 @@ export function createTerminalService(exec: ExecService): TerminalService {
       const owner = currentExecCaller()?.sessionId ?? opts?.sessionId
       return [...records.values()].filter(record => owner === undefined || record.owner.sessionId === owner).map(view)
     },
+    hasActiveWork() {
+      return pending.size > 0 || activeRecords.size > 0
+    },
     async waitExited(id) {
       const record = records.get(id)
       if (!record) throw new Error(`TERMINAL_NOT_FOUND: no terminal ${id}`)
@@ -329,12 +380,13 @@ export function createTerminalService(exec: ExecService): TerminalService {
     async dispose() {
       disposed = true
       const admissions = [...pending]
-      const existing = [...records.values()]
+      const existing = [...records.values(), ...abandoned]
       admissions.forEach(entry => entry.controller.abort("shutdown"))
       const admissionOutcomes = await Promise.allSettled(admissions.map(entry => entry.attempt))
       const outcomes = await Promise.allSettled(existing.map(async record => {
         await stop(record)
         records.delete(record.id)
+        abandoned.delete(record)
       }))
       const failures = [
         ...admissionOutcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected"

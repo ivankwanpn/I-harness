@@ -4,6 +4,7 @@ import {isManagedExecutionAttachment} from '../../session-persistence/src/execut
 import {createManagedExecutionDomain,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 import type {PluginContext} from '@i-harness/core-plugin'
 import type {SessionBackgroundJob} from './background-job-view.ts'
+import type {TerminalReadResult,TerminalView} from '@i-harness/terminal'
 
 export type OriginalProcessJobSelector =
   | Readonly<{ backend: 'shell'; id: string; instanceId: string; sourceId?: string }>
@@ -23,6 +24,9 @@ export type OriginalManagedRuntime = Readonly<{
   tools: import('@i-harness/core-tools').ToolRegistry
   /** Passive view from this runtime's owned registries. */
   processes(): SessionBackgroundJob[]
+  terminals(): readonly TerminalView[]
+  readTerminal(id: string, options?: { offset?: number; maxBytes?: number }): TerminalReadResult | undefined
+  closeTerminal(id: string): Promise<TerminalView | undefined>
   cancelProcessJob(selector: OriginalProcessJobSelector): Promise<'cancellation-requested' | 'already-finished'>
   assertCurrent(): void
 }>

@@ -7,6 +7,16 @@ import { createFileProviderRuntime } from "@i-harness/provider-runtime/file"
 import { vi } from "vitest"
 
 const roots: string[] = []
+it("reapplies the previous sandbox setting after a partially applied transition", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-policy-transition-")); roots.push(root)
+  const path = join(root, "settings.json")
+  const apply = vi.fn().mockRejectedValueOnce(new Error("Pending original cleanup")).mockResolvedValue(undefined)
+  const settings = createAgentSettings(path, { sandboxMode: "read-only", autoCompaction: true, approvalMode: "ask-all" }, { onSandboxModeChanged: apply })
+  await expect(settings.configure({ sandboxMode: "workspace-write" })).rejects.toThrow("Pending original cleanup")
+  const state = await settings.configure({ sandboxMode: "read-only" })
+  expect(state.effective.sandboxMode).toBe("read-only")
+  expect(apply.mock.calls).toEqual([["workspace-write"], ["read-only"]])
+})
 it("refreshes live policy without waiting for execution backend diagnostics", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-policy-diagnostics-")); roots.push(root)
   const path = join(root, "settings.json")

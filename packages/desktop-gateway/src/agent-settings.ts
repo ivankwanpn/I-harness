@@ -26,6 +26,7 @@ export function worktreePermissions(
  * without a callback keeps reporting its startup policy until rebuilt. */
 export function createAgentSettings(path: string, startup: AgentDefaults, options: { isolatedWorktree?: boolean; executionStatus?(): Promise<readonly { sessionId: string; status: unknown }[]>; onWindowsSandboxBackendChanged?(backend: SettingsWindowsSandboxBackend): void; onWslExecutionChanged?(configuration: SettingsWslExecution): void | Promise<void>; onWebSearchModeChanged?(mode: SettingsWebSearchMode): void | Promise<void>; onApprovalModeChanged?: (mode: SettingsApprovalMode) => void; onSandboxModeChanged?: (mode: SettingsSandboxMode) => void | Promise<void>; onAutoCompactionChanged?: (enabled: boolean) => void } = {}) {
   const effective = { ...startup, wslExecution: normalizeWslExecution(startup.wslExecution), windowsSandboxBackend: startup.windowsSandboxBackend ?? "legacy" }
+  let sandboxApplyPending = false
   const withStore = <T>(work: (store: SettingsStore) => Promise<T>) => withDesktopSettings(path, work)
   function snapshot(value: Settings): AgentSettingsState {
     const saved = defaults(value)
@@ -56,24 +57,29 @@ export function createAgentSettings(path: string, startup: AgentDefaults, option
       options.onAutoCompactionChanged(saved.autoCompaction)
       effective.autoCompaction = saved.autoCompaction
     }
-    if (saved.sandboxMode !== effective.sandboxMode && options.onSandboxModeChanged !== undefined) {
-      await options.onSandboxModeChanged(saved.sandboxMode)
-      effective.sandboxMode = saved.sandboxMode
-    }
+    await applySandboxMode(saved.sandboxMode)
     if (saved.approvalMode !== effective.approvalMode && options.onApprovalModeChanged !== undefined
       && (saved.approvalMode !== "full-access" || effective.sandboxMode === "danger-full-access")) {
       options.onApprovalModeChanged(saved.approvalMode)
       effective.approvalMode = saved.approvalMode
     }
   }
+  async function applySandboxMode(mode: SettingsSandboxMode): Promise<void> {
+    if (!options.onSandboxModeChanged || (effective.sandboxMode === mode && !sandboxApplyPending)) return
+    // A callback may already have fenced the old policy before it reports a
+    // failure. The last acknowledged setting cannot prove what is active.
+    sandboxApplyPending = true
+    await options.onSandboxModeChanged(mode)
+    effective.sandboxMode = mode
+    sandboxApplyPending = false
+  }
   async function constrain(): Promise<void> {
-    if (options.onSandboxModeChanged !== undefined && effective.sandboxMode !== "read-only") {
-      await options.onSandboxModeChanged("read-only")
-      effective.sandboxMode = "read-only"
-    }
-    if (options.onApprovalModeChanged !== undefined && effective.approvalMode !== "ask-all") {
-      options.onApprovalModeChanged("ask-all")
-      effective.approvalMode = "ask-all"
+    try { await applySandboxMode("read-only") }
+    finally {
+      if (options.onApprovalModeChanged !== undefined && effective.approvalMode !== "ask-all") {
+        options.onApprovalModeChanged("ask-all")
+        effective.approvalMode = "ask-all"
+      }
     }
   }
   const sync = async (observe?: (saved: Settings) => void): Promise<AgentSettingsState> => {

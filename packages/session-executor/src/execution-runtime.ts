@@ -21,6 +21,7 @@ export interface ExecutionRuntimeOptions {
 }
 export interface OriginalFilesystemPolicy {
  sandboxPolicy():SandboxExecutionPolicy
+ assertActiveTransport(policy:CompiledSandboxPolicy):void
  writeGuard(abs:string,modeOverride?:SandboxMode,authoritySnapshot?:object):{ok:true}|{ok:false;denial:import('@i-harness/sandbox').SandboxDenial}
 }
 const filesystemPolicies=new WeakMap<ExecExecutionHost,{policy:OriginalFilesystemPolicy;execution?:ManagedExecutionAttachment}>()
@@ -204,6 +205,7 @@ export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions)
     },
   }
   const policy:OriginalFilesystemPolicy=Object.freeze({
+   assertActiveTransport(policy:CompiledSandboxPolicy){validate(policy,{phase:'active'})},
    sandboxPolicy(){
     if(disposed||options.ownerAvailable?.()===false)throw Error('Execution caller authority unavailable or revoked')
     const authority=options.authority();if(authority.kind==='revoked'||authority.kind==='unavailable')throw Error('Execution authority '+authority.kind+': '+authority.reason)

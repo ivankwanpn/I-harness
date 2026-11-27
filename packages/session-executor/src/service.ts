@@ -162,7 +162,7 @@ type PostTurnAction = Pick<ManagedAction<ProducerFactOutcome>, 'signal' | 'asser
 
 export interface SessionServiceOptions extends AssemblyOptions {
   /** Internal explicit-tool managed composition; not the default feature builder. */
-  managedRuntime?: Pick<import('./managed-assembly.ts').ManagedExecutionRuntimeOptions,'tools'|'systemPrompt'|'prepareInput'|'originalFilesystem'|'requireFilesystemPolicy'|'originalSchedule'|'originalApproval'|'approvalMode'|'compact'|'autoCompactionEnabled'> & {
+  managedRuntime?: Pick<import('./managed-assembly.ts').ManagedExecutionRuntimeOptions,'tools'|'systemPrompt'|'prepareInput'|'originalFilesystem'|'requireFilesystemPolicy'|'originalSchedule'|'originalApproval'|'approvalMode'|'compact'|'autoCompactionEnabled'|'sandboxMode'> & {
     /** Owned callback mount over the original ctx. Retain exact cleanup before startup awaits. */
     mount?(ctx:PluginContext,retain:(cleanup:()=>void|Promise<void>)=>void):Promise<void>
     mountRegistry?:import('./managed-assembly.ts').ManagedRegistryFactory
@@ -2155,8 +2155,28 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       runtime.domain.assertCurrent()
     }
     check()
+    const terminal = managedShellOwners.get(id)?.terminal
+    const terminalRow = (terminalId: string) => terminal?.list({ sessionId: id }).find(value => value.id === terminalId)
     return Object.freeze({
       execution: runtime.execution, domain: runtime.domain, tools: runtime.tools, assertCurrent: check,
+      terminals() {
+        check()
+        const result = terminal?.list({ sessionId: id }) ?? []
+        check()
+        return result
+      },
+      readTerminal(terminalId: string, options?: { offset?: number; maxBytes?: number }) {
+        check()
+        const result = terminalRow(terminalId) ? terminal!.read(terminalId, { ...options, sessionId: id }) : undefined
+        check()
+        return result
+      },
+      async closeTerminal(terminalId: string) {
+        check()
+        const result = terminalRow(terminalId)?.status === 'running' ? await terminal!.close(terminalId, { sessionId: id }) : undefined
+        check()
+        return result
+      },
       processes() {
         check()
         const shell = managedShellOwners.get(id)?.listJobViews() ?? []

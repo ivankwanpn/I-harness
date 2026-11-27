@@ -197,6 +197,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   const usageStats:NonNullable<DesktopHandlers['usageStats']>=createUsageHandlers(usageStore,{recordingMode:usageObservations?'observations':'legacy',warnings:()=>[...usageCapture.warnings(),...(usageObservations?.warnings()??[])]})
   const initialPolicy = worktreePermissions(settings.get(), options.isolatedWorktree)
   let mode = initialPolicy.sandboxMode
+  let sandboxRevision = 0
   let windowsSandboxBackend = settings.get().windowsSandboxBackend
   let wslExecution = { ...settings.get().wslExecution }
   let webSearchMode = settings.get().webSearchMode
@@ -389,7 +390,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   }
   const wslExecutionFor=()=>{const captured={...wslExecution};if(windowsSandboxBackend!=='wsl'||!captured.workspaceDependencies)return captured;return managedRuntime().then(async runtime=>{const resolved=await runtime.resolve(captured,{installIfMissing:true});if(resolved.status==='missing'||resolved.status==='unavailable')throw Error(resolved.detail);return {...captured,...resolved.runtimePath?{runtimePath:[...resolved.runtimePath]}:{}}})}
   const ownedNative=createOwnedGatewayNative({
-    authorityFor:ownedAuthorityFor,mode:()=>mode,executionOptions:async()=>({windowsSandboxBackend,wslExecution:await wslExecutionFor()}),
+    authorityFor:ownedAuthorityFor,mode:()=>mode,modeRevision:()=>sandboxRevision,executionOptions:async()=>({windowsSandboxBackend,wslExecution:await wslExecutionFor()}),
     async resolveShell(_id,config,authority){
       if(config.windowsSandboxBackend!=='wsl')return agentShell.resolve
       const wsl=config.wslExecution
@@ -410,7 +411,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   const ownedTaskOptions:NonNullable<NonNullable<SessionServiceOptions['managedRuntime']>['ownedTask']>['options']=async(original,live)=>{
     const id=original.domain.sessionId,binding=()=>{const read=ownedBindings.get(id);if(!read)throw Error('Original model binding unavailable');return read()},hook=()=>{const read=ownedHookContexts.get(id);if(!read)throw Error('Original hook context unavailable');return read()}
     if(!original.instructions)throw Error('Original instruction binding unavailable')
-    const parts=createOwnedGatewayPromptParts(original,{workspace:options.workspace,rewindEnabled:true,mode:()=>mode,authority:original.instructions.authority,project:()=>projectContexts.get(id)?.(),shell:()=>ownedNative.agentShellFor(id)})
+    const parts=createOwnedGatewayPromptParts(original,{workspace:options.workspace,rewindEnabled:true,mode:observation=>ownedNative.modeFor(id,observation),authority:original.instructions.authority,project:()=>projectContexts.get(id)?.(),shell:()=>ownedNative.agentShellFor(id)})
     const result=await createOwnedGatewayTaskOptions({bindChildHost(childId,host){if(childId!==id||ownedChildHosts.has(id))throw Error('Original child instruction host already bound');original.retain(()=>{if(ownedChildHosts.get(id)===host)ownedChildHosts.delete(id)});ownedChildHosts.set(id,host)},coordinator,prepareTaskChild:nativeContext.prepareTaskChild,resolveModel:selection=>runtime.resolveModel({sessionSelection:selection}),roleSelectionFor:subagents.selectionFor,roleToolsFor:(role)=>settings.get().agents.roleTools?.[role],allowSubagentModelSelection:()=>roleModelsEnabled,autoCompactionEnabled:()=>autoCompactionEnabled,
       childShellFactory:async({ctx,tools,sessionId})=>{
         if(!sessionId)return
@@ -520,7 +521,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
     compact: { auto: settings.get().compaction.auto },
     managedRuntime: {
       systemPrompt: DEFAULT_AGENT_PRESET.systemPrompt, tools: [], originalFilesystem: true, requireFilesystemPolicy: true,
-      originalSchedule: true, originalApproval: true, approvalMode: () => approvalMode,
+      originalSchedule: true, originalApproval: true, approvalMode: () => approvalMode, sandboxMode: () => mode,
       compact: { auto: settings.get().compaction.auto }, autoCompactionEnabled: () => autoCompactionEnabled,
       acquireInstructions: ownedInstructions, ownedShell: { ...ownedNative, agentShell: agentShell.resolve },
       ownedCode: { configFor: () => codeSettings.resolve(), acquireOutput: ownedNative.acquireOutput },
@@ -534,7 +535,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
         if(ownedBindings.has(id))throw Error('Original model binding already installed')
         original.retain(()=>{if(ownedBindings.get(id)===live.modelBinding)ownedBindings.delete(id)})
         ownedBindings.set(id,live.modelBinding)
-        const parts=createOwnedGatewayPromptParts(original,{workspace:options.workspace,rewindEnabled:true,mode:()=>mode,authority:instructions.authority,project:()=>projectContexts.get(id)?.(),shell:()=>ownedNative.agentShellFor(id)})
+        const parts=createOwnedGatewayPromptParts(original,{workspace:options.workspace,rewindEnabled:true,mode:observation=>ownedNative.modeFor(id,observation),authority:instructions.authority,project:()=>projectContexts.get(id)?.(),shell:()=>ownedNative.agentShellFor(id)})
         const taskOptions=ownedTaskInputs.get(id);if(!taskOptions)throw Error('Original Task options unavailable')
         await mountOwnedGatewayGuardian(original,task,{get parentModel(){return live.modelBinding().model},get contextWindow(){return live.modelBinding().contextWindow},get budgetBinding(){return live.modelBinding().budgetBinding},get contextMetadata(){return live.modelBinding().contextMetadata},get reasoningEffort(){return live.modelBinding().reasoningEffort},get maxOutputTokens(){return live.modelBinding().maxOutputTokens},inheritedBindingForStep:taskOptions.inheritedBindingForStep,summaryFactory,resolveModel:selection=>runtime.resolveModel({sessionSelection:selection}),roleSelectionFor:subagents.selectionFor,allowSubagentModelSelection:()=>true,autoCompactionEnabled:()=>autoCompactionEnabled,policyText:DESKTOP_GUARDIAN_POLICY,enabled:()=>approvalMode==='delegate',fallbackToHumanOnFailure:true,isolated:isolatedGuardianFor(id),breaker:{coordinator,sessionId:id},childSessions:{coordinator,parentSessionId:id}})
         return composeOwnedGatewayDefault(original,{
@@ -596,7 +597,12 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
     onWslExecutionChanged(next) { wslExecution = { ...next } },
     onWebSearchModeChanged(next) { webSearchMode = next },
     executionStatus: () => service.executionBackendStatus(),
-    async onSandboxModeChanged(next) { mode = next; await service.updateSandboxMode(next) },
+    async onSandboxModeChanged(next) {
+      if (mode !== next) { mode = next; sandboxRevision++ }
+      const results = await Promise.allSettled([ownedNative.reconcileAll(), service.updateSandboxMode(next)])
+      const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+      if (failures.length) throw new AggregateError(failures, 'Sandbox mode update incomplete')
+    },
     onApprovalModeChanged(next) { approvalMode = next },
     onAutoCompactionChanged(next) { autoCompactionEnabled = next },
   })

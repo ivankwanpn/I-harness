@@ -27,6 +27,53 @@ function fixture() {
   return { exec, exit: () => root.resolve({ exitCode: 0 }), finishOutput, push(data: string | Uint8Array) { queued.push(Buffer.from(data)); wake?.() } }
 }
 
+it("keeps a late-refused managed PTY private and settles it before a new launch", async () => {
+  const sources = new Map<string, ReturnType<typeof fixture>>()
+  const cancelled: string[] = []
+  let expired = true, allowCleanup = false
+  const invocation = Object.freeze({})
+  const exec: ExecService = {
+    ...fixture().exec,
+    launchTransport: async () => { throw new Error("Managed terminal must use its prepared transport") },
+    cancelExecution: async (id: string) => {
+      cancelled.push(id)
+      if (!allowCleanup) return { kind: "incomplete" as const, phase: "release" as const, detail: "controlled cleanup failure" }
+      return sources.get(id)!.exec.cancelExecution(id, "cancelled")
+    },
+  }
+  const service = createTerminalService(exec, {
+    assertInvocation(candidate) { if (candidate !== invocation) throw Error("foreign fixture invocation") },
+    async launch(request, check) {
+      check()
+      const id = "native-" + (sources.size + 1)
+      const source = fixture()
+      sources.set(id, source)
+      return { ...await source.exec.launchTransport(request), id }
+    },
+    assertPolicy() { if (expired) throw Error("retired before PTY publication") },
+  })
+  const open = () => service.open({ command: "fixture", sandbox: { mode: "danger-full-access", workspaceRoot: "." } }, { invocation })
+  try {
+    await expect(open()).rejects.toThrow("Terminal admission cleanup incomplete")
+    expect(service.list()).toEqual([])
+    expect(service.hasActiveWork()).toBe(true)
+    expect(cancelled).toEqual(["native-1"])
+
+    expired = false
+    await expect(open()).rejects.toThrow("Terminal cleanup incomplete")
+    expect(service.list()).toEqual([])
+    expect(sources.size).toBe(1)
+    allowCleanup = true
+    const { id } = await open()
+    expect(cancelled).toEqual(["native-1", "native-1", "native-1"])
+    expect(service.list()).toMatchObject([{ id }])
+    expect(sources.size).toBe(2)
+  } finally {
+    allowCleanup = true
+    await service.dispose()
+  }
+})
+
 it("reads bounded UTF-16 windows across frames and preserves zero-length and future cursors", async () => {
   const source = fixture(), service = createTerminalService(source.exec)
   const { id } = await service.open({ command: "fixture", rawOutput: true })
