@@ -59,7 +59,7 @@ export function asSessionCoordinator(coordinator: CommitCoordinator, options: Co
   const ports = coordinator.capabilities()
   const facade: SessionCoordinator & Pick<CommitCoordinator, 'acquireExecution'> = {
     ...coordinator,
-    create: async (meta?: Parameters<typeof coordinator.create>[0]) => coordinator.create(meta, initialTaskDocument()),
+    create: async (meta, policy) => coordinator.create(meta, initialTaskDocument(), policy),
     append: async (id: string, events: Parameters<typeof coordinator.append>[1]) => {
       const result = await coordinator.append(id, events)
       coldWrites.committed(id)

@@ -693,6 +693,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
     return read
   }
   const resources = createDesktopResources(options.workspace, () => plugins.inputs(), { configDir: dirname(settingsPath), refresh: () => service.refreshExtensions() })
+  const createDraft = createDraftSession(coordinator)
   const handlers: DesktopHandlers = {
     hasActiveWork: (): boolean => applyingMcp || base.hasActiveWork() || interaction.hasPending() || input.hasActiveWork()
       || workflow.hasActiveWork() || terminal.hasActiveWork() || nativeContext.hasActiveWork()
@@ -711,7 +712,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
       return service.taskProjectionIntegrity(id, options)
     },
     draftSession: async (clientToken: string) => {
-      const created = await createDraftSession(coordinator)(clientToken)
+      const created = await createDraft(clientToken)
       // The empty durable draft is a real sidebar row. Without this notification
       // a failed/queued first send leaves it visible only after the next refresh.
       try { options.onWrite(makeNotification("desktop/session/navigation/changed", { sessionId: created.sessionId })) } catch { /* refresh is best effort */ }

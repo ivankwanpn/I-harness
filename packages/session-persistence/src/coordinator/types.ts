@@ -138,6 +138,11 @@ export interface CoordinatorOptions {
   acquireDeadlineMs?: number
 }
 
+export interface SessionCreateOptions {
+  /** Require a new ID even in stores that support explicit recreation. */
+  readonly recreateDeleted?: false
+}
+
 export interface SessionCoordinator {
   retainExistingSessionBindingObservation?(request: import('./retained-binding.ts').RetainedBindingRequest, retired: (operation: import('./retained-cleanup.ts').RetainedCleanupOperation) => void): Promise<import('./retained-binding.ts').RetainedExistingBinding>
   withProcessReadObservation?<T, U>(id: string, options: import('./process-read-owner.ts').ProcessReadOptions, work: (observation: import('./process-read-owner.ts').ProcessReadObservation) => Promise<T>, publish: (candidate: T, observation: import('./process-read-owner.ts').ProcessReadObservation, last: import('./process-read-owner.ts').ProcessReadUpdate) => Promise<U>): Promise<U>
@@ -170,7 +175,7 @@ export interface SessionCoordinator {
   /** Drain producers before calling. Holds write ownership until the store commits its tombstone. */
   deleteOwnedSession?(sessionId: string, manifest: SessionArtifactManifest): Promise<void>
   deletionReceipt?(sessionId: string): Promise<{ visibility: { origin?: string; parentSession?: string }; manifest: SessionArtifactManifest } | undefined>
-  create(meta?: Partial<SessionMeta>): Promise<{ id: string }>
+  create(meta?: Partial<SessionMeta>, options?: SessionCreateOptions): Promise<{ id: string }>
   append(sessionId: string, events: SessionEvent[]): Promise<void>
   /** @deprecated S-09: no product caller; every real event goes through the
    * synchronous append path. Kept only for API compatibility and retired as a

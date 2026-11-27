@@ -7,7 +7,7 @@ import { COMMIT_LOG_GENERATION, CommitLogConflictError, CommitLogClosedError, Co
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { buildSession, migrate, preflightSessionFormat } from '../format/validation.ts'
-import type { SessionMeta } from '../coordinator/types.ts'
+import type { SessionCreateOptions, SessionMeta } from '../coordinator/types.ts'
 import type { LegacySession, LegacySessionStore } from './legacy.ts'
 export { createOwnedLegacySessionStore } from './legacy.ts'
 export { isCommittedDocumentClaimed } from './document-claim.ts'
@@ -60,7 +60,7 @@ export class CommitSessionDeletedError extends CommitLogNotFoundError {
 
 export type CommitCoordinator = {
   readonly storageRoot: string
-  create(meta?: Partial<SessionMeta>, initialTaskDocument?: unknown): Promise<{ id: string }>
+  create(meta?: Partial<SessionMeta>, initialTaskDocument?: unknown, options?: SessionCreateOptions): Promise<{ id: string }>
   inspectBirth(invocation: import('../coordinator/bootstrap-types.ts').BootstrapInvocation): Promise<import('../coordinator/bootstrap-types.ts').BootstrapInspection>
   createChildSession(request: BootstrapRequest, options: { closure: string; initialTaskDocument?: unknown; header?: Partial<SessionMeta>; mutableVisibility?: boolean }): Promise<{ id: string; document: ManagedDocument; receipt: import('../coordinator/bootstrap-types.ts').BootstrapReceipt }>
   bootstrapChildTargetWithCapture(request: import('../coordinator/child-bootstrap-intent.ts').ChildBootstrapCaptureRequest, guards: import('../coordinator/bootstrap-types.ts').BootstrapGuards, capture: () => Promise<BootstrapRequest>): Promise<import('../coordinator/bootstrap-types.ts').BootstrapOutcome>
@@ -492,18 +492,19 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
 
   const continuation: CommitCoordinator = {
     storageRoot: root,
-    create(meta, initialTaskDocument) {
+    create(meta, initialTaskDocument, options) {
+      const recreateDeleted = options?.recreateDeleted !== false
       const task = initialTaskDocument === undefined ? undefined : captureTaskSnapshot(initialTaskDocument)
       return track(writes, async () => {
         const sessionId = meta?.sessionId ?? randomSessionId()
         const header = toHeader(meta, sessionId, now)
         const log = await inLegacyNamespace(sessionId, async source => {
-          await assertNewTarget(sessionId, source, true)
-          return createCommitLog({ ...logOptions(sessionId), recreateDeleted: true }, { header: header as unknown as Record<string, unknown> })
+          await assertNewTarget(sessionId, source, recreateDeleted)
+          return createCommitLog({ ...logOptions(sessionId), recreateDeleted }, { header: header as unknown as Record<string, unknown> })
         })
         await log.close()
         if (task !== undefined) await putDocumentOf('task-' + sessionId, task)
-        await clearDocumentsOf(['deletion:' + sessionId])
+        if (recreateDeleted) await clearDocumentsOf(['deletion:' + sessionId])
         return { id: sessionId }
       })
     },
