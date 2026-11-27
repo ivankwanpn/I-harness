@@ -71,3 +71,104 @@ it("shares the original workspace opening list with the expanded project tree", 
     { kind: "desktop/session/navigation/state", workspaceId: "w" },
   ])
 })
+
+it("refreshes only the original folder when a sidebar selection clears its unread badge", async () => {
+  vi.useFakeTimers()
+  useUiStore.setState({ surface: "conversation", sidebarCollapsed: false, reviewOpen: false })
+  const folders = ["A", "B", "C"].map(id => ({ id, path: `D:/fixture/${id}`, label: `Folder ${id}` }))
+  const projects = folders.map(({ id }) => ({ id: `p${id}`, name: `Project ${id}`, workspaceIds: [id], primaryWorkspaceId: id, createdAt: "2026-10-10", updatedAt: "2026-10-10" }))
+  const unreadWrite = Promise.withResolvers<void>()
+  let unread = true
+  const request = vi.fn<DesktopBridge["request"]>(async input => {
+    if (input.kind === "session/dashboard") return { sessions: [{ id: "chat", title: `Chat ${input.workspaceId}`, live: false }] }
+    if (input.kind === "desktop/session/navigation/state") return { chat: { projectId: `p${input.workspaceId}`, pinned: false, unread: input.workspaceId === "A" && unread } }
+    return {}
+  })
+  const manage = vi.fn(async () => { await unreadWrite.promise; unread = false })
+  const select = vi.fn()
+  render(<Workbench bridge={{ request, onEvent: () => () => {} }} workspaces={folders} projects={projects}
+    selectedProjectId="pA" selectedWorkspaceId="A" selectedSessionId="chat" capabilities={{ "desktop-sessions": ["1"] }}
+    onSelectWorkspace={() => {}} onSelectSession={() => {}} onSelectSessionInWorkspace={select} onManageSessionInWorkspace={manage} />)
+  fireEvent.click(screen.getByRole("button", { name: "展開專案 Project B" }))
+  await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+  const sidebar = within(screen.getByRole("navigation", { name: "專案" }))
+  const originalOtherRow = sidebar.getByText("Chat B")
+  expect(sidebar.queryByText("Chat C")).toBeNull()
+  const catalogReads = () => request.mock.calls.map(([input]) => input).filter(input => input.kind === "session/dashboard" || input.kind === "desktop/session/navigation/state")
+  expect(catalogReads().filter(input => input.workspaceId === "B").map(input => input.kind)).toEqual(["session/dashboard", "desktop/session/navigation/state"])
+  expect(catalogReads().filter(input => input.workspaceId === "C").map(input => input.kind)).toEqual(["desktop/session/navigation/state"])
+  request.mockClear()
+
+  const originalRow = within(sidebar.getByText("Chat A").closest("li")!)
+  fireEvent.click(originalRow.getByText("Chat A"))
+  expect(select).toHaveBeenCalledWith("A", "chat", "pA")
+  expect(manage).toHaveBeenCalledWith("A", "chat", "read")
+  expect(originalRow.getByLabelText("未讀")).toBeTruthy()
+  await act(async () => { unreadWrite.resolve() })
+  await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+
+  expect(originalRow.queryByLabelText("未讀")).toBeNull()
+  expect(sidebar.getByText("Chat B")).toBe(originalOtherRow)
+  expect(catalogReads().map(input => `${input.workspaceId}:${input.kind}`)).toEqual(["A:session/dashboard", "A:desktop/session/navigation/state"])
+})
+
+it("keeps moved and archived manager rows tied to their original storage folder", async () => {
+  vi.useFakeTimers()
+  useUiStore.setState({ surface: "conversation", sidebarCollapsed: false, reviewOpen: false })
+  const folders = ["A", "B"].map(id => ({ id, path: `D:/fixture/${id}`, label: `Folder ${id}` }))
+  const projects = folders.map(({ id }) => ({ id: `p${id}`, name: `Project ${id}`, workspaceIds: [id], primaryWorkspaceId: id, createdAt: "2026-10-10", updatedAt: "2026-10-10" }))
+  let owner = "pA", archived = false
+  const request = vi.fn<DesktopBridge["request"]>(async input => {
+    if (input.kind === "session/dashboard" || input.kind === "session/list") {
+      return { sessions: input.workspaceId === "A" && !archived ? [{ id: "chat", title: "Chat A", live: false }] : [] }
+    }
+    if (input.kind === "desktop/session/navigation/state") {
+      return input.workspaceId === "A" ? { chat: { projectId: owner, pinned: false, unread: false } } : {}
+    }
+    return {}
+  })
+  const batch = vi.fn<NonNullable<import("../src/renderer/shell/Workbench.tsx").WorkbenchProps["onBatchSessions"]>>(async (workspaceId, command) => {
+    expect(workspaceId).toBe("A")
+    if (command.action === "move") owner = command.projectId!
+    else if (command.action === "archive") archived = true
+    return { results: [{ sessionId: "chat", ok: true, projectId: owner }] }
+  })
+  render(<Workbench bridge={{ request, onEvent: () => () => {} }} workspaces={folders} projects={projects}
+    selectedProjectId="pA" selectedWorkspaceId="A" capabilities={{ "desktop-sessions": ["1"] }}
+    onSelectWorkspace={() => {}} onSelectSession={() => {}} onManageSessionInWorkspace={async () => {}} onBatchSessions={batch} />)
+  const sidebar = within(screen.getByRole("navigation", { name: "專案" }))
+  const group = (id: string) => within(sidebar.getByRole("button", { name: `Project ${id}` }).closest("li")!)
+  fireEvent.click(sidebar.getByRole("button", { name: "展開專案 Project B" }))
+  await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+  const source = group("A"), destination = group("B")
+  expect(source.getByText("Chat A")).toBeTruthy()
+  expect(destination.queryByText("Chat A")).toBeNull()
+
+  await act(async () => { fireEvent.click(sidebar.getByRole("button", { name: "管理會話…" })) })
+  const dialog = within(screen.getByRole("dialog", { name: "管理會話" }))
+  const getChecked = () => dialog.getByRole("checkbox", { name: "選取 Chat A" })
+  const refreshedSource = () => request.mock.calls.map(([input]) => input).filter(input => input.kind === "session/dashboard" || input.kind === "desktop/session/navigation/state").map(input => input.workspaceId)
+  request.mockClear()
+  fireEvent.click(getChecked())
+  fireEvent.click(dialog.getByRole("button", { name: "目的專案" }))
+  fireEvent.click(screen.getByRole("menuitemradio", { name: "Project B" }))
+  fireEvent.click(dialog.getByRole("button", { name: "移動所選會話" }))
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "確認移動" })); await vi.advanceTimersByTimeAsync(300) })
+  await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+  expect(batch).toHaveBeenCalledWith("A", { action: "move", sessionIds: ["chat"], projectId: "pB", expectedOwners: { chat: "pA" } })
+  expect(refreshedSource()).toEqual(["A", "A", "A"])
+  expect(source.queryByText("Chat A")).toBeNull()
+  expect(destination.getByText("Chat A")).toBeTruthy()
+
+  // The manager still lists the original storage row after its owner changes.
+  request.mockClear()
+  fireEvent.click(getChecked())
+  fireEvent.click(dialog.getByRole("button", { name: "封存所選會話" }))
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "確認批次封存" })); await vi.advanceTimersByTimeAsync(300) })
+  await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+  expect(batch).toHaveBeenCalledWith("A", { action: "archive", sessionIds: ["chat"] })
+  expect(refreshedSource()).toEqual(["A", "A", "A"])
+  expect(dialog.queryByRole("checkbox", { name: "選取 Chat A" })).toBeNull()
+  fireEvent.click(dialog.getByRole("button", { name: "關閉" }))
+  expect(sidebar.queryByText("Chat A")).toBeNull()
+})

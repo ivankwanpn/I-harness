@@ -13,7 +13,7 @@ import "./projects-sidebar.css"
 
 export interface ProjectSidebarProps {
   bridge: DesktopBridge
-  revision?: number
+  sessionRevisionsByWorkspace?: ReadonlyMap<string, number>
   onManageSessions?(workspaceId: string, sessionId?: string): void
   projects: ProjectEntry[]
   workspaces: WorkspaceEntry[]
@@ -154,7 +154,7 @@ function ProjectTree(props: ProjectSidebarProps) {
 
   return <nav className="sidebar project-sidebar" aria-label={t("專案")}>
     {workspaces.map(folder => <WorkspaceCatalogReader key={folder.id} bridge={bridge} workspaceId={folder.id}
-      mode={readModes.get(folder.id) ?? "owners"} revision={props.revision} readers={readers} setSnapshots={setSnapshots}
+      mode={readModes.get(folder.id) ?? "owners"} revision={props.sessionRevisionsByWorkspace?.get(folder.id)} readers={readers} setSnapshots={setSnapshots}
       readOpeningDashboard={props.readOpeningDashboard}
       details={folder.id === selectedWorkspaceId && hasProjectSelection ? props.dashboard : undefined} />)}
     <div className="sidebar-header">

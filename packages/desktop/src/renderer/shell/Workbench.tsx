@@ -213,7 +213,14 @@ export function Workbench({
   const [managerBusy, setManagerBusy] = useState(false)
   const managerOwner = useRef(manager)
   managerOwner.current = manager
-  const [sidebarRevision, setSidebarRevision] = useState(0)
+  const [sessionRevisionsByWorkspace, setSessionRevisionsByWorkspace] = useState<ReadonlyMap<string, number>>(() => new Map())
+  const refreshWorkspaceSessions = useCallback((workspaceId: string) => {
+    setSessionRevisionsByWorkspace(previous => {
+      const next = new Map(previous)
+      next.set(workspaceId, (previous.get(workspaceId) ?? 0) + 1)
+      return next
+    })
+  }, [])
   const manageSourceSession = useCallback(async (workspaceId: string, sessionId: string, action: Parameters<ManageSession>[1], title?: string) => {
     if (onManageSessionInWorkspace) {
       if (title === undefined) await onManageSessionInWorkspace(workspaceId, sessionId, action)
@@ -223,8 +230,8 @@ export function Workbench({
       else await onManageSession(sessionId, action, title)
     }
     else throw new Error("Conversation management unavailable")
-    setSidebarRevision(value => value + 1)
-  }, [onManageSessionInWorkspace, onManageSession, selectedWorkspaceId])
+    refreshWorkspaceSessions(workspaceId)
+  }, [onManageSessionInWorkspace, onManageSession, selectedWorkspaceId, refreshWorkspaceSessions])
   const [managerOwners, setManagerOwners] = useState<Record<string, string | undefined>>()
   const workspaceScope = useRef({ id: selectedWorkspaceId, sessionId: selectedSessionId, projectId: selectedProjectId })
   if (workspaceScope.current.id !== selectedWorkspaceId || workspaceScope.current.sessionId !== selectedSessionId || workspaceScope.current.projectId !== selectedProjectId) workspaceScope.current = { id: selectedWorkspaceId, sessionId: selectedSessionId, projectId: selectedProjectId }
@@ -282,8 +289,10 @@ export function Workbench({
   useEffect(() => {
     if (workPaneTab !== paneSelection.id) setPaneSelection({ id: workPaneTab, unavailable: true })
   }, [workPaneTab, paneSelection.id])
+  const managerWorkspaceId = manager?.workspaceId
+  const managerWorkspaceRevision = managerWorkspaceId === undefined ? undefined : sessionRevisionsByWorkspace.get(managerWorkspaceId)
   useEffect(() => {
-    const workspaceId = manager?.workspaceId
+    const workspaceId = managerWorkspaceId
     setManagerOwners(undefined)
     if (!workspaceId) return
     let active = true
@@ -291,15 +300,15 @@ export function Workbench({
       if (active && value && typeof value === "object") setManagerOwners(Object.fromEntries(Object.entries(value).map(([id, row]) => [id, (row as { projectId?: string }).projectId])))
     }).catch(() => undefined)
     return () => { active = false }
-  }, [bridge, manager?.workspaceId, sidebarRevision])
+  }, [bridge, managerWorkspaceId, managerWorkspaceRevision])
   const openManager = (workspaceId: string, sessionId?: string, archived = false) => { setManagerBusy(false); setManager({ workspaceId, sessionId, archived }) }
   const managerManage = manager ? onManageSessionInWorkspace ? (id: string, action: Parameters<ManageSession>[1], title?: string) => onManageSessionInWorkspace(manager.workspaceId, id, action, title) : manager.workspaceId === selectedWorkspaceId ? onManageSession : undefined : undefined
   const batchRequest = useCallback(async (workspaceId: string, command: import("../session/SessionManager.tsx").ManageSessionBatchCommand) => {
     if (!onBatchSessions) throw new Error("Session batch management unavailable")
     const result = await onBatchSessions(workspaceId, command)
-    if (result.results.some(row => row.ok)) setSidebarRevision(value => value + 1)
+    if (result.results.some(row => row.ok)) refreshWorkspaceSessions(workspaceId)
     return result
-  }, [onBatchSessions])
+  }, [onBatchSessions, refreshWorkspaceSessions])
   const notificationNavigation = useRef(0)
   const openNotification = useCallback(async (target: { workspaceId: string; sessionId: string }) => {
     const scope = workspaceScope.current
@@ -462,7 +471,7 @@ export function Workbench({
         {drawer.narrow ? <button type="button" className="drawer-close primary-button" onClick={drawer.closeTemporary}>{t("關閉側欄")}</button> : null}
         <div className="sidebar-view">
           {projects === undefined ? <nav className="sidebar" aria-label={t("專案")}><div className="brand">I-harness</div><p role="status" className="notice">{english ? "Loading projects…" : "正在讀取專案…"}</p><button type="button" className="link-button" onClick={() => { void onProjectsChanged?.().catch(() => undefined) }}>{t("重試")}</button></nav> : <ProjectSidebar
-            bridge={bridge} revision={sidebarRevision} onManageSessions={capabilities["desktop-sessions"]?.includes("1") && (onManageSessionInWorkspace || onManageSession) ? (workspaceId, sessionId) => openManager(workspaceId, sessionId) : undefined} projects={projects} workspaces={workspaces} selectedProjectId={selectedProjectId} selectedWorkspaceId={selectedWorkspaceId} selectedSessionId={selectedSessionId}
+            bridge={bridge} sessionRevisionsByWorkspace={sessionRevisionsByWorkspace} onManageSessions={capabilities["desktop-sessions"]?.includes("1") && (onManageSessionInWorkspace || onManageSession) ? (workspaceId, sessionId) => openManager(workspaceId, sessionId) : undefined} projects={projects} workspaces={workspaces} selectedProjectId={selectedProjectId} selectedWorkspaceId={selectedWorkspaceId} selectedSessionId={selectedSessionId}
             dashboard={dashboard} readOpeningDashboard={readOpeningDashboard} attentionBySession={attentionBySession} projectSelectionPending={!!selectedSessionId && contextState.status !== "ready"}
             onSelectProject={(id) => { drawer.closeTemporary(); onSelectProject?.(id) }}
             onSelectWorkspace={(id, projectId) => { drawer.closeTemporary(); setSurface("conversation"); onSelectWorkspace(id, projectId) }}
@@ -691,7 +700,7 @@ export function Workbench({
         {workVisible && workPaneTab === "tasks" && conversation === undefined ? <p className="notice">{t("尚未選擇會話")}</p> : null}
         </div>
       </aside> : null}
-      {manager && managerManage ? <SettingsDialog title={t("管理會話")} closeLabel={t("關閉")} busy={managerBusy} initialFocusSelector="button" onClose={() => setManager(undefined)}><p className="settings-description">{english ? "This manager lists all conversations stored in the source folder, including conversations from other projects." : "此處管理來源資料夾儲存的所有會話，可能包含其他專案的會話。"}<br /><span>{workspaces.find(row => row.id === manager.workspaceId)?.path}</span></p><SessionManager key={JSON.stringify(manager)} onBusyChange={busy => { if (managerOwner.current === manager) setManagerBusy(busy) }} bridge={bridge} workspaceId={manager.workspaceId} initialArchived={manager.archived} initialSelected={manager.sessionId ? [manager.sessionId] : []} onManage={async (id, action, title) => { await managerManage(id, action, title); setSidebarRevision(value => value + 1) }} onRewindComplete={capabilities["desktop-rewind"]?.includes("1") && onRewindComplete ? id => onRewindComplete(manager.workspaceId, id) : undefined} onBatch={onBatchSessions && capabilities["desktop-sessions"]?.includes("1") ? command => batchRequest(manager.workspaceId, command) : undefined} projects={projects} currentOwners={managerOwners} executionWorkspace={workspaces.find(row => row.id === manager.workspaceId)?.path} /></SettingsDialog> : null}
+      {manager && managerManage ? <SettingsDialog title={t("管理會話")} closeLabel={t("關閉")} busy={managerBusy} initialFocusSelector="button" onClose={() => setManager(undefined)}><p className="settings-description">{english ? "This manager lists all conversations stored in the source folder, including conversations from other projects." : "此處管理來源資料夾儲存的所有會話，可能包含其他專案的會話。"}<br /><span>{workspaces.find(row => row.id === manager.workspaceId)?.path}</span></p><SessionManager key={JSON.stringify(manager)} onBusyChange={busy => { if (managerOwner.current === manager) setManagerBusy(busy) }} bridge={bridge} workspaceId={manager.workspaceId} initialArchived={manager.archived} initialSelected={manager.sessionId ? [manager.sessionId] : []} onManage={async (id, action, title) => { await managerManage(id, action, title); refreshWorkspaceSessions(manager.workspaceId) }} onRewindComplete={capabilities["desktop-rewind"]?.includes("1") && onRewindComplete ? id => onRewindComplete(manager.workspaceId, id) : undefined} onBatch={onBatchSessions && capabilities["desktop-sessions"]?.includes("1") ? command => batchRequest(manager.workspaceId, command) : undefined} projects={projects} currentOwners={managerOwners} executionWorkspace={workspaces.find(row => row.id === manager.workspaceId)?.path} /></SettingsDialog> : null}
       {paletteOpen ? <CommandPalette bridge={bridge}
         workspace={selectedWorkspaceId ? { id: selectedWorkspaceId, label: workspaces.find(row => row.id === selectedWorkspaceId)?.label ?? workspaceTitle } : undefined}
         sessions={dashboard?.sessions ?? []} sessionSearch={supports("desktop-session-search")} files={fileNavigation?.onOpenProjectFile ? review?.projectFiles : undefined}

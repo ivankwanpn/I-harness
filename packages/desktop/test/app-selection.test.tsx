@@ -20,6 +20,38 @@ import type { ForkOperation } from '@i-harness/sdk/fork'
 afterEach(() => { cleanup(); captured.props = undefined; captured.onLayout = undefined; localStorage.removeItem("ih:last-workspace"); useUiStore.setState({ selectedWorkspaceId: undefined, selectedSessionId: undefined, providerRevision: 0, surface: "conversation" }) })
 
 function defer() { let resolve!: (value: unknown) => void; const promise = new Promise<unknown>((done) => { resolve = done }); return { promise, resolve } }
+it.each(['sidebar', 'conversation'] as const)('only rereads dashboard data changed by the actual %s management callback', async entry => {
+  useUiStore.setState({ selectedWorkspaceId: 'w1', selectedSessionId: 'a' })
+  let title = 'Original conversation'
+  const requests = fixture(input => {
+    if (input.kind === 'session/dashboard') return Promise.resolve({ sessions: [{ id: 'a', title, live: false }] })
+    if (input.kind === 'desktop/session/manage') {
+      if (input.action === 'unread') return Promise.reject(new Error('Navigation write refused'))
+      if (input.action === 'rename') title = input.title!
+      return Promise.resolve({ sessionId: 'a' })
+    }
+    return undefined
+  })
+  await waitFor(() => expect(captured.props?.dashboard?.sessions[0]?.title).toBe('Original conversation'))
+  const manage = (action: 'read' | 'pin' | 'unread' | 'rename', title?: string) => entry === 'sidebar'
+    ? captured.props!.onManageSessionInWorkspace!('w1', 'a', action, title)
+    : captured.props!.onManageSession!('a', action, title)
+  const dashboardReads = () => requests.mock.calls.filter(([input]) => input.kind === 'session/dashboard')
+  requests.mockClear()
+  await act(async () => { await manage('read'); await manage('pin') })
+  expect(requests).toHaveBeenCalledWith({ kind: 'desktop/session/manage', workspaceId: 'w1', sessionId: 'a', action: 'read' })
+  expect(requests).toHaveBeenCalledWith({ kind: 'desktop/session/manage', workspaceId: 'w1', sessionId: 'a', action: 'pin' })
+  expect(dashboardReads()).toHaveLength(0)
+  await act(async () => { await expect(manage('unread')).rejects.toThrow('Navigation write refused') })
+  expect(dashboardReads()).toHaveLength(0)
+  expect(captured.props?.selectedSessionId).toBe('a')
+
+  await act(async () => { await manage('rename', 'Renamed conversation') })
+  expect(requests).toHaveBeenCalledWith({ kind: 'desktop/session/manage', workspaceId: 'w1', sessionId: 'a', action: 'rename', title: 'Renamed conversation' })
+  expect(dashboardReads()).toEqual([[{ kind: 'session/dashboard', workspaceId: 'w1' }]])
+  expect(captured.props?.dashboard?.sessions[0]?.title).toBe('Renamed conversation')
+})
+
 it('both actual App fork callbacks join one preparation and one held operation before navigation', async () => {
   const pending = defer(), prepared = preparedFork('a')
   const requests = fixture(request => {

@@ -45,6 +45,7 @@ import { projectTimeline } from "./session/project.ts"
 import { sendGate } from "./session/send-gate.ts"
 import { createWorkspaceConnections } from "./session/workspace-connections.ts"
 import { Workbench } from "./shell/Workbench.tsx"
+import type { SessionAction } from "./shell/SessionActions.tsx"
 import { operationKey, useSessionOperation } from "./session/use-session-operation.ts"
 import { useLocale, useText } from "./design/i18n.ts"
 import { useUiStore } from "./shell/ui-store.ts"
@@ -54,6 +55,10 @@ import { createForkOperationController, createForkCallbackAdapters } from './ses
 
 const HISTORY_MAX_PAGES = 40
 const LAST_WORKSPACE = "ih:last-workspace"
+
+function changesSessionDashboard(action: SessionAction): boolean {
+  return action === "rename" || action === "archive" || action === "restore"
+}
 
 function projectWorkspace(project: ProjectEntry, workspaces: readonly WorkspaceEntry[]): string | undefined {
   return [project.primaryWorkspaceId, ...project.workspaceIds].find(id => id !== undefined && project.workspaceIds.includes(id) && workspaces.some(workspace => workspace.id === id))
@@ -989,7 +994,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         }
         await bridge.request({ kind: "desktop/session/manage", workspaceId, sessionId, action, ...(title !== undefined ? { title } : {}) })
         if (selection.current.workspaceId === workspaceId) {
-          await refreshDashboard(workspaceId)
+          if (changesSessionDashboard(action)) await refreshDashboard(workspaceId)
           if (action === "archive" && selection.current.workspaceId === workspaceId && selection.current.sessionId === sessionId) setSelectedSessionId(undefined)
         }
       }}
@@ -1106,7 +1111,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         }
         const scope = selection.current
         await bridge.request({ kind: "desktop/session/manage", workspaceId: selectedWorkspaceId, sessionId, action, ...(title !== undefined ? { title } : {}) })
-        await refreshDashboard(selectedWorkspaceId)
+        if (changesSessionDashboard(action)) await refreshDashboard(selectedWorkspaceId)
         if (selection.current !== scope) return
         if (action === "archive" && selectedSessionId === sessionId) setSelectedSessionId(undefined)
       }}
