@@ -1,5 +1,5 @@
 import type { SessionView as Session } from "../managed/types.ts"
-import { readManagedWorkflowEvents } from '../managed/workflow-events.ts'
+import { readManagedWorkflowEvents } from '../managed/committed-events.ts'
 
 export interface PlanModeView { active: boolean; proposal?: string; eventSeq?: number }
 

@@ -1,5 +1,25 @@
 import { expect, it } from "vitest"
-import { append, createSession, deriveContextRecovery, fromJSONL, toJSONL } from "../src/index.ts"
+import { append, createManagedSessionState, createSession, deriveContextRecovery, fromJSONL, toJSONL } from "../src/index.ts"
+import { readManagedAssessmentEvents } from '../src/restoration-internal.ts'
+
+it('reads committed recovery lanes afresh for each binding, including a commit made by a binding getter', () => {
+  const source = createSession()
+  const recovery = { type: 'context/recovery', version: 1, ownerSessionId: 's', recoveryId: 'first', logicalStepSeq: 0,
+    bindingFingerprint: 'a'.repeat(64), rejectedInputFingerprint: 'b'.repeat(64), modelId: 'm', protocol: 'p' } as const
+  append(source, { type: 'user/message', text: 'request' })
+  append(source, { ...recovery, state: 'retry-started', providerId: 'one' })
+  append(source, { ...recovery, recoveryId: 'second', state: 'resolved', providerId: 'two' })
+  const managed = createManagedSessionState(source, { sessionId: 's' })
+  expect(readManagedAssessmentEvents(managed.view)).toBeUndefined()
+  managed.bindOwner({})
+  const staged = managed.stage([{ ...recovery, state: 'resolved', seq: 3 }])
+  expect(readManagedAssessmentEvents(managed.view)?.map(row => row.seq)).toEqual([1, 2])
+  const binding = { modelId: 'm', protocol: 'p', get providerId() { staged.install(); return 'one' } }
+  expect(deriveContextRecovery(managed.view, 's', binding)).toMatchObject({ recoveryId: 'first', state: 'retry-started' })
+  expect(readManagedAssessmentEvents(managed.view)?.map(row => row.seq)).toEqual([1, 2, 3])
+  expect(deriveContextRecovery(managed.view, 's', binding)).toMatchObject({ recoveryId: 'first', state: 'resolved', retryConsumed: true })
+  expect(deriveContextRecovery(managed.view, 'other', binding)).toBeUndefined()
+})
 
 it("recovery fold retains retry consumption and progress facts through sparse transitions and JSONL reload", () => {
   const session = createSession()

@@ -1,4 +1,5 @@
 import { deriveContextRecovery, type BudgetRead, type SessionView as Session, type ExchangeAcceptedEventV2, type CalibrationRetirementReason, type FactPorts, type ProducerFactOutcome, type SettlementFacts, type SessionEvent } from "@i-harness/core-session"
+import { readManagedAssessmentEvents } from '@i-harness/core-session/internal/restoration'
 import { agentFacts, committedFactSeqs } from './facts.ts'
 import { createAcceptedCalibration, type PreparedRequestMeasurement } from "@i-harness/token-meter"
 import { assessLegacyPreparedRequest, admissionObservation, readContextCoordinates } from "@i-harness/context-engine"
@@ -16,7 +17,19 @@ export interface OwnedBudgetHistory {
 export function createOwnedBudget(session: Session|undefined, ownerSessionId: string, freshness: () => RequestCandidateIdentity, observationLifetimeId: string, expectedExecution: (base: import("@i-harness/llm-seam").LiveExecutionIdentity | undefined) => import("./execution.ts").EpochObservation,
   facts: () => FactPorts<ProducerFactOutcome> = () => {if(!session)throw TypeError('Original budget fact ports required');return agentFacts({session})}, settlement: () => SettlementFacts<ProducerFactOutcome> | undefined = () => undefined,sourceHistory?:OwnedBudgetHistory) {
   if(!sourceHistory&&!session)throw TypeError('Original budget history required')
-  const history:OwnedBudgetHistory=sourceHistory??{kind:'managed-budget-history',assessmentRevision(){let history='';for(const event of session!.events)if(event.type==='context/usage'||event.type==='context/recovery')history=`${history}:${event.seq}`;return history},recovery:binding=>deriveContextRecovery(session!,ownerSessionId,binding),coordinates:()=>readContextCoordinates(session!,{ownerSessionId}),ownsAccepted:event=>session!.events[event.seq!]===event}
+  const history: OwnedBudgetHistory = sourceHistory ?? {
+    kind: 'managed-budget-history',
+    assessmentRevision() {
+      let revision = ''
+      for (const event of readManagedAssessmentEvents(session!) ?? session!.events) {
+        if (event.type === 'context/usage' || event.type === 'context/recovery') revision += `:${event.seq}`
+      }
+      return revision
+    },
+    recovery: binding => deriveContextRecovery(session!, ownerSessionId, binding),
+    coordinates: () => readContextCoordinates(session!, { ownerSessionId }),
+    ownsAccepted: event => session!.events[event.seq!] === event,
+  }
   const calibration = createAcceptedCalibration(ownerSessionId, observationLifetimeId)
   const compatibility = (evidence: RequestEvidence): Parameters<ReturnType<typeof createAcceptedCalibration>["probe"]>[1] => { const expected = expectedExecution(evidence.executionIdentity); return { ownerSessionId, observationLifetimeId, executionEpochId: expected.kind === "known" ? expected.identity.authEpoch : undefined, branchId: evidence.snapshot.coordinates.branchId, contextEpoch: evidence.snapshot.coordinates.contextEpoch, projectionRevision: evidence.projectionRevision } }
   const retirements: Extract<SessionEvent, { type: 'context/usage'; version: 2; op: 'retire' }>[] = []

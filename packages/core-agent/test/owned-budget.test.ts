@@ -1,7 +1,7 @@
 import { fixtureExecutionIdentity, confirmFixtureExecution } from "./fixtures/execution.ts"
 import { expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { append, createSession, fromJSONL, toJSONL } from "@i-harness/core-session"
+import { append, createManagedSessionState, createSession, fromJSONL, toJSONL } from "@i-harness/core-session"
 import { createToolRegistry, registerContextRemaining } from "@i-harness/core-tools"
 import { wrapPreparedRequest, type PreparedModelRequest, type ModelClient } from "@i-harness/llm-seam"
 import { createAnthropicClient } from "../../llm-anthropic/src/index.ts"
@@ -9,6 +9,29 @@ import { createAgentWithSummary } from './fixtures/agent.ts'
 import { type AgentDeps, type AgentConfig } from '../src/index.ts'
 import { createAgentContext } from '../src/agent/context.ts'
 import { buildContextRequest } from '../src/agent/request-input.ts'
+import { createOwnedBudget } from '../src/agent/budget.ts'
+
+it('revises compatibility budget evidence in physical usage/recovery order after installation', () => {
+  const hash = 'a'.repeat(64), source = createSession()
+  const usage = { type: 'context/usage', version: 1, checkpoint: { version: 1, ownerSessionId: 'other',
+    bindingFingerprint: hash, shapeFingerprint: hash, inputPrefixFingerprint: hash, identityCoverage: 'partial',
+    inputUnitCount: 1, heuristicPrefixTokens: 1, reportedInputTokens: 1, projectionRevision: 0 } } as const
+  const recovery = { type: 'context/recovery', version: 1, ownerSessionId: 'owner', recoveryId: 'r',
+    logicalStepSeq: 0, bindingFingerprint: hash, rejectedInputFingerprint: hash, state: 'required' } as const
+  append(source, usage)
+  append(source, { type: 'user/message', text: 'unrelated' })
+  append(source, recovery)
+  const original = createManagedSessionState(source, { sessionId: 'owner' })
+  original.bindOwner({})
+  const budget = createOwnedBudget(original.view, 'owner', () => { throw Error('Unexpected freshness read') },
+    'lifetime', () => ({ kind: 'unclassified' }))
+  expect(budget.assessmentRevision()).toBe('0:0::0:2')
+  const staged = original.stage([{ type: 'plan/mode', mode: 'off', seq: 3 },
+    { ...usage, seq: 4 }, { ...recovery, state: 'resolved', seq: 5 }])
+  expect(budget.assessmentRevision()).toBe('0:0::0:2')
+  staged.install()
+  expect(budget.assessmentRevision()).toBe('0:0::0:2:4:5')
+})
 
 it('keeps accepted calibration, execution observation and installed facts through a failed hypothetical assessment', async () => {
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)

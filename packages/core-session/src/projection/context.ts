@@ -1,4 +1,5 @@
 import type { SessionView as Session } from "../managed/types.ts";
+import { readManagedAssessmentEvents } from '../managed/committed-events.ts';
 import { validContextEvent, type ContextRecoveryFacts, type RequestBudgetSnapshot } from "../events/context.ts";
 import type { RequestBudgetSnapshotV2 } from '../events/admission.ts';
 import {createPlanModeIndex} from './plan.ts';
@@ -9,7 +10,7 @@ export function deriveContextRecovery(session: Session, ownerSessionId: string, 
     protocol: string;
 }): ContextRecoveryFacts | undefined {
     const recoveries = new Map<string, ContextRecoveryFacts>();
-    for (const event of session.events)
+    for (const event of readManagedAssessmentEvents(session) ?? session.events)
         if (event.type === "context/recovery" && event.ownerSessionId === ownerSessionId && validContextEvent(event)) {
             const previous = recoveries.get(event.recoveryId);
             const folded = previous

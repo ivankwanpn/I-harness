@@ -6,7 +6,7 @@ import { createConversationIndex, createImmutableManagedConversationIndex, creat
 import { managedSessions, managedFactOwners, subscribers } from '../events/state.ts'
 import { captureLegacyFact, freezeJsonData } from './capture.ts'
 import type { SessionView } from './types.ts'
-import { associateManagedWorkflowEvents, type WorkflowEventType } from './workflow-events.ts'
+import { associateManagedCommittedEvents, type CommittedEventGroup } from './committed-events.ts'
 import { prepareSessionEvent } from '../events/intake.ts'
 import { hasOriginalImageMediaTypeLookup } from '../images.ts'
 import { createManagedIntakeIndex } from './intake-index.ts'
@@ -295,14 +295,15 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
   const sessionId = scope?.sessionId
   projectionProof &&= view.formatVersion === formatVersion && typeof sessionId === 'string'
     && indexHeader.sessionId === sessionId && isOriginalArchiveValidationEnvironment()
-  const workflowEvents: Record<WorkflowEventType, SessionEvent[]> = { 'plan/mode': [], 'todo/write': [], 'goal/change': [] }
-  let workflowDiscriminantsOwned = projectionProof && contiguousSeq
-  const observeWorkflowEvent = (event: SessionEvent) => {
+  const selectedEvents: Record<CommittedEventGroup, SessionEvent[]> = { 'plan/mode': [], 'todo/write': [], 'goal/change': [], assessment: [] }
+  let discriminantsOwned = projectionProof && contiguousSeq
+  const indexCommittedEvent = (event: SessionEvent) => {
     const type: unknown = Object.getOwnPropertyDescriptor(event, 'type')?.value
-    if (typeof type !== 'string') workflowDiscriminantsOwned = false
-    if (type === 'plan/mode' || type === 'todo/write' || type === 'goal/change') workflowEvents[type].push(event)
+    if (typeof type !== 'string') discriminantsOwned = false
+    if (type === 'plan/mode' || type === 'todo/write' || type === 'goal/change') selectedEvents[type].push(event)
+    if (type === 'context/usage' || type === 'context/recovery') selectedEvents.assessment.push(event)
   }
-  if (workflowDiscriminantsOwned) for (const event of events) observeWorkflowEvent(event)
+  if (discriminantsOwned) for (const event of events) indexCommittedEvent(event)
   managedSessions.add(view)
   originalIndexes.set(view, index)
   originalSourceSessions.set(view, sessionId)
@@ -311,13 +312,13 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
     // Index and array publication are one synchronous original installation.
     if(events.length<count||index.eventCount!==events.length)throw TypeError('Original immutable history frontier unavailable')
   }})
-  if (workflowDiscriminantsOwned && sessionId !== undefined) associateManagedWorkflowEvents(view, type => {
+  if (discriminantsOwned && sessionId !== undefined) associateManagedCommittedEvents(view, group => {
     // Resolve only the installed log. Reducers interpret the actual facts on
     // each read, including explicit clearing and malformed historical rows.
     const factory = qualifiedProjectionFactoryFor(view, sessionId)
-    if (!factory || !workflowDiscriminantsOwned || !unchangedDataPrototypes()) return undefined
+    if (!factory || !discriminantsOwned || !unchangedDataPrototypes()) return undefined
     factory.assertFrontier(factory.index.eventCount)
-    return [...workflowEvents[type]]
+    return [...selectedEvents[group]]
   })
   return {
     view,
@@ -347,7 +348,7 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
         for (const event of prepared) {
           contiguousSeq &&= event.seq === events.length
           events.push(event)
-          if (workflowDiscriminantsOwned && verifiedSuffix) observeWorkflowEvent(event)
+          if (discriminantsOwned && verifiedSuffix) indexCommittedEvent(event)
         }
         inputs.commit()
         projectionProof &&= verifiedSuffix
