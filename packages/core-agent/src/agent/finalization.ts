@@ -49,8 +49,9 @@ export async function settleFailedTurn(deps: Pick<AgentDeps,'facts'|'sourceFacts
 /** Raw counters belong to every ended response, including capped/refused ones.
  * Reporting them does not accept that response as a context calibration. */
 export function reportModelUsage(deps: Pick<AgentDeps, "telemetry">, { stepUsage }: Pick<ModelStep, "stepUsage">) {
-  if (Object.keys(stepUsage).length > 0) {
-    deps.telemetry?.emit({ type: "provider/usage", ts: Date.now(), data: { ...stepUsage } })
+  const { measurementValidity: _validity, ...reported } = stepUsage
+  if (Object.keys(reported).length > 0) {
+    deps.telemetry?.emit({ type: "provider/usage", ts: Date.now(), data: reported })
   }
   const normalized = normalizeInputUsage(stepUsage)
   const cacheRead = stepUsage.cacheReadTokens

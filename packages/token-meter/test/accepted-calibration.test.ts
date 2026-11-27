@@ -41,6 +41,9 @@ it('keeps a compatible sample across missing and invalid later usage and ignores
   expect(source.recordAccepted(input, a.request, a.accepted, usage)).toMatchObject({ kind: 'ignored', reason: 'duplicate-or-retired' })
   const b = acceptance(input, 'send2', 8)
   for (const value of [{}, { inputTokens: -1, inputTokenSemantics: 'includes-cache' }, { inputTokens: Number.MAX_SAFE_INTEGER, cacheReadTokens: 1, inputTokenSemantics: 'excludes-cache' }]) expect(source.recordAccepted(input, b.request, b.accepted, value as any).kind).toBe('ignored')
+  const contradictory = { inputTokens: 8, cacheCreationTokens: 3, inputTokenSemantics: 'includes-cache' as const, measurementValidity: 'invalid' as const }
+  expect(meter.normalizeInputUsage(contradictory)).toBeUndefined()
+  expect(source.recordAccepted(input, b.request, b.accepted, contradictory)).toMatchObject({ kind: 'ignored', reason: 'invalid-usage' })
   expect(source.probe(facts([7, 3]), compatibility)).toEqual({ tokens: 110, calibrated: true })
   expect(() => source.recordAccepted(input, a.request, a.accepted, { ...usage, inputTokens: 101 })).toThrow(/Contradictory/)
 })

@@ -28,6 +28,8 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
   let stepUsage: LLMUsage = {}
   let usageReported = false
   let invalidUsage = false
+  const usageForReport = (): LLMUsage => invalidUsage && Object.keys(stepUsage).length
+    ? { ...stepUsage, measurementValidity: "invalid" } : stepUsage
   let firstOutputAt: number | undefined
   let streamEndedAt: number | undefined
   const reasoningStart = reasoning.length
@@ -149,7 +151,7 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
               // Mark delivery before invoking an observer: a throwing sink
               // must not cause the response catch to report these counters twice.
               usageReported = true
-              if (Object.keys(stepUsage).length) reportModelUsage(deps, { stepUsage })
+              if (Object.keys(stepUsage).length) reportModelUsage(deps, { stepUsage: usageForReport() })
               await discard()
             } catch (saving) {
               if (originalFailure) throw savingFailure(originalFailure.failure, [saving], 'model retry settlement failed')
@@ -246,7 +248,7 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
       const generationMs = firstOutputAt === undefined || streamEndedAt === undefined ? 0 : Math.round(streamEndedAt - firstOutputAt)
       const generation = !modelFailed && !invalidUsage && outputTokens !== undefined && Number.isSafeInteger(outputTokens) && outputTokens > 0 && generationMs > 0
         ? { outputTokens, generationMs } : undefined
-      return { receipt, stepText, toolCallsThisStep, batch, stepUsage: usageReported ? {} : stepUsage, generation, truncatedThisStep, refusedThisStep, thinkingBlocks, providerContinuation, providerEnded, identity: { actionId, attemptId, stepStartSeq } }
+      return { receipt, stepText, toolCallsThisStep, batch, stepUsage: usageReported ? {} : usageForReport(), generation, truncatedThisStep, refusedThisStep, thinkingBlocks, providerContinuation, providerEnded, identity: { actionId, attemptId, stepStartSeq } }
     },
   }
 }

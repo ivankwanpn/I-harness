@@ -3,10 +3,12 @@ export interface InputUsage {
   cacheReadTokens?: number
   cacheCreationTokens?: number
   inputTokenSemantics?: "includes-cache" | "excludes-cache"
+  measurementValidity?: "invalid"
 }
 
 /** Raw counters remain unchanged. This derived total is only for input sizing. */
 export function normalizeInputUsage(usage: InputUsage): { totalInputTokens: number; cacheReadRatio?: number } | undefined {
+  if (usage.measurementValidity === "invalid") return
   const valid = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0
   if (!valid(usage.inputTokens) || !["includes-cache", "excludes-cache"].includes(usage.inputTokenSemantics ?? "")) return
   for (const value of [usage.cacheReadTokens, usage.cacheCreationTokens]) if (value !== undefined && !valid(value)) return

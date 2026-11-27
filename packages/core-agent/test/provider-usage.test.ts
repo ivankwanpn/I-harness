@@ -3,7 +3,7 @@ import { createContext } from "@i-harness/core-plugin"
 import { createSession } from "@i-harness/core-session"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createTelemetry, type Telemetry, type TelemetryEvent } from "@i-harness/telemetry"
-import { createRetryingClient, generationError, resolveRetryPolicy, type ModelClient } from "@i-harness/llm-seam"
+import { createRetryingClient, generationError, resolveRetryPolicy, type LLMUsage, type ModelClient } from "@i-harness/llm-seam"
 import { createAgent } from "../src/index.ts"
 
 // M5 / T2, half one: "以 provider 回報為事實".
@@ -43,7 +43,7 @@ function spyTelemetry(): { telemetry: Telemetry; events: TelemetryEvent[] } {
  */
 type UsageEvent = {
   type: "usage"
-  usage: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheCreationTokens?: number }
+  usage: LLMUsage
 }
 type WireEvent = UsageEvent | { type: "text/chunk"; text: string } | { type: "end" }
 
@@ -239,11 +239,50 @@ describe("core-agent provider usage (M5 T2)", () => {
     expect(reports[0]!.data).toEqual({ inputTokens: 12, cacheReadTokens: 400, outputTokens: 7 })
   })
 
-  it("a provider that reports nothing emits NO provider/usage at all", async () => {
+  it("keeps invalid accounting sticky across usage updates while retaining raw telemetry", async () => {
+    const reported = { inputTokens: 8, cacheReadTokens: 2, cacheCreationTokens: 3, inputTokenSemantics: "includes-cache" as const }
+    const events = await runWith([
+      { type: "usage", usage: { ...reported, measurementValidity: "invalid" } },
+      { type: "text/chunk", text: "The response still completes" },
+      { type: "usage", usage: { outputTokens: 3 } },
+      { type: "end" },
+    ])
+    expect(usageEvents(events).map(event => event.data)).toEqual([{ ...reported, outputTokens: 3 }])
+    expect(events.filter(event => event.type === "provider/cache").map(event => event.data)).toEqual(
+      [{ cacheReadReported: true, cacheReadTokens: 2 }],
+    )
+  })
+
+  it("resets invalid accounting when the original transport retries", async () => {
+    const ctx = createContext(), { telemetry, events } = spyTelemetry()
+    let attempts = 0
+    const invalid = { inputTokens: 8, cacheReadTokens: 2, cacheCreationTokens: 3, inputTokenSemantics: "includes-cache" as const }
+    const valid = { inputTokens: 14, cacheReadTokens: 7, inputTokenSemantics: "includes-cache" as const }
+    const model = createRetryingClient({ async *stream() {
+      if (++attempts === 1) {
+        yield { type: "usage", usage: { ...invalid, measurementValidity: "invalid" } }
+        yield { type: "error", error: Object.assign(new Error("Temporary failure"), { code: "SERVER" }) }
+        return
+      }
+      yield { type: "usage", usage: valid }
+      yield { type: "text/chunk", text: "Retried answer" }
+      yield { type: "end" }
+    } }, resolveRetryPolicy({ mode: "normal", maxRetries: 1 }))
+    const agent = createAgent(ctx, { session: createSession(), tools: createToolRegistry(ctx), model, systemPrompt: "", telemetry })
+    expect((await agent.run("Try again")).finalText).toBe("Retried answer")
+    expect(attempts).toBe(2)
+    expect(usageEvents(events).map(event => event.data)).toEqual([invalid, valid])
+    expect(events.filter(event => event.type === "provider/cache").map(event => event.data)).toEqual([
+      { cacheReadReported: true, cacheReadTokens: 2 },
+      { cacheReadReported: true, cacheReadTokens: 7, totalInputTokens: 14, cacheReadRatio: .5 },
+    ])
+  })
+
+  it.each([undefined, { measurementValidity: "invalid" } as const])("usage with no numeric measurement (%s) emits no raw usage", async usage => {
     // Not "emits a zero". The denominator has to stay honest: a run whose
     // provider never reported must be distinguishable from a run that reported
     // zero cache reads, or `cacheReadTokens: 0` means nothing.
-    const emitted = await runWith([{ type: "text/chunk", text: "hi" }, { type: "end" }])
+    const emitted = await runWith([...(usage ? [{ type: "usage" as const, usage }] : []), { type: "text/chunk", text: "hi" }, { type: "end" }])
     expect(usageEvents(emitted)).toHaveLength(0)
   })
 

@@ -803,6 +803,18 @@ describe("M5 T2 provider usage (anthropic)", () => {
     expect("cacheReadTokens" in (seen[0] as object)).toBe(false)
   })
 
+  it("distinguishes malformed cache accounting from nullable partial usage", async () => {
+    const seen = await collectUsage([
+      { type: "message_start", message: { usage: { input_tokens: 7, cache_read_input_tokens: "3000", cache_creation_input_tokens: null } } },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { input_tokens: null, cache_read_input_tokens: null, output_tokens: 5 } },
+      { type: "message_stop" },
+    ])
+    expect(seen).toEqual([
+      { inputTokens: 7, inputTokenSemantics: "excludes-cache", measurementValidity: "invalid" },
+      { outputTokens: 5 },
+    ])
+  })
+
   it("M5 T2: no usage object at all → no usage event", async () => {
     const seen = await collectUsage([
       { type: "message_start", message: {} },

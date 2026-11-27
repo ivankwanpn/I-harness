@@ -10,6 +10,37 @@ import { type AgentDeps, type AgentConfig } from '../src/index.ts'
 import { createAgentContext } from '../src/agent/context.ts'
 import { buildContextRequest } from '../src/agent/request-input.ts'
 import { createOwnedBudget } from '../src/agent/budget.ts'
+import { deriveLastProviderInput } from '@i-harness/core-session/internal/archive'
+
+it("never persists a provider input measurement from an invalid accepted attempt", async () => {
+  const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
+  const actual = createAnthropicClient({ model: "m", apiKey: "controlled", executionIdentity: fixtureExecutionIdentity })
+  let sends = 0
+  const model: ModelClient = { async *stream() { throw new Error("unprepared") }, async prepare(request) {
+    const candidate = await actual.prepare!(request)
+    return wrapPreparedRequest(candidate, (_stream, control, measurement) => (async function*() {
+      confirmFixtureExecution({ ...candidate, measurement }, control)
+      if (++sends === 2) yield { type: "usage", usage: { inputTokens: 8, cacheCreationTokens: 3, inputTokenSemantics: "includes-cache", measurementValidity: "invalid" } } as const
+      else yield { type: "usage", usage: { inputTokens: 40 + sends, inputTokenSemantics: "includes-cache" } } as const
+      yield { type: "usage", usage: { outputTokens: 3 } } as const
+      yield { type: "text/chunk", text: "Done" } as const
+      yield { type: "end" } as const
+    })())
+  } }
+  const ownerSessionId = "owned"
+  const agent = createAgentWithSummary(ctx, { executionIdentity: () => fixtureExecutionIdentity, session, sessionId: ownerSessionId, model, tools, systemPrompt: "p", maxOutputTokens: 2048 })
+  const sampledInputs = () => session.events.flatMap(event => event.type === "context/usage" && event.version === 2 && event.op === "sample"
+    ? [event.checkpoint.reportedInputTokens] : [])
+  expect((await agent.run("First")).finalText).toBe("Done")
+  expect(deriveLastProviderInput(session.events, ownerSessionId)?.tokens).toBe(41)
+  expect((await agent.followup("Second")).finalText).toBe("Done")
+  expect(session.events.filter(event => event.type === "model/exchange-accepted" && event.version === 2)).toHaveLength(2)
+  expect(sampledInputs()).toEqual([41])
+  expect(deriveLastProviderInput(session.events, ownerSessionId)).toBeUndefined()
+  expect((await agent.followup("Third")).finalText).toBe("Done")
+  expect(sampledInputs()).toEqual([41, 43])
+  expect(deriveLastProviderInput(session.events, ownerSessionId)?.tokens).toBe(43)
+})
 
 it('revises compatibility budget evidence in physical usage/recovery order after installation', () => {
   const hash = 'a'.repeat(64), source = createSession()

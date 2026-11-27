@@ -432,6 +432,16 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     ])
     expect("totalTokens" in usage[0]!.usage).toBe(false)
   })
+
+  it("retains the raw input while marking a malformed cache count as invalid", async () => {
+    const { fake } = fakeRuntime([{ metadata: { usage: { inputTokens: 7, cacheWriteInputTokens: "3000" } } }])
+    const client = createBedrockClient({ model: "m" }, fake)
+    const usage = []
+    for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) {
+      if (event.type === "usage") usage.push(event.usage)
+    }
+    expect(usage).toEqual([{ inputTokens: 7, inputTokenSemantics: "excludes-cache", measurementValidity: "invalid" }])
+  })
 })
 
 describe("M14 bedrock wire (image modality)", () => {
