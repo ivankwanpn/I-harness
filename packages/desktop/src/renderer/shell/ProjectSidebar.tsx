@@ -8,6 +8,7 @@ import { ChevronRight, FolderOpen, Pin, Plus, Settings, SlidersHorizontal } from
 import { useText } from "../design/i18n.ts"
 import { Button } from "../vendor/opencode/Button.tsx"
 import { affectsSessionDashboard } from "../session/notifications.ts"
+import { createWorkspaceConnections } from "../session/workspace-connections.ts"
 import { ProjectSessions, WorkspaceCatalogReader, type SidebarReadMode, type SidebarWorkspaceReader, type SidebarWorkspaceSnapshot } from "./ProjectSessions.tsx"
 import "./projects-sidebar.css"
 
@@ -68,10 +69,13 @@ function ProjectTree(props: ProjectSidebarProps) {
       : Object.fromEntries(Object.entries(previous).filter(([id]) => ids.has(id))))
   }, [workspaceKey])
   useEffect(() => {
+    const connections = createWorkspaceConnections()
     const unsubscribe = bridge.onEvent(event => {
       if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity") return
+      if (!connections.observe(event)) return
       const reader = readers.current.get(event.workspaceId)
       if (!reader) return
+      if (event.kind === "sdk/idle") { reader.standby(); return }
       if (event.kind === "sdk/disconnected") { reader.disconnect(event.message); return }
       if (event.method === "desktop/session/navigation/changed") { reader.refresh(); return }
       if (reader.mode === "owners") return

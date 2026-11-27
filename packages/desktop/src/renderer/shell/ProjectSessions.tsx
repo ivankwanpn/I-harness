@@ -51,6 +51,7 @@ export interface SidebarWorkspaceReader {
   mode: SidebarReadMode
   followsForeground(sessionId: unknown): boolean
   refresh(): void
+  standby(): void
   disconnect(message: string): void
   reportError(reason: unknown): void
 }
@@ -123,6 +124,10 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
       } }))
       if (dashboard && foreground.current !== supplied && membershipChanged(dashboard, foreground.current)) refresh.schedule()
     })
+    const retireReads = () => {
+      generation++
+      refresh.cancelPending()
+    }
     const reader: SidebarWorkspaceReader = {
       mode,
       followsForeground(id) {
@@ -130,9 +135,10 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
           && confirmedSessionNavigation(confirmedRows?.[id])
       },
       refresh: refresh.schedule,
+      standby() { if (active) retireReads() },
       disconnect(message) {
         if (!active) return
-        generation++
+        retireReads()
         confirmedRows = undefined
         setSnapshots(previous => ({ ...previous, [workspaceId]: { ...previous[workspaceId], navigation: undefined, error: message } }))
         refresh.schedule()

@@ -285,10 +285,14 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const refreshDashboard = useCallback(async (workspaceId: string): Promise<void> => {
     const scope = workspaceSelection.current
     if (scope.workspaceId !== workspaceId) return
+    const generation = disconnectRevision.current
+    const current = () => workspaceSelection.current === scope && disconnectRevision.current === generation
     if (openingDashboard.current?.workspace === scope) openingDashboard.current = undefined
     const request = ++dashboardRequest.current
-    const result = await bridge.request({ kind: "session/dashboard", workspaceId })
-    if (workspaceSelection.current !== scope || request < dashboardApplied.current) return
+    const result = await bridge.request({ kind: "session/dashboard", workspaceId }).catch(reason => {
+      if (current()) throw reason
+    })
+    if (!current() || request < dashboardApplied.current) return
     dashboardApplied.current = request
     setDashboard(result as SessionDashboardResult)
   }, [bridge])

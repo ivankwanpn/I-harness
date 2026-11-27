@@ -225,6 +225,59 @@ describe("project conversation sidebar", () => {
     } finally { visibility.mockRestore(); vi.useRealTimers() }
   })
 
+  it("does not pair a pre-standby conversation list with new ownership metadata", async () => {
+    vi.useFakeTimers()
+    try {
+      const retiringList = Promise.withResolvers<SessionDashboardResult>()
+      const freshList = Promise.withResolvers<SessionDashboardResult>()
+      let dashboardReads = 0
+      const { props, bridge, emit } = fixture(input => {
+        if (input.kind === "session/dashboard") return ++dashboardReads === 1 ? retiringList.promise : freshList.promise
+        if (input.kind === "desktop/session/navigation/state") return {
+          s1: { projectId: "p1", pinned: false, unread: false },
+          archived: { projectId: "p1", pinned: false, unread: false },
+          current: { projectId: "p1", pinned: false, unread: false },
+        }
+      })
+      render(<ProjectSidebar {...props} projects={[projects[0]!]} workspaces={[workspaces[0]!]} />)
+      const advance = async (ms = 250) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+      await advance(0)
+      expect(screen.getByText("Current chat")).toBeTruthy()
+      vi.mocked(bridge.request).mockClear()
+      act(() => emit({ kind: "sdk/ready", method: "sdk/ready", workspaceId: "w1", runtimeGeneration: 1 }))
+      await advance()
+      expect(dashboardReads).toBe(1)
+
+      act(() => {
+        emit({ kind: "sdk/notification", method: "desktop/session/navigation/changed", workspaceId: "w1", params: {} })
+        emit({ kind: "sdk/idle", method: "sdk/idle", workspaceId: "w1", runtimeGeneration: 1 })
+      })
+      await act(async () => {
+        retiringList.resolve({ sessions: [{ id: "archived", title: "Pre-standby row", live: false }] })
+        await retiringList.promise
+      })
+      await advance()
+
+      expect(screen.getByText("Current chat")).toBeTruthy()
+      expect(screen.queryByText("Pre-standby row")).toBeNull()
+      expect(bridge.request).not.toHaveBeenCalledWith({ kind: "desktop/session/navigation/state", workspaceId: "w1", includeCoverage: true })
+      expect(dashboardReads).toBe(1)
+
+      act(() => emit({ kind: "sdk/ready", method: "sdk/ready", workspaceId: "w1", runtimeGeneration: 2 }))
+      await advance()
+      expect(dashboardReads).toBe(2)
+      act(() => {
+        emit({ kind: "sdk/idle", method: "sdk/idle", workspaceId: "w1", runtimeGeneration: 1 })
+        emit({ kind: "sdk/idle", method: "sdk/idle", workspaceId: "w2", runtimeGeneration: 2 })
+      })
+      await act(async () => {
+        freshList.resolve({ sessions: [{ id: "current", title: "Post-reconnect row", live: false }] })
+        await freshList.promise
+      })
+      expect(screen.getByText("Post-reconnect row")).toBeTruthy()
+    } finally { vi.useRealTimers() }
+  })
+
   it("retains the last supplied member dashboard when selection moves to another folder in the same project", async () => {
     const { props } = fixture()
     const view = render(<ProjectSidebar {...props} />)

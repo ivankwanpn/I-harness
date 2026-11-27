@@ -902,6 +902,42 @@ it("retains a successful initial dashboard when a newer background read fails", 
   expect(captured.props!.dashboard).toMatchObject({ marker: "initial" })
 })
 
+it.each(["standby", "reconnect"] as const)("does not replace the sidebar dashboard with a background response retired by %s", async lifecycle => {
+  const retired = defer()
+  const next = defer()
+  const confirmed = { sessions: [{ id: "a", title: "Latest confirmed title", live: true, running: false }] }
+  let reads = 0
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  fixture(input => input.kind === "session/dashboard"
+    ? ++reads === 1 ? Promise.resolve(confirmed) : reads === 2 ? retired.promise : next.promise
+    : undefined, listener => { emit = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.dashboard).toEqual(confirmed))
+  act(() => {
+    emit({ kind: "sdk/ready", method: "sdk/ready", workspaceId: "w1", runtimeGeneration: 1 })
+    emit({ kind: "sdk/notification", workspaceId: "w1", method: "session/status", params: { sessionId: "a", status: "idle" } })
+  })
+  await waitFor(() => expect(reads).toBe(2))
+
+  if (lifecycle === "standby") {
+    act(() => emit({ kind: "sdk/idle", method: "sdk/idle", workspaceId: "w1", runtimeGeneration: 1 }))
+    expect(captured.props?.connection).toBe("idle")
+  } else {
+    act(() => emit({ kind: "sdk/disconnected", workspaceId: "w1", close: { generation: 1, reason: "subprocess-exited" }, message: "Old host exited" }))
+    act(() => emit({ kind: "sdk/ready", method: "sdk/ready", workspaceId: "w1", runtimeGeneration: 2 }))
+    await waitFor(() => expect(reads).toBeGreaterThan(2))
+    expect(captured.props?.connection).toBe("online")
+  }
+  await act(async () => { retired.resolve({ sessions: [{ id: "a", title: "Old running title", live: true, running: true }] }); await retired.promise })
+
+  expect(captured.props?.dashboard).toEqual(confirmed)
+  if (lifecycle === "standby") expect(reads).toBe(2)
+  else {
+    const fresh = { sessions: [{ id: "a", title: "Recognized replacement title", live: true, running: false }] }
+    await act(async () => { next.resolve(fresh); await next.promise })
+    expect(captured.props?.dashboard).toEqual(fresh)
+  }
+})
+
 it("ignores history from a session left while loading", async () => {
   const old = defer()
   fixture((request) => request.kind === "session/history" && request.sessionId === "a" ? old.promise : undefined)

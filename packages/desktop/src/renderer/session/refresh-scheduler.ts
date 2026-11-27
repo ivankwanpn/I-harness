@@ -18,12 +18,17 @@ export function createRefreshScheduler(refresh: () => Promise<unknown>, delay = 
       })
     }, wait)
   }
+  const cancelPending = () => {
+    dirty = false
+    clearTimeout(timer)
+    timer = undefined
+  }
   return {
     schedule,
+    cancelPending,
     dispose() {
       disposed = true
-      dirty = false
-      clearTimeout(timer)
+      cancelPending()
     },
   }
 }
