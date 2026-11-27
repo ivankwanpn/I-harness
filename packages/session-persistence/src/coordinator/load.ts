@@ -1,11 +1,11 @@
-import { CURRENT_FORMAT_VERSION, freezeJsonData, stringifyJsonData, validateSubagentHeader, type JournalPrefix, type OwnedSessionHistoryPage, type Session, type SessionView, type SessionEvent, type SessionEventView, type SessionHistoryPageOptions } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, copyConversationData, freezeJsonData, readInbox, stringifyJsonData, validateSubagentHeader, type JournalPrefix, type OwnedSessionHistoryPage, type Session, type SessionView, type SessionEvent, type SessionEventView, type SessionHistoryPageOptions } from "@i-harness/core-session"
 import { materializeSessionHistoryPage, planSessionHistoryPage, sessionHistoryFact, type SessionHistoryFact } from '@i-harness/core-session/internal/archive'
 import { prepareManagedSessionClone, type ManagedSessionClone } from '@i-harness/core-session/internal/restoration'
 import { repairTurnTail } from "../repair.ts"
 import { preflightSessionFormat, preflightBatchShape, preflightDecodedFactHistory, migrate, guardIgnorable, buildSession } from "../format/validation.ts"
 import { originalColdArchiveHistoryReader, originalDecodedArchiveRead, readArchiveHistoryPrefix, recognizesOriginalCleanHistoryMaterialization, type ColdArchiveHistoryReader } from '../archive-read-internal.ts'
 import { assertUpgradeCapability, ensureWritableFormatUnlocked } from "./writable-format.ts"
-import type { PersistenceBackend, SessionMeta } from "./types.ts"
+import { pendingInputSummary, type PendingInputSummary, type PersistenceBackend, type SessionMeta } from "./types.ts"
 import type { Ownership } from "./ownership.ts"
 import type { Mutations } from "./mutations.ts"
 import { SessionFormatUnsupportedError } from '../format/registry.ts'
@@ -20,11 +20,25 @@ type AfterTransition = (check: (events: readonly SessionEventView[]) => void, ma
 type MaterializedHistory = { session: Session; readonly archivePrefix?: Readonly<JournalPrefix>; readonly managedClone?: ManagedSessionClone }
 type ColdSnapshotFallback = (session: SessionView, isCurrent: () => boolean) => void
 type ColdHistoryPageResult = { page: OwnedSessionHistoryPage; originalSealCurrent?: () => boolean }
+type ColdPendingInputsResult = { items: readonly PendingInputSummary[]; originalSealCurrent?: () => boolean }
+type InitialArchive = Awaited<ReturnType<NonNullable<ColdArchiveHistoryReader['readFullForHistoryPage']>>>
 
 const MAX_COLD_HISTORY_SESSIONS = 2
 const MAX_COLD_HISTORY_FACTS = 16_384
 const MAX_COLD_HISTORY_IMAGE_ID_UNITS = 262_144
-type ColdHistory = { evidence: object; facts: readonly SessionHistoryFact[] }
+const MAX_COLD_PENDING_ORDINALS = 256
+type ColdHistory = { evidence: object; facts: readonly SessionHistoryFact[]; pendingOrdinals?: readonly number[] }
+type InitialColdHistory = {
+  decoded: NonNullable<InitialArchive>
+  unchanged: boolean
+  snapshot(): Promise<Session>
+  pending(): Promise<readonly PendingInputSummary[]>
+}
+
+function pendingOrdinals(pending: readonly PendingInputSummary[]): readonly number[] | undefined {
+  if (pending.length > MAX_COLD_PENDING_ORDINALS) return undefined
+  return pending.map(input => input.admittedSeq)
+}
 
 function historyFacts(events: readonly SessionEvent[]): SessionHistoryFact[] | undefined {
   if (events.length > MAX_COLD_HISTORY_FACTS) return undefined
@@ -89,6 +103,7 @@ export function createLoads(
   withMutationRead?: <T>(sessionId: string, work: () => Promise<T>) => Promise<T>,
 ) {
   const coldHistory = new Map<string, ColdHistory>()
+  const initialColdReads = new Map<string, { reader: ColdArchiveHistoryReader; read: Promise<InitialColdHistory | undefined> }>()
   let coldHistoryRetired = false
   const materialize = (proof: HistoryProof) => materializeHistory(backend, proof)
 
@@ -96,6 +111,9 @@ export function createLoads(
     coldHistory.delete(sessionId)
     coldHistory.set(sessionId, history)
     if (coldHistory.size > MAX_COLD_HISTORY_SESSIONS) coldHistory.delete(coldHistory.keys().next().value!)
+  }
+  function originalSealCurrent(reader: ColdArchiveHistoryReader) {
+    return () => !coldHistoryRetired && originalColdArchiveHistoryReader(backend) === reader
   }
 
   async function processMutation<T>(id: string, work: () => Promise<T>): Promise<T> {
@@ -137,24 +155,45 @@ export function createLoads(
       ...(meta === undefined ? {} : { header: meta }),
     }
   }
-  async function readInitialColdHistoryPage(sessionId: string, options: SessionHistoryPageOptions, original: ColdArchiveHistoryReader, onSnapshotFallback?: ColdSnapshotFallback): Promise<ColdHistoryPageResult | undefined> {
-    let decoded: Awaited<ReturnType<NonNullable<ColdArchiveHistoryReader['readFullForHistoryPage']>>>
-    try { decoded = await original.readFullForHistoryPage?.(sessionId) }
-    catch (cause) {
-      if ((cause as NodeJS.ErrnoException)?.code === 'ENOENT') return undefined
-      return translateReadFailure(cause)
+  function readInitialColdHistory(sessionId: string, original: ColdArchiveHistoryReader) {
+    const existing = initialColdReads.get(sessionId)
+    if (existing?.reader === original) return existing.read
+    const isCurrent = originalSealCurrent(original)
+    const read = (async (): Promise<InitialColdHistory | undefined> => {
+      let decoded: InitialArchive
+      try { decoded = await original.readFullForHistoryPage?.(sessionId) }
+      catch (cause) {
+        if ((cause as NodeJS.ErrnoException)?.code === 'ENOENT') return undefined
+        return translateReadFailure(cause)
+      }
+      if (!decoded || !isCurrent()) return undefined
+      const qualified = visibleHistory(decoded)
+      let internalSnapshot: Promise<Session> | undefined
+      let pendingItems: Promise<readonly PendingInputSummary[]> | undefined
+      const snapshot = () => internalSnapshot ??= asSnapshot(decoded, qualified)
+      return { decoded, unchanged: qualified.unchanged, snapshot,
+        pending: () => pendingItems ??= snapshot().then(session => readInbox(session).pending().map(pendingInputSummary)) }
+    })()
+    if (initialColdReads.size < MAX_COLD_HISTORY_SESSIONS) {
+      const flight = { reader: original, read }
+      initialColdReads.set(sessionId, flight)
+      const clear = () => { if (initialColdReads.get(sessionId) === flight) initialColdReads.delete(sessionId) }
+      void read.then(clear, clear)
     }
-    const isCurrent = () => !coldHistoryRetired && originalColdArchiveHistoryReader(backend) === original
-    if (!decoded || !isCurrent()) return undefined
-    const qualified = visibleHistory(decoded), { events, evidence } = decoded
+    return read
+  }
+  async function readInitialColdHistoryPage(sessionId: string, options: SessionHistoryPageOptions, original: ColdArchiveHistoryReader, onSnapshotFallback?: ColdSnapshotFallback): Promise<ColdHistoryPageResult | undefined> {
+    const reading = await readInitialColdHistory(sessionId, original), isCurrent = originalSealCurrent(original)
+    if (!reading || !isCurrent()) return undefined
+    const { decoded, unchanged } = reading, { events, evidence } = decoded
     const snapshotFallback = async () => {
       if (onSnapshotFallback) {
-        const session = await asSnapshot(decoded, qualified)
-        if (isCurrent()) onSnapshotFallback(session, isCurrent)
+        const session = await reading.snapshot()
+        if (isCurrent()) onSnapshotFallback(copyConversationData(session), isCurrent)
       }
       return undefined
     }
-    const facts = qualified.unchanged && evidence ? historyFacts(events) : undefined
+    const facts = unchanged && evidence ? historyFacts(events) : undefined
     if (!facts || !evidence) return snapshotFallback()
     const plan = planSessionHistoryPage(facts, options)
     if (!plan) return snapshotFallback()
@@ -261,6 +300,47 @@ export function createLoads(
       }
       return { session: await asSnapshot(decoded, qualified) }
     },
+    async readColdPendingInputs(sessionId: string): Promise<ColdPendingInputsResult | undefined> {
+      if (coldHistoryRetired) return undefined
+      const original = originalColdArchiveHistoryReader(backend)
+      if (!original) return undefined
+      const isCurrent = originalSealCurrent(original), history = coldHistory.get(sessionId)
+      if (history?.pendingOrdinals) {
+        // The original reader seals the full committed prefix even when the
+        // mailbox is empty. Only selected pending payloads are decoded.
+        const records = await original.readWindow(sessionId, history.evidence, new Set(history.pendingOrdinals))
+        if (!isCurrent()) return undefined
+        if (records) {
+          const byOrdinal = new Map(records.map(event => [event.seq, event]))
+          const items = history.pendingOrdinals.map(ordinal => {
+            const event = byOrdinal.get(ordinal)
+            if (event?.type !== 'agent/input/admitted') throw new Error('History pending input ordinal mismatch')
+            return pendingInputSummary({ ...event, admittedSeq: ordinal })
+          })
+          if (coldHistory.get(sessionId) === history) rememberColdHistory(sessionId, history)
+          return { items, originalSealCurrent: isCurrent }
+        }
+        if (coldHistory.get(sessionId) === history) coldHistory.delete(sessionId)
+      }
+      const reading = await readInitialColdHistory(sessionId, original)
+      if (!reading || !isCurrent()) return undefined
+      const items = await reading.pending()
+      if (!isCurrent()) return undefined
+      const { decoded, unchanged } = reading
+      const { evidence, retainDecoded } = decoded
+      if (retainDecoded && unchanged && evidence) {
+        const ordinals = pendingOrdinals(items)
+        const cached = coldHistory.get(sessionId)
+        if (ordinals && cached?.evidence === evidence) cached.pendingOrdinals = ordinals
+        else if (ordinals && history && (!cached || cached === history)) {
+          // A previously returned page can predate this verified read. Keep
+          // pending coordinates tied to the exact current evidence.
+          const facts = historyFacts(decoded.events)
+          if (facts) rememberColdHistory(sessionId, { evidence, facts, pendingOrdinals: ordinals })
+        }
+      }
+      return { items, ...(retainDecoded ? { originalSealCurrent: isCurrent } : {}) }
+    },
     async readColdHistoryPage(sessionId: string, options: SessionHistoryPageOptions, onSnapshotFallback?: ColdSnapshotFallback): Promise<ColdHistoryPageResult | undefined> {
       if (coldHistoryRetired) return undefined
       const original = originalColdArchiveHistoryReader(backend)
@@ -288,6 +368,7 @@ export function createLoads(
     retireColdHistory() {
       coldHistoryRetired = true
       coldHistory.clear()
+      initialColdReads.clear()
     },
     async load(sessionId: string) {
       // Physical14 recovery is a parent mutation owned by the retained task

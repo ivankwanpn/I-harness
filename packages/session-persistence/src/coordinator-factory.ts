@@ -3,8 +3,8 @@ import { associateOriginalResultRevocation } from './coordinator/result-revocati
 import { associateRestoredContextAcquisition } from './restored-context-internal.ts'
 import {associateManagedExecution} from './execution-internal.ts'
 import { attachArchiveReadResources } from './archive-read-internal.ts'
-import type { PersistenceBackend, CoordinatorOptions, SessionCoordinator } from './coordinator/types.ts'
-import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
+import { pendingInputSummary, type PersistenceBackend, type CoordinatorOptions, type PendingInputSummary, type SessionCoordinator } from './coordinator/types.ts'
+import { CURRENT_FORMAT_VERSION, readInbox } from '@i-harness/core-session'
 import { createOwnership } from './coordinator/ownership.ts'
 import { associateOriginalResultOrdering } from './result-ordering-internal.ts'
 import { createColdExecutionWrites, associateColdExecutionWrites } from './coordinator/cold-execution-writes.ts'
@@ -178,6 +178,23 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       }
       archiveReads?.assertPublicReadAdmission()
       return page
+    },
+    async readPendingInputs(sessionId) {
+      archiveReads?.assertPublicReadAdmission()
+      let pending: readonly PendingInputSummary[] | undefined = await managed.readPendingInputs(sessionId)
+      if (pending === undefined) {
+        const cold = await loads.readColdPendingInputs(sessionId)
+        const sealCurrent = cold?.originalSealCurrent?.()
+        const reserving = sealCurrent === true && managed.isPreparingUnpublishedExecution(sessionId)
+        if (!reserving && managed.has(sessionId)) pending = await managed.readPendingInputs(sessionId)
+        if (pending === undefined && cold && sealCurrent !== false) pending = cold.items
+        if (pending === undefined) {
+          const snapshot = await loads.snapshot(sessionId)
+          pending = await managed.readPendingInputs(sessionId) ?? readInbox(snapshot.session).pending()
+        }
+      }
+      archiveReads?.assertPublicReadAdmission()
+      return pending.map(pendingInputSummary)
     },
     async snapshot(sessionId, options) {
       archiveReads?.assertPublicReadAdmission()

@@ -1,10 +1,11 @@
-import {expect,it} from 'vitest'
+import {expect,it,vi} from 'vitest'
 import {mkdtemp} from 'node:fs/promises'
 import {join} from 'node:path'
 import {createJsonlBackend} from '../../session-persistence-jsonl/src/index.ts'
 import {composeJsonlTaskTransitionCoordinator} from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import {taskDocumentStorageContract} from '../../subagent/src/task/storage-contract.ts'
 import {createSessionService} from '../../session-executor/src/service.ts'
+import {originalManagedExecutionFor} from '../../session-executor/src/host-managed-execution.ts'
 import {controlledModel} from '../../session-executor/test/controlled-model.ts'
 import {createDesktopInput} from '../src/input.ts'
 
@@ -32,5 +33,22 @@ it('resumes a durably queued managed input through the same retained preparation
  let transforms=0,complete=0,request='';const model=controlledModel(async function*(value){request=JSON.stringify(value);yield {type:'text/chunk',text:'done'};yield {type:'end'}})
  const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[],async mountDefaultSurface(original,live){return {systemPrompt:()=> 'system',modelToolSchemas:live.modelToolSchemas,modelOverheadTokens:()=>10,async prepareInput(text){transforms++;return 'resumed '+text},async reconcileAuthority(){original.assertCurrent()}}}},model,contextWindow:4096,maxOutputTokens:128})
  const input=createDesktopInput(coordinator,service,{managedPreparation:true,async prepare(_id,text){complete++;return text}})
- try{const first=await input.admit('main',{text:'later',delivery:'queue',start:false,clientToken:'same-token-123'});const second=await input.admit('main',{text:'later',delivery:'queue',start:false,clientToken:'same-token-123'});expect(second.inputId).toBe(first.inputId);const queued=await input.state('main');expect(queued.resumable).toBe(true);expect(queued.items.some(row=>row.text==='later')).toBe(true);await input.resume('main');await input.drain();expect(transforms).toBe(1);expect(complete).toBe(0);expect(request).toContain('resumed later')}finally{await input.close();await service.close();await coordinator.close()}
+ const snapshot=vi.spyOn(coordinator as typeof coordinator & { snapshot: NonNullable<typeof coordinator.snapshot> },'snapshot')
+ try{
+  const first=await input.admit('main',{text:'later',delivery:'queue',start:false,clientToken:'same-token-123'})
+  const second=await input.admit('main',{text:'later',delivery:'queue',start:false,clientToken:'same-token-123'})
+  expect(second.inputId).toBe(first.inputId)
+  const original=originalManagedExecutionFor(service,'main')!
+  expect((await input.state('main'))).toMatchObject({resumable:true,items:[{id:first.inputId,text:'later',state:'queued'}]})
+  expect(Object.hasOwn(original.owner,'view')).toBe(false)
+  await input.resume('main')
+  await input.drain()
+  expect(transforms).toBe(1)
+  expect(complete).toBe(0)
+  expect(request).toContain('resumed later')
+  expect(await input.state('main')).toEqual({resumable:false,items:[]})
+  expect(originalManagedExecutionFor(service,'main')).toBe(original)
+  expect(Object.hasOwn(original.owner,'view')).toBe(false)
+  expect(snapshot).not.toHaveBeenCalled()
+ }finally{snapshot.mockRestore();await input.close();await service.close();await coordinator.close()}
 },30000)

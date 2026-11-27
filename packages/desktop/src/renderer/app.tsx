@@ -836,7 +836,10 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
             .catch(() => { throw new ComposerPreparationError(t("無法確認會話專案；草稿仍保留。")) })
         }
         if (selection.current === owner) scrollHistory.latest?.()
-        timer = setTimeout(() => { if (selection.current === owner) void refreshTasks(selectedWorkspaceId, selectedSessionId) }, 500)
+        // The durable RPC acknowledges admission and refreshes below. Its
+        // execution notifications already cover changes before that reply.
+        // Legacy prompt RPCs stay open until the end of the turn.
+        if (!usesDurableInput) timer = setTimeout(() => { if (selection.current === owner) void refreshTasks(selectedWorkspaceId, selectedSessionId) }, 500)
         const accepted = (inputId?: string) => {
           if (showEcho && inputId) setOptimistic(current => current.map(row => ownsEcho(row) ? { ...row, inputId } : row))
           const consume = () => consumeSessionSubmission(selectedWorkspaceId, selectedSessionId, token)

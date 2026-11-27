@@ -1,10 +1,11 @@
 import * as archive from '@i-harness/core-session/internal/archive'
 import * as validation from '../../core-session/src/conversation/validation.ts'
-import { committedFactSeqs, encodeFactBatch, factPrefixDigest, legacyPrefixDigest, type JournalMetadata, type SessionView } from '@i-harness/core-session'
+import { committedFactSeqs, encodeFactBatch, factPrefixDigest, legacyPrefixDigest, readFactJournal, type JournalMetadata, type SessionEvent, type SessionView } from '@i-harness/core-session'
 import { originalColdArchiveHistoryReader } from '@i-harness/session-persistence/internal/archive-read'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setImmediate as nextTurn } from 'node:timers/promises'
 import { expect, it, vi } from 'vitest'
 import { createJsonlBackend } from '../src/index.ts'
 import { PREPARED_HISTORY_LIFETIME_MS } from '../src/backend/process-read.ts'
@@ -14,7 +15,20 @@ import { acquireManagedExecution } from '../../session-persistence/src/execution
 const barrier = vi.hoisted(() => ({
   afterSealedPage: undefined as (() => Promise<void>) | undefined,
   beforeRestore: undefined as (() => Promise<void>) | undefined,
+  readOrdinals: undefined as ((ordinals: readonly number[]) => void) | undefined,
+  beforePending: undefined as (() => void) | undefined,
 }))
+
+vi.mock('../../core-session/src/inbox-view.ts', async load => {
+  const original = await load<typeof import('../../core-session/src/inbox-view.ts')>()
+  return {
+    ...original,
+    readInbox(...args: Parameters<typeof original.readInbox>) {
+      const inbox = original.readInbox(...args)
+      return { ...inbox, pending() { barrier.beforePending?.(); return inbox.pending() } }
+    },
+  }
+})
 
 vi.mock('../../session-persistence/src/archive-read-internal.ts', async load => {
   const original = await load<typeof import('../../session-persistence/src/archive-read-internal.ts')>()
@@ -27,6 +41,10 @@ vi.mock('../../session-persistence/src/archive-read-internal.ts', async load => 
           const result = await reader.readFullForHistoryPage!(id)
           if (result?.retainDecoded) await barrier.afterSealedPage?.()
           return result
+        },
+        async readWindow(id, evidence, ordinals) {
+          barrier.readOrdinals?.([...ordinals])
+          return reader.readWindow(id, evidence, ordinals)
         },
       } : reader)
     },
@@ -88,6 +106,191 @@ async function withHistory(run: (fixture: {
     await rm(root, { recursive: true, force: true })
   }
 }
+
+const admitted = (inputId: string, text: string): SessionEvent => ({type:'agent/input/admitted',version:1,inputId,text,delivery:'queue',intent:'user'})
+async function appendRawEvents(root: string, events: readonly SessionEvent[]) {
+  const path = join(root, 'a.jsonl'), bytes = await readFile(path), end = bytes.indexOf(10)
+  const header = JSON.parse(bytes.subarray(0, end).toString('utf8')) as { formatVersion: number; journal: JournalMetadata; sessionId: string }
+  const { prefix } = readFactJournal(bytes.subarray(end + 1), header.journal, header.formatVersion, header)
+  const frame = encodeFactBatch('pending-fixture-' + prefix.eventCount, prefix.prefixDigest,
+    events.map((event, index) => ({ ...event, seq: prefix.eventCount + index })))
+  await appendFile(path, frame.bytes)
+}
+
+it.each(['history first', 'pending first'] as const)('shares one initial native decode when %s', async order => withHistory(async ({ coordinator, root }) => {
+  await appendRawEvents(root, [admitted('keep', 'pending'), admitted('done', 'completed'),
+    {type:'agent/input/promoted',version:1,inputId:'done'}, admitted('cancelled','cancelled'),
+    {type:'agent/input/cancelled',version:1,inputId:'cancelled'}])
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  barrier.afterSealedPage = async () => { entered.resolve(); await release.promise }
+  const history = () => coordinator.readHistoryPage!('a', tail)
+  const pending = () => coordinator.readPendingInputs!('a')
+  decodes.mockClear()
+  let requests: readonly Promise<unknown>[] = []
+  try {
+    let page, state
+    if (order === 'history first') {
+      page = history()
+      requests = [page]
+      await entered.promise
+      state = pending()
+    } else {
+      state = pending()
+      requests = [state]
+      await entered.promise
+      page = history()
+    }
+    requests = [page, state]
+    await nextTurn()
+    release.resolve()
+    expect(await page).toMatchObject({ headSeq: 6 })
+    const item = {inputId:'keep',text:'pending',intent:'user',delivery:'queue',admittedSeq:1}
+    expect(await state).toEqual([item])
+    expect(decodes).toHaveBeenCalledTimes(1)
+
+    const observed: Array<readonly number[]> = []
+    barrier.readOrdinals = ordinals => observed.push(ordinals)
+    expect(await pending()).toEqual([item])
+    expect(observed).toEqual([[1]])
+    expect(decodes).toHaveBeenCalledTimes(1)
+    expect(coordinator.ownerOf('a')).toBe(false)
+  } finally {
+    barrier.afterSealedPage = undefined
+    barrier.readOrdinals = undefined
+    release.resolve()
+    await Promise.allSettled(requests)
+  }
+}))
+
+it('does not fold or require the pending inbox when only opening a history page', async () => withHistory(async ({ coordinator, root }) => {
+  await appendRawEvents(root, [admitted('keep', 'pending')])
+  const unrelatedFailure = Error('A history page must not depend on a pending fold')
+  barrier.beforePending = () => { throw unrelatedFailure }
+  try {
+    decodes.mockClear()
+    expect(await coordinator.readHistoryPage!('a', tail)).toMatchObject({headSeq:2})
+    expect(decodes).toHaveBeenCalledTimes(1)
+    await expect(coordinator.readPendingInputs!('a')).rejects.toBe(unrelatedFailure)
+    expect(decodes).toHaveBeenCalledTimes(2)
+  } finally { barrier.beforePending = undefined }
+}))
+
+it('seals even an empty cached inbox and requalifies after the committed journal changes', async () => withHistory(async ({ coordinator, root }) => {
+  expect(await coordinator.readHistoryPage!('a', tail)).toMatchObject({ headSeq: 1 })
+  const observed: Array<readonly number[]> = []
+  barrier.readOrdinals = ordinals => observed.push(ordinals)
+  try {
+    decodes.mockClear()
+    expect(await coordinator.readPendingInputs!('a')).toEqual([])
+    expect(observed).toEqual([])
+    expect(decodes).toHaveBeenCalledTimes(1)
+    decodes.mockClear()
+    expect(await coordinator.readPendingInputs!('a')).toEqual([])
+    expect(observed).toEqual([[]])
+    expect(decodes).not.toHaveBeenCalled()
+    await appendRawEvents(root, [admitted('fresh', 'newly queued')])
+    expect(await coordinator.readPendingInputs!('a')).toEqual([
+      {inputId:'fresh',text:'newly queued',intent:'user',delivery:'queue',admittedSeq:1},
+    ])
+    expect(observed).toEqual([[], []])
+    expect(decodes).toHaveBeenCalledTimes(1)
+  } finally { barrier.readOrdinals = undefined }
+}))
+
+it('requalifies cached pending records after a valid same-size overwrite', async () => withHistory(async ({ coordinator, root }) => {
+  await appendRawEvents(root, [admitted('keep', 'before')])
+  expect(await coordinator.readHistoryPage!('a', tail)).toMatchObject({headSeq:2})
+  expect(await coordinator.readPendingInputs!('a')).toEqual([{inputId:'keep',text:'before',intent:'user',delivery:'queue',admittedSeq:1}])
+  const path = join(root, 'a.jsonl'), source = await readFile(path)
+  const last = source.lastIndexOf(10, source.length - 2) + 1
+  const frame = JSON.parse(source.subarray(last).toString('utf8')) as { batchId: string; previousPrefixDigest: string }
+  const rewritten = Buffer.concat([source.subarray(0, last), encodeFactBatch(frame.batchId, frame.previousPrefixDigest, [
+    {...admitted('keep', 'after!'), seq:1},
+  ]).bytes])
+  expect(rewritten.length).toBe(source.length)
+  expect(rewritten).not.toEqual(source)
+  await writeFile(path, rewritten)
+  decodes.mockClear()
+  expect(await coordinator.readPendingInputs!('a')).toEqual([{inputId:'keep',text:'after!',intent:'user',delivery:'queue',admittedSeq:1}])
+  expect(decodes).toHaveBeenCalledTimes(1)
+}))
+
+it('derives pending from the same decoded ignorable history while detaching the mutable public fallback', async () => withHistory(async ({ coordinator, root }) => {
+  await appendRawEvents(root, [admitted('still-pending', 'original pending'),
+    {type:'test/ignorable',ignorable:true} as unknown as SessionEvent])
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  barrier.afterSealedPage = async () => { entered.resolve(); await release.promise }
+  let fallback: SessionView | undefined
+  decodes.mockClear()
+  const page = coordinator.readHistoryPage!('a', tail, session => {
+    fallback = session
+    const admission = session.events.find(event => event.type === 'agent/input/admitted')!
+    expect(Reflect.set(admission, 'text', 'mutated external snapshot')).toBe(true)
+  })
+  try {
+    await entered.promise
+    const pending = coordinator.readPendingInputs!('a')
+    await nextTurn()
+    release.resolve()
+    expect(await page).toBeUndefined()
+    expect(fallback?.events).toHaveLength(2)
+    expect(await pending).toEqual([{inputId:'still-pending',text:'original pending',intent:'user',delivery:'queue',admittedSeq:1}])
+    expect(decodes).toHaveBeenCalledTimes(1)
+  } finally { barrier.afterSealedPage = undefined; release.resolve(); await page }
+}))
+
+it('preserves every pending input past the compact ordinal limit', async () => withHistory(async ({ coordinator, root }) => {
+  await appendRawEvents(root, Array.from({length:257}, (_, index) => admitted('input-' + index, 'queued ' + index)))
+  await coordinator.readHistoryPage!('a', tail)
+  decodes.mockClear()
+  const captured: Array<readonly number[]> = []
+  barrier.readOrdinals = ordinals => captured.push(ordinals)
+  try {
+    const items = await coordinator.readPendingInputs!('a')
+    expect(items).toHaveLength(257)
+    expect(items.at(-1)).toMatchObject({inputId:'input-256',admittedSeq:257})
+    expect(captured).toEqual([])
+    expect(decodes).toHaveBeenCalledTimes(1)
+  } finally { barrier.readOrdinals = undefined }
+}))
+
+it('joins restoring managed input state without materializing a Session and tracks committed consumption', async () => withHistory(async ({ coordinator, root }) => {
+  await appendRawEvents(root, [admitted('to-promote', 'promote me'), admitted('to-cancel', 'cancel me')])
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  barrier.beforeRestore = async () => { entered.resolve(); await release.promise }
+  const attaching = acquireManagedExecution(coordinator, 'a')
+  void attaching.catch(() => {})
+  let reading: ReturnType<NonNullable<typeof coordinator.readPendingInputs>> | undefined
+  try {
+    await entered.promise
+    reading = coordinator.readPendingInputs!('a')
+    void reading.catch(() => {})
+    await nextTurn()
+    release.resolve()
+    const [execution, pending] = await Promise.all([attaching, reading])
+    expect(pending).toEqual([
+      { inputId: 'to-promote', text: 'promote me', intent: 'user', delivery: 'queue', admittedSeq: 1 },
+      { inputId: 'to-cancel', text: 'cancel me', intent: 'user', delivery: 'queue', admittedSeq: 2 },
+    ])
+    expect(Object.hasOwn(execution.owner, 'view')).toBe(false)
+    const action = execution.owner.beginAction()
+    try {
+      committedFactSeqs(await action.facts.inputs.start(
+        { type: 'agent/input/promoted', version: 1, inputId: 'to-promote' },
+        { type: 'user/message', text: 'promote me', input: { inputId: 'to-promote', intent: 'user' } },
+      ))
+      expect(await coordinator.readPendingInputs!('a')).toEqual([pending[1]])
+      committedFactSeqs(await action.facts.inputs.cancel({ type: 'agent/input/cancelled', version: 1, inputId: 'to-cancel' }))
+      expect(await coordinator.readPendingInputs!('a')).toEqual([])
+      committedFactSeqs(await action.facts.agent.lifecycle({ type: 'turn/end' }))
+      expect(Object.hasOwn(execution.owner, 'view')).toBe(false)
+    } finally { action.finish() }
+  } finally {
+    barrier.beforeRestore = undefined
+    release.resolve()
+    await Promise.allSettled([attaching, ...(reading ? [reading] : [])])
+  }
+}))
 
 it('detaches page and public snapshot from a one-use native writer decode', async () => withHistory(async ({ coordinator }) => {
   decodes.mockClear()

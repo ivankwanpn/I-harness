@@ -1,5 +1,11 @@
-import type { OwnedSessionHistoryPage, SessionHistoryPageOptions, SessionView as Session, SessionEvent, SessionHeader } from "@i-harness/core-session"
+import type { OwnedSessionHistoryPage, PendingInput, SessionHistoryPageOptions, SessionView as Session, SessionEvent, SessionHeader } from "@i-harness/core-session"
 import type { SettingsProviderProtocol } from "@i-harness/settings"
+
+/** Displayable durable inbox rows, in admission order. */
+export type PendingInputSummary = Pick<PendingInput, 'inputId' | 'text' | 'intent' | 'delivery' | 'admittedSeq'>
+export function pendingInputSummary({ inputId, text, intent, delivery, admittedSeq }: PendingInputSummary): PendingInputSummary {
+  return { inputId, text, intent, delivery, admittedSeq }
+}
 
 export interface SessionMeta extends SessionHeader {
   formatVersion: number
@@ -165,6 +171,8 @@ export interface SessionCoordinator {
   snapshot?(sessionId: string, options?: { prepareHistoryPages?: boolean }): Promise<{ session: Session }>
   /** Read a bounded page from an existing private execution or verified cold archive. */
   readHistoryPage?(sessionId: string, options: SessionHistoryPageOptions, onSnapshotFallback?: (session: Session) => void): Promise<OwnedSessionHistoryPage | undefined>
+  /** Read the committed inbox without opening an execution engine or materializing its full Session. */
+  readPendingInputs?(sessionId: string): Promise<readonly PendingInputSummary[]>
   /** Acquire long-term ownership before reading, durably canonicalize crash
    * recovery, and return a writable snapshot whose length equals its next seq. */
   loadOwned(sessionId: string): Promise<{ session: Session }>

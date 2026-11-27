@@ -521,6 +521,33 @@ function fixture(override: (request: DesktopRequest) => Promise<unknown> | undef
   return request
 }
 
+it("refreshes a durable input on acknowledgement without polling while admission is pending", async () => {
+  const admission = defer()
+  const request = fixture(message => {
+    if (message.kind === "desktop/capabilities") return Promise.resolve({ "desktop-input": ["1"] })
+    if (message.kind === "desktop/session/input/state") return Promise.resolve({ items: [], resumable: false })
+    if (message.kind === "desktop/session/input/submit") return admission.promise
+    return undefined
+  })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/session/input/state", workspaceId: "w1", sessionId: "a" }))
+  await act(async () => {})
+  request.mockClear()
+  vi.useFakeTimers()
+  let sending: Promise<void> | undefined
+  try {
+    act(() => { sending = captured.props!.conversation!.onPrompt("continue") })
+    await act(async () => { await vi.advanceTimersByTimeAsync(700) })
+    expect(request.mock.calls.some(([row]) => row.kind === "desktop/session/input/submit")).toBe(true)
+    expect(request.mock.calls.some(([row]) => row.kind === "desktop/session/input/state")).toBe(false)
+  } finally {
+    await act(async () => { admission.resolve({ accepted: true, inputId: "admitted", delivery: "queue" }); await sending })
+    vi.useRealTimers()
+  }
+  expect(request).toHaveBeenCalledWith({ kind: "desktop/session/input/state", workspaceId: "w1", sessionId: "a" })
+})
+
 it.each([
   { input: ["1"], submission: "desktop/session/input/submit" },
   { input: ["project-checked"], submission: "session/prompt" },

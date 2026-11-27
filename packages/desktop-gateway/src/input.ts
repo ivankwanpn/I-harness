@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto"
 import type { AsyncInbox, ImageInput, SessionEventView } from "@i-harness/core-session"
-import type { SessionCoordinator } from "@i-harness/session-persistence"
+import type { PendingInputSummary, SessionCoordinator } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 import { createDurableSessionLoader } from "@i-harness/session-executor"
 import { isFactRecoveryRequired, isManagedFactOwner, readInbox, validateImages } from "@i-harness/core-session"
@@ -181,16 +181,19 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     },
     async state(id: string) {
       await coordinator.profile(id)
-      let session = service.liveSession(id)
-      if (!session) {
+      const current = service.liveSession(id)
+      let pending: readonly PendingInputSummary[]
+      if (current) pending = readInbox(current).pending()
+      else if (coordinator.readPendingInputs) pending = await coordinator.readPendingInputs(id)
+      else {
         if (!coordinator.snapshot) throw new Error("Read-only input snapshots unavailable")
         const saved = (await coordinator.snapshot(id)).session
-        session = service.liveSession(id) ?? saved
+        pending = readInbox(service.liveSession(id) ?? saved).pending()
       }
-      const pending = readInbox(session).pending()
-      const rows = new Map(service.queue(id).map((row) => [row.id, row]))
+      const queue = service.queue(id)
+      const rows = new Map(queue.map((row) => [row.id, row]))
       for (const input of pending) if (!rows.has(input.inputId)) rows.set(input.inputId, { id: input.inputId, text: input.text, delivery: input.delivery, intent: input.intent, state: "queued", order: input.admittedSeq })
-      return { items: [...rows.values()], resumable: pending.some((input) => !scheduled.has(keyFor(id, input.inputId))) && !service.queueState(id).running }
+      return { items: [...rows.values()], resumable: pending.some((input) => !scheduled.has(keyFor(id, input.inputId))) && !queue.some(row => row.state === "running") }
     },
     cancel(id: string, inputId: string) {
       return serial(id, async () => {

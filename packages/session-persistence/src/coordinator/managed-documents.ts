@@ -6,7 +6,7 @@ import { hasArchiveHistoryPrefixReader, originalColdArchiveHistoryReader } from 
 import { createManagedRestoredRead, sameArchivePrefix } from './managed-restored-read.ts'
 import type { ManagedRestoredContextRead } from '../restored-context-internal.ts'
 import type { Session, JournalPrefix, OwnedSessionHistoryPage, SessionHistoryPageOptions } from '@i-harness/core-session'
-import { FactRecoveryRequiredError, aggregateErrors, freezeJsonData } from '@i-harness/core-session'
+import { FactRecoveryRequiredError, aggregateErrors, freezeJsonData, readInbox } from '@i-harness/core-session'
 import type { CoordinatorOptions, PersistenceBackend } from './types.ts'
 import type { Ownership } from './ownership.ts'
 import type { Mutations } from './mutations.ts'
@@ -352,6 +352,25 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     },
     revoke(id:string){assertTaskOutside(id);bootstrap.assertOutsideCapture(id);const entry=documents.get(id);if(entry)revokeManagedEntry(entry)},
     async assertObservable(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;entry?.document?.assertObservable()},
+    async readPendingInputs(id: string) {
+      const entry = documents.get(id)
+      assertEntry(entry)
+      if (!entry) return undefined
+      if (executions.has(entry)) {
+        return readPrivateExecution(id, entry, async (original, assertCurrent) => {
+          const observation = original.core.observe()
+          const inputs = observation.inbox.pending()
+          observation.assertCurrent()
+          assertCurrent()
+          return inputs
+        }, document => readInbox(document.view).pending())
+      }
+      await entry.flight
+      if (documents.get(id) !== entry) throw new FactRecoveryRequiredError()
+      assertEntry(entry)
+      entry.document?.assertObservable()
+      return entry.document ? readInbox(entry.document.view).pending() : undefined
+    },
     async readHistoryPage(id: string, options: SessionHistoryPageOptions): Promise<OwnedSessionHistoryPage | undefined> {
       const entry = documents.get(id)
       assertEntry(entry)
