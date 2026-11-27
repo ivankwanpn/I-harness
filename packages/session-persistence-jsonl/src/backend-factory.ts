@@ -31,7 +31,7 @@ import { assembleSessionCoordinatorWithProcessStorage, type TaskTransitionBacken
 import { repairTurnTail, routeInvocation, type CoordinatorOptions, type SessionCoordinator, type BootstrapRoute, type BootstrapReadState } from '@i-harness/session-persistence'
 import { createTaskDocumentObservation } from './backend/task-document-observation.ts'
 import { taskDocumentStorageContract } from '@i-harness/session-persistence/internal/task-state'
-import { SessionLockUnsupportedError } from '@i-harness/session-persistence'
+import { isHeldFactOwner, SessionLockUnsupportedError } from '@i-harness/session-persistence'
 import { writeLegacyDocument } from './backend/document-write.ts'
 import type { HeldTaskDocumentScope, TaskDocumentBackendSession, HeldFactOwner } from '@i-harness/session-persistence'
 
@@ -758,7 +758,7 @@ export function createJsonlBackend(root: string, options?: {
         return field?.enumerable === true && Object.hasOwn(field, 'value') && field.value === observed[key]
       })
   })
-  associateOwnedExecutionReader(backend,{assertOriginal,filePath,assertNotDeleted,archive:archiveReads,
+  const restoreDependencyFraming = associateOwnedExecutionReader(backend,{assertOriginal,filePath,assertNotDeleted,archive:archiveReads,
     register(id,held){trackHeaderOwner(id,held);if(hasTrackedHeaderDebt(id,held))throw Error('Owned dependency birth cleanup unresolved')},
     qualify:(id,held,prefix)=>assertPublicBootstrap(id,false,prefix,trackedStageIO(id,held)),
     settleBirth:(id,held)=>settleTrackedHeaderIO(id,held)})
@@ -778,7 +778,16 @@ export function createJsonlBackend(root: string, options?: {
   const capability = Object.freeze(createJsonlProcessReadCapability({ assertOriginal, root: rootPath, file: filePath, document: docPath, checkDeleted: assertNotDeleted, hasOrdinaryNamespace,
     isOriginalCleanCheck: check => check === cleanHistory && hasOriginalArchiveRead(),
     async checkNamespace(id) { if (!await hasOrdinaryNamespace(id)) throw new Error('PROCESS_READ_UNAVAILABLE') } }))
-  associateArchiveHistoryPrefixReader(backend,proof=>{assertOriginal();return capability.qualifiedHistoryPrefix(proof)})
+  associateArchiveHistoryPrefixReader(backend,(proof,writer)=>{
+    assertOriginal()
+    const prefix = capability.qualifiedHistoryPrefix(proof)
+    if (writer && prefix && isHeldFactOwner(writer)) {
+      const id = writer.owner.sessionId
+      const framing = capability.qualifiedHistoryFraming(id, proof, prefix)
+      if (framing) restoreDependencyFraming(id, writer, framing)
+    }
+    return prefix
+  })
   function openOwnedTask(scope: HeldTaskDocumentScope, initialize: boolean): TaskDocumentBackendSession {
     assertOriginal(); const original = createTaskDocumentObservation(rootPath, docPath(scope.key), scope, undefined, available, createOriginalTaskNativeStage(scope, available, assertOriginal))
     async function available() {

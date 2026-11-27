@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { decodeFactBatch, type JournalMetadata, type JournalPrefix, type SessionEvent } from '@i-harness/core-session'
-import { createArchiveJournalHistoryDecoder, createJournalStreamDecoder, type JournalFrameExtent } from '@i-harness/core-session/internal/archive'
+import { createArchiveJournalHistoryDecoder, createJournalStreamDecoder, isOriginalArchiveValidationEnvironment, type JournalFrameExtent } from '@i-harness/core-session/internal/archive'
 
 /** Evidence from an already verified read by this owner. It retains no event bodies. */
 export interface VerifiedArchiveBody {
@@ -9,6 +9,18 @@ export interface VerifiedArchiveBody {
   readonly prefix: Readonly<JournalPrefix>
   readonly digest: string
   readonly frames: readonly JournalFrameExtent[]
+}
+
+/** Header identity for coordinates lent by the held restoration proof. */
+export interface RestoredArchiveFraming {
+  readonly headerDigest: string
+  readonly body: VerifiedArchiveBody
+}
+
+const originalBufferToString = Buffer.prototype.toString
+export function isOriginalRestorationFramingEnvironment() {
+  return isOriginalArchiveValidationEnvironment()
+    && Object.getOwnPropertyDescriptor(Buffer.prototype, 'toString')?.value === originalBufferToString
 }
 
 export class ArchiveEvidenceMismatch extends Error {

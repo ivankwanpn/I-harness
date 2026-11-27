@@ -23,8 +23,7 @@ export interface PreparedArchiveHistory {
   readonly dev: bigint
   readonly ino: bigint
   readonly headerDigest: string
-  readonly bodyDigest: string
-  readonly prefix: Readonly<JournalPrefix>
+  readonly verified: VerifiedArchiveBody
   readonly events: SessionEvent[]
 }
 class HistoryPreparationUnavailable extends Error {}
@@ -129,8 +128,7 @@ export function createColdArchiveHistoryReader(options: {
         assertCurrent(generation)
         options.prepareHistory!({
           sessionId, size: physical.extent, dev: physical.dev, ino: physical.ino,
-          headerDigest: physical.headerDigest, bodyDigest: physical.verified.digest,
-          prefix: physical.verified.prefix, events: result.events,
+          headerDigest: physical.headerDigest, verified: physical.verified, events: result.events,
         })
       } }
     },

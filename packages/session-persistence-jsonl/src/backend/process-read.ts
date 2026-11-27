@@ -4,17 +4,19 @@ import type { BigIntStats } from 'node:fs';
 import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { CURRENT_FORMAT_VERSION, freezeJsonData, readFactJournal, type JournalPrefix, type SessionEvent, type SessionView } from '@i-harness/core-session';
-import { createArchiveJournalHistoryDecoder, isOriginalArchiveValidationEnvironment } from '@i-harness/core-session/internal/archive';
+import { createArchiveJournalHistoryDecoder } from '@i-harness/core-session/internal/archive';
 import { parseHeader } from '../format.ts';
 import { isHeldTaskDocumentScope, SessionFormatUnsupportedError, type HeldTaskDocumentScope } from '@i-harness/session-persistence';
 import { preflightDecodedFactHistory, preflightSessionFormat } from '@i-harness/session-persistence/internal/task-document-operations';
 import { MAX_PREPARED_HISTORY_BYTES, MAX_PREPARED_HISTORY_EVENTS, type PreparedArchiveHistory } from './cold-archive-history.ts';
+import { isOriginalRestorationFramingEnvironment as cleanDecodeEnvironment, type RestoredArchiveFraming, type VerifiedArchiveBody } from './verified-archive-body.ts';
 
 type Identity = { dev: bigint; ino: bigint; size: number; mtimeNs: bigint; ctimeNs: bigint };
 type DirectoryChain = { root: Identity; rootAncestry: string; pathAncestry: string };
 type Witness = { path: string; identity: Identity; digest: string; parents: DirectoryChain };
 type ColdTranscript = { id: string; witness: Witness; initial: SessionView; reusableInitial?: true };
 type ColdRead = { kind: 'process'; value: ColdTranscript } | { kind: 'history'; value: PreparedArchiveHistory; expiresAt: number };
+type DecodedHistory = ReturnType<typeof readFactJournal> & { framing?: RestoredArchiveFraming };
 export type CleanHistoryCheck = Readonly<{ before(id: string): Promise<void>; isCanonical(events: SessionEvent[]): boolean }>;
 type Ports = { assertOriginal(): void; root: string; file(id: string): string; document(key: string): string; checkNamespace(id: string): Promise<void>; checkDeleted(kind: string, id: string): Promise<void>; isOriginalCleanCheck?(check: CleanHistoryCheck): boolean; hasOrdinaryNamespace?(id: string): Promise<boolean> };
 const bad = (): never => { throw new Error('PROCESS_READ_UNAVAILABLE'); };
@@ -36,26 +38,32 @@ const { parse: nativeParse, stringify: nativeStringify } = JSON;
 const nativeTranscriptDecoding = () => JSON.parse === nativeParse && JSON.stringify === nativeStringify
     && Object.getPrototypeOf(Array.prototype) === Object.prototype
     && !Object.hasOwn(Object.prototype, 'toJSON') && !Object.hasOwn(Array.prototype, 'toJSON');
-const originalBufferToString = Buffer.prototype.toString;
-const cleanDecodeEnvironment = () => isOriginalArchiveValidationEnvironment()
-    && Object.getOwnPropertyDescriptor(Buffer.prototype, 'toString')?.value === originalBufferToString;
 
 /** The stream decoder owns the fresh bytes and decoded rows through validation.
  * Use the ordinary decoder to preserve its error ordering on malformed input. */
-function decodeCleanHistory(body: Buffer, meta: ReturnType<typeof parseHeader>) {
+function decodeCleanHistory(body: Buffer, meta: ReturnType<typeof parseHeader>, header: Buffer): DecodedHistory | undefined {
     try {
         const history = createArchiveJournalHistoryDecoder(meta.journal!, meta.formatVersion);
         history.push(body);
         const result = history.finish();
         if (result.torn || result.prefix.bodyBytes !== body.length) return undefined;
-        return { prefix: result.prefix, torn: false, events: result.validatedEvents(meta, undefined, true) };
+        let original = false;
+        const events = result.validatedEvents(meta, () => { original = true }, true);
+        const framing = original && result.frames?.length ? Object.freeze({
+            headerDigest: hash(header),
+            body: Object.freeze({
+                formatVersion: meta.formatVersion, legacyPrefixDigest: meta.journal!.legacyPrefixDigest,
+                prefix: Object.freeze({ ...result.prefix }), digest: hash(body), frames: result.frames,
+            }) satisfies VerifiedArchiveBody,
+        }) : undefined;
+        return { prefix: result.prefix, torn: false, events, framing };
     } catch { return undefined; }
 }
 /** Low-level byte adapter; cannot associate a backend with factory authority. */
 export function createJsonlProcessReadCapability(ports: Ports) {
     const freshOwners = new WeakMap<object, HeldTaskDocumentScope>();
     const historyOwners = new WeakMap<object, { scope: HeldTaskDocumentScope; bytes: Buffer; identity: Identity; prefix?: Readonly<import('@i-harness/core-session').JournalPrefix>; cleanGeneration?: object; assertPrefixCurrent():void }>();
-    const cleanWriterHistory = new WeakMap<Readonly<JournalPrefix>, { id: string; witness: Witness; generation: object }>();
+    const cleanWriterHistory = new WeakMap<Readonly<JournalPrefix>, { id: string; witness: Witness; generation: object; framing?: RestoredArchiveFraming }>();
     const decodedProcessHistory = new WeakMap<SessionView, { id: string; generation: object }>();
     let coldRead: ColdRead | undefined, historyExpiry: NodeJS.Timeout | undefined, coldGeneration = {};
     function replaceColdRead(value?: ColdRead) {
@@ -72,16 +80,17 @@ export function createJsonlProcessReadCapability(ports: Ports) {
         historyExpiry = setTimeout(replaceColdRead, PREPARED_HISTORY_LIFETIME_MS);
         historyExpiry.unref();
     }
-    function takePreparedHistory(id: string, witness: Witness, header: Buffer, body: Buffer) {
+    function takePreparedHistory(id: string, witness: Witness, header: Buffer, body: Buffer): DecodedHistory | undefined {
         const cached = coldRead;
         if (cached?.kind !== 'history' || cached.value.sessionId !== id) return undefined;
         replaceColdRead();
         const { value, expiresAt } = cached;
         if (performance.now() >= expiresAt || !cleanDecodeEnvironment() ||
             value.dev !== witness.identity.dev || value.ino !== witness.identity.ino ||
-            value.size !== witness.identity.size || value.prefix.bodyBytes !== body.length ||
-            value.headerDigest !== hash(header) || value.bodyDigest !== hash(body)) return undefined;
-        return { prefix: value.prefix, torn: false, events: value.events };
+            value.size !== witness.identity.size || value.verified.prefix.bodyBytes !== body.length ||
+            value.headerDigest !== hash(header) || value.verified.digest !== hash(body)) return undefined;
+        return { prefix: value.verified.prefix, torn: false, events: value.events,
+            framing: Object.freeze({ headerDigest: value.headerDigest, body: value.verified }) };
     }
     function processHeader(line: string) {
         const raw = JSON.parse(line) as Record<string, unknown>;
@@ -460,7 +469,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
                 if (sourceDigest !== undefined && sourceDigest !== captured.witness.digest) bad();
             }
             if (meta.formatVersion >= 6 && captured.bytes.at(-1) !== 10) bad();
-            let decoded: ReturnType<typeof readFactJournal> | undefined;
+            let decoded: DecodedHistory | undefined;
             let validatedClean = false;
             if (meta.formatVersion >= 6) {
                 // The clean route above already excluded older formats, seeds,
@@ -469,7 +478,8 @@ export function createJsonlProcessReadCapability(ports: Ports) {
                 if (nativeHeader && sourceDigest === undefined && !Object.hasOwn(raw, 'parentSession') &&
                     !Object.hasOwn(raw, 'seedLength') && !Object.hasOwn(raw, 'forkPublication') &&
                     meta.origin !== 'fork' && cleanDecodeEnvironment()) {
-                    decoded = takePreparedHistory(id, captured.witness, captured.bytes.subarray(0, end + 1), body) ?? decodeCleanHistory(body, meta);
+                    const headerBytes = captured.bytes.subarray(0, end + 1);
+                    decoded = takePreparedHistory(id, captured.witness, headerBytes, body) ?? decodeCleanHistory(body, meta, headerBytes);
                     validatedClean = decoded !== undefined;
                 }
                 try { decoded ??= readFactJournal(body, meta.journal!, meta.formatVersion, meta); }
@@ -508,7 +518,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
             if (!retiring && prefix && validatedClean && generation === coldGeneration && cleanDecodeEnvironment()) {
                 scope.assertActive(); ports.assertOriginal();
                 const witness = Object.freeze({ ...captured.witness, identity: Object.freeze({ ...captured.witness.identity }) });
-                cleanWriterHistory.set(prefix, { id, witness, generation });
+                cleanWriterHistory.set(prefix, { id, witness, generation, framing: decoded?.framing });
             }
             return proof;
         }
@@ -539,6 +549,11 @@ export function createJsonlProcessReadCapability(ports: Ports) {
         },
         assertFreshOwner(proof: object, scope: HeldTaskDocumentScope) { if (freshOwners.get(proof) !== scope) bad(); scope.assertActive(); },
         qualifiedHistoryPrefix(proof:object){const value=historyOwners.get(proof);if(!value?.prefix)return undefined;try{value.assertPrefixCurrent();return value.prefix}catch{return undefined}},
+        qualifiedHistoryFraming(id: string, proof: object, prefix: Readonly<JournalPrefix>) {
+            const owner = historyOwners.get(proof), original = cleanWriterHistory.get(prefix);
+            if (owner?.prefix !== prefix || original?.id !== id || original.generation !== coldGeneration || !cleanDecodeEnvironment()) return undefined;
+            try { owner.assertPrefixCurrent(); return original.framing; } catch { return undefined; }
+        },
         originalHistory(proof: object, scope: HeldTaskDocumentScope) { const value = historyOwners.get(proof); if (!value || value.scope !== scope) return bad(); scope.assertActive(); return { bytes: value.bytes, identity: value.identity }; },
         async capture(id: string, requested: readonly string[]) {
             const result = await captureCommon(id, requested, true)

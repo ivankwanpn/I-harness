@@ -4,10 +4,10 @@ import { CURRENT_FORMAT_VERSION, validateConversationHistory, type SessionEvent,
 import { createHash } from 'node:crypto';
 import type { SessionMeta } from '@i-harness/session-persistence';
 import { parseHeader } from '../format.ts';
-import { ArchiveEvidenceMismatch, createColdArchiveFramingRecorder, createVerifiedArchiveBodyDecoder, type VerifiedArchiveBody } from './verified-archive-body.ts';
+import { ArchiveEvidenceMismatch, createColdArchiveFramingRecorder, createVerifiedArchiveBodyDecoder, isOriginalRestorationFramingEnvironment, type RestoredArchiveFraming, type VerifiedArchiveBody } from './verified-archive-body.ts';
 const managed = (v: number) => [6, 7, 8, 9, 10, 11, 12, 13, 14].includes(v);
 type ArchivePrefix = { header: SessionMeta; birth: Buffer };
-type DependencySelection = { ordinals: ReadonlySet<number>; prefix: Readonly<JournalPrefix>; assertCurrent(): void; verified?: VerifiedArchiveBody; coldHeaderDigest?: string };
+type DependencySelection = { ordinals: ReadonlySet<number>; prefix: Readonly<JournalPrefix>; assertCurrent(): void; verified?: VerifiedArchiveBody; restored?: RestoredArchiveFraming; coldHeaderDigest?: string };
 type ArchiveBodyDecoder = { push(bytes: Buffer): void; finish(): {
     prefix: JournalPrefix; torn: boolean; verified?: VerifiedArchiveBody; validatedEvents?(header: SessionMeta, onOriginal?: () => void): SessionEvent[];
 } };
@@ -29,7 +29,8 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
     }
     async function line(record: Buffer, lf: boolean) {
         if (!header) {
-            const coldHeader = dependency?.coldHeaderDigest;
+            const restored = dependency?.restored && isOriginalRestorationFramingEnvironment() ? dependency.restored : undefined;
+            const coldHeader = dependency?.coldHeaderDigest ?? restored?.headerDigest;
             if (coldHeader && createHash('sha256').update(record).digest('hex') !== coldHeader) throw new ArchiveEvidenceMismatch();
             header = parseHeader(record.subarray(0, lf ? record.length - 1 : record.length).toString('utf8'));
             // Ordinary headers still belong to the prefix: the bootstrap owner
@@ -48,7 +49,7 @@ export async function readSessionArchive(handle: FileHandle, extent: number, pre
                 const collect = captureColdFraming && !dependency && lf && header.formatVersion === CURRENT_FORMAT_VERSION && !header.semanticSeed
                     && !journal.legacyEventCount && !journal.legacyBodyBytes && !journal.separatorBytes;
                 decoder = (dependency && createVerifiedArchiveBodyDecoder(journal, header.formatVersion,
-                    dependency.prefix, dependency.ordinals, event => events.push(event), dependency.verified, coldHeader !== undefined))
+                    dependency.prefix, dependency.ordinals, event => events.push(event), dependency.verified ?? restored?.body, coldHeader !== undefined))
                     ?? (collect ? createColdArchiveFramingRecorder(journal, header.formatVersion)
                         : createJournalStreamDecoder(journal, header.formatVersion, accept));
             }

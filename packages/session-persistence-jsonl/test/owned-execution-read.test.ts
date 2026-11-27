@@ -6,9 +6,21 @@ import {composeJsonlTaskTransitionCoordinator} from '../src/task-document-factor
 import {taskDocumentStorageContract} from '../../subagent/src/task/storage-contract.ts'
 import {createOwnership} from '../../session-persistence/src/coordinator/ownership.ts'
 import {heldFactOwner} from '../../session-persistence/src/coordinator/fact-owner.ts'
+import {acquireManagedExecution} from '../../session-persistence/src/execution-internal.ts'
+import {readArchiveHistoryPrefix} from '@i-harness/session-persistence/internal/archive-read'
 import {openOwnedExecutionDependencies} from '../src/backend/owned-execution-read.ts'
 import {encodeFactBatch,factPrefixDigest,type JournalPrefix} from '@i-harness/core-session'
 const resumed=vi.hoisted(()=>[] as JournalPrefix[])
+const restoration=vi.hoisted(()=>({
+ original:undefined as undefined|{backend:object;proof:object;writer:import('@i-harness/session-persistence').HeldFactOwner},
+}))
+vi.mock('../../session-persistence/src/archive-read-internal.ts',async load=>{
+ const actual=await load<typeof import('../../session-persistence/src/archive-read-internal.ts')>()
+ return {...actual,readArchiveHistoryPrefix(backend:object,proof:object,writer?:import('@i-harness/session-persistence').HeldFactOwner){
+  if(writer)restoration.original={backend,proof,writer}
+  return actual.readArchiveHistoryPrefix(backend,proof,writer)
+ }}
+})
 vi.mock('@i-harness/core-session/internal/archive',async load=>{
  const actual=await load<typeof import('@i-harness/core-session/internal/archive')>()
  return {...actual,createJournalStreamDecoder(...args:Parameters<typeof actual.createJournalStreamDecoder>){
@@ -19,7 +31,7 @@ vi.mock('@i-harness/core-session/internal/archive',async load=>{
 vi.mock('node:fs/promises',async load=>{const actual=await load<typeof import('node:fs/promises')>();return {...actual,open:vi.fn(actual.open),readFile:vi.fn(actual.readFile),stat:vi.fn(actual.stat)}})
 const originalOpen=vi.mocked(fs.open).getMockImplementation()!
 const originalStat=vi.mocked(fs.stat).getMockImplementation()!
-afterEach(()=>{vi.mocked(fs.open).mockImplementation(originalOpen);vi.mocked(fs.stat).mockImplementation(originalStat);vi.mocked(fs.readFile).mockClear();resumed.length=0})
+afterEach(()=>{vi.mocked(fs.open).mockImplementation(originalOpen);vi.mocked(fs.stat).mockImplementation(originalStat);vi.mocked(fs.readFile).mockClear();resumed.length=0;restoration.original=undefined})
 async function fixture(){
  const root=await fs.mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-deps-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
  await coordinator.create({sessionId:'a'});coordinator.enqueue('a',[{type:'plan/mode',mode:'on'},{type:'plan/mode',mode:'off'}]);await coordinator.flush('a');await coordinator.close()
@@ -28,6 +40,67 @@ async function fixture(){
  const prefix=await backend.readJournalPrefix!('a',held)
  return {root,backend,held,prefix,path:join(root,'a.jsonl'),invalidate(){current=false},async close(){await claim.release();await Promise.all(ownership.releaseHeldLocks());await fs.rm(root,{recursive:true,force:true})}}
 }
+
+async function restoredFixture(options?:Parameters<typeof createJsonlBackend>[1]){
+ const root=await fs.mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'restored-deps-'))
+ const backend=createJsonlBackend(root,options),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'a'})
+ // A later page can select the second frame without reading the first body.
+ await coordinator.append('a',[{type:'user/message',text:'earlier'}])
+ await coordinator.append('a',[{type:'plan/mode',mode:'on'}])
+ return {backend,coordinator,path:join(root,'a.jsonl'),async close(){try{await coordinator.close()}finally{await fs.rm(root,{recursive:true,force:true})}}}
+}
+const restoredPage={afterSeq:1,limit:1}
+
+it.each(['held decoder','sealed cold handoff'] as const)('reuses only the coordinates of the original %s on its first dependency read',async source=>{
+ const f=await restoredFixture()
+ try{
+  if(source==='sealed cold handoff')await f.coordinator.readHistoryPage!('a',restoredPage)
+  const owner=await acquireManagedExecution(f.coordinator,'a')
+  expect(resumed).toHaveLength(0)
+  const before=restoration.original
+  expect(before?.writer.owner.sessionId).toBe('a')
+  expect(readArchiveHistoryPrefix(f.backend,{...before!.proof},before!.writer)).toEqual({kind:'unavailable'})
+  expect(readArchiveHistoryPrefix(f.backend,before!.proof,before!.writer)).toEqual({kind:'unavailable'})
+  let opens=0
+  vi.mocked(fs.open).mockImplementation(async(...args)=>{if(args[0]===f.path)opens++;return originalOpen(...args)})
+  await expect(f.coordinator.readHistoryPage!('a',restoredPage)).resolves.toMatchObject({headSeq:2,events:[{seq:1,type:'plan/mode',mode:'on'}]})
+  expect(resumed).toMatchObject([{eventCount:2}])
+  expect(opens).toBe(1)
+  owner.observe().assertCurrent()
+ }finally{await f.close()}
+})
+
+it.each(['header','unselected body'] as const)('checks the actual %s bytes before publishing any restored framing selection',async what=>{
+ const f=await restoredFixture()
+ try{
+  await acquireManagedExecution(f.coordinator,'a')
+  const raw=await fs.readFile(f.path,'utf8')
+  const changed=what==='header'?raw.replace('"sessionId":"a"','"sessionId":"b"'):raw.replace('"text":"earlier"','"text":"changed"')
+  expect(changed).not.toBe(raw)
+  expect(Buffer.byteLength(changed)).toBe(Buffer.byteLength(raw))
+  await fs.writeFile(f.path,changed)
+  await expect(f.coordinator.readHistoryPage!('a',restoredPage)).rejects.toThrow('Owned dependency prefix mismatch')
+  expect(resumed).toHaveLength(0)
+ }finally{await f.close()}
+})
+
+it.each(['custom archive','opaque environment'] as const)('leaves the first dependency read unseeded with a %s',async kind=>{
+ const options:Parameters<typeof createJsonlBackend>[1]=kind==='custom archive'?{wrap(backend){
+  const read=backend.read.bind(backend);backend.read=id=>read(id)
+ }}:undefined
+ const f=await restoredFixture(options)
+ try{
+  await acquireManagedExecution(f.coordinator,'a')
+  const parse=JSON.parse
+  const opaque=kind==='opaque environment'?vi.spyOn(JSON,'parse').mockImplementation((text,reviver)=>parse(text,reviver)):undefined
+  try{
+   await expect(f.coordinator.readHistoryPage!('a',restoredPage)).resolves.toMatchObject({headSeq:2,events:[{seq:1,type:'plan/mode',mode:'on'}]})
+   expect(resumed).toHaveLength(0)
+  }finally{opaque?.mockRestore()}
+ }finally{await f.close()}
+})
+
 it('verifies the complete prefix once for a batch and returns selected records in request order',async()=>{
  const f=await fixture();let opens=0,reads=0
  vi.mocked(fs.readFile).mockClear()

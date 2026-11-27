@@ -75,7 +75,7 @@ export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry
    const pending=ports.loadOwnedExecution(ports.id,async history=>{
      const snapshot=history.initial
      await history.assertCurrent();assertCurrent()
-     const read=readArchiveHistoryPrefix(ports.backend,history)
+     const read=readArchiveHistoryPrefix(ports.backend,history,held)
      if(read.kind!=='available'||read.prefix.eventCount!==snapshot.events.length)throw new FactRecoveryRequiredError()
      initial=snapshot;proof=history;formatVersion=snapshot.formatVersion;header=snapshot.header;prefix=Object.freeze({...read.prefix})
      const decoded=recognizesOriginalCleanHistoryMaterialization(ports.backend,history)?snapshot:undefined
