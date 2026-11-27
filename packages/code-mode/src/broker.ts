@@ -26,6 +26,19 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
     return next
   }
   const recovery = (cause: unknown) => Object.assign(new FactRecoveryRequiredError(), { cause })
+  function bindInvocationGeneration(item: Queued, preflightCell?: Cell) {
+    const { call, action, eventSeq, signal, tool } = item
+    const lineage = call.origin.generationLineage
+    if (!lineage) return undefined
+    if (options.kind === 'managed-execution') throw Error('Private Code generation lineage unsupported')
+    const cell = preflightCell ?? cells.get(call.cellId)
+    const sameCellAndTool = () => !disposed && !signal.aborted && cell !== undefined && cells.get(call.cellId) === cell && tools.get(call.name) === tool
+    return lineage.forInvocation({
+      view: options.session, cellId: call.cellId, action, eventSeq: eventSeq!, callId: call.invocationId, name: call.name, signal,
+      current: () => sameCellAndTool() && active.has(item),
+      ...(preflightCell ? { preflightCurrent: () => sameCellAndTool() && !item.finished && queue.includes(item) } : {}),
+    })
+  }
   function replanCell(id: string, detail: InstructionReplanData) {
     const cell = cells.get(id)
     if (!cell || cell.replan) return
@@ -131,9 +144,7 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
         if (tools.get(item.call.name) !== item.tool) throw new Error("Code Mode tool binding changed")
         let prepared, preparing = false
         try {
-          if(options.kind==='managed-execution'&&item.call.origin.generationLineage)throw Error('Private Code generation lineage unsupported')
-          item.generation ??= options.kind==='managed-execution'?undefined:item.call.origin.generationLineage?.forInvocation({ view: options.session, cellId: item.call.cellId, action: item.action, eventSeq: item.eventSeq!, callId: item.call.invocationId, name: item.call.name, signal: item.signal,
-            current: () => !disposed && !item.signal.aborted && cells.has(item.call.cellId) && active.has(item) && tools.get(item.call.name) === item.tool })
+          item.generation ??= bindInvocationGeneration(item)
           preparing = true
           prepared = item.capture ? await tools.prepareCaptured(item.capture, item.signal, item.instructionOrigin) : await tools.prepare({ name: item.call.name, args: item.call.args }, item.signal, { sessionId: options.sessionId ?? item.call.origin.sessionId, session: options.session, callId: item.call.invocationId, callEventSeq: item.eventSeq, resultConsumer: "code", settlementSource: item.source, modelGeneration: item.generation?.factories })
         } catch (error) {
@@ -240,9 +251,7 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
             let failure: unknown, failed = false, missingOriginMutation = false
             for (const pending of group) {
               try {
-                if(options.kind==='managed-execution'&&pending.call.origin.generationLineage)throw Error('Private Code generation lineage unsupported')
-                pending.generation = options.kind==='managed-execution'?undefined:pending.call.origin.generationLineage?.forInvocation({ view: options.session, cellId: pending.call.cellId, action: pending.action, eventSeq: pending.eventSeq!, callId: pending.call.invocationId, name: pending.call.name, signal: pending.signal,
-                  current: () => !disposed && !pending.signal.aborted && cells.has(pending.call.cellId) && active.has(pending) && tools.get(pending.call.name) === pending.tool })
+                pending.generation = bindInvocationGeneration(pending, cell)
                 if(options.kind==='managed-execution'){if(!cell.admissionAction||!cell.delegation)throw Error('Original Code instruction scheduling owner required');for(;;){pending.signal.throwIfAborted();pending.action.assertOpen();pending.source.assertHeld();const wait=getManagedExecutionAdmissionWait(options.domain,cell.admissionAction,pending.signal);if(!wait)break;await wait}}
                 const capture = tools.capture({ name: pending.call.name, args: pending.call.args }, { sessionId: options.sessionId ?? pending.call.origin.sessionId, session: options.session, callId: pending.call.invocationId, callEventSeq: pending.eventSeq, resultConsumer: 'code', settlementSource: pending.source, modelGeneration: pending.generation?.factories })
                 if(options.kind==='managed-execution'&&cell.instructionOrigin){if(!cell.delegation||!pending.callCapture||!pending.callOutcome)throw Error('Original Code call proof required');cell.delegation.certifyInstructionCall(capture,pending.action,pending.source,pending.callCapture,pending.callOutcome)}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { createToolRegistry, nativePlanValidationFailure } from "@i-harness/core-tools"
+import { createToolRegistry, nativePlanValidationFailure, type CodeGenerationLineage } from "@i-harness/core-tools"
 import { createSession, decodeFactBatch } from "@i-harness/core-session"
 import { createCodeModeBroker } from "../src/broker.ts"
 import { mkdtemp } from 'node:fs/promises'
@@ -65,6 +65,58 @@ describe("Code Mode nested effects", () => {
     f.tools.register({ name: "write", description: "write", inputSchema: { type: "object" }, execute: async () => { writes++; return 1 } })
     const b = createCodeModeBroker(f.ctx, f.tools, { session: f.session, flush: async () => { throw new Error("disk failed") } }); b.startCell("c")
     try { await expect(b.invoke(f.call("c", "n", "write"))).rejects.toThrow("disk failed"); expect(writes).toBe(0) } finally { await expect(b.dispose()).rejects.toThrow("disk failed") }
+  })
+  it.each([false, true])("binds a recorded invocation in instruction preflight without activating it (stop=%s)", async stopDuringCapture => {
+    const f = setup(), tools = createToolRegistry(f.ctx, { instructionsRequired: true })
+    const controller = new AbortController()
+    let phases: Parameters<CodeGenerationLineage['forInvocation']>[0] | undefined
+    let captures = 0, effects = 0, closes = 0
+    const noGeneration = async () => { throw new Error('Unexpected auxiliary generation') }
+    const generationLineage: CodeGenerationLineage = {
+      bindCell() { throw new Error('Expected an already bound cell') },
+      forInvocation(input) {
+        expect(phases).toBeUndefined()
+        phases = input
+        expect(input.view).toBe(f.session)
+        expect(f.session.events[input.eventSeq]).toMatchObject({ type: 'code/call', cellId: 'c', parentCallId: 'outer', callId: 'nested', name: 'read' })
+        expect(input.preflightCurrent?.()).toBe(true)
+        expect(input.current()).toBe(false)
+        return { factories: { approval: noGeneration, media: noGeneration }, async close() { closes++ } }
+      },
+    }
+    tools.register({ name: 'read', description: 'read', inputSchema: { type: 'object' },
+      captureNativePlan() {
+        captures++
+        expect(phases?.preflightCurrent?.()).toBe(true)
+        expect(phases?.current()).toBe(false)
+        if (stopDuringCapture) {
+          controller.abort()
+          expect(phases?.preflightCurrent?.()).toBe(false)
+          expect(phases?.current()).toBe(false)
+        }
+        return { targets: [], operation: 'read' }
+      },
+      async execute() {
+        effects++
+        expect(phases?.preflightCurrent?.()).toBe(false)
+        expect(phases?.current()).toBe(true)
+        return 'original result'
+      },
+    })
+    const broker = createCodeModeBroker(f.ctx, tools, { session: f.session, sessionId: 'parent' })
+    broker.startCell('c')
+    try {
+      const call = f.call('c', 'nested', 'read')
+      const result = broker.invoke({ ...call, origin: { ...call.origin, generationLineage }, signal: controller.signal })
+      if (stopDuringCapture) await expect(result).rejects.toThrow('Code Mode tool call aborted before dispatch')
+      else await expect(result).resolves.toBe('original result')
+      expect(captures).toBe(1)
+      expect(effects).toBe(stopDuringCapture ? 0 : 1)
+      expect(f.session.events.map(event => event.type)).toEqual(stopDuringCapture
+        ? ['code/call', 'code/result'] : ['code/call', 'code/dispatch', 'code/result'])
+    } finally { await broker.dispose() }
+    expect(closes).toBe(1)
+    expect(phases?.current()).toBe(false)
   })
   it("refuses hidden, recursive and replaced tool bindings", async () => {
     const f = setup(); let effects = 0

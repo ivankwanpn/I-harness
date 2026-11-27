@@ -1,20 +1,84 @@
 import * as publicTools from '@i-harness/core-tools'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createContext } from '@i-harness/core-plugin'
 import { createToolRegistry, assertResultPrepared, type Tool } from '@i-harness/core-tools'
 import { createToolRegistryWithModelOrigin } from '@i-harness/core-tools/model-origin'
+import { committedFactSeqs } from '@i-harness/core-session'
 import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
 import { createGenerationLifecycle } from '../../session-executor/src/lifecycle/generation-actions.ts'
 import { createAgent } from '../src/index.ts'
+import type { AgentGenerationLifecycle } from '../src/agent/generation.ts'
+import { toolGenerationFactory } from '../src/agent/tool-generation.ts'
 import { createAgentModelOriginOwner, consumeAgentModelOrigin } from '../src/tool-batch/model-origin.ts'
 import { createLoopbackProvider } from './helpers/provider-loopback.ts'
 
 const wire = (tool: boolean) => `data: ${JSON.stringify({ choices: [{ delta: tool ? { tool_calls: [{ index: 0, id: 'original-model-code', function: { name: 'code_exec', arguments: '{}' } }] } : { content: 'done' }, finish_reason: tool ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 2 } })}\n\ndata: [DONE]\n\n`
+
+it('allows queued Code lineage binding while auxiliary generation requires active dispatch', async () => {
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'code-generation-preflight-'))
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
+  const parent = document.beginAction(), controller = new AbortController(), invocation = document.beginAction(controller.signal)
+  const generation = createGenerationLifecycle(document.view, id, parent)
+  const reachedOriginalOpen = new Error('Original nested lifecycle reached')
+  const open = vi.fn<AgentGenerationLifecycle['open']>(async () => { throw reachedOriginalOpen })
+  const localNestedLifecycle: AgentGenerationLifecycle = { open, async drain() {} }
+  let parentGeneration: Awaited<ReturnType<typeof generation.open>> | undefined
+  let scope: ReturnType<import('@i-harness/llm-seam').CodeGenerationLineage['forInvocation']> | undefined
+  try {
+    const [inputSeq] = committedFactSeqs(await parent.facts.inputs.admit({
+      type: 'agent/input/admitted', version: 1, inputId: 'input', text: 'work', delivery: 'queue', intent: 'user',
+      provenance: { kind: 'unknown', authority: 'unknown', scope: 'turn', producer: 'fixture' },
+    }))
+    parentGeneration = await generation.open('main', { kind: 'input', seq: inputSeq! })
+    const call = { callId: 'outer', name: 'code_exec', args: {} }
+    const [callSeq] = committedFactSeqs(await parent.facts.tools.call({ type: 'tool/call', ...call }))
+    committedFactSeqs(await parent.facts.tools.dispatch(call.callId, { kind: 'prior', seq: callSeq!, expectedType: 'tool/call' }))
+    committedFactSeqs(await parent.facts.code.record({ type: 'code/cell', cellId: 'cell', parentCallId: call.callId, state: 'started' }))
+    const [eventSeq] = committedFactSeqs(await invocation.facts.code.record({ type: 'code/call', cellId: 'cell', parentCallId: call.callId, callId: 'inner', name: 'read_video', args: {} }))
+    const toolGeneration = toolGenerationFactory({
+      session: document.view, sessionId: id, factOwner: document, tools: createToolRegistry(createContext()),
+      model: { stream() { throw new Error('Unexpected provider request') } },
+      generationAction: parentGeneration, generationLifecycle: generation,
+      generationFactory(action) { expect(action).toBe(invocation); return localNestedLifecycle },
+    })!
+    const lineage = toolGeneration({ ...call, eventSeq: callSeq }, parent.signal).codeLineage!.bindCell('cell')
+    let queued = true, active = false
+    scope = lineage.forInvocation({
+      view: document.view, cellId: 'cell', action: invocation, eventSeq: eventSeq!, callId: 'inner', name: 'read_video', signal: invocation.signal,
+      preflightCurrent: () => queued, current: () => active,
+    })
+    const approve = () => scope!.factories.approval({ timeoutMs: 1_000, selectedClient: () => undefined })
+    const media = () => scope!.factories.media(1_000)
+    await expect(approve()).rejects.toMatchObject({ code: 'GENERATION_STALE' })
+    await expect(media()).rejects.toMatchObject({ code: 'GENERATION_STALE' })
+    expect(open).not.toHaveBeenCalled()
+
+    queued = false; active = true
+    const [dispatchSeq] = committedFactSeqs(await invocation.facts.code.dispatch('cell', 'inner', { kind: 'prior', seq: eventSeq!, expectedType: 'code/call' }))
+    await expect(approve()).rejects.toBe(reachedOriginalOpen)
+    await expect(media()).rejects.toBe(reachedOriginalOpen)
+    expect(open.mock.calls.map(([purpose, origin]) => [purpose, origin])).toEqual([
+      ['approval', { kind: 'code', seq: eventSeq, parentActionId: parentGeneration.actionId }],
+      ['media', { kind: 'code', seq: dispatchSeq, parentActionId: parentGeneration.actionId }],
+    ])
+
+    controller.abort()
+    await expect(approve()).rejects.toMatchObject({ name: 'AbortError' })
+    await expect(media()).rejects.toMatchObject({ name: 'AbortError' })
+    expect(open).toHaveBeenCalledTimes(2)
+    committedFactSeqs(await parent.facts.code.record({ type: 'code/cell', cellId: 'cell', parentCallId: call.callId, state: 'terminated' }))
+  } finally {
+    await scope?.close(); invocation.finish()
+    await parentGeneration?.close('failed')
+    await generation.drain(); parent.finish(); await coordinator.close()
+  }
+})
 
 it.each([{captureWholeBatch:false,interference:'none'},{captureWholeBatch:true,interference:'none'},{captureWholeBatch:false,interference:'stop'},{captureWholeBatch:false,interference:'twice-next'},{captureWholeBatch:false,interference:'identity'}] as const)('a public fake Code tool cannot enroll source privilege ($captureWholeBatch / $interference)', async ({captureWholeBatch,interference}) => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'model-origin-'))

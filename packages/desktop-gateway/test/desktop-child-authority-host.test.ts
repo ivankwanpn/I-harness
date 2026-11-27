@@ -116,15 +116,26 @@ it("the real Desktop host registers authority for independent child ordinary and
 // the complete measured workload, history reads, and cleanup took 35–42s.
 }, 60_000)
 
-it.skipIf(process.platform !== "win32")("a real restricted Task child searches its bound project and persists both tool results", async () => {
+it.skipIf(process.platform !== "win32").each(["off", "only"] as const)("a real restricted Task child searches its bound project in Code Mode %s", async mode => {
+  const codeOnly = mode === "only"
+  const roleTools = codeOnly ? ["grep"] : ["glob", "grep"]
+  const codeTools = ["code_exec", "code_status", "code_wait"]
   const root = await mkdtemp(join(tmpdir(), "ih-desktop-child-file-search-"))
   const workspace = join(root, "workspace"), sibling = join(root, "other"), sessions = join(root, "sessions")
   const settingsPath = join(root, "settings.json"), credentialsPath = join(root, "credentials.json")
   const allowed = "scope marker in the bound project", decoy = "scope marker in the other project"
   const childAnswer = "Child search finished", parentAnswer = "Parent received child search"
-  const trace = createHostFixtureTrace("desktop-task-child-file-search")
+  const trace = createHostFixtureTrace("desktop-task-child-file-search-" + mode)
   const completes = { type: "response.completed", response: { usage: { input_tokens: 20, output_tokens: 6 } } }
   const text = (delta: string) => ({ type: "response.output_text.delta", delta })
+  const schemas = (body: Record<string, unknown>) => ((body.tools ?? []) as Array<{ name: string }>).map(tool => tool.name).sort()
+  const spawn = { task_name: "scout", agent_type: "explore", message: "Search this project for the marker.", fork_turns: "none", background: false }
+  const code = (code: string) => ({ code, yield_time_ms: 60_000 })
+  const codeSearch = [
+    'const search = describeTool("grep");',
+    'if (search.name !== "grep" || ALL_TOOLS.map(tool => tool.name).join(",") !== "grep") throw Error("Unexpected role tool catalog");',
+    'text({ checkedTool: search.name, result: await tools.grep({ pattern: "scope marker", mode: "literal" }) });',
+  ].join("\n")
   const call = (name: string, args: object, index = 0) => {
     const item = { id: name, call_id: name, type: "function_call", name, arguments: "" }
     const encoded = JSON.stringify(args)
@@ -137,23 +148,28 @@ it.skipIf(process.platform !== "win32")("a real restricted Task child searches i
   const server = await createLoopbackProvider("/v1/responses", [
     async (response, request) => {
       expect(request.body.model).toBe("fixture-parent")
-      await writeSplitSse(response, [...call("spawn_agent", {
-        task_name: "scout", agent_type: "explore", message: "Search this project for the marker.", fork_turns: "none", background: false,
-      }), completes])
+      if (codeOnly) expect(schemas(request.body)).toEqual(codeTools)
+      const dispatch = codeOnly ? call("code_exec", code('text(await tools.spawn_agent(' + JSON.stringify(spawn) + '));')) : call("spawn_agent", spawn)
+      await writeSplitSse(response, [...dispatch, completes])
     },
     async (response, request) => {
       expect(request.body.model).toBe("fixture-child")
-      const catalog = request.body.tools as Array<{ name: string }> | undefined
-      expect(catalog?.map(tool => tool.name).sort() ?? []).toEqual(["glob", "grep"])
-      await writeSplitSse(response, [
-        ...call("glob", { pattern: "*.txt" }),
-        ...call("grep", { pattern: "scope marker", mode: "literal" }, 1),
-        completes,
-      ])
+      expect(schemas(request.body)).toEqual(codeOnly ? codeTools : roleTools)
+      const dispatch = codeOnly ? call("code_exec", code(codeSearch)) : [
+        ...call("glob", { pattern: "*.txt" }), ...call("grep", { pattern: "scope marker", mode: "literal" }, 1),
+      ]
+      await writeSplitSse(response, [...dispatch, completes])
     },
     async (response, request) => {
       expect(request.body.model).toBe("fixture-child")
       const input = JSON.stringify(request.body.input)
+      if (codeOnly) {
+        const items = request.body.input as Array<{ type: string; call_id?: string; output?: string }>
+        const output = items.find(item => item.type === "function_call_output" && item.call_id === "code_exec")?.output
+        const result = JSON.parse(output ?? "null") as { status?: string; text?: string; error?: string } | null
+        expect(result?.status, result?.error).toBe("completed")
+        expect(result?.text).toContain("checkedTool")
+      }
       expect(input).toContain(allowed)
       expect(input).not.toContain(decoy)
       await writeSplitSse(response, [text(childAnswer), completes])
@@ -174,9 +190,9 @@ it.skipIf(process.platform !== "win32")("a real restricted Task child searches i
       writeFile(join(root, "plugins", "state.json"), JSON.stringify({ version: 1, sources: [], plugins: [] })),
       writeFile(credentialsPath, JSON.stringify({ refs: { IH_CHILD_FILE_SEARCH_FIXTURE_KEY: "loopback-only" } })),
       writeFile(settingsPath, JSON.stringify({
-        autoTitle: false, approvalMode: "dangerous", sandboxMode: "read-only", windowsSandboxBackend: "legacy", codeMode: { mode: "off" },
+        autoTitle: false, approvalMode: "dangerous", sandboxMode: "read-only", windowsSandboxBackend: "legacy", codeMode: { mode },
         plugins: { subagentModel: true },
-        agents: { roles: { explore: { provider: "fixture", model: "fixture-child" } }, roleTools: { explore: ["glob", "grep"] } },
+        agents: { roles: { explore: { provider: "fixture", model: "fixture-child" } }, roleTools: { explore: roleTools } },
         llm: { defaultModel: { provider: "fixture", model: "fixture-parent" }, providers: { fixture: {
           baseURL: server.baseUrl, protocol: "openai-responses", apiKeyEnv: "IH_CHILD_FILE_SEARCH_FIXTURE_KEY",
           models: ["fixture-parent", "fixture-child"].map(id => ({ id, contextWindow: 128_000 })),
@@ -215,7 +231,8 @@ it.skipIf(process.platform !== "win32")("a real restricted Task child searches i
     expect(await rpc("desktop/session/project/state", { sessionId: childSessionId })).toMatchObject({ projectId: "bound" })
     const child = await rpc("desktop/session/subagents/history", { sessionId, childSessionId }) as HistoryRange
     const parent = await rpc("session/history", { sessionId }) as HistoryRange
-    expect(parent.events.filter(event => event.type === "tool/call").map(event => event.name)).toEqual(["spawn_agent"])
+    expect(parent.events.filter(event => event.type === "tool/call").map(event => event.name)).toEqual([codeOnly ? "code_exec" : "spawn_agent"])
+    if (codeOnly) expect(parent.events.filter(event => event.type === "code/call").map(event => event.name)).toEqual(["spawn_agent"])
     expect(parent.events).toContainEqual(expect.objectContaining({ type: "assistant/message", text: parentAnswer }))
 
     await trace.run("host/close", () => host!.close())
@@ -223,14 +240,22 @@ it.skipIf(process.platform !== "win32")("a real restricted Task child searches i
     const durable = fromJSONL(await readFile(join(sessions, childSessionId + ".jsonl"), "utf8"))
     expect(durable.header).toMatchObject({ parentSession: sessionId, origin: "subagent" })
     expect(durable.events).toContainEqual(expect.objectContaining({ type: "assistant/message", text: childAnswer }))
-    const results = durable.events.filter(event => event.type === "tool/result")
-    expect(results.map(result => result.name).sort()).toEqual(["glob", "grep"])
+    const results = codeOnly ? durable.events.filter(event => event.type === "code/result") : durable.events.filter(event => event.type === "tool/result")
+    expect(results.map(result => result.name).sort()).toEqual(roleTools)
     for (const result of results) {
       expect(result.envelope?.execution).toEqual({ outcome: "succeeded", dispatch: "dispatched" })
       expect(child.events).toContainEqual(result)
     }
     const resultFor = (name: string) => results.find(result => result.name === name)?.envelope?.retention
-    expect(resultFor("glob")).toMatchObject({ kind: "inline", value: { matches: ["found.txt"] } })
+    if (codeOnly) {
+      const outer = durable.events.filter(event => event.type === "tool/call")
+      const calls = durable.events.filter(event => event.type === "code/call")
+      expect(outer.map(event => event.name)).toEqual(["code_exec"])
+      expect(calls).toEqual([expect.objectContaining({ name: "grep", parentCallId: outer[0]!.callId })])
+      const [invocation] = calls
+      expect(results[0]).toMatchObject({ cellId: invocation!.cellId, callId: invocation!.callId })
+      expect(durable.events).toContainEqual(expect.objectContaining({ type: "code/cell", cellId: invocation!.cellId, state: "completed" }))
+    } else expect(resultFor("glob")).toMatchObject({ kind: "inline", value: { matches: ["found.txt"] } })
     expect(resultFor("grep")).toMatchObject({ kind: "inline", value: { matches: [expect.objectContaining({ path: "found.txt", text: allowed })] } })
   } finally {
     try { await host?.close() } finally { await server.close(); await rm(root, { recursive: true, force: true }) }

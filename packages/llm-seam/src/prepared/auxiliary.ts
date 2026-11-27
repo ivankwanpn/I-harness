@@ -26,6 +26,18 @@ export type MediaGenerationFactory = (timeoutMs: number) => Promise<MediaGenerat
 export interface CodeGenerationScope { factories: ToolModelGeneration; close(): Promise<void> }
 export interface CodeGenerationLineage {
   bindCell(cellId: string): CodeGenerationLineage
-  forInvocation(input: { view: object; cellId: string; action: import('@i-harness/core-session').ManagedAction<import('@i-harness/core-session').ProducerFactOutcome>; eventSeq: number; callId: string; name: string; signal: AbortSignal; current(): boolean }): CodeGenerationScope
+  forInvocation(input: {
+    view: object
+    cellId: string
+    action: import('@i-harness/core-session').ManagedAction<import('@i-harness/core-session').ProducerFactOutcome>
+    eventSeq: number
+    callId: string
+    name: string
+    signal: AbortSignal
+    /** Active dispatch ownership, required for every auxiliary model operation. */
+    current(): boolean
+    /** Binding only, while this exact recorded invocation is queued for instruction preflight. */
+    preflightCurrent?(): boolean
+  }): CodeGenerationScope
 }
 export interface ToolModelGeneration { approval: ApprovalGenerationFactory; media: MediaGenerationFactory; codeLineage?: CodeGenerationLineage }

@@ -98,9 +98,10 @@ export function toolGenerationFactory(deps: AgentDeps): ExecuteToolCallsOptions[
         attached = true
         const bound: import('@i-harness/llm-seam').CodeGenerationLineage = { bindCell() { throw generationError('GENERATION_STALE') }, forInvocation(input) {
         checkOrigin()
-        if (this !== bound || input.cellId !== cellId || input.view !== session || owner.view !== session || !owner.ownsAction?.(input.action) || !input.current()) throw generationError('GENERATION_STALE')
+        if (this !== bound || input.cellId !== cellId || input.view !== session || owner.view !== session || !owner.ownsAction?.(input.action)) throw generationError('GENERATION_STALE')
         const invocation = session.events[input.eventSeq]
         if (invocation?.type !== 'code/call' || invocation.cellId !== cellId || invocation.parentCallId !== call.callId || invocation.callId !== input.callId || invocation.name !== input.name || input.eventSeq <= call.eventSeq!) throw generationError('GENERATION_STALE')
+        if (!(input.preflightCurrent ? input.preflightCurrent() : input.current())) throw generationError('GENERATION_STALE')
         const current = () => {
           checkOrigin(); input.signal.throwIfAborted(); input.action.assertOpen()
           if (!input.current() || session.events[input.eventSeq] !== invocation) throw generationError('GENERATION_STALE')
