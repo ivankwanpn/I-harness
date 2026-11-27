@@ -1,10 +1,12 @@
 import {expect,it,vi} from 'vitest'
-const probe=vi.hoisted(()=>({hold:undefined as undefined|{entered:()=>void;wait:Promise<void>},unknown:false,reconciles:0,appends:0}))
+type TestGate = {entered():void;wait:Promise<void>}
+const probe=vi.hoisted(()=>({hold:undefined as TestGate|undefined,appendHold:undefined as TestGate|undefined,unknown:false,reconciles:0,appends:0}))
 vi.mock('../../session-persistence/src/coordinator/action-captures.ts',async original=>{const m=await original<typeof import('../../session-persistence/src/coordinator/action-captures.ts')>();return {...m,createActionCaptures(...args:Parameters<typeof m.createActionCaptures>){const c=m.createActionCaptures(...args);return {...c,captureMetadata(event:Parameters<NonNullable<typeof c.captureMetadata>>[0],check?:()=>boolean){const f=c.captureMetadata!(event,check);if(event.type!=='plan/mode'||!probe.hold)return f;const gate=probe.hold;probe.hold=undefined;return {...f,async admit(){gate.entered();await gate.wait;return f.admit()}}}}}}})
-vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async original=>{const m=await original<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>();return {...m,createFactJournalBackend(...args:Parameters<typeof m.createFactJournalBackend>){const b=m.createFactJournalBackend(...args);return {...b,async appendOwnedBatch(...values:Parameters<typeof b.appendOwnedBatch>){const out=await b.appendOwnedBatch(...values);if(probe.unknown&&out.kind==='committed'){probe.unknown=false;probe.appends++;return {kind:'unknown' as const,key:values[3].key}}return out},async reconcileOwnedBatch(...values:Parameters<typeof b.reconcileOwnedBatch>){probe.reconciles++;return b.reconcileOwnedBatch(...values)}}}}})
+vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async original=>{const m=await original<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>();return {...m,createFactJournalBackend(...args:Parameters<typeof m.createFactJournalBackend>){const b=m.createFactJournalBackend(...args);return {...b,async appendOwnedBatch(...values:Parameters<typeof b.appendOwnedBatch>){const gate=probe.appendHold;if(gate){probe.appendHold=undefined;gate.entered();await gate.wait}const out=await b.appendOwnedBatch(...values);if(probe.unknown&&out.kind==='committed'){probe.unknown=false;probe.appends++;return {kind:'unknown' as const,key:values[3].key}}return out},async reconcileOwnedBatch(...values:Parameters<typeof b.reconcileOwnedBatch>){probe.reconciles++;return b.reconcileOwnedBatch(...values)}}}}})
 import {mkdtemp} from 'node:fs/promises'
 import {join} from 'node:path'
 import {committedFactSeqs,type SessionEventView} from '@i-harness/core-session'
+import {createToolRegistry,type Tool} from '@i-harness/core-tools'
 import {createJsonlBackend} from '../../session-persistence-jsonl/src/index.ts'
 import {composeJsonlTaskTransitionCoordinator} from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import {taskDocumentStorageContract} from '../../subagent/src/task/storage-contract.ts'
@@ -22,7 +24,7 @@ type PlanFixture={
  events():Promise<readonly SessionEventView[]>
 }
 async function fixture(run:(x:PlanFixture)=>Promise<void>){
- probe.hold=undefined;probe.unknown=false;probe.appends=0;probe.reconciles=0
+ probe.hold=undefined;probe.appendHold=undefined;probe.unknown=false;probe.appends=0;probe.reconciles=0
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'plan-repair-'))
  const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract);await coordinator.create({sessionId:'main'})
  const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main'),cleanups:Array<()=>void|Promise<void>>=[]
@@ -40,6 +42,83 @@ async function fixture(run:(x:PlanFixture)=>Promise<void>){
 }
 it('does not overwrite an explicit off while initial on is held',async()=>{await fixture(async({entry,start})=>{const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();probe.hold={entered:entered.resolve,wait:release.promise};const pending=start();await entered.promise;committedFactSeqs(await actionMetadataFacts(entry.execution.owner).admit({type:'plan/mode',mode:'off'}));release.resolve();await expect(pending).rejects.toMatchObject({code:'FACT_PRECONDITION_STALE'});expect(entry.execution.observe().plan().active).toBe(false)})},30000)
 it('reconciles the same uncertain original plan capture',async()=>{await fixture(async({entry,start})=>{probe.unknown=true;probe.appends=0;probe.reconciles=0;const runtime=await start() as {close():Promise<void>};expect(entry.execution.observe().plan().active).toBe(true);expect(probe.appends).toBe(1);expect(probe.reconciles).toBe(1);await runtime.close()})},30000)
+
+function registerChildPlanTools(runtime:Awaited<ReturnType<PlanFixture['start']>>) {
+ const child=runtime.ctx.scope.mount(),tools=createToolRegistry(child)
+ const read:Tool={name:'probe',description:'Fixture read',inputSchema:{type:'object'},isReadOnly:true,async execute(){return 'original read'}}
+ runtime.tools.register(read)
+ tools.register({...read})
+ tools.register({name:'unknown_to_parent',description:'Unrecognized fixture read',inputSchema:{type:'object'},isReadOnly:true,async execute(){return 'unexpected'}})
+ return {child, tools, read:()=>tools.execute({name:read.name,args:{}})}
+}
+
+it.each(['on','off'] as const)('lets an original child read through a healthy held parent append with Plan %s',async mode=>{
+ await fixture(async f=>{
+  if(mode==='off')committedFactSeqs(await actionMetadataFacts(f.entry.execution.owner).admit({type:'plan/mode',mode:'off'}))
+  const runtime=await f.start(),child=registerChildPlanTools(runtime)
+  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+  probe.appendHold={entered:entered.resolve,wait:release.promise}
+  const writing=actionMetadataFacts(f.entry.execution.owner).admit({type:'plan/mode',mode}),outcome=writing.then(()=>true,()=>false)
+  try {
+   await Promise.race([entered.promise,outcome.then(()=>{throw Error('Append completed before the fixture cut')})])
+   expect(f.entry.execution.observe().plan().active).toBe(mode==='on')
+   expect(()=>f.construction().assertCurrent()).toThrow(expect.objectContaining({code:'FACT_RECOVERY_REQUIRED'}))
+   await expect(child.read()).resolves.toMatchObject({output:'original read'})
+   await expect(child.tools.execute({name:'unknown_to_parent',args:{}})).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+  } finally { release.resolve();await outcome;child.child.scope.unmount();await runtime.close() }
+  committedFactSeqs(await writing)
+ })
+},30000)
+
+it('keeps the original Plan hook strict for a writable shadow, uncertainty and retirement',async()=>{
+ await fixture(async f=>{
+  const runtime=await f.start(),child=registerChildPlanTools(runtime)
+  const action=f.entry.execution.owner.beginAction()
+  const fact=action.captureMetadata!({type:'plan/mode',mode:'off'})
+  let uncertain=false,shadowWrites=0
+  try {
+   await expect(child.read()).resolves.toMatchObject({output:'original read'})
+   const read=child.tools.get('probe')!
+   child.tools.unregister('probe');child.tools.register({...read,isReadOnly:false,async execute(){shadowWrites++;return 'unexpected'}})
+   await expect(child.read()).rejects.toMatchObject({policyRefusal:true})
+   expect(shadowWrites).toBe(0)
+   child.tools.unregister('probe');child.tools.register(read)
+   probe.unknown=true
+   uncertain=(await fact.admit()).kind==='unknown'
+   expect(uncertain).toBe(true)
+   await expect(child.read()).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+   committedFactSeqs(await fact.reconcile());uncertain=false
+   await expect(child.read()).resolves.toMatchObject({output:'original read'})
+   await f.retireConstruction()
+   await expect(child.read()).rejects.toThrow('Original construction retired')
+  } finally {
+   if(uncertain)await fact.reconcile()
+   action.finish();child.child.scope.unmount();await runtime.close()
+  }
+ })
+},30000)
+
+it('accepts original getter and inherited readonly flags only after strict admission',async()=>{
+ await fixture(async f=>{
+  const runtime=await f.start(),child=runtime.ctx.scope.mount(),tools=createToolRegistry(child)
+  const probeTool:Tool={name:'legacy_probe',description:'Legacy read',inputSchema:{type:'object'},async execute(){return 'legacy read'}}
+  let getterReads=0
+  runtime.tools.register(Object.assign(Object.create({isReadOnly:true}),probeTool))
+  tools.register({...probeTool,get isReadOnly(){getterReads++;return true}})
+  const read=()=>tools.execute({name:probeTool.name,args:{}})
+  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+  probe.appendHold={entered:entered.resolve,wait:release.promise}
+  const writing=actionMetadataFacts(f.entry.execution.owner).admit({type:'plan/mode',mode:'on'}),outcome=writing.then(()=>true,()=>false)
+  try {
+   await Promise.race([entered.promise,outcome.then(()=>{throw Error('Append completed before the fixture cut')})])
+   await expect(read()).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+   expect(getterReads).toBe(0)
+   release.resolve();committedFactSeqs(await writing)
+   await expect(read()).resolves.toMatchObject({output:'legacy read'})
+   expect(getterReads).toBeGreaterThan(0)
+  } finally { release.resolve();await outcome;child.scope.unmount();await runtime.close() }
+ })
+},30000)
 
 it.each(['retired','method-substituted'] as const)('refuses a held original Plan capture after construction is %s',async cut=>{
  await fixture(async f=>{

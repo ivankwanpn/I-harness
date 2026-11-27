@@ -11,6 +11,7 @@
     "./internal/scoped-exec-origin": "./src/scoped-exec-origin.ts",
     "./internal/workflow-origin": "./src/workflow-origin.ts",
     "./internal/code-origin": "./src/code-origin.ts",
+    "./internal/pre-execute": "./src/pre-execute.ts",
     "./model-origin": "./src/model-origin.ts"
   },
   "scripts": {

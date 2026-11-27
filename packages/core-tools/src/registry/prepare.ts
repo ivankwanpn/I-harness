@@ -109,7 +109,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
       if(signal&&signalAborted.call(signal))throw Error('Original tool invocation aborted')
       if(!bindingValidation())throw Error('Original invocation binding changed')
       if(hookSurface)hooks!.assertCurrent(hookSurface)
-    })
+    }, false, {name:call.name,tool})
     let chainValue:unknown
     try{chainValue=hooks?await hooks.emit('tools/pre-execute',policyInput,hookSurface):await ctx.emit("tools/pre-execute",policyInput)}finally{releasePolicy()}
     const decision: ToolDecision = isDecision(chainValue) ? chainValue : { kind: "allow" }

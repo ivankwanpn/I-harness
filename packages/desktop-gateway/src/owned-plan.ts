@@ -1,6 +1,9 @@
 import { onExecutionEvent } from '@i-harness/core-plugin'
+import { types } from 'node:util'
 import { assertManagedActionLifetimeCurrent, isOriginalExecutionObservation, type ExecutionObservation } from '@i-harness/core-session/internal/execution'
 import { committedFactSeqs, type CapturedActionFact, type ProducerFactOutcome } from '@i-harness/core-session'
+import type { Tool } from '@i-harness/core-tools'
+import { hasOwnReadOnlyToolFlag, readOriginalReadOnlyInvocationName } from '@i-harness/core-tools/internal/pre-execute'
 import { PLAN_MODE_SYSTEM_PROMPT } from '../../plan-mode/src/index.ts'
 import type { ManagedRegistryConstruction } from '../../session-executor/src/managed-assembly.ts'
 
@@ -54,8 +57,24 @@ export async function mountOwnedPlan(original: ManagedRegistryConstruction, init
  const initial = capture()
  if (initiallyEnabled && initial.plan.eventSeq === undefined) { await change(initial,'on'); original.assertCurrent() }
  if (original.tools.get('exit_plan_mode')) throw Error('duplicate tool registration: exit_plan_mode')
- original.tools.register({name:'exit_plan_mode', description:'Signal that the plan is complete and plan mode should end. No arguments.', inputSchema:{type:'object',properties:undefined,required:undefined},isReadOnly:true,
-  async execute(_args, exec) { const selected=capture(); if (!selected.plan.active) return {active:false}; await change(selected,'off',exec.abortSignal); return {active:true} }})
- onExecutionEvent(original.ctx,'tools/pre-execute',call => {const name=(call as {name?:string})?.name; if(read().active && (!name || original.tools.get(name)?.isReadOnly!==true)) throw Object.assign(new Error('Plan Mode permits only read-only tools'),{policyRefusal:true}); return call})
+ const exit:Tool={name:'exit_plan_mode', description:'Signal that the plan is complete and plan mode should end. No arguments.', inputSchema:{type:'object',properties:undefined,required:undefined},isReadOnly:true,
+  async execute(_args, exec) { const selected=capture(); if (!selected.plan.active) return {active:false}; await change(selected,'off',exec.abortSignal); return {active:true} }}
+ original.tools.register(exit)
+ onExecutionEvent(original.ctx,'tools/pre-execute',call => {
+  if(closing)throw Error('Original Plan policy retired')
+  const name=readOriginalReadOnlyInvocationName(call), tool=name===undefined?undefined:original.tools.get(name)
+  // A child read is compatible with either Plan state. Its parent's healthy
+  // pending append must not interfere with this committed observation.
+  if(tool!==exit&&hasOwnReadOnlyToolFlag(tool)){projection();return call}
+  const selected=capture()
+  if(!selected.plan.active)return call
+  const actualName=readOriginalReadOnlyInvocationName(call,'normal')
+  const actual=actualName===undefined?undefined:original.tools.get(actualName)
+  if(actualName===undefined||!actual||types.isProxy(actual)||actual.isReadOnly!==true||original.tools.get(actualName)!==actual)
+   throw Object.assign(new Error('Plan Mode permits only read-only tools'),{policyRefusal:true})
+  selected.observation.assertCurrent()
+  original.assertCurrent()
+  return call
+ })
  return Object.freeze({read, prompt:(observation?:ExecutionObservation)=>projection(observation).plan.active ? PLAN_MODE_SYSTEM_PROMPT : ''})
 }
