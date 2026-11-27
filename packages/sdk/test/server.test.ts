@@ -1794,6 +1794,9 @@ describe("createSdkServer session/dashboard (Task 13)", () => {
       // a listing-only session keeps NO live fields (never a fabricated zero)
       const s2 = result.sessions.find((row) => row.id === "s2")!
       expect(s2).toEqual({ id: "s2", title: "Two", updatedAt: 2, live: false })
+      expect(service.hasAssembly).toHaveBeenCalledTimes(2)
+      expect(service.queueState).toHaveBeenCalledExactlyOnceWith("s1")
+      expect(service.tasks).toHaveBeenCalledExactlyOnceWith("s1")
     } finally {
       await client.close()
       await server.close()
@@ -1810,6 +1813,39 @@ describe("createSdkServer session/dashboard (Task 13)", () => {
     const client = linkClient(server)
     try {
       expect((await client.dashboard()).sessions).toContainEqual(expect.objectContaining({ id: 'managed', live: true, running: true, active: true }))
+    } finally { await client.close(); await server.close() }
+  })
+
+  it("uses one activity observation per owner on each dashboard request without adding hidden rows", async () => {
+    const service = makeStubService()
+    service.hasAssembly = vi.fn(() => false)
+    service.activitySessionIds = () => ["listed", "hidden-active", "after-active"]
+    let queued = 0
+    const inspect = vi.fn((id: string) => id === "listed"
+      ? { live: true, running: false, queued, tasks: queued > 0 ? 1 : 0, active: queued > 0 }
+      : { live: id === "hidden-active", running: id === "hidden-active", queued: 0, tasks: 0, active: id === "hidden-active" })
+    service.inspectActivity = inspect
+    const server = createSdkServer(service, {
+      listSessions: async () => ({ sessions: [{ id: "listed", title: "Saved title" }, { id: "cold" }], listingPartial: true }),
+    })
+    await handshake(server)
+    const client = linkClient(server)
+    try {
+      expect(await client.dashboard()).toEqual({
+        sessions: [{ id: "listed", title: "Saved title", live: true, active: false, running: false },
+          { id: "cold", live: false, active: false }],
+        listingPartial: true,
+        active: true,
+      })
+      expect(inspect.mock.calls).toEqual([["listed"], ["hidden-active"], ["cold"]])
+      expect(service.hasAssembly).not.toHaveBeenCalled()
+      expect(service.queueState).not.toHaveBeenCalled()
+      expect(service.tasks).not.toHaveBeenCalled()
+
+      inspect.mockClear()
+      queued = 2
+      expect(await client.dashboard()).toMatchObject({ sessions: [{ id: "listed", queued: 2, tasks: 1, active: true }, { id: "cold" }], active: true })
+      expect(inspect.mock.calls).toEqual([["listed"], ["cold"]])
     } finally { await client.close(); await server.close() }
   })
 

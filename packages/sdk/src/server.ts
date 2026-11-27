@@ -840,9 +840,16 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           }
           const listed = await opts.listSessions()
           const sessions: DashboardSessionRow[] = []
-          const active = ownedRequestActivity() || (service.activitySessionIds?.() ?? []).some(sessionId => service.inspectActivity?.(sessionId).active === true)
+          // The aggregate and listed rows can describe the same owner. Share
+          // that observation only within this response, including across model reads.
+          const snapshots = new Map<string, ReturnType<NonNullable<SessionService["inspectActivity"]>> | undefined>()
+          const readActivity = (sessionId: string) => {
+            if (!snapshots.has(sessionId) && service.inspectActivity) snapshots.set(sessionId, service.inspectActivity(sessionId))
+            return snapshots.get(sessionId)
+          }
+          const active = ownedRequestActivity() || (service.activitySessionIds?.() ?? []).some(sessionId => readActivity(sessionId)?.active === true)
           for (const row of listed.sessions) {
-            const activity = service.inspectActivity?.(row.id)
+            const activity = readActivity(row.id)
             const live = activity?.live ?? service.hasAssembly(row.id)
             const out: DashboardSessionRow = {
               id: row.id,
