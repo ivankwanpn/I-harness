@@ -115,11 +115,20 @@ export async function readToolCatalogue(listPage: ConnectedMcpClient["listTools"
     if (remaining <= 0) {
       throw new McpCatalogError("timeout", `mcp-client(${serverName}): catalogue drain exceeded its timeout`)
     }
-    const response = await listPage(cursor, {
+    const options = {
       timeout: Math.min(remaining, pageTimeoutCap),
       maxTotalTimeout: remaining,
-      ...(signal ? { signal } : {}),
-    })
+    }
+    let response: Awaited<ReturnType<typeof listPage>>
+    if (signal) {
+      // The SDK retains each request's abort listener after it resolves.
+      // Link only the current page so completed request IDs stay retired.
+      const page = new AbortController()
+      const stopPage = () => page.abort()
+      signal.addEventListener('abort', stopPage, { once: true })
+      try { response = await listPage(cursor, { ...options, signal: page.signal }) }
+      finally { signal.removeEventListener('abort', stopPage) }
+    } else response = await listPage(cursor, options)
     signal?.throwIfAborted()
     for (const tool of response.tools) {
       listedNames.add(tool.name)

@@ -9,18 +9,19 @@ import { mountMcpClient } from '../src/index.ts'
 
 it('cancels the original SDK stdio catalogue page and immediately permits a fresh read', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-mcp-catalogue-abort-'))
-  const script = join(root, 'server.cjs'), entered = join(root, 'request'), cancelled = join(root, 'cancelled')
+  const script = join(root, 'server.cjs'), entered = join(root, 'request'), cancelled = join(root, 'cancelled'), retired = join(root, 'retired-page-cancelled')
   await writeFile(script, `
     const fs = require('node:fs');
     const send = (message) => process.stdout.write(JSON.stringify({jsonrpc:'2.0', ...message}) + '\\n');
     let pages = 0, heldId;
     require('node:readline').createInterface({input: process.stdin}).on('line', line => {
       const req = JSON.parse(line);
-      if (req.method === 'notifications/cancelled' && req.params.requestId === heldId) fs.writeFileSync(${JSON.stringify(cancelled)}, 'original');
+      if (req.method === 'notifications/cancelled') fs.writeFileSync(req.params.requestId === heldId ? ${JSON.stringify(cancelled)} : ${JSON.stringify(retired)}, 'cancelled');
       if (req.id === undefined) return;
       if (req.method === 'initialize') return send({id:req.id,result:{protocolVersion:req.params.protocolVersion,capabilities:{tools:{listChanged:true}},serverInfo:{name:'abort-fixture',version:'1'}}});
       if (req.method !== 'tools/list') throw Error('Unexpected fixture request');
-      if (++pages === 2) { heldId = req.id; send({method:'notifications/tools/list_changed'}); fs.writeFileSync(${JSON.stringify(entered)}, 'held'); return; }
+      if (++pages === 2) return send({id:req.id,result:{tools:[],nextCursor:'held'}});
+      if (pages === 3 && req.params.cursor === 'held') { heldId = req.id; send({method:'notifications/tools/list_changed'}); fs.writeFileSync(${JSON.stringify(entered)}, 'held'); return; }
       send({id:req.id,result:{tools:[{name:pages === 1 ? 'before' : 'after', inputSchema:{type:'object'}}]}});
     });
   `)
@@ -33,6 +34,7 @@ it('cancels the original SDK stdio catalogue page and immediately permits a fres
     await vi.waitFor(() => expect(existsSync(entered)).toBe(true), { timeout: 2_000 })
     stop.abort()
     await vi.waitFor(() => expect(existsSync(cancelled)).toBe(true), { timeout: 1_500 })
+    expect(existsSync(retired)).toBe(false)
     expect(await waiting).toBe(stop.signal.reason)
     expect(mount.catalogDirty()).toBe(true)
     expect(tools.get('mcp__fixture__before')).toBeDefined()
