@@ -4,6 +4,21 @@
 
 共確認 **13 項**，其中 P1 有 4 項、P2 有 6 項、P3 有 3 項。三個子代理各自負責進程及工作區、會話及儲存、桌面前端；主審查再核對協議、上下文和工具，並將相同根因合併。
 
+## 後續修復與驗收
+
+原始清單保留了 `c6e4fe18` 的重現條件。後續至 `167b891f` 的修復涵蓋全部 13 項，以下是採用相同入口及資料條件的驗收結果。
+
+| 原項目 | 變更與驗收 |
+|---|---|
+| 1、5 · 工作區生命週期 | 工作區失效會作廢尚未執行的重連，重連前再讀目前目錄。A 已取得即時結果後，無人等待的磁碟預讀可以結束，B 的清單和退出可繼續。共用讀者仍能讀完。已取得儲存租約的實際讀取仍會安全釋放租約，底層檔案系統卡住時，這部分仍可能影響退出。[重連測試](../../packages/desktop/test/sdk-runtime.test.ts) · [掃描、取消與租約測試](../../packages/desktop/test/session-catalog.test.ts) |
+| 2、3、13 · 持久化輸入與 SDK | 重送 A 的舊收據只會檢查 A。SDK 和 Desktop 共用冷佇列觀測，SDK 可依原輸入 ID 取消，第二次重開仍維持取消。在 JSONL 和 commit-log 都驗證了已完成、已取消、仍待處理三種重試及新輸入的先後順序。兩種後端都將「會話不存在」映射為 `-32602`。[公開收據與佇列測試](../../packages/desktop-gateway/test/cold-queue-receipts.test.ts) |
+| 4 · 舊會話歷史 | 從真實 SDK 頁面復原舊事件的顯示位置。格式 2 的兩筆訊息均可見，新舊混合會話經重疊分頁及重連後各顯示一次。即時通知維持本來的身分。[歷史合併測試](../../packages/desktop/test/event-window.test.ts) |
+| 6、7 · 思考串流與原始記錄面板 | 同一思考區塊更新時只改該列正文，缺口、順序變更、正式記錄到達時才重新投影。原始訊息每頁最多 100 個事件，可翻到較早、較新或最新頁。以 20,000 個事件測試，面板由一次建立 16,000 列降至 80 列，80 次思考更新只建立一次完整時間線。[投影測試](../../packages/desktop/test/live-reasoning-projection.test.ts) · [面板測試](../../packages/desktop/test/context-session-records.test.tsx) |
+| 8 · commit-log 翻頁 | 初讀驗證整份日誌，後續在同一版本的已索引範圍內只讀頁面及其依賴的原始 bytes。索引有大小上限，可移至其他範圍。在 20,004 筆會話上連讀 10 頁，包含一次遠距跳頁，完整讀檔由 10 次降為 2 次，其餘 8 次各讀 28–147 bytes。若檔案系統無法可靠識別版本，會回到完整讀取。建立或重建索引仍需完整驗證，並須在檔案身分或內容改變後重新檢查。[版本替換、並行追加、圖片與翻頁測試](../../packages/session-persistence/test/commit-history-pages.test.ts) |
+| 9 · 壓縮保留成本 | 各協議在準備原始請求時記錄實際重播的推理成本及所屬助手訊息。壓縮直接使用這些數據。測試中短段落佔 6 token，受保護的後一段佔 8,196 token，兩者分開歸屬。換協議、覆寫輸入或缺少可靠來源時維持保守的估算。[五種協議的歸屬測試](../../packages/provider/test/replay-unit-ownership.test.ts) · [實際壓縮選取](../../packages/compaction/test/route-tail.test.ts) |
+| 10 · HTTP 串流 | 四個 HTTP 轉接器共用終止幀的釋放流程。Chat 與 Gemini 同一幀包含用量與錯誤時，呼叫端停在 `usage`，伺服器仍能觀察到連線已關閉；繼續讀取時仍會收到原錯誤。[真實本機 HTTP 測試](../../packages/provider/test/stream-disconnect.test.ts) |
+| 11、12 · 工具與 Code Mode | 讀檔參數只改鍵順序時仍算同一個呼叫，舊與受管執行路徑使用同一項判斷。實際執行 5 次，模型在第 3、5 次後收到提醒。Code Mode 依 UTF-8 碼點截取：`x🙂abcdef` 在 4-byte 上限產生 `x`，正確報告省略 10 bytes。[受管工具測試](../../packages/session-executor/test/managed-runtime.test.ts) · [Code Mode 測試](../../packages/code-mode/test/runtime.test.ts) |
+
 ## 優先處理
 
 | 編號 | 問題與觸發方式 | 實際影響與證據 | 建議修正與驗收 |
