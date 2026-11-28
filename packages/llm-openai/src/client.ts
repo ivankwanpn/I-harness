@@ -91,7 +91,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         const request = { ...capturedRequest, ...control }
         routing?.capture(response, request.signal)
         const fold = createResponseFold(capturedConfig, codexSubscription, () => reportStreamActivity(request, "tool-arguments"))
-        yield* decodeResponseStream(response.body!, fold, codexSubscription, request)
+        yield* decodeResponseStream(response.body!, fold, request)
       },
       },
     })

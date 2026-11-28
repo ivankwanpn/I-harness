@@ -1,3 +1,5 @@
+import type { LLMStreamEvent } from "./index.ts"
+
 /**
  * One SSE framer for every adapter.
  *
@@ -12,30 +14,50 @@ export interface SseFrame {
   event?: string
 }
 
-/** Read complete event blocks across arbitrary UTF-8 and CRLF chunk boundaries.
- * Adapters retain ownership of terminal events and reader cleanup. */
-export async function* readSseBlocks(reader: ReadableStreamDefaultReader<Uint8Array>): AsyncGenerator<string> {
-  const decoder = new TextDecoder()
-  let buffer = ""
-  let previousCR = false
-  while (true) {
-    const { done, value } = await reader.read()
-    let text = done ? decoder.decode() : decoder.decode(value, { stream: true })
-    if (text.length) {
-      if (previousCR && text.startsWith("\n")) text = text.slice(1)
-      previousCR = text.endsWith("\r")
-      const scan = Math.max(0, buffer.length - 1)
-      buffer += text.replace(/\r\n?/g, "\n")
-      let start = 0
-      for (let end = buffer.indexOf("\n\n", scan); end >= 0; end = buffer.indexOf("\n\n", start)) {
-        yield buffer.slice(start, end)
-        start = end + 2
-      }
-      buffer = buffer.slice(start)
-    }
-    if (done) break
+/** Unwind the body reader before the decoder yields a terminal failure.
+ * A consumer can keep the iterator suspended on that event indefinitely. */
+export function* forwardSseEvents(events: LLMStreamEvent[]): Generator<LLMStreamEvent> {
+  for (const event of events) {
+    if (event.type === "error") throw event.error
+    yield event
   }
-  if (buffer.trim()) yield buffer
+}
+
+/** A body acquired here is cancelled on early exit. Callers supplying an
+ * existing reader retain ownership of its lock and cancellation policy. */
+export async function* readSseBlocks(source: ReadableStream<Uint8Array> | ReadableStreamDefaultReader<Uint8Array>): AsyncGenerator<string> {
+  const owned = "getReader" in source
+  const reader = owned ? source.getReader() : source
+  let eof = false
+  try {
+    const decoder = new TextDecoder()
+    let buffer = ""
+    let previousCR = false
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) eof = true
+      let text = done ? decoder.decode() : decoder.decode(value, { stream: true })
+      if (text.length) {
+        if (previousCR && text.startsWith("\n")) text = text.slice(1)
+        previousCR = text.endsWith("\r")
+        const scan = Math.max(0, buffer.length - 1)
+        buffer += text.replace(/\r\n?/g, "\n")
+        let start = 0
+        for (let end = buffer.indexOf("\n\n", scan); end >= 0; end = buffer.indexOf("\n\n", start)) {
+          yield buffer.slice(start, end)
+          start = end + 2
+        }
+        buffer = buffer.slice(start)
+      }
+      if (done) break
+    }
+    if (buffer.trim()) yield buffer
+  } finally {
+    if (owned) {
+      if (!eof) void reader.cancel().catch(() => {})
+      reader.releaseLock()
+    }
+  }
 }
 
 export function parseSseFrames(text: string): SseFrame[] {

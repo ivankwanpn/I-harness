@@ -17,6 +17,7 @@ export function createBedrockFold(config: BedrockConfig, request: LLMRequest, wi
   const blockOrder = new Map<number, ProviderBlockOrderEntry>()
   let startedTools = 0
   let truncated = false
+  let toolError: string | undefined
   let receivedTerminal = false
   let malformed: string | undefined
   let refused = false
@@ -35,6 +36,16 @@ export function createBedrockFold(config: BedrockConfig, request: LLMRequest, wi
       serviceUnavailableException?: { message?: string }
       throttlingException?: { message?: string }
       validationException?: { message?: string }
+    }
+    // Only terminal status, exceptions and usage remain relevant after
+    // malformed input or messageStop. No later block can authorize a tool.
+    if ((toolError || receivedTerminal) && (m.contentBlockStart || m.contentBlockDelta || m.contentBlockStop)) return []
+    if (m.contentBlockStart) {
+      const index = m.contentBlockStart.contentBlockIndex
+      if (pendingToolUses.has(index ?? 0) || index !== undefined && blockOrder.get(index)?.kind === "tool") {
+        toolError = "Bedrock response reused a tool block index"
+        return []
+      }
     }
     if (m.contentBlockStart !== undefined && m.contentBlockStart.start?.toolUse !== undefined) {
       const toolUse = m.contentBlockStart.start.toolUse
@@ -108,10 +119,8 @@ export function createBedrockFold(config: BedrockConfig, request: LLMRequest, wi
           calls.push({ ...(pending.id ? { id: pending.id } : {}), name: pending.name, args })
           return [{ type: "tool_call", call: { ...(pending.id ? { id: pending.id } : {}), name: pending.name, args } }]
         } catch {
-          return [{
-            type: "error",
-            error: new Error(`bedrock malformed tool use args for "${pending.name}": ${pending.buffer}`),
-          }]
+          toolError = "Bedrock malformed tool use arguments"
+          return []
         }
       }
       return []
@@ -144,6 +153,10 @@ export function createBedrockFold(config: BedrockConfig, request: LLMRequest, wi
   const end = (): LLMStreamEvent => {
     if (!receivedTerminal) return { type: "error", error: new Error("Bedrock stream ended without messageStop") }
     if (malformed) return { type: "error", error: new Error(`Bedrock stopped with ${malformed}`) }
+    if (!truncated && !refused) {
+      if (toolError) return { type: "error", error: new Error(toolError) }
+      if (pendingToolUses.size) return { type: "error", error: new Error("Bedrock response closed with an unfinished tool use block") }
+    }
     // M77: each bit is written on its own (a response can be both), and both
     // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
     const contentOrder = bindVisibleToolIds([...blockOrder.entries()].sort(([left], [right]) => left - right).map(([, entry]) => entry), calls)

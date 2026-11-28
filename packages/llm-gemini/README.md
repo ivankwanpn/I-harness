@@ -52,13 +52,12 @@ results share a user content entry, using the preceding assistant call's name.
 Native signed replay requires matching model/provider and neutral tool
 bindings; stale text/order/arguments fall back to the unsigned projection.
 
-The decoder acquires and releases the reader. EOF flushes the residual frame,
-finalizes calls, releases the reader in `finally`, then emits end. Parsing/read
-failures produce an error event and suppress end; an aborted body read rethrows.
-Early consumer return also releases the lock without cancelling the response.
-Transport and HTTP failures remain in the client; retry policy belongs to the
-provider consumer. Safety refusal and token truncation are independent flags.
-No cross-provider stream or request mapping is shared here.
+The shared SSE reader drains a successful response through EOF so trailing
+usage can be included. EOF flushes the residual frame and releases the reader
+before the decoder finalizes tool calls. Stream failures release the reader
+before delivering an error. Early consumer return cancels the unread body.
+An aborted body read throws. The provider consumer owns the retry policy.
+Safety refusal and token truncation are independent flags.
 
 Run from the repository root, with suites sequential:
 

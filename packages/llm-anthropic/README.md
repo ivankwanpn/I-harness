@@ -56,15 +56,12 @@ output usage. Context-window usage precedes its terminal error. Input counts
 exclude cache; only finite counters are copied, with no fabricated cache zeros
 or derived totals.
 
-`decodeAnthropicStream` owns the reader, decoder and byte/SSE buffer for one
-response. It processes normal boundaries and residual EOF content through the
-same fold. `message_stop` retains its existing nonterminal behavior: clean end
-is emitted at EOF after the reader lock is released. A subsequent error remains
-terminal and suppresses end. Non-abort parse/read failures yield an error;
-aborted reads rethrow. The finally block releases the reader on completion,
-error, abort and early consumer return, without cancelling the response.
-Transport/HTTP failures stay before reader acquisition in the client, retaining
-the existing seam retry boundary.
+`decodeAnthropicStream` uses the shared SSE reader for one response.
+It sends both framed events and a final unterminated frame through the same
+fold. `message_stop` ends reading immediately. EOF before that marker produces
+an error. The decoder releases the reader before reporting a terminal error
+or end and cancels unread bytes on early exit. An aborted read throws.
+Transport and HTTP failures are handled by the client before reader acquisition.
 
 Run these local suites sequentially from the repository root:
 

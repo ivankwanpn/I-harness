@@ -47,14 +47,11 @@ over `prompt_tokens_details.cached_tokens`; no counter is fabricated or derived.
 The existing mapping does not turn DeepSeek `prompt_cache_miss_tokens` into an
 additional seam counter. The characterization test pins that behavior.
 
-`decodeChatStream` owns one reader, decoder, byte buffer and DONE bit. Both normal
-boundaries and EOF residual frames use the same fold handler. It ignores frames
-after DONE, validates final tools inside the existing catch boundary, and emits
-the end event after releasing the reader lock. Non-abort read/parse failures yield
-an error; an aborted signal preserves the existing throw. Its finally block
-releases the lock on completion, error, abort and early consumer return. It does
-not cancel the reader. Transport and HTTP failures remain in the client, before
-reader acquisition, with the existing seam retry boundaries.
+`decodeChatStream` uses the shared SSE reader. Complete frames and the residual
+frame at EOF use the same fold. The decoder stops reading on `[DONE]`, releases
+the reader, validates the buffered tools, and emits the terminal event. A stream
+failure releases the reader before the consumer receives the error. Early
+consumer return cancels the unread response. An aborted read throws.
 
 Run the local suites sequentially from the repository root:
 

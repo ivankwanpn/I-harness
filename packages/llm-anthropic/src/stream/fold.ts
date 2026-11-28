@@ -6,6 +6,7 @@ import { mapUsage } from "./usage.ts"
 export function createAnthropicFold(config: Pick<AnthropicConfig, "model" | "providerId">, prefixFingerprint: () => string, onToolArguments: () => void, producerWitness?: Extract<ProviderContinuation, { kind: 'anthropic' }>['producerWitness']) {
   let truncated = false
   let refused = false
+  let toolError: string | undefined
   const thinkingBlocks: ProviderThinkingBlock[] = []
   const blockOrder = new Map<number, ProviderBlockOrderEntry>()
   let startedTools = 0
@@ -35,7 +36,14 @@ export function createAnthropicFold(config: Pick<AnthropicConfig, "model" | "pro
       const usage = mapUsage(event.usage)
       return usage ? [{ type: "usage", usage }] : []
     }
+    // A cut-off argument can precede the provider's stop reason and final
+    // usage. Consume those terminal facts without emitting more content.
+    if (toolError && t !== "error") return []
     if (t === "content_block_start") {
+      if (pendingToolUses.has(index) || index !== undefined && blockOrder.get(index)?.kind === "tool") {
+        toolError = "Anthropic response reused a tool block index"
+        return []
+      }
       const block = event.content_block as { type: string; id?: string; name?: string; input?: unknown; text?: string; thinking?: string; signature?: string; data?: string }
       if (block?.type === "tool_use") {
         startedTools++
@@ -101,7 +109,8 @@ export function createAnthropicFold(config: Pick<AnthropicConfig, "model" | "pro
           toolBindings.push({ ...(pending.id ? { id: pending.id } : {}), name: pending.name, inputJson: stringifyJsonData(args)! })
           return [{ type: "tool_call", call: { ...(pending.id ? { id: pending.id } : {}), name: pending.name, args } }]
         } catch {
-          return [{ type: "error", error: new Error("anthropic malformed tool_use input") }]
+          toolError = "anthropic malformed tool_use input"
+          return []
         }
       }
       return []
@@ -118,6 +127,10 @@ export function createAnthropicFold(config: Pick<AnthropicConfig, "model" | "pro
   }
   const finish = (): LLMStreamEvent => {
     if (!receivedStop) return { type: "error", error: new Error("Anthropic stream ended without message_stop") }
+    if (!truncated && !refused) {
+      if (toolError) return { type: "error", error: new Error(toolError) }
+      if (pendingToolUses.size) return { type: "error", error: new Error("Anthropic response closed with an unfinished tool_use block") }
+    }
     // M77: each bit is written on its own (a response can be both), and both
     // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
     const contentOrder = bindVisibleToolIds([...blockOrder.entries()].sort(([left], [right]) => left - right).map(([, entry]) => entry), toolBindings)

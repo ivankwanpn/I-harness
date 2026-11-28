@@ -2,17 +2,6 @@ import { describeChatStreamError, reportStreamActivity, type LLMRequest, type LL
 import type { OpenAICompatibleConfig } from "../types.ts"
 import { mapUsage } from "./usage.ts"
 
-export const emit = function* (events: LLMStreamEvent[]): Generator<LLMStreamEvent, boolean, unknown> {
-  for (const ev of events) {
-    if (ev.type === "error") {
-      yield ev
-      return true
-    }
-    yield ev
-  }
-  return false
-}
-
 /** One response owns its tools, reasoning and terminal flags. */
 export function createChatFold(config: Pick<OpenAICompatibleConfig, "model" | "providerId">, request: LLMRequest) {
   // M72 Ⅱ: the wire's own truncation literal (`finish_reason: "length"`) —

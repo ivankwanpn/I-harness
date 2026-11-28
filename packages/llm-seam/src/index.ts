@@ -495,7 +495,7 @@ export class SSEParseError extends Error {
  * does TODAY as well (no `max_tokens` is also a 400), so this is a strict
  * improvement even before the card arm fires.
  */
-export { parseSseFrames, readSseBlocks } from "./sse.ts"
+export { forwardSseEvents, parseSseFrames, readSseBlocks } from "./sse.ts"
 export const ANTHROPIC_MAX_TOKENS_FALLBACK = 128_000
 
 

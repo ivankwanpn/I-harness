@@ -33,7 +33,13 @@ function createWaitingExecution(client: ModelClient, policy: ModelWaitPolicy): M
       queued.push({ type: "activity", activity: { requestId, phase, startedAt, waitingFor: waitingFor(), ...(lastProgressAt === undefined ? {} : { lastProgressAt }), ...(outcome ? { outcome } : {}) } })
       wake?.()
     }
-    const stop = (error: Error) => { if (closed || terminal) return; terminal = error; controller.abort(error); wake?.() }
+    const stop = (error: Error) => {
+      if (closed || terminal) return
+      terminal = error
+      queued.length = 0
+      controller.abort(error)
+      wake?.()
+    }
     const cancellationError = () => Object.assign(new Error("Model request aborted"), { name: "AbortError", code: "ABORTED" })
     const abort = () => stop(cancellationError())
     const schedule = () => {
@@ -126,6 +132,9 @@ function createWaitingExecution(client: ModelClient, policy: ModelWaitPolicy): M
         if (event.type === "tool_call" || (event.type === "text/chunk" || event.type === "reasoning") && event.text.length > 0) progress()
         if (event.type === "end" || event.type === "error") { outcome = event.type === "end" ? "completed" : "failed"; settle() }
         while (queued.length) yield queued.shift()!
+        // A consumer can stop the request while handling a progress update.
+        // Only already-observed billing data may cross that boundary.
+        if (terminal && event.type !== "usage") throw terminal
         yield event
         if (event.type === "end" || event.type === "error") break
       }

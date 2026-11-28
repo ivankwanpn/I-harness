@@ -83,7 +83,7 @@ it("isolates overlapping SSE buffers, thinking signatures, tools, usage and term
   }
 })
 
-it("releases the reader on early consumer return without cancelling the response", async () => {
+it("cancels and releases the response body on early consumer return", async () => {
   let cancellations = 0
   const stream = new ReadableStream<Uint8Array>({
     start(controller) { controller.enqueue(bytes({ type: "content_block_start", index: 0, content_block: { type: "text", text: "partial" } })) },
@@ -92,7 +92,7 @@ it("releases the reader on early consumer return without cancelling the response
   vi.stubGlobal("fetch", async () => new Response(stream))
   for await (const event of client().stream(request)) { expect(event).toEqual({ type: "text/chunk", text: "partial" }); break }
   expect(stream.locked).toBe(false)
-  expect(cancellations).toBe(0)
+  expect(cancellations).toBe(1)
 })
 
 it.each([true, false])("respects the first terminal event and releases the reader (stop first: %s)", async stopFirst => {

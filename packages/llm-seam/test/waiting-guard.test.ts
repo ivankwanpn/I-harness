@@ -4,6 +4,22 @@ import { createGenerationControl, createWaitingGuard, createRetryingClient, reso
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
 
 const request: LLMRequest = { messages: [], tools: [], systemPrompt: "" }
+it.each([
+  { type: "text/chunk", text: "pending" }, { type: "reasoning", text: "pending" },
+  { type: "tool_call", call: { id: "c", name: "read", args: {} } },
+] as const)("does not deliver pending $type after Stop from a progress notification", async event => {
+  const stop = new AbortController(), delivered: LLMStreamEvent[] = []
+  const guard = createWaitingGuard({ async *stream() { yield event; yield { type: "end" } } }, { firstResponseMs: 0, progressMs: 0 })
+  const consume = async () => {
+    for await (const e of guard.stream({ ...request, signal: stop.signal })) {
+      delivered.push(e)
+      if (e.type === "activity" && e.activity.phase === "streaming") stop.abort()
+    }
+  }
+  await expect(consume()).rejects.toMatchObject({ name: "AbortError", code: "ABORTED" })
+  expect(delivered.filter(e => e.type !== "activity")).toEqual([])
+  expect(delivered.at(-1)).toMatchObject({ activity: { phase: "settled", outcome: "cancelled" } })
+})
 it("a stalled HTTP error body retains its terminal hint and explicit Stop still wins", async () => {
   vi.useFakeTimers()
   const client: ModelClient = { async *stream(req) {

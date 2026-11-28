@@ -1,5 +1,5 @@
-import { readSseBlocks, SSEParseError, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
-import { emit, type createChatFold } from "./fold.ts"
+import { forwardSseEvents, readSseBlocks, SSEParseError, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
+import type { createChatFold } from "./fold.ts"
 
 const doneFrame = Object.freeze({ type: "[DONE]" })
 
@@ -34,21 +34,14 @@ export function parseSSE(text: string): Record<string, unknown>[] {
 
 /** Own one response reader, UTF-8 decoder and residual frame buffer. */
 export async function* decodeChatStream(body: ReadableStream<Uint8Array>, fold: ReturnType<typeof createChatFold>, request: LLMRequest): AsyncIterable<LLMStreamEvent> {
-  const reader = body.getReader()
   let receivedDone = false
-  const dispatch = function* (text: string): Generator<LLMStreamEvent, boolean, unknown> {
-    for (const event of parseSSE(text)) {
-      if (event === doneFrame) { receivedDone = true; return true }
-      if (yield* emit(fold.handleFrame(event))) return true
-    }
-    return false
-  }
   try {
-    for await (const chunk of readSseBlocks(reader)) {
-      if (yield* dispatch(chunk)) {
-        if (receivedDone) break
-        return
+    for await (const chunk of readSseBlocks(body)) {
+      for (const event of parseSSE(chunk)) {
+        if (event === doneFrame) { receivedDone = true; break }
+        yield* forwardSseEvents(fold.handleFrame(event))
       }
+      if (receivedDone) break
     }
   } catch (err) {
     // M72 Ⅰ: a corrupt chunk is a provider failure → the seam's error channel.
@@ -56,11 +49,6 @@ export async function* decodeChatStream(body: ReadableStream<Uint8Array>, fold: 
     if (request.signal?.aborted === true) throw err
     yield { type: "error", error: err instanceof Error ? err : new Error(String(err)) }
     return
-  } finally {
-    // Error/DONE/consumer return ends ownership even if upstream keeps the
-    // connection open. Cancellation must not wait for producer cooperation.
-    void reader.cancel().catch(() => {})
-    reader.releaseLock()
   }
   yield* fold.finish(receivedDone)
 }

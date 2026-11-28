@@ -73,14 +73,15 @@ it.each(['unknown-version', 'hidden', 'accessor', 'prototype', 'extra'] as const
   await expect(f.client.prepare!(f.replay)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', modelFailure: { reason: 'native-replay' } })
   expect(f.sends()).toBe(1)
 })
-it('withholds a witness when overwritten response indices leave incomplete actual call bindings', async () => {
+it('rejects overwritten tool indices without publishing a tool or signed continuation', async () => {
   vi.stubGlobal('fetch', async () => new Response([
     { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: 's' } }, { type: 'content_block_stop', index: 0 },
     { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'a', name: 'read', input: {} } },
     { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'b', name: 'read', input: {} } }, { type: 'content_block_stop', index: 1 },
     { type: 'message_stop' },
   ].map(event => `data: ${JSON.stringify(event)}\n\n`).join('')))
-  let end: any
-  for await (const event of createAnthropicClient({ apiKey: 'controlled', model: 'fixture' }).stream({ systemPrompt: '', tools: [], messages: [{ role: 'user', content: 'go' }] })) if (event.type === 'end') end = event
-  expect(end.providerContinuation).not.toHaveProperty('producerWitness')
+  const events: LLMStreamEvent[] = []
+  for await (const event of createAnthropicClient({ apiKey: 'controlled', model: 'fixture' }).stream({ systemPrompt: '', tools: [], messages: [{ role: 'user', content: 'go' }] })) events.push(event)
+  expect(events.map(event => event.type)).toEqual(['reasoning', 'error'])
+  expect(events.at(-1)).toMatchObject({ error: { message: 'Anthropic response reused a tool block index' } })
 })

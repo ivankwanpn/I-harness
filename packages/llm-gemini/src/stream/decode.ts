@@ -1,36 +1,41 @@
-import { readSseBlocks, SSEParseError, parseSseFrames, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
+import { forwardSseEvents, readSseBlocks, SSEParseError, parseSseFrames, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
 import type { GeminiConfig } from "../types.ts"
 import { createGeminiFold } from "./fold.ts"
 
 export function parseSSE(text: string): Record<string, unknown>[] {
-  return parseSseFrames(text).map(({ data }) => {
-    if (data.trim() === "[DONE]") return { type: "[DONE]" }
-    try {
-      return JSON.parse(data) as Record<string, unknown>
-    } catch (err) {
-      throw new SSEParseError(data)
+  const frames = parseSseFrames(text)
+  // Google's SDK also handles a bare JSON error after the stream opened.
+  // Inspect the assembled block so splitting UTF-8/JSON across reads is safe.
+  if (!frames.length && text.trimStart().startsWith('{')) {
+    const value = parseObject(text)
+    return Object.hasOwn(value,'error') ? [value] : []
+  }
+  return frames.map(({ data, event }) => {
+    if (event === 'error') {
+      try {
+        const value = parseObject(data)
+        return { ...value, error: Object.hasOwn(value,'error') ? value.error ?? {} : value }
+      } catch { return {error:{}} }
     }
+    if (data.trim() === "[DONE]") return { type: "[DONE]" }
+    return parseObject(data)
   })
 }
-const emit = function* (events: LLMStreamEvent[]): Generator<LLMStreamEvent, boolean, unknown> {
-  for (const ev of events) {
-    if (ev.type === "error") {
-      yield ev
-      return true
-    }
-    yield ev
-  }
-  return false
+
+function parseObject(data: string): Record<string,unknown> {
+  let parsed: unknown
+  try { parsed = JSON.parse(data) } catch { throw new SSEParseError(data) }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new SSEParseError(data)
+  return parsed as Record<string,unknown>
 }
 
 /** Own byte/SSE buffers and reader cleanup; release precedes the end event. */
 export async function* decodeGeminiStream(body: ReadableStream<Uint8Array>, request: LLMRequest, config: GeminiConfig): AsyncIterable<LLMStreamEvent> {
-  const reader = body.getReader()
   const fold = createGeminiFold(request, config)
   try {
-    for await (const chunk of readSseBlocks(reader)) {
+    for await (const chunk of readSseBlocks(body)) {
       for (const event of parseSSE(chunk)) {
-        if (yield* emit(fold.handleChunk(event))) return
+        yield* forwardSseEvents(fold.handleChunk(event))
       }
     }
     if (yield* fold.finalizeCalls()) return
@@ -40,8 +45,6 @@ export async function* decodeGeminiStream(body: ReadableStream<Uint8Array>, requ
     if (request.signal?.aborted === true) throw err
     yield { type: "error", error: err instanceof Error ? err : new Error(String(err)) }
     return
-  } finally {
-    reader.releaseLock()
   }
   yield fold.finish()
 }

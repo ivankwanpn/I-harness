@@ -1,6 +1,7 @@
 import { reportStreamActivity, stringifyJsonData, type LLMRequest, type LLMStreamEvent, type ProviderBlockOrderEntry } from "@i-harness/llm-seam"
 import type { GeminiConfig } from "../types.ts"
 import { createGeminiUsageMapper } from "./usage.ts"
+import { geminiStreamError } from './error.ts'
 
 /**
  * M77 (fix wave): the candidate-side FinishReason values whose documented
@@ -126,6 +127,11 @@ export function createGeminiFold(request: LLMRequest, config: GeminiConfig) {
   }
   const handleChunk = (event: Record<string, unknown>): LLMStreamEvent[] => {
     const events: LLMStreamEvent[] = []
+    if (Object.hasOwn(event, 'error') && event.error !== null) {
+      const usage = mapUsage(event.usageMetadata)
+      if (usage) events.push({type:'usage',usage})
+      return [...events, {type:'error',error:geminiStreamError(event.error)}]
+    }
     const candidates = event.candidates as { index?: number; finishReason?: string; content?: { parts?: { text?: string; thought?: boolean; thoughtSignature?: string; functionCall?: { id?: string; name?: string; args?: unknown } }[] } }[] | undefined
     // A streaming frame can contain only an alternative candidate. The IH
     // transcript and its tool calls follow candidate zero across frames.

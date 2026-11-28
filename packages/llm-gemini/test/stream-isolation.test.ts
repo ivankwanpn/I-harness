@@ -56,7 +56,7 @@ it("isolates overlapping SSE bytes, thoughts, tool pieces, usage and terminal fl
   }
 })
 
-it("releases the reader on early return without cancelling the response", async () => {
+it("cancels and releases the response body on early consumer return", async () => {
   let cancellations = 0
   const stream = new ReadableStream<Uint8Array>({
     start(controller) { controller.enqueue(bytes({ candidates: [{ content: { parts: [{ text: "partial" }] } }] })) },
@@ -65,7 +65,7 @@ it("releases the reader on early return without cancelling the response", async 
   vi.stubGlobal("fetch", async () => new Response(stream))
   for await (const event of client().stream(request)) { expect(event).toEqual({ type: "text/chunk", text: "partial" }); break }
   expect(stream.locked).toBe(false)
-  expect(cancellations).toBe(0)
+  expect(cancellations).toBe(1)
 })
 
 it("releases on corrupt frames without end and rethrows an aborted body read", async () => {

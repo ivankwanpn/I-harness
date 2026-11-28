@@ -1,4 +1,4 @@
-import { readSseBlocks, SSEParseError, parseSseFrames, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
+import { forwardSseEvents, readSseBlocks, SSEParseError, parseSseFrames, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
 import type { createAnthropicFold } from "./fold.ts"
 
 export function parseSSE(text: string): Record<string, unknown>[] {
@@ -13,21 +13,10 @@ export function parseSSE(text: string): Record<string, unknown>[] {
 }
 /** Release the transport as soon as the message's terminal event arrives. */
 export async function* decodeAnthropicStream(body: ReadableStream<Uint8Array>, fold: ReturnType<typeof createAnthropicFold>, request: Pick<LLMRequest, "signal">): AsyncIterable<LLMStreamEvent> {
-  const reader = body.getReader()
-  const emitEvents = function* (events: LLMStreamEvent[]): Generator<LLMStreamEvent, boolean, unknown> {
-    for (const ev of events) {
-      if (ev.type === "error") {
-        yield ev
-        return true
-      }
-      yield ev
-    }
-    return false
-  }
   try {
-    for await (const chunk of readSseBlocks(reader)) {
+    for await (const chunk of readSseBlocks(body)) {
       for (const event of parseSSE(chunk)) {
-        if (yield* emitEvents(fold.handleEvent(event))) return
+        yield* forwardSseEvents(fold.handleEvent(event))
       }
       if (fold.terminal) break
     }
@@ -37,9 +26,6 @@ export async function* decodeAnthropicStream(body: ReadableStream<Uint8Array>, f
     if (request.signal?.aborted === true) throw err
     yield { type: "error", error: err instanceof Error ? err : new Error(String(err)) }
     return
-  } finally {
-    if (fold.terminal) void reader.cancel().catch(() => {})
-    reader.releaseLock()
   }
   yield fold.finish()
 }

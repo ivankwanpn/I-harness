@@ -39,17 +39,16 @@ flags live in that call's closure; the client never shares them across streams.
 The fold receives only model/provider identity, the subscription flag, and a tool
 argument activity callback. Usage mapping has no retained mutable state.
 
-`decodeResponseStream` owns the reader, decoder and byte buffer for one response.
-It preserves final-argument snapshot precedence over partial deltas and terminates
-immediately after an error event. Reader cleanup runs on terminal completion,
-parse/read failure, abort and early consumer return. It cancels the reader for
-subscription requests and releases its lock for both routes. An aborted read
-throws; other parse/read failures use the error-event channel. The signal view
-retains the original request reference so cancellation is checked at catch time.
+`decodeResponseStream` uses the shared SSE reader for both API and subscription
+requests. The final argument snapshot takes precedence over partial deltas.
+The decoder releases the reader before reporting a terminal error or end.
+An early exit cancels the unread response body, including when the consumer
+returns after a partial event. An aborted read throws.
 
-Subscription `response.completed` ends reading without needing `[DONE]` and is
-required for success. The public route retains its existing DONE/EOF behavior.
-Reasoning, refusal and truncation output remain protocol-specific.
+`response.completed` ends reading immediately on both routes. The subscription
+route requires that event for success. The API route also processes
+`response.incomplete` and the legacy `[DONE]` marker. EOF without a terminal
+event is a failed response.
 
 Affinity stays in its original module. Its bounded WeakMap belongs to the client,
 keyed by host scope and guarded by account/turn identity; it is independent of

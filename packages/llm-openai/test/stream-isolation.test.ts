@@ -66,7 +66,7 @@ describe.each([false, true])("Responses stream ownership (subscription: %s)", su
     }
   })
 
-  it("releases the reader on early consumer return and preserves subscription-only cancellation", async () => {
+  it("cancels and releases the response body on early consumer return", async () => {
     const cancel = vi.fn()
     const stream = new ReadableStream<Uint8Array>({
       start(controller) { controller.enqueue(bytes({ type: "response.output_text.delta", delta: "partial" })) },
@@ -75,6 +75,6 @@ describe.each([false, true])("Responses stream ownership (subscription: %s)", su
     vi.stubGlobal("fetch", vi.fn(async () => new Response(stream)))
     for await (const event of client().stream(request)) { expect(event).toEqual({ type: "text/chunk", text: "partial" }); break }
     expect(stream.locked).toBe(false)
-    expect(cancel).toHaveBeenCalledTimes(subscription ? 1 : 0)
+    expect(cancel).toHaveBeenCalledTimes(1)
   })
 })

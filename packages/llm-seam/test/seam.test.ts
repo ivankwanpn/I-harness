@@ -1,7 +1,26 @@
 import { describe, expect, expectTypeOf, it } from "vitest"
-import { assertMessagesFromLog, bindVisibleToolIds, canReplayContinuation, describeTransportError, replayBlockOrder, replayVisibleToolOrder } from "../src/index.ts"
+import { assertMessagesFromLog, bindVisibleToolIds, canReplayContinuation, describeTransportError, readSseBlocks, replayBlockOrder, replayVisibleToolOrder } from "../src/index.ts"
 import type { LLMMessage, LLMRequest, ProviderBlockOrderEntry, ReasoningEffort } from "../src/index.ts"
 import { createSession, append } from "@i-harness/core-session"
+
+it("leaves an externally acquired SSE reader available to its owner", async () => {
+  const bytes = new TextEncoder()
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes.encode("data: first\n\n"))
+      controller.enqueue(bytes.encode("data: second\n\n"))
+      controller.close()
+    },
+  })
+  const reader = body.getReader()
+  try {
+    const blocks = readSseBlocks(reader)
+    expect((await blocks.next()).value).toBe("data: first")
+    await blocks.return(undefined)
+    expect(body.locked).toBe(true)
+    expect((await reader.read()).value).toEqual(bytes.encode("data: second\n\n"))
+  } finally { reader.releaseLock() }
+})
 
 describe("llm-seam invariant (audit F01-3)", () => {
   it("accepts messages derived from the log", () => {

@@ -95,15 +95,26 @@ it("closes the SDK iterator once on early consumer return without destroying the
   expect(runtime.destroy).not.toHaveBeenCalled()
 })
 
-it.each([
-  [{ validationException: { message: "invalid" } }],
-  [{ contentBlockStart: { start: { toolUse: { name: "broken" } } } }, { contentBlockDelta: { delta: { toolUse: { input: "{" } } } }, { contentBlockStop: {} }],
-])("closes the SDK iterator on a terminal error and suppresses end", async (...members) => {
-  const fixture = trackedStream([...members, { contentBlockDelta: { delta: { text: "unread" } } }])
+it("closes the SDK iterator on a terminal provider error and suppresses end", async () => {
+  const fixture = trackedStream([{ validationException: { message: "invalid" } }, { contentBlockDelta: { delta: { text: "unread" } } }])
   const runtime = runtimeFor([fixture.stream])
   const events = await drain(createBedrockClient({ model: "fixture" }, runtime.runtime).stream(request))
   expect(events.map(event => event.type)).toEqual(["error"])
   expect(fixture.returned).toHaveBeenCalledTimes(1)
+  expect(runtime.destroy).not.toHaveBeenCalled()
+})
+
+it("drains the SDK's final status and usage after local tool parsing fails, without emitting later content", async () => {
+  const fixture = trackedStream([
+    { contentBlockStart: { start: { toolUse: { name: "broken" } } } },
+    { contentBlockDelta: { delta: { toolUse: { input: "{" } } } }, { contentBlockStop: {} },
+    { contentBlockDelta: { delta: { text: "ignored" } } }, { messageStop: { stopReason: "tool_use" } },
+    { metadata: { usage: { outputTokens: 17 } } },
+  ])
+  const runtime = runtimeFor([fixture.stream])
+  const events = await drain(createBedrockClient({ model: "fixture" }, runtime.runtime).stream(request))
+  expect(events).toEqual([{ type: "usage", usage: { outputTokens: 17 } }, { type: "error", error: expect.any(Error) }])
+  expect(fixture.returned).not.toHaveBeenCalled()
   expect(runtime.destroy).not.toHaveBeenCalled()
 })
 
