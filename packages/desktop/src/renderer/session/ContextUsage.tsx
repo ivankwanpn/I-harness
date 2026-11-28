@@ -43,8 +43,12 @@ const unavailableMessages: Record<string, Message> = {
 const sourceLabels = { "projected-heuristic": "已準備輸入的估算", "provider-anchor-plus-projection": "供應商用量加上新增輸入", "neutral-only": "通用格式估算" } as const
 const confidenceLabels = { estimated: "估算值", "calibrated-mixed": "部分依用量校準", "unknown-components": "部分內容成本不確定" } as const
 const coverageLabels = { complete: "已包含完整輸入", "neutral-only": "僅包含通用格式", incomplete: "輸入估算不完整" } as const
-const capLabels = { supported: "已套用", unsupported: "此路由不支援", unknown: "是否套用尚不確定" } as const
+const capLabels = { supported: "支援，未記錄上限數值", unsupported: "此路由不支援", unknown: "是否套用尚不確定" } as const
 const number = new Intl.NumberFormat("en-US").format
+
+function outputCapText(t: ReturnType<typeof useText>, support: keyof typeof capLabels, cap?: number) {
+  return support === "supported" && cap !== undefined ? `${t("已套用")} · ${number(cap)}` : t(capLabels[support])
+}
 
 function admissionReason(state: Extract<SessionContextState, { kind: "unavailable" }>): string {
   const { observation } = state
@@ -161,7 +165,7 @@ function ContextFacts({ view, usage, layout = "popover" }: { view: Reading; usag
       </dl>
       <dl className="context-usage-fact-group">
         <div className="context-usage-fact"><dt>{t("輸出預留")}</dt><dd>{number(snapshot.outputReserve)}</dd></div>
-        <div className="context-usage-fact"><dt>{t("輸出上限")}</dt><dd>{t(capLabels[snapshot.capSupport])}{snapshot.effectiveOutputCap === undefined ? "" : ` · ${number(snapshot.effectiveOutputCap)}`}</dd></div>
+        <div className="context-usage-fact"><dt>{t("輸出上限")}</dt><dd>{outputCapText(t, snapshot.capSupport, snapshot.effectiveOutputCap)}</dd></div>
         <div className="context-usage-fact"><dt>{t("安全餘量")}</dt><dd>{number(snapshot.safetyMargin)}</dd></div>
       </dl>
       {snapshot.capSupport === "unsupported" ? <small>{t("此路由未套用傳送給供應商的輸出上限。")}</small> : null}
@@ -208,7 +212,7 @@ export function ContextUsagePage(props: ContextViews & { onBack(): void; session
         <h2>{t("請求限制")}</h2>
         <dl className="context-usage-fact-group">
           {view.modelWindow !== undefined ? <div className="context-usage-fact"><dt>{t("模型上下文視窗")}</dt><dd>{number(view.modelWindow)}</dd></div> : null}
-          <div className="context-usage-fact"><dt>{t("輸出上限")}</dt><dd>{t(capLabels[observation.output.capSupport])}{observation.output.effectiveCap !== undefined ? ` · ${number(observation.output.effectiveCap)}` : ""}</dd></div>
+          <div className="context-usage-fact"><dt>{t("輸出上限")}</dt><dd>{outputCapText(t, observation.output.capSupport, observation.output.effectiveCap)}</dd></div>
           {observation.output.allowance !== undefined ? <div className="context-usage-fact"><dt>{t("輸出預留")}</dt><dd>{number(observation.output.allowance)}</dd></div> : null}
         </dl>
       </section> : null}

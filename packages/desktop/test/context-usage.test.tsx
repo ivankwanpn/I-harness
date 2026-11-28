@@ -5,7 +5,7 @@ import { contextStateFromObservation } from "../../core-session/src/context.ts"
 import type { RequestBudgetSnapshotV2 } from "@i-harness/sdk/context"
 import { afterEach, expect, it, vi } from "vitest"
 import type { DesktopBridge, DesktopEvent } from "../src/shared/bridge.ts"
-import { ContextUsage } from "../src/renderer/session/ContextUsage.tsx"
+import { ContextUsage, ContextUsagePage } from "../src/renderer/session/ContextUsage.tsx"
 
 function deferred() {
   let resolve!: (value: unknown) => void
@@ -47,6 +47,15 @@ function observation(overrides: Partial<RequestBudgetSnapshotV2> = {}): RequestB
   }
 }
 const trigger = () => screen.getByRole("button", { name: "上下文容量" })
+
+it.each([[undefined, "支援，未記錄上限數值"], [4096, "已套用 · 4,096"]] as const)("reports the output cap actually recorded for the request (%s)", (cap, label) => {
+  const state = contextStateFromObservation(observation({
+    disposition: "compatibility", output: { capSupport: "supported", minimumCap: 1, ...(cap === undefined ? {} : { effectiveCap: cap }) },
+  }))
+  render(<ContextUsagePage usage={{ current: { owner: {}, state, loading: false }, retry() {} }} onBack={() => {}} />)
+  const limits = screen.getByRole("region", { name: "請求限制" })
+  expect(within(limits).getByText("輸出上限").nextElementSibling?.textContent).toBe(label)
+})
 const flush = () => act(async () => {})
 const advance = (milliseconds: number) => act(async () => { await vi.advanceTimersByTimeAsync(milliseconds) })
 

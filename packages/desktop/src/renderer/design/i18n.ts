@@ -446,6 +446,7 @@ const english = {
   "估算值": "Estimated", "部分依用量校準": "Partly calibrated from usage", "部分內容成本不確定": "Some input costs are uncertain",
   "已包含完整輸入": "All input included", "僅包含通用格式": "Generic input only", "輸入估算不完整": "Input estimate is incomplete",
   "已套用": "Applied", "此路由不支援": "Unsupported by this route", "是否套用尚不確定": "Application is unknown",
+  "支援，未記錄上限數值": "Supported (cap value unreported)",
   "模型已回覆；下一次請求準備完成後會重新估算容量。": "The model has replied. Capacity will be estimated again when the next request is prepared.",
   "尚未準備模型請求，暫無上下文估算。": "No model request has been prepared yet. A context estimate is not available.",
   "供應商拒絕了目前上下文，需先壓縮或更換模型。": "The provider rejected this context. Compact it or change the model to continue.",
