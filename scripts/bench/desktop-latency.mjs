@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url"
 import { timingScope } from "../../packages/desktop-gateway/src/timing-trace.ts"
 import { createJsonlBackend } from "../../packages/session-persistence-jsonl/src/index.ts"
 import { createReadOnlySessionCoordinator, createSessionCoordinator } from "../../packages/session-persistence/src/index.ts"
-import { installRendererSoakObserver, renderedAssistantBodies, rendererState, sampleDesktopProcesses, sumProcessRoles } from "./desktop-soak.mjs"
+import { installRendererSoakObserver, observeNativeWindow, reachableDesktopControl, renderedAssistantBodies, rendererState, sampleDesktopProcesses, submitBackgroundSoak, sumProcessRoles } from "./desktop-soak.mjs"
 
 const { values } = parseArgs({ options: {
   exe: { type: "string" }, rounds: { type: "string", default: "3" }, "require-trace": { type: "boolean" },
@@ -178,7 +178,7 @@ async function launch() {
   delete env.ELECTRON_RUN_AS_NODE
   delete env.ELECTRON_RENDERER_URL
   child = spawn(electron, [...(packaged ? [] : [desktop]), "--user-data-dir=" + profile, "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0"],
-    { cwd: desktop, env, windowsHide: true, stdio: ["ignore", "ignore", "pipe"] })
+    { cwd: desktop, env, windowsHide: false, stdio: ["ignore", "ignore", "pipe"] })
   child.stderr.on("data", bytes => {
     stderr = (stderr + bytes).slice(-4000)
     const port = stderr.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)/)?.[1]
@@ -196,7 +196,7 @@ async function launch() {
     const done = callbacks.get(message.id)
     if (done) done(message)
   })
-  return async expression => {
+  const evaluate = async expression => {
     const id = ++serial
     const request = Promise.withResolvers()
     callbacks.set(id, request.resolve)
@@ -209,6 +209,8 @@ async function launch() {
       return reply.result.result.value
     } finally { callbacks.delete(id) }
   }
+  await until(() => windowVisible(evaluate), "native window and renderer visible")
+  return evaluate
 }
 async function close() {
   if (!child || child.exitCode != null || child.signalCode != null) return
@@ -224,6 +226,37 @@ async function close() {
 
 async function startRendererSampler(evaluate) {
   await evaluate(`(${installRendererSoakObserver})(${rendererState})`)
+}
+
+const windowVisible = evaluate => evaluate(`(${observeNativeWindow})()`)
+class HiddenDesktop extends Error {}
+
+async function waitVisible(evaluate, read, label, timeout) {
+  let nextCheck = 0
+  return until(async () => {
+    if (performance.now() >= nextCheck) {
+      if (!await windowVisible(evaluate)) throw new HiddenDesktop("Desktop window hidden during " + label)
+      nextCheck = performance.now() + 250
+    }
+    return read()
+  }, label, timeout)
+}
+
+async function clickControl(evaluate, selector, label) {
+  return waitVisible(evaluate, () => evaluate(`(() => {
+    const el = (${selector})
+    if (!el || el.disabled) return
+    if (!(${reachableDesktopControl})(el)) el.scrollIntoView({block:"nearest",inline:"nearest"})
+    if (!(${reachableDesktopControl})(el)) return
+    const at = performance.timeOrigin + performance.now()
+    el.click()
+    return at
+  })()`), label)
+}
+
+async function openSidebar(evaluate) {
+  const expanded = await waitVisible(evaluate, () => evaluate('document.querySelector(".navigation-home")?.getAttribute("aria-expanded")'), "project sidebar")
+  if (expanded === "false") await clickControl(evaluate, 'document.querySelector(".navigation-home")', "open project sidebar")
 }
 
 async function verifyRecovery(evaluate) {
@@ -244,8 +277,7 @@ async function verifyRecovery(evaluate) {
   const cancel = "fixture-latency-cancel-0"
   await submit(evaluate, cancel)
   await until(() => responseMarks.get(cancel)?.length === 1, "held provider stream")
-  await until(() => evaluate(`!!document.querySelector('.composer-send[data-state="running"]')`), "visible stop control")
-  await evaluate(`document.querySelector('.composer-send[data-state="running"]').click()`)
+  await clickControl(evaluate, `document.querySelector('.composer-send[data-state="running"]')`, "visible stop control")
   await until(() => evaluate(`!document.querySelector('.composer-send[data-state="running"]')`), "stopped execution")
   await admission(cancel)
   const retry = "fixture-latency-warm-0"
@@ -258,16 +290,25 @@ const projectRow = label => `[...document.querySelectorAll(".project-sidebar-pro
 const sessionRow = title => `[...document.querySelectorAll(".project-sidebar-sessions .row-button")].find(el => el.querySelector(".row-label")?.textContent === ${JSON.stringify(title)})`
 const sendButton = 'button.composer-send[data-can-send="1"]'
 async function select(evaluate, workspace, session) {
+  try { return await selectVisible(evaluate, workspace, session) }
+  catch (error) {
+    if (!(error instanceof HiddenDesktop) || !soak || values["require-visible-replies"]) throw error
+    return { background: true }
+  }
+}
+async function selectVisible(evaluate, workspace, session) {
+  await openSidebar(evaluate)
   const selectedProject = projectRow(workspace.label)
-  await until(() => evaluate(`Boolean(${selectedProject})`), "visible project")
-  const start = await evaluate(`(() => { const start = performance.timeOrigin + performance.now(); (${selectedProject}).click(); return start })()`)
-  await until(() => evaluate(`(${selectedProject})?.getAttribute("aria-current") === "true"`), "selected project")
-  const row = sessionRow((session === "empty" ? "Empty fixture " : "Long fixture ") + workspace.id)
-  await until(() => evaluate(`Boolean(${row})`), "catalog row")
-  const listed = await evaluate("performance.timeOrigin + performance.now()")
-  await evaluate(`(${row}).click()`)
+  const start = await clickControl(evaluate, selectedProject, "visible project")
+  await waitVisible(evaluate, () => evaluate(`(${selectedProject})?.getAttribute("aria-current") === "true"`), "selected project")
+  // Selecting a project dismisses a narrow or temporary Home drawer.
+  await openSidebar(evaluate)
+  const title = (session === "empty" ? "Empty fixture " : "Long fixture ") + workspace.id
+  const row = sessionRow(title)
+  const listed = await clickControl(evaluate, row, "reachable catalog row")
   try {
-    await until(() => evaluate(`(${row})?.getAttribute("aria-current") === "true" && !!document.querySelector(${JSON.stringify(sendButton)}) && !!document.querySelector(".connection-online")`), "ready composer", live ? 25000 : 45000)
+    await waitVisible(evaluate, () => evaluate(`document.querySelector(".header-title")?.textContent === ${JSON.stringify(title)} && (${reachableDesktopControl})(document.querySelector(".composer-input"))
+      && !!document.querySelector(${JSON.stringify(sendButton)}) && !!document.querySelector(".connection-online")`), "ready composer", live ? 25000 : 45000)
   } catch (error) {
     if (!live) throw error
     const gate = await evaluate(`(async () => {
@@ -287,14 +328,16 @@ async function select(evaluate, workspace, session) {
   return { listedAfterMs: listed - start, readyAfterMs: (await evaluate("performance.timeOrigin + performance.now()")) - start }
 }
 async function submit(evaluate, tag, prompt = tag) {
-  await evaluate(`(() => {
+  await waitVisible(evaluate, () => evaluate(`(() => {
     const input = document.querySelector(".composer-input")
+    if (!(${reachableDesktopControl})(input) || input.disabled || input.readOnly) return false
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(input, ${JSON.stringify(prompt)})
     input.dispatchEvent(new Event("input", { bubbles: true }))
-  })()`)
-  await until(() => evaluate(`!document.querySelector(${JSON.stringify(sendButton)})?.disabled && document.querySelector(${JSON.stringify(sendButton)})?.dataset.payload === "1"`), "editable draft settled")
-  return evaluate(`(() => {
+    return true
+  })()`), "editable composer")
+  return waitVisible(evaluate, () => evaluate(`(() => {
     const target = document.querySelector(${JSON.stringify(sendButton)})
+    if (!(${reachableDesktopControl})(target) || target.disabled || target.dataset.payload !== "1") return
     const tag = ${JSON.stringify(tag)}
     const state = ${rendererState}
     window.ihLatencySamples ??= Object.create(null)
@@ -302,7 +345,7 @@ async function submit(evaluate, tag, prompt = tag) {
     window.ihLatencySamples[tag] = sample
     const next = () => {
       const at = performance.timeOrigin + performance.now()
-      if (!document.hidden) {
+      if (window.ihLatencyWindow?.visible === true && !document.hidden) {
         const text = (${renderedAssistantBodies})(document)
         if (sample.firstText === undefined && text.some(line => ${Boolean(live)} ? !!line : line.includes("Started " + tag))) {
           sample.firstText = at
@@ -318,13 +361,23 @@ async function submit(evaluate, tag, prompt = tag) {
     target.click()
     requestAnimationFrame(next)
     return sample
-  })()`)
+  })()`), "reachable send control with settled draft")
+}
+async function submitTrial(evaluate, workspace, session, tag, activation) {
+  if (!activation.background) {
+    try { return await submit(evaluate, tag) }
+    catch (error) {
+      if (!(error instanceof HiddenDesktop) || !soak || values["require-visible-replies"]) throw error
+    }
+  }
+  const scope = { workspaceId: workspace.id, sessionId: session }
+  return evaluate(`(${submitBackgroundSoak})(window.ihDesktop, ${JSON.stringify(scope)}, ${JSON.stringify(tag)}, ${rendererState})`)
 }
 async function waitForReply(evaluate, workspace, session, tag, submitted) {
   let checkedAt = 0
   return until(async () => {
     const key = JSON.stringify(tag)
-    const sample = await evaluate(`window.ihLatencySamples[${key}]`)
+    const sample = submitted.inputRoute === "background-ipc" ? undefined : await evaluate(`window.ihLatencySamples?.[${key}]`)
     if (sample?.finished) return sample
     // When the window is hidden there may be no animation frames. The
     // provider's response only tells us when to check committed history.
@@ -334,7 +387,7 @@ async function waitForReply(evaluate, workspace, session, tag, submitted) {
     if (soak && !values["require-visible-replies"] && ended !== undefined && now - ended >= 500 && now >= checkedAt + 2000) {
       checkedAt = now
       const state = await evaluate(`(${rendererState})()`)
-      if (state.visibility !== "hidden" && now - ended < 3000) return undefined
+      if (!submitted.inputRoute && state.visibility !== "hidden" && now - ended < 3000) return undefined
       const completed = await evaluate(`window.ihDesktop.request({kind:"session/history",workspaceId:${JSON.stringify(workspace.id)},
         sessionId:${JSON.stringify(session)},afterSeq:0,beforeSeq:Number.MAX_SAFE_INTEGER,limit:40})
         .then(history=>history.events.some(event=>event.type==="assistant/message"&&event.text.trim()==="Finished "+${key}))`)
@@ -359,7 +412,7 @@ function summarize(trials, traces) {
     const offset = at => at === undefined ? undefined : round(at - trial.pressed)
     const loopback = responseMarks.get(trial.tag)
     if (!live) assert.equal(loopback?.length, 2, "The fixture must exercise one tool, then a second provider request")
-    return { scenario: trial.scenario, tag: trial.tag,
+    return { scenario: trial.scenario, tag: trial.tag, inputRoute: trial.inputRoute ?? "visible-composer",
       workspaceToListMs: round(trial.activation.listedAfterMs), workspaceToComposerMs: round(trial.activation.readyAfterMs),
       gatewayReceivedMs: offset(phase("gateway-received")), gatewayAdmittedMs: offset(phase("gateway-admitted")),
       turnStartMs: offset(phase("turn-start")), requestProjectedMs: offset(phase("request-projected")), requestAssessedMs: offset(phase("request-assessed")),
@@ -435,7 +488,7 @@ async function runLatency(evaluate) {
   async function run(workspace, session, scenario, round) {
     const tag = `fixture-latency-${scenario}-${round}`
     const activation = await select(evaluate, workspace, session)
-    const submitted = await submit(evaluate, tag)
+    const submitted = await submitTrial(evaluate, workspace, session, tag, activation)
     trials.push({ workspace, session, scenario, tag, activation,
       ...await waitForReply(evaluate, workspace, session, tag, submitted) })
   }
@@ -466,10 +519,10 @@ async function runLatency(evaluate) {
     const a = "fixture-latency-parallela-" + index
     const b = "fixture-latency-parallelb-" + index
     const startA = await select(evaluate, workspaces[0], "long")
-    const submittedA = await submit(evaluate, a)
+    const submittedA = await submitTrial(evaluate, workspaces[0], "long", a, startA)
     await until(() => responseMarks.get(a)?.length === 1, "first concurrent request")
     const startB = await select(evaluate, workspaces[1], "long")
-    const submittedB = await submit(evaluate, b)
+    const submittedB = await submitTrial(evaluate, workspaces[1], "long", b, startB)
     const sampleB = await waitForReply(evaluate, workspaces[1], "long", b, submittedB)
     await select(evaluate, workspaces[0], "long")
     const sampleA = await waitForReply(evaluate, workspaces[0], "long", a, submittedA)
@@ -478,8 +531,8 @@ async function runLatency(evaluate) {
     parallelCycles++
     if (soak) {
       await evaluate(`(() => {
-        delete window.ihLatencySamples[${JSON.stringify(a)}]
-        delete window.ihLatencySamples[${JSON.stringify(b)}]
+        delete window.ihLatencySamples?.[${JSON.stringify(a)}]
+        delete window.ihLatencySamples?.[${JSON.stringify(b)}]
       })()`)
       if (performance.now() >= nextSample && (deadline === undefined || performance.now() < deadline)) await sampleSoak(parallelCycles)
       const rest = deadline === undefined ? 0 : Math.min(20_000, deadline - performance.now())
@@ -505,7 +558,7 @@ async function runLatency(evaluate) {
   })
   const report = { root, executable: electron, fixture: live ? "explicit live provider profile" : "local Responses with a read tool", rounds: live ? 1 : rounds,
     ...(soak ? { soakMinutes, soakCycles, soakSampleSeconds, workloadElapsedMs, parallelCycles, soakSamples, persisted, desktopExited: true } : {}),
-    rendererMeasurement: "First animation frame with the expected DOM text in a visible document. State separates focused, unfocused, and hidden windows, and foreground timer statistics exclude connection or visibility transitions. Background A may be restored from history.",
+    rendererMeasurement: "UI actions require a visible native window, a visible document and a control reached by DOM hit testing. Paint is the first animation frame containing the expected reply text. Renderer focus is recorded separately. Permissive hidden soak inputs use scoped IPC and report only durable reply confirmation.",
     trials: summarize(trials, records) }
   return report
 }

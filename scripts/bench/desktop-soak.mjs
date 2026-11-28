@@ -1,6 +1,46 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 
+/** Called in the renderer. A retained drawer can have buttons while invisible. */
+export function reachableDesktopControl(element) {
+  if (!element || !element.isConnected || element.closest("[hidden], [inert]")) return false
+  if (element.checkVisibility && !element.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false
+  const doc = element.ownerDocument
+  if (doc.visibilityState !== "visible" || doc.defaultView?.ihLatencyWindow?.visible === false) return false
+  const rect = element.getBoundingClientRect()
+  if (!rect.width || !rect.height) return false
+  const hit = doc.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+  return !!hit && element.contains(hit)
+}
+
+/** Install once per renderer. Chromium can report visible for a hidden Windows GUI. */
+export async function observeNativeWindow() {
+  if (!window.ihDesktop) return false
+  if (!window.ihLatencyWindow) {
+    const state = {}
+    window.ihLatencyWindow = state
+    const off = window.ihDesktop.onEvent(event => {
+      if (event.kind === "window/state" && typeof event.visible === "boolean") {
+        state.visible = event.visible
+        window.dispatchEvent(new Event("ih-latency-visibility"))
+      }
+    })
+    window.addEventListener("pagehide", () => { off(); delete window.ihLatencyWindow }, { once: true })
+    const initial = await window.ihDesktop.request({ kind: "window/state" })
+    state.visible ??= initial?.visible
+  }
+  return window.ihLatencyWindow?.visible === true && document.visibilityState === "visible"
+}
+
+/** A hidden soak uses the public scoped input route without a UI latency sample. */
+export async function submitBackgroundSoak(bridge, scope, tag, readState) {
+  await bridge.request({ kind: "desktop/session/open", ...scope })
+  const pressed = performance.timeOrigin + performance.now(), submitState = readState()
+  const result = await bridge.request({ kind: "desktop/session/input/submit", ...scope, text: tag, clientToken: tag, delivery: "queue" })
+  if (result?.accepted !== true) throw Error("Background fixture input was not admitted")
+  return { pressed, submitState, inputRoute: "background-ipc" }
+}
+
 /** Measure reply text independently of the controls in the same bubble. */
 export function renderedAssistantBodies(document) {
   return [...document.querySelectorAll(".timeline-assistant")]
@@ -58,7 +98,7 @@ export function rendererState() {
   const workspace = ["online", "offline", "connecting", "reconnecting", "idle"].find(state =>
     marker?.classList.contains("connection-" + state)) ?? "unknown"
   return {
-    visibility: document.hidden ? "hidden" : document.hasFocus() ? "foreground" : "visible-unfocused",
+    visibility: document.hidden || window.ihLatencyWindow?.visible === false ? "hidden" : document.hasFocus() ? "foreground" : "visible-unfocused",
     workspace,
     network: navigator.onLine ? "online" : "offline",
   }
@@ -100,7 +140,8 @@ export function installRendererSoakObserver(readState) {
 
   const refresh = () => update(performance.now())
   document.addEventListener("visibilitychange", refresh)
-  for (const event of ["focus", "blur", "online", "offline"]) window.addEventListener(event, refresh)
+  const stateEvents = ["focus", "blur", "online", "offline", "ih-latency-visibility"]
+  for (const event of stateEvents) window.addEventListener(event, refresh)
   const connection = new MutationObserver(refresh)
   let marker
   function observeConnection() {
@@ -148,7 +189,7 @@ export function installRendererSoakObserver(readState) {
     clearInterval(timer)
     connection.disconnect()
     document.removeEventListener("visibilitychange", refresh)
-    for (const event of ["focus", "blur", "online", "offline"]) window.removeEventListener(event, refresh)
+    for (const event of stateEvents) window.removeEventListener(event, refresh)
     delete window.ihSoakSample
   }, { once: true })
 }

@@ -1,7 +1,52 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { runInNewContext } from "node:vm"
-import { installRendererSoakObserver, renderedAssistantBodies, rendererState, sumProcessRoles } from "./desktop-soak.mjs"
+import { installRendererSoakObserver, observeNativeWindow, reachableDesktopControl, renderedAssistantBodies, rendererState, submitBackgroundSoak, sumProcessRoles } from "./desktop-soak.mjs"
+
+test("native hide wins over a stale visible snapshot and layout hit tests", async () => {
+  const window = new EventTarget(), initial = Promise.withResolvers()
+  let listener, reads = 0
+  window.ihDesktop = {
+    onEvent(fn) { listener = fn; return () => { listener = undefined } },
+    request() { reads++; return initial.promise },
+  }
+  const document = { visibilityState: "visible", defaultView: window, elementFromPoint: () => target }
+  const target = { isConnected: true, ownerDocument: document, closest: () => null,
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 30 }), contains: el => el === target }
+  const check = () => runInNewContext(`(${observeNativeWindow})()`, { window, document, Event })
+  const opening = check()
+  listener({ kind: "window/state", visible: false })
+  initial.resolve({ visible: true })
+  assert.equal(await opening, false)
+  assert.equal(reachableDesktopControl(target), false)
+  listener({ kind: "window/state", visible: true })
+  assert.equal(await check(), true)
+  assert.equal(reads, 1)
+  assert.equal(reachableDesktopControl(target), true)
+  document.elementFromPoint = () => ({ overlay: true })
+  assert.equal(reachableDesktopControl(target), false)
+  document.elementFromPoint = () => target
+  target.closest = () => ({ hidden: true })
+  assert.equal(reachableDesktopControl(target), false)
+  window.dispatchEvent(new Event("pagehide"))
+  assert.equal(listener, undefined)
+  assert.equal(window.ihLatencyWindow, undefined)
+})
+
+test("background input opens the intended workspace and admits one identified turn", async () => {
+  const calls = [], scope = { workspaceId: "b", sessionId: "long" }
+  let accepted = true
+  const bridge = { async request(request) { calls.push(request); return { accepted } } }
+  const result = await submitBackgroundSoak(bridge, scope, "one", () => ({ visibility: "hidden" }))
+  assert.deepEqual(calls, [
+    { kind: "desktop/session/open", ...scope },
+    { kind: "desktop/session/input/submit", ...scope, text: "one", clientToken: "one", delivery: "queue" },
+  ])
+  assert.equal(result.inputRoute, "background-ipc")
+  accepted = false
+  await assert.rejects(submitBackgroundSoak(bridge, scope, "two", () => ({})), /not admitted/)
+  assert.equal(calls.filter(call => call.clientToken === "two").length, 1)
+})
 
 test("timer gaps only use callbacks from a single visibility and connection state", () => {
   let now = 0
