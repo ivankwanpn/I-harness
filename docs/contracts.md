@@ -51,7 +51,7 @@
 | `webfetch` | 僅 http/https（`WEB_UNSUPPORTED_PROTOCOL` 拒止非絕對 URL / 非 http(s)）；響應截斷標記 `truncated` / `bodyTruncated`（無需 provider） |
 | `websearch` | **無 search provider 時註冊但執行即 throw `NO_PROVIDER`（fail-closed），不靜默返回空結果** |
 | `ask_user_input` | **無 user-questions provider → 執行 throw `NO_PROVIDER`（fail-closed）**；答案作為 tool result 回傳，模型可見 |
-| `get_context_remaining` | **無 contextWindow 知識 → 不註冊（fail-closed）**；回應 `{ window, used, remaining, percentage }`（M27-R-A8） |
+| `get_context_remaining` | 主會話在模型有上下文視窗或獨立輸入上限時註冊。當前請求完成估算且通過容量檢查時，回傳 `window`、`used`、`remaining`、`percentage`。上一個請求已完成、下一次估算仍待進行時，回傳 `kind: "unavailable"`。如能核對供應商用量，另附 `lastReportedInputTokens` 和 `lastReportedUsage`。 |
 
 > 正名註記：M26 已將工具面統一為 `terminal_*` / `process_*` 字首；`webfetch` / `websearch` 沿用 M21 名稱；`ask_user_input` 為 M26-B14；`get_context_remaining` 為 M27-R-A8（對應 codex 同名能力）。
 
@@ -112,7 +112,7 @@
 
 | 方向 | 方法 / 通知 | 參數 | 響應 |
 |---|---|---|---|
-| call | `session/history` | `{ sessionId, afterSeq?, limit? }` | `{ events: SessionEvent[], nextSeq }`（`afterSeq` **內斥**（exclusive），預設 0；`limit` 預設 500，clamp 上限 1000；`nextSeq` = 下一個未回傳事件的 seq（全回傳時 == log 長度）；未知 sessionId → `-32602` + 明確「session not found」（fail-closed：read 永不 auto-create）；log 空 → `{ events: [], nextSeq: 0 }`） |
+| call | `session/history` | `{ sessionId, afterSeq?, beforeSeq?, limit?, includeTurns? }` | 回傳 `{ events: SessionEvent[], nextSeq }`。從 `afterSeq` 指定的零起算位置開始，預設為 0。下一頁直接傳回 `nextSeq`。若手上的是最後已讀事件的 `seq`，則傳 `seq + 1`。讀取較早一頁時，`beforeSeq` 是不包含在頁面內的結束位置。每頁預設 500 筆，上限 1,000 筆。空日誌回傳 `{ events: [], nextSeq: 0 }`。未知會話回傳 `-32602` 和「session not found」。 |
 | call | `session/list` | `{}` | `{ sessions: SessionListEntry[], listingUnavailable? }`（source 為 server 選配 `listSessions`；缺省 → `{ sessions: [], listingUnavailable: true }` 誠實「未知」，絕不偽造空表；source throw → `-32603` fail-closed） |
 | call | `initialize`（v1 響應） | `{}` | 同 v0 外殼不變，且 `protocolVersion: 2`；capabilities **增加** `"session-history": ["1"]`、`"session-list": ["1"]`（v0 行 byte-identical）。 |
 
@@ -157,6 +157,14 @@
 | call | `shutdown` | `{}` | 同 v0 不變；**免閘**——半初始化的客戶端要有路退 |
 
 - **遷移**：客戶端在**首個請求前**送 `initialize`。`HarnessClient.initialize()` 已是明示方法（embedder 不需新 API）；直接驅動裸 wire 的 embedder 補一幀。其餘不變：所有其他方法、所有通知 shape、capabilities 行、`session/event` 的 append-only 語意、既有錯誤碼的語意。
+
+### SDK 歷史圖片
+
+`session/history` 和即時 `session/event` 提供 `SessionDisplayEvent`。尚在佇列或已取消的輸入會隱藏圖片資料。輸入升格為使用者訊息後，`user/message.images` 攜帶圖片，即使原始輸入在較早的一頁，客戶端也能顯示當頁。
+
+需要用 `deriveMessages` 投影對話的 SDK 客戶端，可依序收齊歷史頁，再呼叫 `restorePromotedHistoryImages(events)`。它會複製事件，依 `imageInputId` 將已顯示的圖片交還給當時的原始輸入，保留輸入準備記錄與工具結果。缺少前頁的原始輸入或同一原始輸入出現相衝突的圖片時會回報錯誤。匯出完整會話另需保留原始 JSONL，當中包含會話標頭、提交框架及尚未升格的輸入。
+
+服務在 `initialize` 回報 `"prompt-input-receipt": ["1"]` 時，客戶端可在 `session/prompt` 傳入 `inputReceipt: true`。服務將已進入佇列的這筆輸入 ID 放在成功回覆的 `inputId`，或失敗回覆的 `error.data.inputId`。進入佇列前即失敗的請求沒有輸入 ID。`HarnessClient.run()` 使用這個身分配對同一會話裡的並行請求。`onNotification()` 仍提供會話層事件。舊服務無法可靠區分同一會話的並行執行時，由 SDK 回報歸屬不明。
 
 ## 版本 / 健康
 

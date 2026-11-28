@@ -13,8 +13,9 @@ import {
 // high-level run(session) surface. Zero new dependencies (node:child_process
 // + node:stream only).
 import { spawn, type ChildProcess } from "node:child_process"
+import { promptEvents } from "./run-events.ts"
 import type { Readable, Writable } from "node:stream"
-import type { SessionEvent } from "@i-harness/core-session"
+import type { SessionDisplayEvent as SessionEvent } from "./history-events.ts"
 import type { ResultPageQuery, ResultPageResult } from './protocol.ts'
 import { safeModelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 import {
@@ -22,6 +23,7 @@ import {
   makeNotification,
   makeRequest,
   RpcError,
+  SERVER_OVERLOAD,
   type HistoryRange,
   type RpcFailure,
   type RpcNotification,
@@ -132,6 +134,7 @@ export interface QueueState {
 /** M41a v1: session/history paging options (all optional — defaults live in
  * the server: afterSeq 0, limit 500 capped at 1000). */
 export interface HistoryOptions {
+  /** Zero-based position of the first event to read. Use the previous page's nextSeq. */
   afterSeq?: number
   /** Tail read: return the window ending just before this seq. */
   beforeSeq?: number
@@ -159,6 +162,8 @@ export class HarnessClient {
   private closeFlight: Promise<void> | undefined
   private stderrTail = ""
   private serverInfo: ServerInfo | undefined
+  private legacyRuns = new Set<string>()
+  private readonly legacyTimedOutRuns = new Set<string>()
 
   constructor(readable: Readable, writable: Writable, opts?: { child?: ChildProcess }) {
     this.transport = new JsonRpcLineTransport(readable, writable)
@@ -428,14 +433,19 @@ export class HarnessClient {
     return await this.request("session/model/set", { sessionId, selection }) as SessionModelState
   }
 
-  /** High-level one-shot or continued run: streams the session events and
-   * resolves when the turn completed. A failed turn rejects with SdkRunError
-   * (the collected events ride along). */
+  /** A high-level run returns the admitted prompt's events and assistant reply.
+   * Initialize before concurrent runs on the same session to negotiate input
+   * receipts. Older peers support one local run per session and can reject
+   * ambiguous event streams from multiple producers. */
   async run(input: RunInput): Promise<RunResult> {
     if (input.context !== undefined && !this.serverInfo?.capabilities?.["prompt-context"]?.includes("1")) throw new Error("Prompt context is not supported; initialize a capable server first")
     if (input.images?.length && !this.serverInfo?.capabilities?.["prompt-images"]?.includes("1")) throw new Error("Prompt images are not supported; initialize a capable server first")
     const sessionId = input.sessionId
       ?? `sdk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+    const receipts = this.serverInfo?.capabilities?.["prompt-input-receipt"]?.includes("1") === true
+    if (!receipts && this.legacyRuns.has(sessionId)) throw new Error("Concurrent runs on this session require a server with prompt input receipts")
+    if (!receipts) this.legacyRuns.add(sessionId)
+    const clientToken = input.clientToken ?? (!receipts ? randomUUID() : undefined)
     const events: SessionEvent[] = []
     const off = this.onNotification((notification) => {
       if (notification.method !== "session/event") return
@@ -444,25 +454,58 @@ export class HarnessClient {
         events.push(params.event)
       }
     })
+    const collect = (reply: unknown, failed = false): SessionEvent[] => {
+      const id = reply && typeof reply === "object" && "inputId" in reply ? reply.inputId : undefined
+      if (typeof id === "string") return promptEvents(events, id)
+      if (receipts) return []
+      const admissions = events.filter(event => event.type === "agent/input/admitted" && event.clientToken !== undefined)
+      if (admissions.length) {
+        const matches = admissions.filter(event => event.type === "agent/input/admitted" && event.clientToken === clientToken)
+        if (matches.length > 1) throw new Error("Legacy server returned ambiguous input receipts")
+        return matches[0]?.type === "agent/input/admitted" ? promptEvents(events, matches[0].inputId) : []
+      }
+      const first = events.findIndex(event => event.type === "turn/start")
+      if (first >= 0 && events.slice(first + 1).some(event => event.type === "turn/start")) throw new Error("Legacy server cannot attribute overlapping session turns")
+      const turn = first < 0 ? events : events.slice(first)
+      const roots = turn.filter(event => event.type === "user/message" && !event.internal && !event.source)
+      if (roots.length && !roots.some(event => event.type === "user/message" && event.text === input.prompt)) throw new Error("Legacy server did not identify the submitted prompt")
+      if (this.legacyTimedOutRuns.has(sessionId) && (first < 0 || roots.length === 0)) throw new Error("Legacy server cannot attribute this turn after an earlier timeout")
+      if (failed && !roots.length) return []
+      return turn
+    }
+    let owned: SessionEvent[]
     try {
-      await this.request("session/prompt", { sessionId, prompt: input.prompt, ...(input.context !== undefined ? { context: input.context } : {}), ...(input.images?.length ? { images: input.images } : {}), ...(input.clientToken ? { clientToken: input.clientToken } : {}) }, input.timeoutMs ?? 0)
+      const receipt = await this.request("session/prompt", { sessionId, prompt: input.prompt, ...(receipts ? { inputReceipt: true } : {}), ...(input.context !== undefined ? { context: input.context } : {}), ...(input.images?.length ? { images: input.images } : {}), ...(clientToken ? { clientToken } : {}) }, input.timeoutMs ?? 0)
+      owned = collect(receipt)
+      this.legacyTimedOutRuns.delete(sessionId)
     } catch (error) {
+      if (!receipts && input.sessionId && error instanceof SdkTimeoutError) this.legacyTimedOutRuns.add(sessionId)
       if (error instanceof RpcError) {
+        const failed = collect(error.data, true)
+        const data = error.data
+        const bySeq = new Map(failed.filter(event => event.seq !== undefined).map(event => [event.seq, event]))
+        const bounded = data && typeof data === "object" && "events" in data && Array.isArray(data.events)
+          ? { ...data, events: data.events.flatMap(event => {
+              const scoped = event && typeof event === "object" ? bySeq.get(event.seq) : undefined
+              return scoped && scoped.type === event.type ? [scoped] : []
+            }) }
+          : data
         throw new SdkRunError(
           error.message,
           error.code,
-          error.data,
-          events,
+          bounded,
+          failed,
         )
       }
       throw error
     } finally {
       off()
+      if (!receipts) this.legacyRuns.delete(sessionId)
     }
-    const last = [...events].reverse().find(
+    const last = [...owned].reverse().find(
       (event): event is Extract<SessionEvent, { type: "assistant/message" }> => event.type === "assistant/message",
     )
-    return { sessionId, events, ...(last !== undefined ? { text: last.text } : {}) }
+    return { sessionId, events: owned, ...(last !== undefined ? { text: last.text } : {}) }
   }
 
   async status(sessionId: string): Promise<QueueState> {
@@ -478,8 +521,8 @@ export class HarnessClient {
     return await this.request("session/dashboard", {}) as SessionDashboardResult
   }
 
-  /** M41a v1: walk a session's live event log from `afterSeq` (exclusive),
-   * paging up to `limit` events. Rejects with RpcError(-32602, "session not
+  /** Read up to `limit` events starting at cursor `afterSeq` (inclusive).
+   * Rejects with RpcError(-32602, "session not
    * found") for an unknown session. */
   async history(sessionId: string, opts: HistoryOptions = {}): Promise<HistoryRange> {
     const params: { sessionId: string; afterSeq?: number; beforeSeq?: number; limit?: number; includeTurns?: boolean } = { sessionId }
@@ -620,16 +663,11 @@ export class HarnessClient {
 
   private onMessage(message: RpcSuccess | RpcFailure | RpcNotification): void {
     if ("result" in message || "error" in message) {
-      // M68: a failure frame with a NULL id corresponds to no request. The
-      // host's bounded output queue sends exactly one of those (SERVER_OVERLOAD)
-      // and then ends the stream; `String(null)` matches no pending entry, so
-      // without this branch the reason for the cut would be dropped here and
-      // the caller would see only a dead connection. Record it as the
-      // connection's error — the same exit-error shape a subprocess exit uses,
-      // so LATER requests fail with it too — and settle everything in flight
-      // with it.
+      // Only IH's overload notice announces a connection-wide shutdown.
+      // A standard null-id parse error has no matching request.
       if ("error" in message && message.id === null) {
         const failure = message as RpcFailure
+        if (failure.error.code !== SERVER_OVERLOAD) return
         this.exitError = new SdkConnectionError(
           `the server cut the connection with error ${failure.error.code}: ${failure.error.message}`,
           { code: failure.error.code, message: failure.error.message },
@@ -637,9 +675,11 @@ export class HarnessClient {
         this.rejectAll(this.exitError)
         return
       }
-      const pending = this.pending.get(String(message.id))
+      // This client sends string IDs. JSON-RPC peers must echo the same type and value.
+      if (typeof message.id !== "string") return
+      const pending = this.pending.get(message.id)
       if (pending === undefined) return
-      this.pending.delete(String(message.id))
+      this.pending.delete(message.id)
       if (pending.timer !== undefined) clearTimeout(pending.timer)
       if ("result" in message) {
         pending.resolve(message.result)
@@ -694,7 +734,7 @@ export class HarnessSession {
     return this.client.setSessionModel(this.sessionId, selection)
   }
 
-  /** M41a v1: history walk for this session (afterSeq exclusive, limit paging). */
+  /** History for this session, beginning at the supplied zero-based cursor. */
   history(opts?: HistoryOptions): Promise<HistoryRange> {
     return this.client.history(this.sessionId, opts)
   }

@@ -181,6 +181,19 @@ describe("frame encoding", () => {
     expect(decodeFrame(encodeFrame({ jsonrpc: "1.0", id: 1, method: "x" } as unknown as RpcRequest))).toBeUndefined()
   })
 
+  it("accepts one JSON-RPC message kind per frame with a well-formed response id and error", () => {
+    for (const fields of [
+      { id: "1", result: "ok", error: { code: -32603, message: "failed" } },
+      { id: 1, method: "session/status", result: "ok" },
+      { method: "session/event", error: { code: -32603, message: "failed" } },
+      { id: {}, result: true }, { id: null, result: true },
+      { id: "1", error: {} }, { id: "1", error: { code: 1.5, message: "failed" } },
+      { id: "1", error: { code: -32603, message: {} } },
+    ]) expect(decodeFrame(JSON.stringify({ jsonrpc: "2.0", ...fields }))).toBeUndefined()
+    expect(decodeFrame(encodeFrame(makeSuccess(0, null)))).toEqual(makeSuccess(0, null))
+    expect(decodeFrame(encodeFrame(makeFailure(null, PARSE_ERROR, "bad frame")))).toEqual(makeFailure(null, PARSE_ERROR, "bad frame"))
+  })
+
   it("error codes: -32700 parse / -32603 internal error constants and frames", () => {
     expect(PARSE_ERROR).toBe(-32700)
     expect(INTERNAL_ERROR).toBe(-32603)
@@ -269,6 +282,20 @@ describe("HarnessClient (low level, in-process transport)", () => {
       rl.close()
       await client.close()
     }
+  })
+
+  it("requires the original request id type when matching responses", async () => {
+    const { client, serverRead, serverWrite } = link()
+    const rl = createInterface({ input: serverRead })
+    rl.on("line", line => {
+      const request = decodeFrame(line)
+      if (!isRpcRequest(request)) return
+      serverWrite.write(encodeFrame(makeFailure(null, PARSE_ERROR, "Uncorrelated parse error")))
+      serverWrite.write(encodeFrame(makeSuccess(Number(request.id), "unmatched")))
+      serverWrite.write(encodeFrame(makeSuccess(request.id, "matched")))
+    })
+    try { await expect(client.request("case", {})).resolves.toBe("matched") }
+    finally { rl.close(); serverWrite.end(); await client.close() }
   })
 
   it("request() rejects with an RpcError carrying the server code", async () => {

@@ -87,6 +87,7 @@ export { parseResultPageQuery } from './results.ts'
 export { transportSessionEvents } from "./image-transport.ts"
 import type { SessionService } from "@i-harness/session-executor"
 import { createManagedEventBridge } from "./managed-event-bridge.ts"
+import { promptEvents } from "./run-events.ts"
 import { onOriginalHostAssembly } from "../../session-executor/src/host-assembly-observer.ts"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { diagnosticsFor } from "@i-harness/diagnostics"
@@ -472,6 +473,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           protocolVersion: SDK_SERVER_PROTOCOL_VERSION,
           capabilities: {
             "prompt-context": ["1"],
+            ...(service.supportsPromptInputReceipt ? { "prompt-input-receipt": ["1"] } : {}),
             "prompt-images": ["1"],
             "session-context": ["1"],
             ...(opts.readResultPage ? { 'session-result-read': opts.supportsResultDependencyMembership ? ['1', '2'] : ['1'] } : {}),
@@ -764,7 +766,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           return makeFailure(id, INVALID_PARAMS, "session/history requires a non-empty sessionId")
         }
         const afterSeq = p.afterSeq === undefined ? 0 : p.afterSeq
-        if (typeof afterSeq !== "number" || !Number.isInteger(afterSeq) || afterSeq < 0) {
+        if (typeof afterSeq !== "number" || !Number.isSafeInteger(afterSeq) || afterSeq < 0) {
           return makeFailure(id, INVALID_PARAMS, "session/history afterSeq must be a non-negative integer")
         }
         const rawLimit = p.limit === undefined ? HISTORY_DEFAULT_LIMIT : p.limit
@@ -965,7 +967,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
       }
       case 'session/result/read': return dispatchResultPage(id, params, opts.readResultPage, opts.supportsResultDependencyMembership)
       case "session/prompt": {
-        const p = params as { sessionId?: unknown; prompt?: unknown; context?: unknown; images?: unknown; clientToken?: unknown } | undefined
+        const p = params as { sessionId?: unknown; prompt?: unknown; context?: unknown; images?: unknown; clientToken?: unknown; inputReceipt?: unknown } | undefined
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
           return makeFailure(id, INVALID_PARAMS, "session/prompt requires a non-empty sessionId")
         }
@@ -1004,19 +1006,24 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         const submissions = inflight.get(sessionId) ?? new Set<Inflight>()
         submissions.add(submission)
         inflight.set(sessionId, submissions)
+        const capture = service.supportsPromptInputReceipt && p.inputReceipt === true
+        let inputId: string | undefined
         try {
-          if (typeof p.context === "string" || images?.length || typeof p.clientToken === "string") await service.submit(sessionId, prompt, controller.signal, { ...(typeof p.context === "string" ? { context: p.context } : {}), ...(images?.length ? { images } : {}), ...(typeof p.clientToken === "string" ? { clientToken: p.clientToken } : {}) })
+          if (capture || typeof p.context === "string" || images?.length || typeof p.clientToken === "string") await service.submit(sessionId, prompt, controller.signal, { ...(typeof p.context === "string" ? { context: p.context } : {}), ...(images?.length ? { images } : {}), ...(typeof p.clientToken === "string" ? { clientToken: p.clientToken } : {}), ...(capture ? { onInputId: (id: string) => { inputId = id } } : {}) })
           else await service.submit(sessionId, prompt, controller.signal)
+          await managedEvents.flush(sessionId)
           statusNotify(sessionId, "completed")
-          return makeSuccess(id, { sessionId, ok: true })
+          return makeSuccess(id, { sessionId, ok: true, ...(capture ? { inputId } : {}) })
         } catch (error) {
+          await managedEvents.flush(sessionId)
           const message = error instanceof Error ? error.message : String(error)
           const errorCode = isFactRecoveryRequired(error) ? error.code : undefined
           const modelFailure = errorCode ? undefined : modelFailureFacts(error)
           statusNotify(sessionId, "error", message, modelFailure, errorCode)
           return makeFailure(id, INTERNAL_ERROR, message, {
             sessionId,
-            events: boundedFailureEvents(liveEventsFor(service, sessionId)),
+            events: capture ? scopedFailureEvents(service, sessionId, inputId) : boundedFailureEvents(liveEventsFor(service, sessionId)),
+            ...(capture && inputId ? { inputId } : {}),
             ...(modelFailure ? { modelFailure } : {}),
             ...(errorCode ? { errorCode } : {}),
           })
@@ -1225,6 +1232,16 @@ function isSessionNotFoundError(message: string): boolean {
 function liveEventsFor(service: SessionService, sessionId: string): readonly SessionEvent[] {
   const live = service.liveSession(sessionId)
   return live?.events ?? []
+}
+
+function scopedFailureEvents(service: SessionService, sessionId: string, inputId?: string): readonly SessionEvent[] {
+  if (!inputId) return []
+  const live = service.liveSession(sessionId)
+  if (!live) return []
+  const start = live.events.findLastIndex(event => event.type === 'agent/input/admitted' && event.inputId === inputId)
+  if (start < 0) return []
+  const display = transportSessionEvents(live, boundedFailureEvents(promptEvents(live.events.slice(start), inputId)))
+  return boundedFailureEvents(display)
 }
 
 /** A failure frame may carry events for the client to reconstruct the run, but

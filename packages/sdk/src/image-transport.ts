@@ -1,4 +1,5 @@
 import { copyConversationData, type DeepReadonly, type ImageInput, type SessionView as Session, type SessionEventView as SessionEvent } from "@i-harness/core-session"
+import type { SessionDisplayEvent } from './history-events.ts'
 
 type Admission = { position: number; event: Extract<SessionEvent, { type: "agent/input/admitted" }> }
 type AdmissionIndex = { events: readonly SessionEvent[]; processed: number; lastEvent?: SessionEvent; byId: Map<string, Admission[]> }
@@ -39,22 +40,28 @@ function earlierImages(index: AdmissionIndex, inputId: string, before: number): 
   return images
 }
 
-/** Keep displayed images on user messages and strip their durable copies. */
-function copyWireEvents(events: readonly SessionEvent[], imagesFor: (event: Extract<SessionEvent, { type: "user/message" }>, inputId: string) => readonly DeepReadonly<ImageInput>[]): import('@i-harness/core-session').SessionEvent[] {
-  return copyConversationData(events.map(event => {
-    if (event.type === "agent/input/admitted" && event.images !== undefined) {
-      const { images: _images, ...rest } = event
-      return rest
-    }
-    if (event.type === "user/message" && event.imageInputId !== undefined) {
-      return { ...event, images: imagesFor(event, event.imageInputId) }
-    }
-    return event
-  }))
+/** The same detached display representation for notifications and history pages. */
+export function displaySessionEvent(event: SessionEvent, images?: readonly DeepReadonly<ImageInput>[]): SessionDisplayEvent {
+  if (event.type === 'agent/input/admitted') {
+    const { images: _images, ...admission } = event
+    return copyConversationData(admission)
+  }
+  if (event.type === 'user/message') {
+    const { imageInputId, ...message } = event
+    if (imageInputId === undefined) return copyConversationData(message)
+    if (!images?.length) throw new Error('image admission not found for user/message: ' + imageInputId)
+    return copyConversationData({ ...message, imageInputId, images })
+  }
+  return copyConversationData(event)
+}
+
+function copyWireEvents(events: readonly SessionEvent[], imagesFor: (event: Extract<SessionEvent, { type: "user/message" }>, inputId: string) => readonly DeepReadonly<ImageInput>[]): SessionDisplayEvent[] {
+  return events.map(event => displaySessionEvent(event, event.type === 'user/message' && event.imageInputId !== undefined
+    ? imagesFor(event, event.imageInputId) : undefined))
 }
 
 /** Read images from the existing in-process session, including earlier pages. */
-export function transportSessionEvents(session: Session, events: readonly SessionEvent[]): import('@i-harness/core-session').SessionEvent[] {
+export function transportSessionEvents(session: Session, events: readonly SessionEvent[]): SessionDisplayEvent[] {
   let index: AdmissionIndex | undefined
   return copyWireEvents(events, (event, inputId) => {
     const position = event.seq ?? session.events.indexOf(event)
@@ -67,7 +74,7 @@ export function transportSessionEvents(session: Session, events: readonly Sessio
 }
 
 /** The coordinator has already looked up each image's earlier admission. */
-export function transportHistoryPageEvents(events: readonly SessionEvent[], images: ReadonlyMap<number, readonly DeepReadonly<ImageInput>[]>): import('@i-harness/core-session').SessionEvent[] {
+export function transportHistoryPageEvents(events: readonly SessionEvent[], images: ReadonlyMap<number, readonly DeepReadonly<ImageInput>[]>): SessionDisplayEvent[] {
   return copyWireEvents(events, (event, inputId) => {
     if (event.seq === undefined || !Number.isSafeInteger(event.seq) || event.seq < 0) {
       throw new Error("image admission: user/message position is unavailable")

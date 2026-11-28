@@ -46,7 +46,12 @@ it("serves the actual prepared owner without inspecting transport and retains po
     const state = await service.contextState("owned")
     expect(state).toMatchObject({ kind: "unavailable", observation: budget })
     const tool = await assembly.tools.execute({ name: "get_context_remaining", args: {} })
-    expect(tool.output).toMatchObject({ kind: "unavailable", observation: budget })
+    expect(tool.output).toMatchObject({ kind: "unavailable", observation: {
+      freshness: budget.freshness, disposition: budget.disposition, estimate: budget.estimate,
+      pressure: budget.pressure, output: budget.output, components: budget.components,
+    } })
+    expect(tool.output).not.toHaveProperty('observation.requestContext')
+    expect(tool.output).not.toHaveProperty('observation.bindingFingerprint')
     expect(tool.output).not.toHaveProperty('percentage')
     expect(budget.components.system).toBeGreaterThan(0)
     expect(budget.components.schema).toBe(prepared.measurement.input.components.toolSchemas.heuristicTokens)
@@ -114,7 +119,7 @@ it.each([false, true])("child context reader preserves its owner and current par
     const value = tool.envelope.retention.value
     if (revoked) expect(value).toMatchObject({ code: "TOOL_FAILED", error: "Execution caller unavailable: unknown registry or durable owner" })
     else expect(value).toMatchObject({ kind: "unavailable", observation: {
-      ownerSessionId: childId, freshness: 'awaiting-projection', components: { system: measurements[0]!.input.components.system.heuristicTokens,
+      freshness: 'awaiting-projection', components: { system: measurements[0]!.input.components.system.heuristicTokens,
       schema: measurements[0]!.input.components.toolSchemas.heuristicTokens } } })
     expect(measurements.length).toBeGreaterThanOrEqual(2)
     await parentEntered

@@ -333,6 +333,7 @@ describe("createSdkServer", () => {
           capabilities: {
             "prompt-context": ["1"],
             "prompt-images": ["1"],
+            "prompt-input-receipt": ["1"],
             "session-context": ["1"],
             session: ["prompt", "status"],
             notifications: ["session/event", "session/status"],
@@ -997,7 +998,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
     }
   })
 
-  it("session/history walks the live log (afterSeq exclusive, limit, nextSeq)", async () => {
+  it("resumes session/history at the first unreturned event", async () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
@@ -1023,6 +1024,8 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
       // seqs are 0-based positions: nextSeq == length when returned in full.
       expect(range.nextSeq).toBe(range.events.length)
       expect(range.events[0]!.seq).toBe(0)
+      const unsafe = await server.handleLine(encodeFrame(makeRequest(122, "session/history", { sessionId: "h1", afterSeq: 2 ** 53 })))
+      expect(decodeFrame(unsafe!)).toMatchObject({ error: { code: INVALID_PARAMS, message: expect.stringContaining("afterSeq") } })
 
       const middle = types.indexOf("user/message")
       const middleReply = await server.handleLine(encodeFrame(makeRequest(110, "session/history", {
@@ -1032,7 +1035,8 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
         events: [range.events[middle]], turns: [{ startSeq: types.indexOf("turn/start"), endSeq: types.indexOf("turn/end") }],
       } })
 
-      // afterSeq is EXCLUSIVE: only later events, same tail.
+      // A page cursor points to the first unreturned row. Passing it back
+      // reads that row, including when its zero-based sequence is zero.
       const cut = 2
       const laterReply = await server.handleLine(
         encodeFrame(makeRequest(102, "session/history", { sessionId: "h1", afterSeq: cut })),

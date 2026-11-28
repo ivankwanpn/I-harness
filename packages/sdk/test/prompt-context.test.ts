@@ -4,6 +4,8 @@ import { createSdkServer } from "../src/server.ts"
 import { decodeFrame, encodeFrame, isRpcSuccess, makeRequest } from "../src/protocol.ts"
 import { PassThrough, Writable } from "node:stream"
 import { HarnessClient } from "../src/client.ts"
+import { restorePromotedHistoryImages, type SessionDisplayEvent } from '../src/history-events.ts'
+import { deriveMessages } from '@i-harness/core-session'
 
 it("refuses context on a peer that would silently ignore the added field", async () => {
   const input = new PassThrough()
@@ -58,6 +60,10 @@ it("admits a bounded image and promotes it into the model-visible user message",
     const completeEvents = (completeHistory as { result: { events: Record<string, unknown>[] } }).result.events
     expect(completeEvents.find((event) => event.type === "agent/input/admitted")).not.toHaveProperty("images")
     expect(completeEvents.find((event) => event.type === "user/message")).toMatchObject({ images: [image] })
+    const source = service.liveSession('images')!
+    const restored = restorePromotedHistoryImages((completeHistory as {result:{events:SessionDisplayEvent[]}}).result.events)
+    expect(deriveMessages({...source, events:restored})).toEqual(deriveMessages(source))
+    expect(() => restorePromotedHistoryImages((history as {result:{events:SessionDisplayEvent[]}}).result.events)).toThrow(/earlier admission/)
     expect(admitted).toHaveProperty("images", [image])
     const events = notifications.filter((item): item is { method: string; params: { event: Record<string, unknown> } } => !!item && typeof item === "object" && (item as { method?: string }).method === "session/event")
       .map((item) => item.params.event)

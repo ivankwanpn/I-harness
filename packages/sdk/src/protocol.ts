@@ -1,4 +1,5 @@
 import { safeModelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
+import type { SessionDisplayEvent } from "./history-events.ts"
 /** Data-only connected reduction compatibility; importing this type loads no engine. */
 export type SessionCompactResult = import('@i-harness/context-engine').ReductionResult
 // M27 R-C4: NDJSON JSON-RPC 2.0 line framing for @i-harness/sdk.
@@ -68,9 +69,9 @@ export type SessionCompactResult = import('@i-harness/context-engine').Reduction
  *                      protocolVersion is now 2 (the v0 rows stay verbatim).
  *   session/history { sessionId, afterSeq?, limit? }
  *                  → { events, nextSeq }   — always `{ events, nextSeq }`,
- *                    never null. afterSeq is EXCLUSIVE (default 0); limit
- *                    defaults to 500, clamped to a 1000 cap; the source log
- *                    is the live in-process session (service.liveSession);
+ *                    never null. afterSeq is the zero-based position of
+ *                    the first event to read (default 0). limit defaults
+ *                    to 500 and is capped at 1000;
  *                    nextSeq = seq of the next unreturned event (== the
  *                    source log length when the walk returned everything).
  *                    Unknown sessionId → -32602 INVALID_PARAMS with an
@@ -291,7 +292,6 @@ export type SessionCompactResult = import('@i-harness/context-engine').Reduction
 
 import { createInterface, type Interface } from "node:readline"
 import type { Readable, Writable } from "node:stream"
-import type { SessionEvent } from "@i-harness/core-session"
 
 export const PROTOCOL_VERSION = 3
 
@@ -352,8 +352,8 @@ export interface HistoryTurn { startSeq: number; endSeq?: number }
 export interface HistoryRange {
   /** Turn boundaries intersecting this page, when requested. endSeq identifies its durable turn/end. */
   turns?: HistoryTurn[]
-  /** Events strictly after `afterSeq`, in seq order, at most `limit` of them. */
-  events: SessionEvent[]
+  /** Events from the requested zero-based cursor, in order, up to the page limit. */
+  events: SessionDisplayEvent[]
   /** Seq of the next unreturned event (== the log length when returned in full). */
   nextSeq: number
   /** First seq included when the page was requested with `beforeSeq`. */
@@ -630,48 +630,36 @@ export function makeFailure(id: number | string | null, code: number, message: s
     : { jsonrpc: "2.0", id, error: { code, message, data } }
 }
 
+function isEnvelope(msg: unknown): msg is Record<string, unknown> {
+  return typeof msg === "object" && msg !== null && !Array.isArray(msg)
+    && "jsonrpc" in msg && msg.jsonrpc === "2.0"
+}
+
+function isRpcId(id: unknown): id is string | number {
+  return typeof id === "string" || (typeof id === "number" && Number.isFinite(id))
+}
+
+function isMethodEnvelope(msg: unknown): msg is Record<string, unknown> {
+  return isEnvelope(msg) && typeof msg.method === "string" && !("result" in msg) && !("error" in msg)
+}
+
 export function isRpcRequest(msg: unknown): msg is RpcRequest {
-  return (
-    typeof msg === "object"
-    && msg !== null
-    && !Array.isArray(msg)
-    && (msg as { jsonrpc?: unknown }).jsonrpc === "2.0"
-    && typeof (msg as { method?: unknown }).method === "string"
-    && (typeof (msg as { id?: unknown }).id === "number" || typeof (msg as { id?: unknown }).id === "string")
-  )
+  return isMethodEnvelope(msg) && isRpcId(msg.id)
 }
 
 export function isRpcNotification(msg: unknown): msg is RpcNotification {
-  return (
-    typeof msg === "object"
-    && msg !== null
-    && !Array.isArray(msg)
-    && (msg as { jsonrpc?: unknown }).jsonrpc === "2.0"
-    && typeof (msg as { method?: unknown }).method === "string"
-    && (msg as { id?: unknown }).id === undefined
-  )
+  return isMethodEnvelope(msg) && !("id" in msg)
 }
 
 export function isRpcSuccess(msg: unknown): msg is RpcSuccess {
-  return (
-    typeof msg === "object"
-    && msg !== null
-    && (msg as { jsonrpc?: unknown }).jsonrpc === "2.0"
-    && "id" in msg
-    && "result" in msg
-    && !("error" in msg)
-  )
+  return isEnvelope(msg) && isRpcId(msg.id) && "result" in msg && !("error" in msg) && !("method" in msg)
 }
 
 export function isRpcFailure(msg: unknown): msg is RpcFailure {
-  return (
-    typeof msg === "object"
-    && msg !== null
-    && (msg as { jsonrpc?: unknown }).jsonrpc === "2.0"
-    && "id" in msg
-    && typeof (msg as { error?: unknown }).error === "object"
-    && (msg as { error?: unknown }).error !== null
-  )
+  if (!isEnvelope(msg) || (!isRpcId(msg.id) && msg.id !== null) || "result" in msg || "method" in msg) return false
+  const error = msg.error
+  return typeof error === "object" && error !== null && !Array.isArray(error)
+    && "code" in error && Number.isSafeInteger(error.code) && "message" in error && typeof error.message === "string"
 }
 
 /** Encode one message as a single NDJSON line (trailing "\n"). */

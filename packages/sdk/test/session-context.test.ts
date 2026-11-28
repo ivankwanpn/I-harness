@@ -5,7 +5,8 @@ import { decodeFrame, encodeFrame, makeRequest } from "../src/protocol.ts"
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { toJSONL, type SessionEvent } from '@i-harness/core-session'
+import { deriveMessages, fromJSONL, toJSONL, type SessionEvent } from '@i-harness/core-session'
+import { restorePromotedHistoryImages, type SessionDisplayEvent } from '../src/history-events.ts'
 import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
@@ -29,6 +30,11 @@ it('serves literal replacement records and cold context through actual SDK reade
     await server.handleLine(encodeFrame(makeRequest(1, 'initialize', {})))
     const history = decodeFrame((await server.handleLine(encodeFrame(makeRequest(2, 'session/history', { sessionId: 's' }))))!)
     expect(history).toMatchObject({ result: { events, nextSeq: 7 } })
+    const display = (history as {result:{events:SessionDisplayEvent[]}}).result.events
+    const original = fromJSONL(raw)
+    const messages = deriveMessages({...original,events:restorePromotedHistoryImages(display)})
+    expect(messages).toEqual(deriveMessages(original))
+    expect(messages.map(message => message.content)).toEqual(['H','S'])
     const context = decodeFrame((await server.handleLine(encodeFrame(makeRequest(3, 'session/context', { sessionId: 's' }))))!)
     expect(context).toHaveProperty('result')
     expect(preparations).toBe(0)

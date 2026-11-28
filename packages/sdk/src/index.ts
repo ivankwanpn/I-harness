@@ -2,6 +2,7 @@
 // the SessionService-backed server is a separate entry (`@i-harness/sdk/server`)
 // so client-only consumers never load the engine.
 export * from "./protocol.ts"
+export { restorePromotedHistoryImages, type SessionDisplayEvent } from './history-events.ts'
 export * from './fork.ts'
 export * from '@i-harness/session-persistence/selected-results-fork-contract'
 export { modelFailureFacts, safeModelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"

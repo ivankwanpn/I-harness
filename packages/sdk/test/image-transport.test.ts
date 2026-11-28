@@ -1,6 +1,7 @@
 import { expect, it } from "vitest"
 import { createSession } from "@i-harness/core-session"
 import { transportSessionEvents } from "../src/image-transport.ts"
+import { restorePromotedHistoryImages, type SessionDisplayEvent } from '../src/history-events.ts'
 
 it("fails a cold log with a missing image admission instead of returning text only", () => {
   const session = createSession()
@@ -23,6 +24,20 @@ it("uses the latest earlier admission when an input id is reused", () => {
   expect(wire[3]).toMatchObject({ images: [second] })
   expect(wire[0]).not.toHaveProperty("images")
   expect(wire[2]).not.toHaveProperty("images")
+  expect(restorePromotedHistoryImages(wire)).toEqual(session.events)
+  expect(wire[0]).not.toHaveProperty("images")
+  expect(wire[1]).toHaveProperty("images", [first])
+})
+
+it('never recovers hidden pending images or accepts contradictory promoted payloads', () => {
+  const session = createSession()
+  const image = {mediaType:'image/png' as const,dataBase64:'QUJD'}
+  session.events.push({type:'agent/input/admitted',version:1,inputId:'hidden',text:'pending',images:[image],delivery:'queue',intent:'user',seq:0})
+  const wire = transportSessionEvents(session,session.events)
+  expect(restorePromotedHistoryImages(wire)[0]).not.toHaveProperty('images')
+  const visible:SessionDisplayEvent = {type:'user/message',text:'promoted',seq:1,imageInputId:'hidden',images:[image]}
+  expect(() => restorePromotedHistoryImages([...wire,visible,{...visible,seq:2,images:[{...image,dataBase64:'REVG'}]}])).toThrow(/conflicting/i)
+  expect(() => restorePromotedHistoryImages([...wire,{...visible,images:[]}])).toThrow(/promoted bytes/)
 })
 
 it("reuses an indexed long prefix across image-bearing history pages", () => {

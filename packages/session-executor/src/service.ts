@@ -236,6 +236,8 @@ export interface SessionServiceOptions extends AssemblyOptions {
 
 interface SessionSubmitOptions {
   context?: string; images?: ImageInput[]; clientToken?: string; admittedInputId?: string
+  /** Observes the queue's original id before this input can publish events. */
+  onInputId?: (id: string) => void
   /** Trusted host preparation callback; never comes from model or wire data. */
   prepareInput?: (assembly: SessionAssembly, prompt: string) => Promise<string>
 }
@@ -251,6 +253,7 @@ export interface ManagedRuntimePublication {
 }
 export type ManagedRuntimeLifecycle={sessionId:string;owner:ManagedRuntimePublication;kind:'published'|'retiring'|'removed'}
 export interface SessionService {
+  readonly supportsPromptInputReceipt?: true
   /** Warm only an execution already selected or required by the host. A
    * deferred warm leaves the first real input's execution choice open. */
   warmSession?(sessionId: string): Promise<{ ready: boolean; deferred?: true }>
@@ -1444,6 +1447,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const id = options?.admittedInputId ?? randomUUID()
     const admitted = options?.admittedInputId ? assemblies.get(sessionId)?.inbox.pending().find((input) => input.inputId === id) : undefined
     if (st.byId.get(id)?.scheduled || laneControls(sessionId)?.currentInput()?.inputId === id) return Promise.reject(new Error("Input is already scheduled"))
+    options?.onInputId?.(id)
     if (admitted?.intent !== "system" && !signal.aborted) cancelledParents.delete(sessionId)
     const controller = new AbortController()
     const record: QueueRowRecord = {
@@ -2062,6 +2066,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     contextState,
     taskProjectionIntegrity,
     ...(opts.contextOutput || opts.coordinator?.storageRoot ? { readResultPage: resultReader.read } : {}),
+    supportsPromptInputReceipt: true,
     rebindModel,
     liveSession: (sessionId) => assemblies.get(sessionId)?.session,
     writableSessionFor,

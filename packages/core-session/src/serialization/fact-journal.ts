@@ -15,6 +15,11 @@ import { isOriginalArchiveValidationEnvironment, unchangedDataPrototypes } from 
 
 const digestPattern = /^[a-f0-9]{64}$/
 const fail = (): never => { throw new TypeError('Invalid fact journal frame or digest') }
+/** Delivery requires an original frame. A legacy record cannot supply it. */
+export function assertLegacyJournalEvent(event: SessionEventView): void {
+  if (isDeliveryEventType(event.type) || event.type === 'agent/input/admitted' &&
+    ['session.delivery.subagent', 'session.delivery.exec', 'session.delivery.workflow', 'session.delivery.code'].includes(event.provenance?.producer ?? '')) fail()
+}
 const count = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0
 const digest = (value: unknown): value is string => typeof value === 'string' && digestPattern.test(value)
 const hash = (domain: string, ...parts: Uint8Array[]) => {
@@ -184,7 +189,8 @@ function decodeJournal(body: Uint8Array, metadata: JournalMetadata, formatVersio
   for (const line of legacy.toString('utf8').split('\n')) {
     if (line.trim()) { try { events.push(JSON.parse(line)) } catch { fail() } }
   }
-  if (events.length !== metadata.legacyEventCount || events.some(event => isDeliveryEventType(event.type) || event.type === 'agent/input/admitted' && ['session.delivery.subagent', 'session.delivery.exec', 'session.delivery.workflow','session.delivery.code'].includes(event.provenance?.producer ?? ''))) fail()
+  if (events.length !== metadata.legacyEventCount) fail()
+  events.forEach(assertLegacyJournalEvent)
   let offset = metadata.legacyBodyBytes
   if (metadata.separatorBytes) { if (buffer[offset] !== 0x0a) fail(); offset++ }
   let prefixDigest = metadata.legacyPrefixDigest
@@ -417,7 +423,7 @@ function journalStreamDecoder(
     if (!line.trim()) return
     let event: SessionEvent
     try { event = JSON.parse(line) } catch { return fail() }
-    if (isDeliveryEventType(event.type) || event.type === 'agent/input/admitted' && ['session.delivery.subagent', 'session.delivery.exec', 'session.delivery.workflow','session.delivery.code'].includes(event.provenance?.producer ?? '')) fail()
+    assertLegacyJournalEvent(event)
     eventCount++; consume([event])
   }
   function checkLegacy() {

@@ -2,6 +2,12 @@
   "note": "Deliberate exceptions to the reachability gate. Every entry needs a date and a reason; the gate refuses to run when either is missing. TWO MECHANICS A LATER EDIT MUST KNOW, both recorded here because this file is the artifact a re-seed touches. (1) AN ENTRY EXEMPTS EXACTLY ONE ROW. The gate reduces a row key to `kind<TAB>subject` (`check-reachability.mjs:1612` `allowlistKey`) and compares it for equality against each entry's `key` (`:1599-1600`); there is no wildcard, prefix or class key. An entry keyed on a representative row is therefore a dated ADJUDICATION of a class, not an exemption covering it — the class's other members are accepted through `scripts/audit/reachability-baseline.json`, and repairing one of them warns only about the single row the entry names. The entries dated 2026-09-17 that say \"one class of N rows\" are all of this kind. (2) LINE ENDINGS. This file and `reachability-baseline.json` are CRLF on disk with no BOM, while `--seed-baseline` WRITES LF. A re-seed therefore leaves the baseline LF and produces a whole-file EOL diff against the CRLF convention; re-normalise both files to CRLF after any re-seed and re-run `--gate` and `--digest` to confirm the tool's behaviour is unchanged. Committed blobs are LF under `core.autocrlf=true`, so this is a working-tree rule, not a content rule. Recorded for the milestone record: it belongs in `docs/handoff/2026-09-15-m2-reachability-gate-handoff.md` §6 (\"Three traps a later edit will hit\") as a third trap, where Task 3 landed it on 2026-09-17 — flagged to Task 3, which owns that document.",
   "entries": [
     {
+      "key": "unused-export\t@i-harness/sdk#restorePromotedHistoryImages",
+      "reason": "Public SDK conversion for clients that project a complete ordered display history. Desktop renders the displayed images directly. SDK integration tests restore promoted image carriers across live and restarted history, including prepared inputs and failed tools.",
+      "dated": "2026-11-28",
+      "source": "docs/contracts.md#sdk-歷史圖片, packages/sdk/test/promoted-history.test.ts"
+    },
+    {
       "key": "unused-export\t@i-harness/mcp-client#createMcpSupervisor",
       "reason": "The package root retains the standalone factory that returns a McpSupervisor. Since ca55187d the managed mount uses createMcpSupervisorOwner so it can hold the server-name reservation until the original connection is released. Both entry points construct the same supervisor. The package facade test exercises the standalone lifecycle.",
       "dated": "2026-11-28",
