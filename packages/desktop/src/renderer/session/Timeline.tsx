@@ -359,18 +359,19 @@ export function Timeline({ rows, assistantPreview, reasoningText, navigation, ru
       <div className="timeline-inner" style={{ height: `${totalSize}px` }}>
         {virtualizer.getVirtualItems().map((item) => {
           const row = itemAt(item.index)
+          const searchHit = row.id === target?.id || (row.kind === "activity-group" && row.rows.some(tool => tool.id === target?.id))
           return (
             <div
               key={timelineKey(row)}
               className="timeline-row"
               data-row-id={row.id}
               data-row-kind={row.kind}
-              data-search-target={row.id === target?.id || (row.kind === "activity-group" && row.rows.some(tool => tool.id === target?.id)) ? "true" : undefined}
+              data-search-target={searchHit ? "true" : undefined}
               data-index={item.index}
               ref={virtualizer.measureElement}
-              style={{ transform: `translateY(${item.start}px)`, ...(row.id === target?.id || (row.kind === "activity-group" && row.rows.some(tool => tool.id === target?.id)) ? { outline: "2px solid var(--ih-accent)", outlineOffset: "-2px" } : {}) }}
+              style={{ transform: `translateY(${item.start}px)` }}
             >
-              {row.id === target?.id || (row.kind === "activity-group" && row.rows.some(tool => tool.id === target?.id)) ? <span className="muted">搜尋命中</span> : null}
+              {searchHit ? <span className="muted">{t("搜尋命中")}</span> : null}
               <RowView resultReader={resultReader} row={row} open={open} toggle={toggle} activeReasoningId={activeReasoningId} navigation={navigation} onPreview={setPreview} page={pages.get(row.id) ?? 0} setPage={(page) => {
                 pauseFollowing()
                 setPages((previous) => {

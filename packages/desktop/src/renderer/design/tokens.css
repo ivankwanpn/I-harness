@@ -259,6 +259,7 @@ button { font: inherit; color: inherit; }
 .timeline-inner, .conversation-dock { width: 100%; max-width: 720px; margin-inline: auto; }
 .timeline-inner { position: relative; }
 .timeline-row { position: absolute; top: 0; left: 0; width: 100%; padding: 4px 6px; }
+.timeline-row[data-search-target="true"] { border-radius: var(--ih-radius-panel); outline: 2px solid var(--ih-accent); outline-offset: -2px; }
 .timeline-message { margin: 12px 0; padding: 12px 16px; border-radius: 16px; line-height: 1.75; overflow-wrap: anywhere; }
 .timeline-user { margin-left: auto; max-width: 85%; width: fit-content; background: var(--ih-message-bg); white-space: pre-wrap; }
 .timeline-user-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
@@ -273,8 +274,10 @@ button { font: inherit; color: inherit; }
 .timeline-assistant pre { padding: 16px; overflow-x: auto; background: #202020; border: 1px solid var(--ih-divider); border-radius: 10px; font-size: 12px; }
 .timeline-assistant code { font-family: Consolas, monospace; }
 .timeline-assistant :not(pre) > code { background: #ffffff0d; padding: 2px 5px; border-radius: 4px; }
-.timeline-assistant table { display: block; overflow-x: auto; border-collapse: collapse; }
-.timeline-assistant td, .timeline-assistant th { padding: 6px 12px; border: 1px solid var(--ih-divider); }
+.timeline-assistant table { display: block; width: fit-content; max-width: 100%; overflow-x: auto; border: 1px solid var(--ih-divider); border-radius: var(--ih-radius-control); border-collapse: separate; border-spacing: 0; }
+.timeline-assistant :is(td, th) { padding: 6px 12px; border-inline-end: 1px solid var(--ih-divider); border-block-end: 1px solid var(--ih-divider); }
+.timeline-assistant tr > :last-child { border-inline-end: 0; }
+.timeline-assistant table > :last-child > tr:last-child > :is(th, td) { border-block-end: 0; }
 .timeline-assistant a { color: var(--ih-accent); }
 .timeline-outcome { margin: 0; padding: 6px 10px; color: #b3261e; }
 .timeline-other { margin: 0; padding: 4px 10px; font-size: 12px; }

@@ -2,6 +2,7 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "搜尋命中": "Search result",
   "所有專案共用": "Shared across projects",
   "伺服器": "Servers",
   "擴充功能": "Extensions",
