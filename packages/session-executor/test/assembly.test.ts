@@ -50,8 +50,8 @@ vi.mock("@i-harness/core-agent", async (importOriginal) => {
 
 type CapturedMount = { config: McpServerConfig; deps?: McpMountDeps }
 const mcpMounts = vi.hoisted(() => ({ calls: [] as CapturedMount[] }))
-vi.mock("@i-harness/mcp-client", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@i-harness/mcp-client")>()
+vi.mock("@i-harness/mcp-client/mount", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@i-harness/mcp-client/mount")>()
   return {
     ...actual,
     // The real mount dials the server and a live OAuth AS is out of scope here;

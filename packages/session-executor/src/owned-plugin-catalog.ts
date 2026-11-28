@@ -1,6 +1,7 @@
 import { isOriginalExecutionHookScope, onExecutionEvent, type PluginContext } from "@i-harness/core-plugin"
 import type { ToolRegistry } from "@i-harness/core-tools"
-import { mountMcpClient, type McpMountHandle, type McpServerConfig, type McpMountDeps } from "@i-harness/mcp-client"
+import { mountMcpClient, type McpMountHandle, type McpMountDeps } from "@i-harness/mcp-client/mount"
+import type { McpServerConfig } from "@i-harness/mcp-client"
 import { registerSkills, createSkillsSection, scanMentionedSkillNames, skillGetName, skillSearchName } from "@i-harness/skills"
 import type { RoleRegistry } from "@i-harness/subagent"
 import { createPluginCapabilities } from "./plugin-capabilities.ts"

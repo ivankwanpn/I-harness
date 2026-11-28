@@ -1,4 +1,5 @@
-import { readMcpFailedMountCleanup, type McpMountHandle, type McpServerConfig } from "@i-harness/mcp-client"
+import { readMcpFailedMountCleanup, type McpMountHandle } from "@i-harness/mcp-client/mount"
+import type { McpServerConfig } from "@i-harness/mcp-client"
 import type { RoleRegistry, SubagentRole } from "@i-harness/subagent"
 
 export interface PluginCapabilities {

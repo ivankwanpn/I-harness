@@ -2,6 +2,7 @@
 import assert from "node:assert/strict"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
+import { registerHooks } from "node:module"
 import { join } from "node:path"
 
 const workspace = join(import.meta.dirname, "workspace")
@@ -19,6 +20,15 @@ writeFileSync(settingsPath, JSON.stringify({
 }))
 writeFileSync(credentialsPath, JSON.stringify({ refs: {} }))
 
+// An empty profile can initialize a complete workspace without starting an
+// MCP connection or verifying a subscription account.
+const optionalImports = new Set()
+const probe = registerHooks({ load(url, context, next) {
+  for (const name of ["@modelcontextprotocol/sdk", "jose"]) {
+    if (url.includes(`/node_modules/${name}/`)) optionalImports.add(name)
+  }
+  return next(url, context)
+} })
 const { createDesktopHost } = await import("./runtime/cli/src/host.js")
 const { closeSystemFetch } = await import("./runtime/node_modules/@i-harness/http-transport/src/index.js")
 const frames = []
@@ -33,7 +43,9 @@ try {
   await host.handleLine(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }))
   const initialized = frames.find(frame => frame.id === 1)
   assert.equal(initialized?.result?.protocolVersion, 3, JSON.stringify(frames))
+  assert.deepEqual([...optionalImports], [])
 } finally {
+  probe.deregister()
   try { await host.close() } finally { await closeSystemFetch() }
 }
 

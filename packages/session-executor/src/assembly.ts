@@ -70,16 +70,8 @@ import { createSessionQueryTools, type SessionQuery } from "@i-harness/session-q
 import { registerSubagent, SHIPPING_REPORT_POLICY, createStaleSubagentsSection, projectWorkflowRows, snapshotState, type AgentTaskView, type ParentInputAdmission, type SubagentRole, type SubagentStateSnapshot } from "@i-harness/subagent"
 import { createSkillsSection, registerSkills, scanMentionedSkillNames, SKILL_MENTION_PLUGIN } from "@i-harness/skills"
 import { registerWorkflow, type WorkflowMountHandle } from "@i-harness/workflow"
-import {
-  mountMcpClient,
-  readMcpFailedMountCleanup,
-  type McpMountHandle,
-  type McpOAuthConfig,
-  type McpServerConfig,
-  type McpServerState,
-  type McpServerStatusEvent,
-  type McpTokenStore,
-} from "@i-harness/mcp-client"
+import { mountMcpClient, readMcpFailedMountCleanup, type McpMountHandle } from "@i-harness/mcp-client/mount"
+import type { McpOAuthConfig, McpServerConfig, McpServerState, McpServerStatusEvent, McpTokenStore } from "@i-harness/mcp-client"
 import type { Telemetry } from "@i-harness/telemetry"
 // Type-only: the role selection's protocol is the SAME closed set settings
 // validates (`SettingsProviderProtocol`) — a copy of the five names here would

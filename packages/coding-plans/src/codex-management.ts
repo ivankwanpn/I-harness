@@ -11,7 +11,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { lstat, readFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from "jose"
+import type { JSONWebKeySet } from "jose"
 import { writeFileAtomic } from "@i-harness/fs"
 import { acquireSessionLock } from "@i-harness/fs-lock"
 import { createSystemFetch } from "@i-harness/http-transport"
@@ -192,6 +192,7 @@ export function createCodexManagement(options: CodexManagementOptions): CodexMan
   async function identity(idToken: string, signal?: AbortSignal): Promise<{ subject: string; workspaceId: string; email?: string }> {
     const meta = await metadata(signal)
     const jwks = await json(await request(endpoint(meta.jwks_uri), {}, signal))
+    const { createLocalJWKSet, jwtVerify } = await import("jose")
     try {
       const { payload } = await jwtVerify(idToken, createLocalJWKSet(jwks as unknown as JSONWebKeySet), { issuer: ISSUER, audience: CLIENT_ID, algorithms: ["RS256", "ES256"], requiredClaims: ["sub", "exp"], currentDate: new Date(now()) })
       const workspaceId = optionalObject(payload["https://api.openai.com/auth"])?.chatgpt_account_id

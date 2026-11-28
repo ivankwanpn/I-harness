@@ -1,8 +1,8 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import { diagnosticsFor } from "@i-harness/diagnostics"
 import type { ToolRegistry } from "@i-harness/core-tools"
-import { createConnectedClient, type ConnectedMcpClient, type McpConnectOptions } from "./client.ts"
-import { createMcpSupervisorOwner, type McpServerStatusEvent, type McpSupervisor } from "./supervisor.ts"
+import type { ConnectedMcpClient, McpConnectOptions } from "./client.ts"
+import type { McpServerStatusEvent, McpSupervisor } from "./supervisor.ts"
 import { McpServerUnavailableError } from "./errors.ts"
 import { validateMcpConfig, type McpServerConfig } from "./types.ts"
 
@@ -115,6 +115,9 @@ export async function mountMcpClient(
   }
 
   try {
+    const [{ createMcpSupervisorOwner }, { createConnectedClient }] = await Promise.all([
+      import("./supervisor.ts"), import("./client.ts"),
+    ])
     const owned = createMcpSupervisorOwner(config, {
       tools,
       connect: (c, o) => (deps?.connect ?? createConnectedClient)(c, deps?.workspace === undefined ? o : { ...o, workspace: deps.workspace }),
