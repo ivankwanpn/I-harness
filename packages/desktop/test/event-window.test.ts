@@ -5,11 +5,15 @@ import {
   applyNotification,
   createHistoryPreviewCache,
   emptyEventWindow,
+  historyViewport,
+  pageHistoryViewport,
   MAX_RETAINED_EVENTS,
   MAX_RETAINED_LIVE,
   markDisconnected,
   timelineEvents,
 } from "../src/renderer/session/event-window.ts"
+import { loadEarlierHistory } from "../src/renderer/session/history.ts"
+import { historyEvents, type IncomingWireEvent } from "../src/renderer/session/history-events.ts"
 
 type WireEvent = HistoryRange["events"][number]
 
@@ -215,16 +219,31 @@ describe("Desktop event window", () => {
     expect(state.live).toEqual([{ type: "reasoning/chunk", streamId: "a", text: "Inspect files", offset: 0, atSeq: 0 }])
   })
 
-  it("keeps an old gateway's admission bytes out of the retained renderer window", () => {
+  it("keeps an old gateway's admission bytes out of live, cached and paged renderer history", async () => {
     const image = { mediaType: "image/png" as const, dataBase64: "aGVsbG8=" }
-    const admission: WireEvent = { type: "agent/input/admitted", version: 1, inputId: "q1", text: "inspect", delivery: "queue", intent: "user", images: [image], seq: 0 }
+    const admission: IncomingWireEvent = { type: "agent/input/admitted", version: 1, inputId: "q1", text: "inspect", delivery: "queue", intent: "user", images: [image], seq: 0 }
     const user: WireEvent = { type: "user/message", text: "inspect", images: [image], seq: 1 }
     let state = applyNotification(emptyEventWindow(), admission)
     expect(state.events[0]).not.toHaveProperty("images")
-    state = applyHistory(state, page([admission, user], 2))
+    const cache = createHistoryPreviewCache()
+    cache.set("s", state)
+    expect(cache.get("s")!.events[0]).not.toHaveProperty("images")
+    const incoming = { events: [admission, user], nextSeq: 2 }
+    state = applyHistory(state, incoming)
     expect(state.events[0]).not.toHaveProperty("images")
-    expect(state.events[1]).toMatchObject({ images: [image] })
+    expect(state.events[1]).toBe(user)
+    const annotated = historyViewport({ ...incoming, turns: [{ startSeq: 0, endSeq: 1 }] }, 0)
+    expect(annotated.events[0]).toMatchObject({ historyTurn: { startSeq: 0, endSeq: 1 } })
+    expect(annotated.events[0]).not.toHaveProperty("images")
+    const merged = pageHistoryViewport(historyViewport(page([event(2, "next")], 3), 2), incoming, 0, "before")
+    expect(merged.events[0]).not.toHaveProperty("images")
+    expect(merged.events[1]).toBe(user)
+    const earlier = await loadEarlierHistory(async () => incoming, 2, 2)
+    expect(earlier.events[0]).not.toHaveProperty("images")
+    expect(earlier.events[1]).toBe(user)
     expect(admission).toHaveProperty("images", [image])
+    const modern = page([user], 2)
+    expect(historyEvents(modern)).toBe(modern.events)
   })
   it("keeps seq 0 from the first page and advances the cursor to nextSeq", () => {
     const state = applyHistory(emptyEventWindow(), page([event(0, "a"), event(1, "b")], 2))

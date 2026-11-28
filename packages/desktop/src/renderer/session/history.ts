@@ -1,4 +1,4 @@
-import { historyEvents } from "./history-events.ts"
+import { displayEvents, historyEvents, type IncomingHistoryPage } from "./history-events.ts"
 import type { HistoryRange } from "@i-harness/sdk"
 
 export interface HistoryPageRequest {
@@ -21,27 +21,27 @@ export interface HistoryLoad {
 }
 
 /** A legacy gateway can return a full prefix after ignoring beforeSeq. */
-export function requiresHistoryTailProbe(page: HistoryRange, limit: number): boolean {
+export function requiresHistoryTailProbe(page: IncomingHistoryPage, limit: number): boolean {
   return page.events.length >= limit && !Number.isSafeInteger(page.startSeq)
 }
 
 /** Read the page immediately before the current window. Older gateways fall
  * back to a forward read from the preceding window's expected start. */
 export async function loadEarlierHistory(
-  request: (params: HistoryPageRequest) => Promise<HistoryRange>,
+  request: (params: HistoryPageRequest) => Promise<IncomingHistoryPage>,
   beforeSeq: number,
   limit: number,
 ): Promise<HistoryRange> {
-  const page = await request({ afterSeq: 0, beforeSeq, limit })
-  if (Number.isSafeInteger(page.startSeq) || page.events.length === 0 || beforeSeq <= limit) return page
-  return await request({ afterSeq: beforeSeq - limit, limit })
+  let page = await request({ afterSeq: 0, beforeSeq, limit })
+  if (!Number.isSafeInteger(page.startSeq) && page.events.length > 0 && beforeSeq > limit) page = await request({ afterSeq: beforeSeq - limit, limit })
+  return { ...page, events: displayEvents(page.events) }
 }
 
 /** Tail read: one request returns the newest bounded window plus the durable
  * head, instead of probing and then re-snapshotting the full log page by page. */
 export async function loadRecentHistory(
-  request: (params: HistoryPageRequest) => Promise<HistoryRange>,
-  options: { limit: number; maxEvents?: number; initialPage?: HistoryRange },
+  request: (params: HistoryPageRequest) => Promise<IncomingHistoryPage>,
+  options: { limit: number; maxEvents?: number; initialPage?: IncomingHistoryPage },
 ): Promise<HistoryLoad> {
   const tail = options.initialPage ?? await request({ afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: options.limit })
   if (Number.isSafeInteger(tail.nextSeq) && Number.isSafeInteger(tail.headSeq) && Number.isSafeInteger(tail.startSeq)) {
@@ -62,7 +62,7 @@ export async function loadRecentHistory(
  * instead of showing only its first window.
  */
 export async function loadHistory(
-  request: (params: HistoryPageRequest) => Promise<HistoryRange>,
+  request: (params: HistoryPageRequest) => Promise<IncomingHistoryPage>,
   options: { afterSeq: number; limit: number; maxPages?: number },
 ): Promise<HistoryLoad> {
   const maxPages = options.maxPages ?? 40

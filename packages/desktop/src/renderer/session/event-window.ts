@@ -1,6 +1,5 @@
-import type { HistoryRange } from "@i-harness/sdk"
 import { assistantBoundary, isAssistantPreview, updateAssistantPreview, type AssistantPreview } from "../../shared/assistant-preview.ts"
-import { historyEvents, type WireEvent } from "./history-events.ts"
+import { displayEvent, historyEvents, type IncomingHistoryPage, type IncomingWireEvent, type WireEvent } from "./history-events.ts"
 import { mergeReasoningChunks } from "./reasoning-progress.ts"
 import { hasResultImages, isToolImage, record } from "./tool-presentation.ts"
 
@@ -121,12 +120,6 @@ function capEvents(events: WireEvent[]): WireEvent[] {
   return events.length > MAX_RETAINED_EVENTS ? events.slice(events.length - MAX_RETAINED_EVENTS) : events
 }
 
-function retainEvent(event: WireEvent): WireEvent {
-  if (event.type !== "agent/input/admitted" || event.images === undefined) return event
-  const { images: _images, ...rest } = event
-  return rest
-}
-
 function settleLive(state: EventWindow, incoming: readonly WireEvent[]): Pick<EventWindow, "live" | "assistantPreview" | "assistantBoundary"> {
   const completed = new Set(incoming.flatMap((event) => event.type === "reasoning" && event.streamId ? [event.streamId] : []))
   const boundary = incoming.reduce((latest, event) => Math.max(latest, assistantBoundary(event)), state.assistantBoundary ?? -1)
@@ -145,23 +138,24 @@ export function timelineEvents(state: Pick<EventWindow, "events" | "live">): Wir
   return [...state.live, ...state.events].sort((a, b) => position(a) - position(b))
 }
 
-export function applyHistory(state: EventWindow, page: HistoryRange): EventWindow {
+export function applyHistory(state: EventWindow, page: IncomingHistoryPage): EventWindow {
   // A background session can advance beyond the entire cached page. Keep
   // subsequent live arrivals, and let the older-page cursor lead into the gap.
   const previous = page.startSeq !== undefined && page.startSeq > state.cursor
     ? state.events.filter(event => event.seq! >= page.startSeq!)
     : state.events
+  const rows = historyEvents(page)
   return {
     cursor: Math.max(state.cursor, page.nextSeq),
-    events: capEvents(mergeBySeq(previous, historyEvents(page).filter(event => (event as { type: string }).type !== "model/activity").map(retainEvent))),
-    ...settleLive(state, page.events),
+    events: capEvents(mergeBySeq(previous, rows.filter(event => event.type !== "model/activity"))),
+    ...settleLive(state, rows),
     connection: "online",
   }
 }
 
-export function applyNotification(state: EventWindow, event: WireEvent): EventWindow {
-  if ((event as { type: string }).type === "model/activity") return state
-  event = retainEvent(event)
+export function applyNotification(state: EventWindow, incoming: IncomingWireEvent): EventWindow {
+  if (incoming.type === "model/activity") return state
+  const event = displayEvent(incoming)
   if (isAssistantPreview(event)) {
     if (state.connection === "offline" || (state.assistantBoundary ?? -1) > event.stepStartSeq) return state
     const assistantPreview = updateAssistantPreview(state.assistantPreview, event)
@@ -205,11 +199,11 @@ export function markDisconnected(state: EventWindow): EventWindow {
 export interface HistoryViewport { events: WireEvent[]; startSeq: number; endSeq: number; hasBefore: boolean; hasAfter: boolean }
 export const HISTORY_PAGE_SIZE = 200
 export const MAX_HISTORY_VIEW_EVENTS = 2000
-export function historyViewport(page: HistoryRange, startSeq: number): HistoryViewport {
-  return { events: historyEvents(page).filter(event => (event as { type: string }).type !== "model/activity").map(retainEvent), startSeq, endSeq: page.nextSeq, hasBefore: startSeq > 0, hasAfter: page.events.length === HISTORY_PAGE_SIZE }
+export function historyViewport(page: IncomingHistoryPage, startSeq: number): HistoryViewport {
+  return { events: historyEvents(page).filter(event => event.type !== "model/activity"), startSeq, endSeq: page.nextSeq, hasBefore: startSeq > 0, hasAfter: page.events.length === HISTORY_PAGE_SIZE }
 }
-export function pageHistoryViewport(state: HistoryViewport, page: HistoryRange, startSeq: number, direction: "before" | "after"): HistoryViewport {
-  const merged = mergeBySeq(orderedBySeq(state.events), historyEvents(page).filter(event => (event as { type: string }).type !== "model/activity").map(retainEvent))
+export function pageHistoryViewport(state: HistoryViewport, page: IncomingHistoryPage, startSeq: number, direction: "before" | "after"): HistoryViewport {
+  const merged = mergeBySeq(orderedBySeq(state.events), historyEvents(page).filter(event => event.type !== "model/activity"))
   const events = direction === "before" ? merged.slice(0, MAX_HISTORY_VIEW_EVENTS) : merged.slice(-MAX_HISTORY_VIEW_EVENTS)
   const first = events[0]?.seq ?? startSeq
   const last = events.at(-1)?.seq
