@@ -15,13 +15,24 @@ export function parseSSE(text: string): Record<string, unknown>[] {
 }
 export async function* decodeResponseStream(body: ReadableStream<Uint8Array>, fold: ReturnType<typeof createResponseFold>, request: Pick<LLMRequest, "signal">): AsyncIterable<LLMStreamEvent> {
   try {
-    for await (const chunk of readSseBlocks(body)) {
+    let finalEvents: LLMStreamEvent[] = []
+    frames: for await (const chunk of readSseBlocks(body)) {
       for (const event of parseSSE(chunk)) {
-        if (event === doneFrame) fold.done()
-        else yield* forwardSseEvents(fold.handleEvent(event))
+        const events = event === doneFrame ? fold.done() : fold.handleEvent(event)
+        if (fold.terminal) {
+          finalEvents = events
+          break frames
+        }
+        yield* forwardSseEvents(events)
       }
-      if (fold.terminal) break
     }
+    // A consumer may pause on usage or text from the final snapshot.
+    // Release the HTTP response before exposing any part of that snapshot.
+    for (const event of forwardSseEvents(finalEvents)) {
+      if (event.type !== "usage") request.signal?.throwIfAborted()
+      yield event
+    }
+    request.signal?.throwIfAborted()
   } catch (err) {
     // M72 Ⅰ: a corrupt chunk is a provider failure → the seam's error channel.
     // Abort is NOT: an aborted signal keeps today's behaviour (a throw).

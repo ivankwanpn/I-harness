@@ -16,6 +16,8 @@ route and the account-bound Codex subscription route.
 | `src/request/headers.ts` | Case-insensitive configured-header collision handling; adapter-owned headers win. |
 | `src/stream/decode.ts` | Public SSE parser, per-response UTF-8 decoder/buffer, terminal-aware read loop, error channel and reader cleanup. |
 | `src/stream/fold.ts` | One response's event state: pending tool arguments, inline-call identities, refusal/truncation flags, completed/DONE checks, native reasoning and ordered continuation. |
+| `src/stream/text.ts` | Reconciles streamed text with completed parts, messages and final output. Only newly confirmed text reaches the consumer. |
+| `src/stream/reasoning.ts` | Matches native reasoning to its original item and position, and recovers complete items supplied by the terminal response. |
 | `src/stream/usage.ts` | Finite measured usage fields and input token/cache semantics. |
 | `src/affinity.ts` | Existing client-owned, account-bound, scope-keyed turn affinity. |
 
@@ -36,8 +38,9 @@ and credentials are never serialized into the request body.
 
 `createResponseFold` runs once per response. Its maps, sets, counters and terminal
 flags live in that call's closure; the client never shares them across streams.
-The fold receives only model/provider identity, the subscription flag, and a tool
-argument activity callback. Usage mapping has no retained mutable state.
+The fold reads the model, provider and effective response endpoint when capturing
+native reasoning. The endpoint proof supports replay after reopening a session.
+Requests carrying native reasoning keep the transport on the selected endpoint.
 
 `decodeResponseStream` uses the shared SSE reader for both API and subscription
 requests. The final argument snapshot takes precedence over partial deltas.
@@ -49,6 +52,13 @@ returns after a partial event. An aborted read throws.
 route requires that event for success. The API route also processes
 `response.incomplete` and the legacy `[DONE]` marker. EOF without a terminal
 event is a failed response.
+
+Text deltas are forwarded as they arrive. When a part, message or completed
+response supplies a longer authoritative value, the adapter emits the missing
+suffix once. A conflicting snapshot fails the exchange before its tools run.
+Completed assistant messages retain their phase and their position among tools.
+The HTTP reader is released before delivering usage, recovered text or calls
+from a terminal event.
 
 Affinity stays in its original module. Its bounded WeakMap belongs to the client,
 keyed by host scope and guarded by account/turn identity; it is independent of

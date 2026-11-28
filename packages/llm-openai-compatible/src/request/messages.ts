@@ -1,15 +1,17 @@
-import { textProtocolToolResult, toolResultImageLabel, canReplayContinuation, deepSeekCallFingerprint, isOfficialDeepSeekApi, replayBlockOrder, type LLMContentPart, type LLMMessage } from "@i-harness/llm-seam"
+import { textProtocolToolResult, toolResultImageLabel, canReplayContinuation, deepSeekCallFingerprint, isOfficialDeepSeekApi, replayBlockOrder, responsesEndpoint, responsesEndpointFingerprint, type LLMContentPart, type LLMMessage } from "@i-harness/llm-seam"
 import { projectionFingerprint } from "@i-harness/token-meter"
 import type { OpenAICompatibleConfig } from "../types.ts"
 
 type Target = Pick<OpenAICompatibleConfig, "baseUrl" | "model" | "providerId">
+const deepSeekResponsesFingerprint = responsesEndpointFingerprint(responsesEndpoint("https://api.deepseek.com", false), false)
 
 function chatReasoning(message: Extract<LLMMessage, { role: "assistant" }>, target: Target): string | undefined {
   const native = message.providerContinuation
   if (!native || !canReplayContinuation(native, target)) return
   if (native.kind === "openai-compatible") return native.reasoningContent
   if (native.kind !== "openai-responses" || !native.deepSeekReplayFingerprint || native.origin !== undefined
-    || !native.providerId || native.providerId !== target.providerId || native.model !== target.model || !isOfficialDeepSeekApi(target.baseUrl)) return
+    || !native.providerId || native.providerId !== target.providerId || native.model !== target.model || !isOfficialDeepSeekApi(target.baseUrl)
+    || native.replayEndpointFingerprint !== undefined && native.replayEndpointFingerprint !== deepSeekResponsesFingerprint) return
   const calls = message.toolCalls ?? []
   if (native.deepSeekReplayFingerprint !== projectionFingerprint([message.content, calls.map(deepSeekCallFingerprint)])) return
 

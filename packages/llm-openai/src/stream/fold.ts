@@ -3,9 +3,12 @@ import { projectionFingerprint } from "@i-harness/token-meter"
 import { isDeepStrictEqual } from "node:util"
 import type { OpenAIConfig } from "../types.ts"
 import { mapUsage } from "./usage.ts"
+import { createResponsesReasoning } from "./reasoning.ts"
+import { responsesEndpointFingerprint } from "@i-harness/llm-seam"
+import { createResponseText } from "./text.ts"
 
 /** One response owns all terminal, continuation, and partial function-call state. */
-export function createResponseFold(config: Pick<OpenAIConfig, "model" | "providerId" | "baseUrl">, codexSubscription: boolean, onToolArguments: () => void) {
+export function createResponseFold(config: Pick<OpenAIConfig, "model" | "providerId" | "baseUrl">, codexSubscription: boolean, onToolArguments: () => void, endpoint: string) {
   const xai = codexSubscription ? undefined : officialXaiRoute(config.baseUrl)
   const deepSeekCalls: string[] | undefined = !codexSubscription && config.providerId && isOfficialDeepSeekApi(config.baseUrl) ? [] : undefined
   let terminal: 'completed' | 'incomplete' | 'done' | 'failed' | undefined
@@ -22,12 +25,18 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
   // response can be both truncated and refused, so neither bit may be
   // produced as the other's `else`. Only `true` is ever written.
   let refused = false
-  const reasoningItems = new Map<string | number, Record<string, unknown>>()
+  let routeFingerprint: string | null | undefined
+  const replayEndpoint = () => {
+    if (routeFingerprint === undefined) routeFingerprint = responsesEndpointFingerprint(endpoint, codexSubscription)
+    return routeFingerprint
+  }
+  const reasoning = createResponsesReasoning(Boolean(xai), !codexSubscription && isOfficialDeepSeekApi(config.baseUrl), () => replayEndpoint() !== null)
+  const reasoningItems = reasoning.items
   const outputItems = new Map<number, ProviderBlockOrderEntry>()
   let outputOrderValid = true
   let hasAssistantPhase = false
   const emittedCalls: { id?: string }[] = []
-  let streamedTextUnits = 0
+  const text = createResponseText()
   const recordOutput = (index: unknown, entry: ProviderBlockOrderEntry): void => {
     if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0 || outputItems.has(index)) { outputOrderValid = false; return }
     outputItems.set(index, entry)
@@ -101,26 +110,30 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
       return [recordCall(call.outputIndex, call.callId, call.name, args)]
     } catch { toolError = malformed; return [] }
   }
-  const observedSnapshotContent = (output: Record<string, unknown>[]): boolean => {
-    let textUnits = 0
-    for (const [index, item] of output.entries()) {
-      if (item.type === "function_call") continue
-      if (item.type === "reasoning") {
-        const key = typeof item.id === "string" ? item.id : index
-        if (!isDeepStrictEqual(reasoningItems.get(key), item)) return false
-      } else if (item.type === "message" && item.role === "assistant" && Array.isArray(item.content)) {
-        const recorded = outputItems.get(index)
-        let offset = 0
-        for (const part of item.content) {
-          if (part?.type !== "output_text" || typeof part.text !== "string") return false
-          if (part.text && (recorded?.kind !== "text" || !recorded.text.startsWith(part.text, offset))) return false
-          offset += part.text.length
-        }
-        if (recorded?.kind === "text" && offset !== recorded.text.length) return false
-        textUnits += offset
-      } else return false
+  const recordMessage = (position: unknown, item: Record<string, unknown>) => {
+    if (typeof position !== "number" || !Number.isSafeInteger(position) || position < 0) { outputOrderValid = false; return }
+    if (!Array.isArray(item.content) || item.content.some(part => part?.type !== "output_text" || typeof part.text !== "string")) {
+      outputOrderValid = false
+      return
     }
-    return streamedTextUnits === textUnits
+    const previous = outputItems.get(position)
+    if ((previous && previous.kind !== "text") || callKeys.has("index:" + position)) {
+      toolError = "OpenAI response changed an output item's type"
+      return
+    }
+    const phase = typeof item.phase === "string" || item.phase === null ? item.phase : previous?.phase
+    if (previous?.phase !== undefined && previous.phase !== phase) {
+      toolError = "OpenAI response changed an assistant message phase"
+      return
+    }
+    if (phase !== undefined) hasAssistantPhase = true
+    outputItems.set(position, { kind: "text", text: item.content.map(part => part.text).join(""), ...(phase !== undefined ? { phase } : {}) })
+  }
+  const replayableSnapshotItem = (item: Record<string, unknown>, index: number): boolean => {
+    if (item.type === "function_call") return true
+    if (item.type === "message") return item.role === "assistant" && Array.isArray(item.content) &&
+      item.content.every(part => part?.type === "output_text" && typeof part.text === "string")
+    return item.type === "reasoning" && reasoning.matches(index, item)
   }
   // M77 (fix wave): the Responses wire's OTHER refusal shape — a refusal
   // CONTENT PART (`ResponseOutputRefusal`, `{ type: "refusal", refusal:
@@ -148,29 +161,18 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
     ) {
       refused = true
     }
-    if (t === "response.output_text.delta") {
-      const text = (event as { delta: string }).delta
-      if (typeof text === "string") streamedTextUnits += text.length
-      return [{ type: "text/chunk", text }]
-    }
+    if (t === "response.output_text.delta") return text.delta(event)
+    if (t === "response.output_text.done" || t === "response.content_part.done") return text.partDone(event)
     if (t === "response.output_item.done") {
       const item = event.item as Record<string, unknown> | undefined
       if (item?.type !== "function_call" && callKeys.has("index:" + event.output_index)) toolError = "OpenAI response changed a function_call item's type"
-      const reasoningKey = typeof item?.id === "string" ? item.id :
-        xai && item?.id === undefined && Array.isArray(item?.summary) && typeof item.encrypted_content === "string" && item.encrypted_content.length
-          && typeof event.output_index === "number" && Number.isSafeInteger(event.output_index) && event.output_index >= 0 ? event.output_index : undefined
-      if (item?.type === "reasoning" && reasoningKey !== undefined) {
-        const index = reasoningItems.has(reasoningKey) ? [...reasoningItems.keys()].indexOf(reasoningKey) : reasoningItems.size
-        reasoningItems.set(reasoningKey, item)
-        recordOutput(event.output_index, { kind: "reasoning", index })
+      if (item?.type === "reasoning") {
+        const index = reasoning.observe(item, event.output_index, outputItems.has(event.output_index as number) || callKeys.has("index:" + event.output_index))
+        if (typeof index === "number") recordOutput(event.output_index, { kind: "reasoning", index })
+        else if (index !== "repeat") outputOrderValid = false
       } else if (item?.type === "message" && item.role === "assistant") {
-        const parts = item.content
-        if (!Array.isArray(parts) || parts.some((part) => (part as { type?: unknown })?.type !== "output_text" || typeof (part as { text?: unknown }).text !== "string")) outputOrderValid = false
-        else {
-          const phase = typeof item.phase === "string" || item.phase === null ? item.phase as string | null : undefined
-          if (phase !== undefined) hasAssistantPhase = true
-          recordOutput(event.output_index, { kind: "text", text: parts.map((part) => (part as { text: string }).text).join(""), ...(phase !== undefined ? { phase } : {}) })
-        }
+        recordMessage(event.output_index, item)
+        return text.message(event.output_index, item)
       } else if (item?.type === "function_call") {
         const call = track(item, event.output_index)
         if (call && (item.status === undefined || item.status === "completed")) {
@@ -225,6 +227,14 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
       if (codexSubscription) return [...events, { type: "error", error: new Error(`Codex subscription response incomplete: ${reason ?? "unknown reason"}`) }]
       if (reason === "max_output_tokens") truncated = true
       if (reason === "content_filter") refused = true
+      const output = (event.response as { output?: unknown } | undefined)?.output
+      if (truncated && !refused && Array.isArray(output)) {
+        const suffixes = text.terminal(output)
+        for (const [index, item] of output.entries()) {
+          if (item?.type === "message" && item.role === "assistant") recordMessage(index, item)
+        }
+        if (!text.error) for (const suffix of suffixes.values()) events.push({ type: "text/chunk", text: suffix })
+      } else if (truncated && !refused && output === undefined) events.push(...text.drain())
       if (!truncated && !refused) events.push({ type: "error", error: new Error("OpenAI response was incomplete") })
       return events
     }
@@ -238,25 +248,38 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
       if (Array.isArray(response?.output)) {
         if (response.output.some(item => item?.type === "message" && refusalParts(item.content))) refused = true
         if (refused) return events
+        if (!toolError) reasoning.terminal(response.output, index => outputItems.has(index) || callKeys.has("index:" + index),
+          (index, ordinal) => recordOutput(index, { kind: "reasoning", index: ordinal }))
         const finalCalls = new Set<Call>(), recovered: LLMStreamEvent[] = []
+        const suffixes = text.terminal(response.output)
+        let recoveredTool = false
         for (const [index, item] of response.output.entries()) {
           if (item === null || typeof item !== "object" || typeof item.type !== "string") { toolError = "OpenAI response has an invalid output item"; break }
+          if (item.type === "message" && item.role === "assistant") {
+            if (item.status !== undefined && item.status !== "completed") {
+              toolError = "OpenAI completed response contains an unfinished assistant message"
+              break
+            }
+            recordMessage(index, item)
+            const suffix = suffixes.get(index)
+            if (suffix) recovered.push({ type: "text/chunk", text: suffix })
+          }
           if (item?.type !== "function_call") continue
           const call = track(item, index)
           if (!call) break
           if (finalCalls.has(call) || item.status !== undefined && item.status !== "completed") { toolError = "OpenAI response has an invalid final function_call"; break }
           if (!call.callId && call.finalArgs === undefined) { toolError = "OpenAI final function_call is missing its call_id"; break }
           finalCalls.add(call)
-          recovered.push(...completeCall(call, item.arguments === undefined ? call.finalArgs : item.arguments, "openai malformed function_call arguments"))
+          const newCalls = completeCall(call, item.arguments === undefined ? call.finalArgs : item.arguments, "openai malformed function_call arguments")
+          if (newCalls.length) recoveredTool = true
+          recovered.push(...newCalls)
         }
         if (!toolError && finalCalls.size !== calls.size) toolError = "OpenAI response omitted an announced function_call"
-        if (recovered.length && !toolError) {
-          // Only calls are backfilled. Recovering one must not hide narration
-          // or native reasoning present only in the final response.
-          if (!observedSnapshotContent(response.output)) toolError = "OpenAI final function_call snapshot is missing streamed assistant content"
+        if (recoveredTool && !toolError && !response.output.every(replayableSnapshotItem)) {
+          toolError = "OpenAI final function_call snapshot contains unconfirmed assistant content"
         }
-        if (!toolError) events.push(...recovered)
-      }
+        if (!toolError && !text.error) events.push(...recovered)
+      } else if (response?.output === undefined && !toolError && !refused) events.push(...text.drain())
       return events
     }
     // M72 Ⅰ: the Responses API signals failure on the stream (`response.failed`)
@@ -290,6 +313,7 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
     return []
   }
   const finish = (): LLMStreamEvent => {
+    if (!truncated && !refused && text.error) return { type: "error", error: Object.assign(new Error(text.error), { code: "MALFORMED_RESPONSE" }) }
     if (!truncated && !refused && toolError) return { type: "error", error: new Error(toolError) }
     if (codexSubscription && terminal !== 'completed') {
       return { type: "error", error: new Error("Codex subscription stream ended without response.completed") }
@@ -314,7 +338,10 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
     const deepSeekReplayFingerprint = deepSeekCalls && outputOrder && reasoningItems.size > 0
       ? projectionFingerprint([outputOrder.map(entry => entry.kind === "text" ? entry.text : "").join(""), deepSeekCalls])
       : undefined
-    return { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningItems.size || outputOrder ? { providerContinuation: { kind: "openai-responses", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), ...(xai ? { origin: xai.origin } : {}), reasoningItems: [...reasoningItems.values()], ...(outputOrder ? { outputOrder } : {}), ...(deepSeekReplayFingerprint ? { deepSeekReplayFingerprint } : {}) } as const } : {}) }
+    return { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningItems.size || outputOrder ? { providerContinuation: { kind: "openai-responses", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), ...(xai ? { origin: xai.origin } : {}), reasoningItems: [...reasoningItems.values()], ...(outputOrder ? { outputOrder } : {}), ...(deepSeekReplayFingerprint ? { deepSeekReplayFingerprint } : {}), ...(reasoningItems.size ? { replayEndpointFingerprint: replayEndpoint() } : {}) } as const } : {}) }
   }
-  return { handleEvent, finish, done() { terminal = 'done' }, get terminal() { return terminal !== undefined } }
+  return { handleEvent, finish, done() {
+    terminal = 'done'
+    return codexSubscription || refused || toolError ? [] : text.drain()
+  }, get terminal() { return terminal !== undefined } }
 }

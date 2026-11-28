@@ -77,7 +77,7 @@ describe("llm-openai protocol", () => {
     const client = createOpenAIClient({ apiKey: "k", model: "gpt-test" })
     const events: LLMStreamEvent[] = []
     for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
-    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "openai-responses", model: "gpt-test", reasoningItems: [item] } })
+    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "openai-responses", model: "gpt-test", reasoningItems: [item], replayEndpointFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/) } })
     const iterator = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "openai-responses", model: "gpt-test", reasoningItems: [item] } }, { role: "tool", toolCallId: "c1", content: "fixture outcome" }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await iterator.next()
     const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)

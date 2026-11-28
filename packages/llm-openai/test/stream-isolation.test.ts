@@ -58,6 +58,7 @@ describe.each([false, true])("Responses stream ownership (subscription: %s)", su
         { type: "usage", usage: { inputTokens: 10 + index, outputTokens: 20 + index, cacheReadTokens: index, inputTokenSemantics: "includes-cache" } },
         { type: "end", providerContinuation: { kind: "openai-responses", model: "fixture-model", providerId: "fixture-provider",
           reasoningItems: [{ type: "reasoning", id: "shared-reasoning", encrypted_content: `reasoning-${index}` }],
+          replayEndpointFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
           outputOrder: [{ kind: "reasoning", index: 0 }, { kind: "tool", index: 0 }],
         } },
       ])

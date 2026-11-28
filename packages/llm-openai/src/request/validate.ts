@@ -1,7 +1,6 @@
 import { subscriptionFields, publicFields } from './fields.ts'
-import { isOfficialDeepSeekApi, validationCollector, type FinalValidator } from '@i-harness/llm-seam'
+import { isOfficialDeepSeekApi, isOfficialOpenAIResponses, validationCollector, type FinalValidator } from '@i-harness/llm-seam'
 import type { OpenAIConfig } from '../types.ts'
-import { isOfficialOpenAIResponses } from './route.ts'
 
 type Checks = ReturnType<typeof validationCollector>
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)

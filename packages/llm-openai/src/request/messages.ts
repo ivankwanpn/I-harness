@@ -1,4 +1,4 @@
-import { textProtocolToolResult, canReplayContinuation, isOfficialDeepSeekApi, officialXaiRoute, replayBlockOrder, replayVisibleToolOrder, type LLMContentPart, type LLMRequest } from "@i-harness/llm-seam"
+import { textProtocolToolResult, canReplayContinuation, isOfficialDeepSeekApi, officialXaiRoute, replayBlockOrder, replayVisibleToolOrder, responsesEndpoint, responsesEndpointFingerprint, type LLMContentPart, type LLMRequest } from "@i-harness/llm-seam"
 import type { OpenAIConfig } from "../types.ts"
 
 function toInputContent(content: string | LLMContentPart[]): unknown {
@@ -34,6 +34,12 @@ export function withoutCacheBreakpoints(input: unknown): unknown {
 /** Map projected history, preserving native continuation ordering and tool images. */
 export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenAIConfig, "model" | "providerId" | "baseUrl">, codexSubscription: boolean): unknown[] {
   const deepSeek = !codexSubscription && isOfficialDeepSeekApi(config.baseUrl)
+  let targetFingerprint: string | null | undefined
+  const matchesEndpoint = (source: string | null) => {
+    if (source === null) return false
+    if (targetFingerprint === undefined) targetFingerprint = responsesEndpointFingerprint(responsesEndpoint(config.baseUrl, codexSubscription), codexSubscription)
+    return source === targetFingerprint
+  }
   return messages
     .map((m) => {
       if (m.role === "user") return { role: "user", content: toInputContent(m.content) }
@@ -48,6 +54,7 @@ export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenA
       // assistant
       const previous = m.providerContinuation
       const continuation = previous?.kind === "openai-responses" && canReplayContinuation(previous, config)
+        && (previous.replayEndpointFingerprint === undefined || previous.providerId === config.providerId && previous.model === config.model && matchesEndpoint(previous.replayEndpointFingerprint))
         && (previous.deepSeekReplayFingerprint === undefined || deepSeek)
         && (previous.origin === undefined || previous.origin === officialXaiRoute(config.baseUrl)?.origin) ? previous : undefined
       // DeepSeek's two APIs use different envelopes for the same provider text.

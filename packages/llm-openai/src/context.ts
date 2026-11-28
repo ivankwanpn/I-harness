@@ -1,8 +1,7 @@
 import { ProjectionCounter } from "@i-harness/token-meter"
-import type { LLMRequest } from "@i-harness/llm-seam"
+import { isOfficialOpenAIResponses, type LLMRequest } from "@i-harness/llm-seam"
 import type { OpenAIConfig } from "./types.ts"
 import type { GeneratedAffinity } from "./request/cache-evidence.ts"
-import { isOfficialOpenAIResponses } from "./request/route.ts"
 export function describeContext(actualBody: Record<string, unknown>, config: OpenAIConfig, subscription: boolean, generatedAffinity?: GeneratedAffinity) {
   const body = { ...actualBody }
   // Only the affinity producer's exact insertion is cache metadata. Caller,

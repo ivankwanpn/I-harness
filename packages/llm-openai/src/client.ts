@@ -1,5 +1,5 @@
 import { observeTextOutput } from './request/text-output.ts'
-import { isOfficialDeepSeekApi, officialXaiRoute, preparedModelClient, snapshotModelData, createPreparedHttpPayload, reportStreamActivity, projectImagesForProvider, type ModelClient } from "@i-harness/llm-seam"
+import { isOfficialDeepSeekApi, officialXaiRoute, preparedModelClient, snapshotModelData, createPreparedHttpPayload, reportStreamActivity, projectImagesForProvider, responsesEndpoint, type ModelClient } from "@i-harness/llm-seam"
 import { createSubscriptionAffinity } from "./affinity.ts"
 import type { OpenAIConfig } from "./types.ts"
 import { createRequestBody } from "./request/body.ts"
@@ -9,7 +9,6 @@ import { decodeResponseStream } from "./stream/decode.ts"
 
 import { describeContext, outputFacts } from "./context.ts"
 import { responsesValidator } from './request/validate.ts'
-import { isOfficialOpenAIResponses } from './request/route.ts'
 
 export function createOpenAIClient(config: OpenAIConfig): ModelClient {
   const codexSubscription = config.codexSubscription === true
@@ -22,9 +21,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
   }
   const xai = officialXaiRoute(baseUrl)
   const deepSeek = isOfficialDeepSeekApi(baseUrl)
-  const endpoint = codexSubscription ? "https://chatgpt.com/backend-api/codex/responses"
-    : isOfficialOpenAIResponses(baseUrl) ? "https://api.openai.com/v1/responses"
-    : xai ? `${xai.url}/v1/responses` : deepSeek ? "https://api.deepseek.com/v1/responses" : `${baseUrl}/v1/responses`
+  const endpoint = responsesEndpoint(baseUrl, codexSubscription)
   const affinity = codexSubscription ? createSubscriptionAffinity() : undefined
   return preparedModelClient(async originalRequest => {
     const request = snapshotModelData(originalRequest)
@@ -57,7 +54,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         return body
       },
       transport: { label: 'openai', ...(codexSubscription ? { proxy: 'system' as const } : {}),
-      async prepare(_actualBody, _serialized, control) {
+      async prepare(actualBody, _serialized, control) {
         const request = { ...capturedRequest, ...control }
         let accessToken: string
         let accountId: string | undefined
@@ -78,10 +75,11 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
           throw Object.assign(error instanceof Error ? error : new Error("Unable to resolve account credentials"), { code: "AUTH" })
         }
         const routing = affinity?.prepare(scope, accountId!, body.prompt_cache_key, cacheMode === "off", scopeIdentity)
+        const nativeReplay = Array.isArray(actualBody.input) && actualBody.input.some(item => item?.type === "reasoning")
         return { url: endpoint, identity: executionIdentity, state: routing, init: {
             method: "POST",
             headers: mergeConfiguredHeaders(capturedConfig.headers, { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}`, ...(codexSubscription ? { "ChatGPT-Account-Id": accountId!, originator: "i-harness", "User-Agent": "I-harness", Accept: "text/event-stream", ...routing!.headers } : {}) }),
-            ...(codexSubscription || xai || deepSeek ? { redirect: "error" as const } : {}),
+            ...(codexSubscription || xai || deepSeek || nativeReplay ? { redirect: "error" as const } : {}),
             // M61: the caller's abort signal reaches the transport — cancel must
             // kill a parked request, not wait for the first event.
             ...(request.signal !== undefined ? { signal: request.signal } : {}),
@@ -90,7 +88,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       async *read(response, _actualBody, control, routing) {
         const request = { ...capturedRequest, ...control }
         routing?.capture(response, request.signal)
-        const fold = createResponseFold(capturedConfig, codexSubscription, () => reportStreamActivity(request, "tool-arguments"))
+        const fold = createResponseFold(capturedConfig, codexSubscription, () => reportStreamActivity(request, "tool-arguments"), response.redirected ? response.url : endpoint)
         yield* decodeResponseStream(response.body!, fold, request)
       },
       },

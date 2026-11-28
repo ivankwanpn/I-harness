@@ -27,6 +27,7 @@ it('rejects unknown native carriers and malformed thinking blocks after valid in
     (message: any) => { message.providerContinuation = { kind: 'unknown', payload: 'opaque' } },
     (message: any) => { message.providerContinuation = { kind: 'openai-responses', reasoningItems: [], receipt: 'forged' } },
     (message: any) => { message.providerContinuation = { kind: 'openai-responses', reasoningItems: [], deepSeekReplayFingerprint: 'invalid' } },
+    (message: any) => { message.providerContinuation = { kind: 'openai-responses', reasoningItems: [], replayEndpointFingerprint: 'https://example.test' } },
     (message: any) => { message.thinkingBlocks = [{ type: 'thinking', thinking: 'opaque', signature: 'sig', permission: true }] },
     (message: any) => { message.thinkingBlocks = [{ type: 'unknown' }] },
   ]) {
@@ -48,6 +49,21 @@ it('retains the optional official DeepSeek Responses replay check through seeded
   const session = literalSession(seed)
   validateSemanticSeed(seed)
   expect(deriveMessages(fromJSONL(toJSONL(session)))).toContainEqual(assistant)
+})
+
+it.each([undefined, null, '9a'.repeat(32)])('preserves the Responses endpoint proof through a nested fork (%s)', proof => {
+  const seed = structuredClone(literalSeed)
+  const assistant = seed.groups[0]!.items[1]!.messages[0]!
+  if (assistant.role !== 'assistant') throw new Error('Invalid fixture')
+  assistant.providerContinuation = {
+    kind: 'openai-responses', model: 'm', providerId: 'fixture',
+    reasoningItems: [{ type: 'reasoning', id: 'r', encrypted_content: 'opaque-fixture' }],
+    ...(proof !== undefined ? { replayEndpointFingerprint: proof } : {}),
+  }
+  const cold = fromJSONL(toJSONL(literalSession(seed)))
+  const child = exportConversationSeed(cold, { kind: 'session', sessionId: 'parent' }, { kind: 'all' })
+  if (child.kind !== 'seed' || child.seed.version !== 1) throw new Error('Missing fork seed')
+  expect(deriveMessages(fromJSONL(toJSONL(literalSession(child.seed))))).toContainEqual(assistant)
 })
 
 it('rejects misordered tool exchanges and missing image companions after independent hash validation', () => {

@@ -61,3 +61,11 @@ Responses 可以在參數完成事件、輸出項目或最終回覆中送出同�
 執行中的工具若已寫檔，逾時或按下停止都不能推斷寫入已回滾。新紀錄保留可確認的執行狀態。舊 JSONL 繼續使用原本的呼叫 ID、結果與錯誤旗標。只有工具明示唯讀、且逾時由該次呼叫的執行器確認，才可自動重試。一般工具結果即使含有 `TOOL_TIMEOUT` 字樣，仍按原本的成功或失敗狀態處理。[執行與重開回歸](../../packages/session-executor/test/tool-effect-interruption.test.ts) · [重試歸屬回歸](../../packages/guard-retry/test/prepared-retry.test.ts)
 
 使用者停止某次輸入時，Gateway 同時取消該次輸入的提問、核准與工作流程。下一次輸入可以在前一輪完成儲存後繼續執行。舊輸入最後的清理不會移除新輸入的卡片或目標。[SDK 排隊與停止回歸](../../packages/sdk/test/post-tool-stop.test.ts) · [Gateway 互動回歸](../../packages/desktop-gateway/test/interaction.e2e.test.ts)
+
+## Responses 最終正文與下一輪續接
+
+同一段正文可經由增量、內容區塊完成、訊息完成，以及整筆回覆的最終輸出送達。IH 即時送出一般增量，並核對項目身分、內容位置及已顯示的文字。若完整字串以已顯示的內容開頭，只補上尾段。相同快照可以重送。若最終回覆和已顯示的文字衝突，IH 會保留已回報的用量並結束該輪，這一輪的工具不會執行。[正文回歸](../../packages/llm-openai/test/assistant-text-snapshots.test.ts) · [OpenAI 串流事件](https://developers.openai.com/api/reference/resources/responses/streaming-events)
+
+有些 Responses 服務只在最後提供原生推理項目的加密資料。IH 用項目身分與位置核對已有的紀錄，再補齊可驗證的欄位。新紀錄中的受限續接資料會綁定產生它的端點與 API 模式。切換目的地時，公開正文與工具配對仍可重播。已有的 JSONL 使用原來的讀取規則。[原生資料回歸](../../packages/llm-openai/test/late-reasoning.test.ts) · [pi 的 Azure 實例](https://github.com/earendil-works/pi/issues/6409)
+
+公開 Gateway 驗證會在隔離專案讀取一個檔案，核對即時正文、實際讀檔次數與第二筆模型請求，再關閉 Gateway。重新啟動後核對磁碟歷史與第三筆請求中的文字、工具結果及原生續接資料。使用本機模型回應可以穩定重現僅在最終事件才提供正文或續接資料的情況。[關閉並重開會話的迴歸](../../packages/desktop-gateway/test/responses-final-history.test.ts)

@@ -85,9 +85,11 @@ it.each(["unseen", "delta-only", "recorded", "different", "refused"])("guards as
   const events = await collect([...prefix.map(delta => ({ type: "response.output_text.delta", delta })),
     ...(["recorded","different"].includes(mode) ? [{ type: "response.output_item.done", output_index: 0, item: { type: "message", role: "assistant", content: [{ type: "output_text", text: prefix.join("") }] } }] : []),
     sent([{ type: "message", role: "assistant", content: [part] }, a])])
-  expect(events.filter(e => e.type === "tool_call").length).toBe(mode === "recorded" ? 1 : 0)
+  const accepted = mode === "recorded" || mode === "unseen" || mode === "delta-only"
+  expect(events.filter(e => e.type === "tool_call").length).toBe(accepted ? 1 : 0)
+  if (accepted) expect(events.flatMap(e => e.type === "text/chunk" ? [e.text] : []).join("")).toBe("a🙂b")
   if (mode === "refused") expect(events.at(-1)).toMatchObject({ type: "end", refused: true })
-  else expect(events.at(-1)?.type).toBe(mode === "recorded" ? "end" : "error")
+  else expect(events.at(-1)?.type).toBe(accepted ? "end" : "error")
 })
 it("applies the Codex tool namespace check to calls appearing only in the final output", async () => {
   const events = await collect([sent([{ ...a, namespace: "other" }])], true)

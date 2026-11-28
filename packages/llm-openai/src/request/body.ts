@@ -1,8 +1,7 @@
-import { isOfficialDeepSeekApi, officialXaiRoute, resolveXaiEffort, resolvePromptCacheMode, type LLMRequest, type ReasoningEffort } from "@i-harness/llm-seam"
+import { isOfficialDeepSeekApi, isOfficialOpenAIResponses, officialXaiRoute, resolveXaiEffort, resolvePromptCacheMode, type LLMRequest, type ReasoningEffort } from "@i-harness/llm-seam"
 import type { OpenAIConfig } from "../types.ts"
 import { mapMessages, withoutCacheBreakpoints } from "./messages.ts"
 import type { GeneratedAffinity } from "./cache-evidence.ts"
-import { isOfficialOpenAIResponses } from "./route.ts"
 
 /**
  * M32 openai-family translation table (Responses | Chat | DeepSeek — ONE

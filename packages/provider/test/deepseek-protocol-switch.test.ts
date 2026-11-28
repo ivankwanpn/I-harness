@@ -87,6 +87,7 @@ it("rejects edited text, replaced arguments and non-plain reasoning from the cro
   const { post, assistant, continuation } = await switchFixture()
   const modified = [
     { ...assistant, content: "Edited." },
+    { ...assistant, providerContinuation: { ...continuation, replayEndpointFingerprint: "c".repeat(64) } },
     { ...assistant, toolCalls: [{ id: call.call_id, name: call.name, args: { path: "other.txt" } }] },
     ...[{ content: undefined }, { encrypted_content: 12 }, { summary: [{ type: "summary_text", text: "summary" }] },
       { content: [...item.content, { type: "summary_text", text: "summary" }] }].map(changes => ({
