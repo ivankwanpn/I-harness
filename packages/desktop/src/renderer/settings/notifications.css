@@ -1,6 +1,10 @@
 .notifications-pane { margin-block:24px; min-width:0; }
 .notification-preference-controls, .notification-preference-controls label { display:flex; align-items:center; gap:8px; }
-.notification-preference-controls { flex-wrap:wrap; column-gap:20px; }
+.notification-preference-controls { flex-wrap:wrap; justify-content:flex-end; column-gap:16px; }
+.notification-preference-controls select { min-inline-size:9em; }
+@container (min-width:480px) {
+  .zc-settings-row-grid:has(.notification-preference-controls) { grid-template-columns:minmax(0,1fr) max-content; }
+}
 .notification-preference-controls label { cursor:pointer; font-size:13px; }
 .zc-settings-row .notification-switch { appearance:none; position:relative; box-sizing:border-box; margin:0; padding:0; width:32px; height:18px; border:1px solid var(--ih-divider); border-radius:12px; background:var(--ih-field); cursor:pointer; }
 .notification-switch::after { content:""; position:absolute; top:2px; left:2px; width:12px; height:12px; border-radius:50%; background:var(--ih-muted); }
