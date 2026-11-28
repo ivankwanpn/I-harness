@@ -1,9 +1,11 @@
-import { SSEParseError, parseSseFrames, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
+import { readSseBlocks, SSEParseError, parseSseFrames, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
 import type { createResponseFold } from "./fold.ts"
+
+const doneFrame = Object.freeze({ type: "[DONE]" })
 
 export function parseSSE(text: string): Record<string, unknown>[] {
   return parseSseFrames(text).map(({ data }) => {
-    if (data.trim() === "[DONE]") return { type: "[DONE]" }
+    if (data.trim() === "[DONE]") return doneFrame
     try {
       return JSON.parse(data) as Record<string, unknown>
     } catch (err) {
@@ -14,8 +16,6 @@ export function parseSSE(text: string): Record<string, unknown>[] {
 /** Decode bytes and own the reader lifetime, including early iterator return. */
 export async function* decodeResponseStream(body: ReadableStream<Uint8Array>, fold: ReturnType<typeof createResponseFold>, codexSubscription: boolean, request: Pick<LLMRequest, "signal">): AsyncIterable<LLMStreamEvent> {
   const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
   const emitEvents = function* (events: LLMStreamEvent[]): Generator<LLMStreamEvent, boolean, unknown> {
     for (const ev of events) {
       if (ev.type === "error") {
@@ -27,28 +27,12 @@ export async function* decodeResponseStream(body: ReadableStream<Uint8Array>, fo
     return false
   }
   try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true }).replace(/\r\n?/g, "\n")
-      // split on SSE boundaries; each data: line is one event
-      const chunks = buffer.split("\n\n")
-      buffer = chunks.pop() ?? ""
-      for (const chunk of chunks) {
-        if (fold.receivedDone) break
-        for (const event of parseSSE(chunk)) {
-          if (fold.receivedDone) break
-          if (yield* emitEvents(fold.handleEvent(event))) return
-        }
+    for await (const chunk of readSseBlocks(reader)) {
+      for (const event of parseSSE(chunk)) {
+        if (event === doneFrame) fold.done()
+        else if (yield* emitEvents(fold.handleEvent(event))) return
       }
-      if (fold.receivedDone) break
-    }
-    // flush any residual partial chunk left in the buffer
-    if (buffer.trim() !== "") {
-      for (const event of parseSSE(buffer)) {
-        if (fold.receivedDone) break
-        if (yield* emitEvents(fold.handleEvent(event))) return
-      }
+      if (fold.terminal) break
     }
   } catch (err) {
     // M72 Ⅰ: a corrupt chunk is a provider failure → the seam's error channel.
@@ -57,7 +41,7 @@ export async function* decodeResponseStream(body: ReadableStream<Uint8Array>, fo
     yield { type: "error", error: err instanceof Error ? err : new Error(String(err)) }
     return
   } finally {
-    if (codexSubscription) await reader.cancel().catch(() => {})
+    if (codexSubscription || fold.terminal) void reader.cancel().catch(() => {})
     reader.releaseLock()
   }
   yield fold.finish()

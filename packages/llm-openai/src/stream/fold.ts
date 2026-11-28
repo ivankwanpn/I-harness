@@ -4,11 +4,7 @@ import { mapUsage } from "./usage.ts"
 
 /** One response owns all terminal, continuation, and partial function-call state. */
 export function createResponseFold(config: Pick<OpenAIConfig, "model" | "providerId">, codexSubscription: boolean, onToolArguments: () => void) {
-  let receivedDone = false
-  let receivedCompleted = false
-  // A-01: any of response.completed / response.incomplete / [DONE] is a real
-  // terminal wire event. EOF without one is a dropped connection.
-  let receivedTerminal = false
+  let terminal: 'completed' | 'incomplete' | 'done' | 'failed' | undefined
   // M72 Ⅱ: the Responses wire's own truncation literal lives in
   // `response.incomplete.incomplete_details.reason` — set in `handleEvent`
   // below, read once at the ending. Absent stays absent: only `true` writes
@@ -141,29 +137,19 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
     // bit keys on the REASON, never on the event name. M77: the refusal
     // reason now sets its own bit, the sibling of the truncation above.
     if (t === "response.incomplete") {
-      receivedTerminal = true
+      terminal = 'incomplete'
       const reason = (event.response as { incomplete_details?: { reason?: string } } | undefined)?.incomplete_details?.reason
-      if (codexSubscription) return [{ type: "error", error: new Error(`Codex subscription response incomplete: ${reason ?? "unknown reason"}`) }]
+      const usage = mapUsage((event.response as { usage?: unknown } | undefined)?.usage)
+      const events: LLMStreamEvent[] = usage ? [{ type: "usage", usage }] : []
+      if (codexSubscription) return [...events, { type: "error", error: new Error(`Codex subscription response incomplete: ${reason ?? "unknown reason"}`) }]
       if (reason === "max_output_tokens") truncated = true
       if (reason === "content_filter") refused = true
-      return []
+      return events
     }
     if (t === "response.completed") {
-      receivedCompleted = true
-      receivedTerminal = true
-      if (codexSubscription) receivedDone = true
-      // M72 Ⅲ: the Responses API reports this round-trip's usage HERE and
-      // nowhere else — the arm used to drop the payload on the floor. The
-      // rules are llm-anthropic's `mapUsage`: finite numbers only, and no
-      // recognisable number at all means NO event (a fabricated 0 would read
-      // as a measurement nobody made).
+      terminal = 'completed'
       const usage = mapUsage((event.response as { usage?: unknown } | undefined)?.usage)
       return usage !== undefined ? [{ type: "usage", usage }] : []
-    }
-    if (t === "[DONE]") {
-      receivedDone = true
-      receivedTerminal = true
-      return []
     }
     // M72 Ⅰ: the Responses API signals failure on the stream (`response.failed`)
     // and can also send a bare `error` event. Both used to fall through to the
@@ -182,24 +168,28 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
     // Retain the structured identity separately: provider message wording
     // cannot determine whether a failure is transient or terminal.
     if (t === "response.failed" || t === "error") {
+      terminal = 'failed'
       const r = event.response as { error?: { message?: string; code?: string } } | undefined
       const flat = event as { code?: unknown; message?: unknown }
       const nested = event.error as { code?: unknown; message?: string } | undefined
       const code = r?.error?.code ?? flat.code ?? nested?.code
       const text = r?.error?.message ?? (typeof flat.message === "string" ? flat.message : undefined) ?? nested?.message ?? "the provider reported a failed response"
-      return [{ type: "error", error: Object.assign(new Error(typeof code === "string" ? `${code}: ${text}` : text), typeof code === "string" ? { code } : {}) }]
+      const usage = t === "response.failed" ? mapUsage((event.response as { usage?: unknown } | undefined)?.usage) : undefined
+      const events: LLMStreamEvent[] = usage ? [{ type: "usage", usage }] : []
+      events.push({ type: "error", error: Object.assign(new Error(typeof code === "string" ? `${code}: ${text}` : text), typeof code === "string" ? { code } : {}) })
+      return events
     }
     return []
   }
   const finish = (): LLMStreamEvent => {
-    if (codexSubscription && !receivedCompleted) {
+    if (codexSubscription && terminal !== 'completed') {
       return { type: "error", error: new Error("Codex subscription stream ended without response.completed") }
     }
     // A-01: a normal Responses stream terminates with response.completed (some
     // compatible endpoints use the Chat-Completions [DONE] sentinel instead).
     // EOF without either is a dropped connection, not a completed turn; before
     // this check it was reported as an empty success.
-    if (!receivedTerminal && !receivedCompleted && !receivedDone) {
+    if (!terminal) {
       return { type: "error", error: new Error("OpenAI stream ended without response.completed") }
     }
     // M77: the two bits are independent — each is written on its own, so a
@@ -211,5 +201,5 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
       : undefined
     return { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningItems.size || outputOrder ? { providerContinuation: { kind: "openai-responses", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), reasoningItems: [...reasoningItems.values()], ...(outputOrder ? { outputOrder } : {}) } as const } : {}) }
   }
-  return { handleEvent, finish, get receivedDone() { return receivedDone } }
+  return { handleEvent, finish, done() { terminal = 'done' }, get terminal() { return terminal !== undefined } }
 }

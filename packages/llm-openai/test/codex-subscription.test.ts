@@ -132,6 +132,21 @@ describe("Codex subscription Responses contract", () => {
     expect(await collect(plan())).toEqual([{ type: "end" }])
   })
 
+  it.each([true, false])("preserves usage on incomplete Responses and finishes without upstream EOF (subscription %s)", async subscription => {
+    let cancelled = false
+    const payload = { type: "response.incomplete", response: { incomplete_details: { reason: "max_output_tokens" }, usage: { input_tokens: 31, output_tokens: 7 } } }
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode(sse(payload))) },
+      cancel() { cancelled = true; return new Promise<void>(() => {}) },
+    })
+    vi.stubGlobal("fetch", async () => new Response(body))
+    const events = await collect(subscription ? plan() : createOpenAIClient({ apiKey: "fixture-key", model: "fixture-model" }))
+    expect(events.map(event => event.type)).toEqual(["usage", subscription ? "error" : "end"])
+    expect(events[0]).toMatchObject({ usage: { inputTokens: 31, outputTokens: 7 } })
+    if (!subscription) expect(events[1]).toEqual({ type: "end", truncated: true })
+    expect(cancelled).toBe(true)
+  })
+
   it("releases a connection that stays open after the terminal completion event", async () => {
     let cancelled = false
     const stream = new ReadableStream({

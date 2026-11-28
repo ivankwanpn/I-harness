@@ -3,6 +3,17 @@ import { createRetryingClient, resolveRetryPolicy, retryErrorCode, type LLMStrea
 import { createOpenAIClient } from "../src/index.ts"
 
 afterEach(() => vi.unstubAllGlobals())
+it("accepts the literal compatibility sentinel and does not finish on an unrelated JSON type", async () => {
+  const run = async (data: string) => {
+    vi.stubGlobal("fetch", async () => new Response("data: " + data + "\n\n"))
+    const client = createOpenAIClient({ model: "fixture", apiKey: "fixture" })
+    const events: LLMStreamEvent[] = []
+    for await (const event of client.stream({ systemPrompt: "", messages: [], tools: [] })) events.push(event)
+    return events.map(event => event.type)
+  }
+  expect(await run('{"type":"[DONE]"}')).toEqual(["error"])
+  expect(await run("[DONE]")).toEqual(["end"])
+})
 it.each([
   ["error", "server_error", "normal", "SERVER", 2],
   ["response.failed", "server_error", "normal", "SERVER", 2],
