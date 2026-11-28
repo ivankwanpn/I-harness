@@ -7,6 +7,38 @@ import { createDesktopRouter, createGatewayWrite } from "../src/router.ts"
 import { createInteractionBridge } from "../src/interaction.ts"
 
 describe("Desktop interaction over the SDK-compatible stream", () => {
+  it("keeps an interaction created by a successor while the original SDK Stop settles", async () => {
+    const frames: RpcMessage[] = []
+    const send = (frame: RpcMessage) => { frames.push(frame) }
+    const service = createSessionService({workspace:process.cwd(),modelPolicy:'test-mock',mockScript:[]})
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    const interaction = createInteractionBridge(send)
+    const off = service.onAssembly(assembly => interaction.attach(assembly))
+    const handlers = { interaction }
+    const base = createSdkServer({...service,async awaitDeliveryStop(id) {
+      const receipt=service.awaitDeliveryStop(id)
+      entered.resolve()
+      await release.promise
+      return receipt
+    }}, {onWrite:createGatewayWrite(send,handlers)})
+    const router = createDesktopRouter(base,send,handlers)
+    try {
+      await router.handleLine(encodeFrame(makeRequest(1,'initialize',{})))
+      const assembly = await service.assemblyFor('s1')
+      const answer = assembly.ctx.services.get<(request: ApprovalRequest)=>Promise<boolean>>('approval/answerer')
+      const previous=answer({name:'write',reason:'before Stop'})
+      const stop=router.handleLine(encodeFrame(makeRequest(2,'session/cancel',{sessionId:'s1'})))
+      await entered.promise
+      const next=answer({name:'edit',reason:'after Stop'})
+      const successor=interaction.pending('s1').at(-1)!
+      release.resolve(); await stop
+      expect(await previous).toBe(false)
+      expect(interaction.pending('s1').map(row=>row.requestId)).toEqual([successor.requestId])
+      await router.handleLine(encodeFrame(makeRequest(3,'desktop/interaction/reply',{sessionId:'s1',requestId:successor.requestId,decision:{kind:'approval',approved:true}})))
+      expect(await next).toBe(true)
+    } finally {release.resolve();off();await router.close();await service.close()}
+  })
+
   it("settles pending interaction on SDK session/cancel and rejects a late answer", async () => {
     const frames: RpcMessage[] = []
     const send = (frame: RpcMessage) => { frames.push(frame) }

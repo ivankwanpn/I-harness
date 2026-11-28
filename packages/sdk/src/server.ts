@@ -194,7 +194,11 @@ export interface RewindServiceSurface {
   ): Promise<RewindExecuteResponse>
 }
 
-type SdkRequestControls = { fork?: ForkExecutionControl }
+type SdkRequestControls = {
+  fork?: ForkExecutionControl
+  /** Capture host-owned interactions and workflows at the same Stop as the engine. */
+  onSessionStop?(sessionId: string): Promise<void>
+}
 
 export interface SdkServer {
   /** In-memory process liveness for hosts deciding whether to shut down. */
@@ -438,7 +442,8 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
     return preparation
   }
 
-  async function handleRequest(method: string, params: unknown, id: number | string, forkControl?: ForkExecutionControl): Promise<RpcMessage> {
+  async function handleRequest(method: string, params: unknown, id: number | string, controls?: SdkRequestControls): Promise<RpcMessage> {
+    const forkControl = controls?.fork
     // M68 batch B (v3): `initialize` is THE GATE — the one funnel every request
     // passes, so it sits above the switch (an unknown method is gated too: "has
     // this connection handshaken?" is answered before "does this method exist",
@@ -723,16 +728,21 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
               if (typeof service.awaitDeliveryStop !== 'function') throw new Error('Cancellation settlement unavailable')
               // A provider stream that ignores abort must not hang the cancel RPC:
               // the UI can then offer Force stop instead of waiting forever.
-              await waitForStopSettlement(service.awaitDeliveryStop(sessionId))
+              const settlement = service.awaitDeliveryStop(sessionId)
+              await waitForStopSettlement(controls?.onSessionStop
+                ? Promise.all([settlement, controls.onSessionStop(sessionId)])
+                : settlement)
               return makeSuccess(id, response)
             }
             // Explicit legacy compatibility: FIFO abort has no delivery owner.
             const inFlight = inflight.get(sessionId)?.values().next().value
             if (inFlight !== undefined) {
               inFlight.controller.abort()
+              if (controls?.onSessionStop) await waitForStopSettlement(controls.onSessionStop(sessionId))
               return makeSuccess(id, { cancelled: true })
             }
             const known = service.liveSession(sessionId) !== undefined || knownSessions.has(sessionId)
+            if (known && controls?.onSessionStop) await waitForStopSettlement(controls.onSessionStop(sessionId))
             return known
               ? makeSuccess(id, { cancelled: false, reason: "not-running" })
               : makeSuccess(id, { cancelled: false, reason: "not-found" })
@@ -1048,7 +1058,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
     if (closed) return null
     let reply: RpcMessage
     try {
-      reply = await handleRequest(message.method, message.params, message.id, controls?.fork)
+      reply = await handleRequest(message.method, message.params, message.id, controls)
     } catch (error) {
       reply = hostMethodFailure(message.id, message.method, error)
     }

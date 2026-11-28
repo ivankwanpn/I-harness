@@ -150,6 +150,11 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
     return reply.then(value => value === null ? null : decodeFrame(value) ?? null)
   }
 
+  async function stopHostWork(sessionId: string) {
+    try { handlers.interaction?.cancelSession?.(sessionId) }
+    finally { await handlers.workflow?.cancelForInputStop(sessionId) }
+  }
+
   async function dispatch(line: string, message: RpcRequest) {
       if (message.method === "initialize") {
         const reply = await dispatchSdk(message, line)
@@ -239,11 +244,13 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
             if (!open) { send(makeSuccess(message.id, { ready: false, error: "Desktop host is closing" })); return }
           }
         }
-        await dispatchSdk(message, line)
         if (message.method === "session/cancel") {
-          const sessionId = asRecord(message.params)?.sessionId
-          if (typeof sessionId === "string" && sessionId !== "") { handlers.interaction?.cancelSession?.(sessionId); await handlers.workflow?.cancel(sessionId) }
+          // An awaiting durable Stop can overlap the next input in this
+          // session. Only retire work that was present at the original abort.
+          await dispatchSdk(message, line, { onSessionStop: stopHostWork })
+          return
         }
+        await dispatchSdk(message, line)
         return
       }
 
@@ -375,10 +382,7 @@ export function createDesktopRouter(base: Pick<SdkServer, "handleLine" | "close"
           else if (operation === "stop" && handlers.input.stop) {
             const inputId = params?.inputId
             if (typeof inputId !== "string" || !inputId || inputId.length > 256 || inputId.includes("\0")) throw new Error("Invalid input")
-            result = busy ? { cancelled: false, reason: "stale-input" } : await handlers.input.stop(sessionId, inputId, async () => {
-              try { handlers.interaction?.cancelSession?.(sessionId) }
-              finally { await handlers.workflow?.cancelForInputStop(sessionId) }
-            })
+            result = busy ? { cancelled: false, reason: "stale-input" } : await handlers.input.stop(sessionId, inputId, () => stopHostWork(sessionId))
           }
           else throw new Error("Invalid input operation")
           send(makeSuccess(message.id, result))
