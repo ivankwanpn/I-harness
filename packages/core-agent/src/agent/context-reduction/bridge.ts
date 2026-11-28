@@ -59,13 +59,21 @@ export function createReductionBridge(deps: BridgeDeps, captureCandidate: () => 
       proofs.set(token, proof)
       const { input, packet } = assessed.prepared.measurement, budget = assessed.snapshot
       const bytes = packet.bodyBytes ?? packet.sdkCommandBytesEstimate ?? Object.values(input.components).reduce((n, component) => n + component.textUtf8Bytes + component.structuredBytes + component.binaryBytes, 0)
+      const fixedTokens = input.components.system.heuristicTokens + input.components.toolSchemas.heuristicTokens
+      // A shorter conversation can make a legal output-cap derivative possible.
+      // Only an unavoidable input floor can prove that no rewrite could fit.
+      const releasableOutput = pressure.kind === 'known' && pressure.basis !== 'input-only' && budget.capSupport !== 'unsupported'
+        ? Math.max(0, budget.outputReserve - assessed.prepared.measurement.output.minimumCap) : 0
+      const maximumBudget = pressure.kind === 'known'
+        ? Math.min(pressure.inputBudget + releasableOutput, now.snapshot.surface.budgetBinding?.limits.inputTokens?.value ?? Infinity) : undefined
+      const oversizedFixedSurface = !assessed.calibrated && maximumBudget !== undefined && fixedTokens > maximumBudget
+      const overridesMessages = input.overriddenInputFields.includes('messages')
       return { kind: 'assessed', capacityFit, target: capacityFit === 'unavailable' ? 'unavailable' : targetReady ? 'ready' : 'over-target',
         currentView: projectionFingerprint([now.snapshot.coordinates.semanticRevision, now.snapshot.coordinates.protectionRevision, now.snapshot.surfaceRevision, assessmentRevision]),
         inputTokens: budget.admissionInputTokens, inputBytes: bytes, inputByteKind: packet.sizeKind, inputFingerprint: input.inputFingerprint,
         shape: projectionFingerprint([input.bindingFingerprint, input.shapeFingerprint, now.snapshot.surface.binding]),
-        fixedTokens: input.components.system.heuristicTokens + input.components.toolSchemas.heuristicTokens,
-        fixedInput: input.overriddenInputFields.includes('messages')
-          || pressure.kind === 'known' && input.components.system.heuristicTokens + input.components.toolSchemas.heuristicTokens > pressure.target, proof: token }
+        fixedInput: overridesMessages || oversizedFixedSurface,
+        ...(!overridesMessages && oversizedFixedSurface ? { fixedTokens } : {}), proof: token }
     } catch (error) {
       if ((error as { code?: string }).code === 'CONTEXT_INPUT_STALE') return { kind: 'stale' }
       if ((error as { code?: string }).code === 'CONTEXT_CURRENT_UNREPRESENTABLE') return { kind: 'blocked', reason: 'source-unrepresentable' }

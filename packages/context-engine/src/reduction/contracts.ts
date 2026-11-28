@@ -64,8 +64,9 @@ export interface ReductionAssessment {
   readonly inputFingerprint: string
   readonly shape: string
   readonly currentView: string
+  /** The conversation is overridden, or irreducible input alone exceeds hard capacity. */
   readonly fixedInput: boolean
-  /** Heuristic tokens that no reduction can remove (system prompt + tool schemas). */
+  /** Oversized fixed system + schemas, when the conversation can still be shortened. */
   readonly fixedTokens?: number
   /** Opaque bridge-owned capability. Its contents are never inspected here. */
   readonly proof: object

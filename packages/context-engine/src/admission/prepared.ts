@@ -53,7 +53,11 @@ export function assessPreparedCapacity(prepared: PreparedModelRequest, policy: P
   const actualIntent = outputA.effectiveCap ?? outputA.configuredCap
   const intended = policy.preferOutputPolicy ? outputA.source === 'adapter-default' ? policy.outputPreference ?? actualIntent : actualIntent === undefined ? policy.outputPreference : policy.outputPreference === undefined ? actualIntent : Math.min(policy.outputPreference, actualIntent)
     : actualIntent ?? policy.outputPreference
-  const ceiling = intended === undefined ? undefined : Math.min(intended, limits.outputTokens?.value ?? intended, room ?? intended)
+  // A request with no room for the output floor needs less input. Still
+  // enforce the model's output ceiling on the candidate being assessed:
+  // retaining an oversized adapter default here would block before reduction.
+  const allowedOutput = intended === undefined ? undefined : Math.min(intended, limits.outputTokens?.value ?? intended)
+  const ceiling = allowedOutput !== undefined && room !== undefined && room >= required ? Math.min(allowedOutput, room) : allowedOutput
   const mayDerive = policy.selectOutputCap !== false && (outputA.capSupport === 'supported' || outputA.capSupport === 'unknown' && prepared.measurement.input.coverage === 'neutral-only')
   // A single derivative is fully validated and repriced. Below-floor room does
   // not become a cap, and optional omission never acquires new intent.

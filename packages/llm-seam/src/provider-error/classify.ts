@@ -10,7 +10,7 @@ export function normalizedCode(code: string): string {
   if (/^(server_error|api_error|overloaded_error|ServiceUnavailableException|InternalServerException|ModelStreamErrorException)$/i.test(code) || capacityCode.test(code)) return "SERVER"
   if (/^(ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_SOCKET)$/.test(code)) return "TRANSPORT"
   if (/^(ETIMEDOUT|ESOCKETTIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|TimeoutError)$/.test(code)) return "TIMEOUT"
-  if (/CERT|TLS|SSL|SELF_SIGNED|UNABLE_TO_VERIFY/.test(code)) return "TLS"
+  if (/(?:^|_)(?:CERT(?:IFICATE)?|TLS(?:V\d+)?|SSL(?:V\d+)?|OSSL|SELF_SIGNED|UNABLE_TO_VERIFY)(?:_|$)/.test(code)) return "TLS"
   if (/^(AbortError|ABORT_ERR|ERR_CANCELED)$/.test(code)) return "ABORTED"
   if (/^(insufficient_quota|billing_hard_limit_reached|quota_exceeded|ServiceQuotaExceededException)$/i.test(code)) return "QUOTA"
   if (/^(invalid_api_key|authentication_error|permission_error|permission_denied|AccessDeniedException|UnrecognizedClientException)$/i.test(code)) return "AUTH"

@@ -158,6 +158,23 @@ it('preserves route minimum and explicit no-selection', () => {
   expect(assessLegacyPreparedRequest(b, { ...policy, selectOutputCap: false }, readers()).prepared).toBe(b)
   expect(derive).not.toHaveBeenCalled(); expect(deriveB).not.toHaveBeenCalled()
 })
+
+it('allows history reduction when a required default is above the model ceiling and input leaves less than the output floor', () => {
+  const initial = prepared(facts(), { source: 'adapter-default', effectiveCap: 128000, minimumCap: 1025 })
+  const bounded = prepared(facts('bounded'), { effectiveCap: 8192, minimumCap: 1025 })
+  const derive = vi.fn(() => bounded)
+  initial.withOutputCap = derive
+  const options = { purpose: 'main' as const, binding: policy.budgetBinding, contextWindow: 10000, outputCeiling: 8192 }
+  const price = vi.fn(() => ({ tokens: 8500, calibrated: false }))
+  const result = assessPreparedCapacity(initial, options, price)
+  expect(result.prepared).toBe(bounded)
+  expect(derive).toHaveBeenCalledExactlyOnceWith(8192)
+  expect(price).toHaveBeenCalledTimes(2)
+  expect(result.decision).toMatchObject({ disposition: 'reduce', reason: 'input-overflow' })
+  expect(result.decision.dimensions).toContainEqual({ dimension: 'output', state: 'pass', actual: 8192, limit: 8192, sourceId: 'captured-output-ceiling-v1' })
+  expect(assessPreparedCapacity(initial, { ...options, selectOutputCap: false }, price).decision).toMatchObject({ disposition: 'blocked', reason: 'output-ceiling' })
+  expect(assessPreparedCapacity(initial, { ...options, outputCeiling: 512 }, price).decision).toMatchObject({ disposition: 'blocked' })
+})
 it('does not retire a real accepted anchor on provisional A shape miss when final B is compatible', () => {
   const calibration = createAcceptedCalibration('owner', 'live'), input = facts('B')
   const request = { version: 1 as const, ownerSessionId: 'owner', observationLifetimeId: 'live', candidateId: 'A', sendId: 'send', semanticId: input.semanticIdentity!.semanticId, payloadId: d, payloadKind: 'http-json-body' as const, executionEpochId: 'E', coldCompatible: false as const,

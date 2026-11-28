@@ -3,6 +3,14 @@ import * as seam from "../src/index.ts"
 
 const facts = seam.modelFailureFacts
 
+it("preserves local generation, transport and certificate error identities", () => {
+  const uncertain = seam.generationError("GENERATION_UNCERTAIN")
+  expect(seam.retryErrorCode(uncertain)).toBe("GENERATION_UNCERTAIN")
+  expect(facts(uncertain)).toBeUndefined()
+  expect(seam.retryErrorCode({ code: "ECONNRESET" })).toBe("TRANSPORT")
+  expect(seam.retryErrorCode({ code: "ERR_TLS_CERT_ALTNAME_INVALID" })).toBe("TLS")
+})
+
 it.each([
   { error: { type: "invalid_request_error", message: "context_length_exceeded" } },
   { error: { code: "CONTEXT_TOO_LONG", message: "private prompt" } },

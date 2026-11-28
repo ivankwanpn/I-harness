@@ -67,7 +67,15 @@ function preparePayload<T>(options: PreparedPayloadOptions<T>, owned: boolean): 
       || result.kind === 'accepted' && validated.status === 'invalid'
       || result.kind === 'rejected' && validated.status !== 'invalid')) throw new TypeError('Invalid final validation result')
     if (result?.kind === 'rejected') throw finalValidationError(result.reason, validated!)
-    const { input, packet } = options.describe(actualBody, request)
+    const description = options.describe(actualBody, request)
+    const packet = description.packet
+    let input = description.input
+    // The protocol validator and meter observe the same final payload. Local
+    // bytes cannot establish the size of a referenced, server-owned item.
+    if (validated?.gaps.includes('remote-input-unavailable') && input.coverage !== 'incomplete') {
+      const { lastUnpricedUnit: _localPrefix, ...visible } = input
+      input = { ...visible, coverage: 'incomplete', uncertainties: [...new Set([...visible.uncertainties, 'server-referenced-context-unavailable'])] }
+    }
     const output = options.output(actualBody, request)
     validateOutputCap(output.effectiveCap, output.minimumCap)
     const payloadIdentity: PayloadIdentityV2 = { version: 2, kind: sdk ? "sdk-command-estimate" : "http-json-body", id: encodedProjectionDigest(sdk ? "sdk-command-estimate" : "http-json-body", serialized) }

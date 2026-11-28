@@ -22,6 +22,15 @@ it('bounds oversized chunks and still observes terminal usage', async () => {
   expect(r).toMatchObject({ chars: 1000000, overflow: true })
   expect(usage).toEqual([{ outputTokens: 42 }])
 })
+it('preserves an invalid input report across a later valid output report and still returns the summary', async () => {
+  const usage: unknown[] = []
+  const result = await readSummaryStream(candidate([
+    { type: 'usage', usage: { inputTokens: 8, cacheCreationTokens: 3, measurementValidity: 'invalid' } },
+    chunk('summary'), { type: 'usage', usage: { outputTokens: 7 } }, { type: 'end' },
+  ]), { maxRetainedChars: 20, onUsage: u => usage.push(u) })
+  expect(result.text).toBe('summary')
+  expect(usage).toEqual([{ inputTokens: 8, cacheCreationTokens: 3, outputTokens: 7, measurementValidity: 'invalid' }])
+})
 it.each([
   [{ type: 'tool_call', call: { id: 'c', name: 'read', args: {} } }, chunk('valid'), { type: 'usage', usage: { inputTokens: 2 } }, { type: 'end' }],
   [chunk('valid'), { type: 'end', refused: true }], [chunk('valid'), { type: 'end', truncated: true }], [chunk('valid')],

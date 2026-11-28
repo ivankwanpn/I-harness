@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { createRetryingClient, resolveRetryPolicy, mapModelRequest, observeModelClient, type LLMUsage, type ModelClient } from "@i-harness/llm-seam"
+import { createRetryingClient, resolveRetryPolicy, mapModelRequest, observeModelClient, mergeUsageReport, hasConflictingUsage, type LLMUsage, type ModelClient } from "@i-harness/llm-seam"
 import type { buildModelClient } from "@i-harness/provider"
 import { validateRequestMetrics, type UsageRecord } from "@i-harness/usage-stats"
 import { withOriginalPassiveClientAttribution } from '@i-harness/llm-seam/internal/passive-observation'
@@ -74,24 +74,15 @@ export function createUsageCapture(options: {
               try { projectId = await options.projectFor(request.sessionId) } catch { failedAttributions++; notifyWarning() }
             }
             request.signal?.throwIfAborted()
-            return { request, measurement, projectId, startedAt: now(), id: randomUUID(), firstTokenMs: undefined as number | undefined, usage: {} as LLMUsage,measurementInvalid:false }
+            return { request, measurement, projectId, startedAt: now(), id: randomUUID(), firstTokenMs: undefined as number | undefined, usage: {} as LLMUsage }
           },
           event(state, event) {
-            const usage = state.usage
-            if (event.type === "usage") {
-              if(event.usage.measurementValidity==='invalid')state.measurementInvalid=true
-              for (const key of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"] as const) {
-                const value = event.usage[key]
-                if (value !== undefined && Number.isSafeInteger(value) && value >= 0) usage[key] = value
-              }
-              if (event.usage.inputTokenSemantics === "includes-cache" || event.usage.inputTokenSemantics === "excludes-cache") usage.inputTokenSemantics = event.usage.inputTokenSemantics
-            }
+            if (event.type === "usage") mergeUsageReport(state.usage, event.usage)
             if (state.firstTokenMs === undefined && ((event.type === "text/chunk" || event.type === "reasoning") && event.text.length > 0 || event.type === "tool_call")) state.firstTokenMs = Math.max(0, now() - state.startedAt)
           },
           async finish(state, status) {
             const { request, measurement, projectId, startedAt, id, firstTokenMs, usage } = state
-            const contradictory = state.measurementInvalid || usage.inputTokenSemantics === "includes-cache" && usage.inputTokens !== undefined
-              && (usage.cacheReadTokens ?? 0) + (usage.cacheCreationTokens ?? 0) > usage.inputTokens
+            const contradictory = hasConflictingUsage(usage)
             if (contradictory) { invalidMeasurements++; notifyWarning() }
             const record: UsageRecord = {
               id, startedAt, durationMs: Math.max(0, now() - startedAt),

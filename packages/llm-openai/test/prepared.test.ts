@@ -137,6 +137,7 @@ it("prices projected image bytes separately and quarantines text-only input", as
 })
 it.each([
   { previous_response_id: "resp_short" }, { conversation: "conv_short" }, { prompt: { id: "pmpt_short" } },
+  { input: [{ type: "item_reference", id: "msg_remote" }] },
   { input: [{ role: "user", content: [{ type: "input_file", file_id: "file_short" }] }] },
   { input: [{ role: "user", content: [{ type: "input_file", file_url: "https://fixture.test/file" }] }] },
 ])("does not label server-referenced options complete", async (options) => {
@@ -144,6 +145,15 @@ it.each([
   const prepared = await client.prepare!({ systemPrompt: "", messages: [], tools: [] })
   expect(prepared.measurement.input.coverage).toBe("incomplete")
   expect(prepared.measurement.input.uncertainties).toContain("server-referenced-context-unavailable")
+})
+it("treats nullable server references as absent when measuring a fully local request", async () => {
+  const local = { systemPrompt: "", messages: [{ role: "user" as const, content: '{"type":"item_reference","id":"msg_remote"}' }], tools: [] }
+  for (const options of [{}, { previous_response_id: null, conversation: null, prompt: null }]) {
+    const prepared = await createOpenAIClient({ apiKey: "test", model: "fixture", options }).prepare!(local)
+    expect(prepared.measurement.input.coverage).toBe("complete")
+    expect(prepared.measurement.input.uncertainties).not.toContain("server-referenced-context-unavailable")
+    expect(prepared.withOutputCap(128).measurement.input.coverage).toBe("complete")
+  }
 })
 it("uses verified public OpenAI minimum16 without applying it to custom routes or subscription", async () => {
   const request: LLMRequest = { systemPrompt: "", messages: [], tools: [] }

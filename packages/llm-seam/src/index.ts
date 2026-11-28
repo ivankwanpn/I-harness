@@ -2,6 +2,7 @@ import type { LLMMessage, LLMContentPart, ModelRetryInfo, ProviderContinuation, 
 import { deriveMessages, renderConversation, stringifyJsonData } from "@i-harness/core-session"
 import { createHash } from 'node:crypto'
 import { InvalidImageError, validateImage } from '@i-harness/image-validation'
+import { normalizeInputUsage } from '@i-harness/token-meter'
 
 /**
  * M5 T2: the provider's OWN usage report for one round-trip.
@@ -31,6 +32,29 @@ export interface LLMUsage {
   /** Adapter-declared accounting; unknown routes leave it absent. Raw input
    * counts stay raw, while consumers may derive a separate full input total. */
   inputTokenSemantics?: "includes-cache" | "excludes-cache"
+}
+
+/** Stream reports update cumulative counters for one physical attempt. Keep a
+ * contradictory report invalid even if the provider later sends a valid delta. */
+export function mergeUsageReport(attempt: LLMUsage, report: LLMUsage): void {
+  if (report.measurementValidity === "invalid") attempt.measurementValidity = "invalid"
+  for (const field of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"] as const) {
+    const value = report[field]
+    if (value === undefined) continue
+    if (!Number.isSafeInteger(value) || value < 0) attempt.measurementValidity = "invalid"
+    if (Number.isFinite(value)) attempt[field] = value
+  }
+  const semantics = report.inputTokenSemantics
+  if (semantics === "includes-cache" || semantics === "excludes-cache") {
+    if (attempt.inputTokenSemantics && attempt.inputTokenSemantics !== semantics) attempt.measurementValidity = "invalid"
+    attempt.inputTokenSemantics = semantics
+  }
+}
+
+/** Compare totals only after all partial reports for this attempt arrived. */
+export function hasConflictingUsage(usage: LLMUsage): boolean {
+  return usage.measurementValidity === "invalid" || (usage.inputTokenSemantics !== undefined
+    && usage.inputTokens !== undefined && normalizeInputUsage(usage) === undefined)
 }
 
 /**
@@ -414,7 +438,7 @@ export class SSEParseError extends Error {
  * does TODAY as well (no `max_tokens` is also a 400), so this is a strict
  * improvement even before the card arm fires.
  */
-export { parseSseFrames } from "./sse.ts"
+export { parseSseFrames, readSseBlocks } from "./sse.ts"
 export const ANTHROPIC_MAX_TOKENS_FALLBACK = 128_000
 
 

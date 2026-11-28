@@ -88,6 +88,7 @@ export function createMetricsSink(): MetricsSink {
         return
       }
       if (ev.type === "compaction/usage") {
+        if (ev.data.measurementValidity === "invalid") return
         for (const key of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"]) {
           const value = ev.data[key]
           if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) summaries.set(key, (summaries.get(key) ?? 0) + value)

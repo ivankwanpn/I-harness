@@ -253,6 +253,17 @@ describe("core-agent provider usage (M5 T2)", () => {
     )
   })
 
+  it("does not calibrate two reports that disagree about whether input already includes cache", async () => {
+    const events = await runWith([
+      { type: "usage", usage: { inputTokens: 11, cacheReadTokens: 4, inputTokenSemantics: "includes-cache" } },
+      { type: "usage", usage: { inputTokens: 11, inputTokenSemantics: "excludes-cache", outputTokens: 2 } },
+      { type: "text/chunk", text: "done" }, { type: "end" },
+    ])
+    expect(events.filter(event => event.type === "provider/cache").map(event => event.data)).toEqual(
+      [{ cacheReadReported: true, cacheReadTokens: 4 }],
+    )
+  })
+
   it("resets invalid accounting when the original transport retries", async () => {
     const ctx = createContext(), { telemetry, events } = spyTelemetry()
     let attempts = 0

@@ -1,7 +1,7 @@
 import { agentFacts, committedFactSeqs } from "./facts.ts"
 import { type ModelActivityInfo } from "@i-harness/core-session"
 import type { LLMStreamEvent, LLMUsage } from "@i-harness/llm-seam"
-import { modelFailureFacts, consumeRetryFailure } from "@i-harness/llm-seam"
+import { modelFailureFacts, consumeRetryFailure, mergeUsageReport, hasConflictingUsage } from "@i-harness/llm-seam"
 import type { BatchCall } from "../execute-tool-calls.ts"
 import type { AgentDeps, TurnLifecycle } from "./types.ts"
 import { createStepReasoning } from "./reasoning.ts"
@@ -27,9 +27,6 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
   // Reports merge within this attempt; a discarded retry resets usage.
   let stepUsage: LLMUsage = {}
   let usageReported = false
-  let invalidUsage = false
-  const usageForReport = (): LLMUsage => invalidUsage && Object.keys(stepUsage).length
-    ? { ...stepUsage, measurementValidity: "invalid" } : stepUsage
   let firstOutputAt: number | undefined
   let streamEndedAt: number | undefined
   const reasoningStart = reasoning.length
@@ -109,12 +106,7 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
       // Stop. Accumulate them on this original attempt without publishing
       // content or accepting completion; the failure owner reports them.
       if (ev.type === 'usage') {
-        if (ev.usage.measurementValidity === "invalid") invalidUsage = true
-        for (const field of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"] as const) {
-          const value = ev.usage[field]
-          if (typeof value === "number" && Number.isFinite(value)) stepUsage[field] = value
-        }
-        if (ev.usage.inputTokenSemantics === "includes-cache" || ev.usage.inputTokenSemantics === "excludes-cache") stepUsage.inputTokenSemantics = ev.usage.inputTokenSemantics
+        mergeUsageReport(stepUsage, ev.usage)
         return
       }
       abort?.throwIfAborted()
@@ -151,7 +143,7 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
               // Mark delivery before invoking an observer: a throwing sink
               // must not cause the response catch to report these counters twice.
               usageReported = true
-              if (Object.keys(stepUsage).length) reportModelUsage(deps, { stepUsage: usageForReport() })
+              if (Object.keys(stepUsage).length) reportModelUsage(deps, { stepUsage })
               await discard()
             } catch (saving) {
               if (originalFailure) throw savingFailure(originalFailure.failure, [saving], 'model retry settlement failed')
@@ -159,7 +151,6 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
             }
             stepUsage = {}
             usageReported = false
-            invalidUsage = false
             firstOutputAt = undefined
             streamEndedAt = undefined
             stepText = ""
@@ -246,9 +237,9 @@ export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'
     result() {
       const outputTokens = stepUsage.outputTokens
       const generationMs = firstOutputAt === undefined || streamEndedAt === undefined ? 0 : Math.round(streamEndedAt - firstOutputAt)
-      const generation = !modelFailed && !invalidUsage && outputTokens !== undefined && Number.isSafeInteger(outputTokens) && outputTokens > 0 && generationMs > 0
+      const generation = !modelFailed && !hasConflictingUsage(stepUsage) && outputTokens !== undefined && Number.isSafeInteger(outputTokens) && outputTokens > 0 && generationMs > 0
         ? { outputTokens, generationMs } : undefined
-      return { receipt, stepText, toolCallsThisStep, batch, stepUsage: usageReported ? {} : usageForReport(), generation, truncatedThisStep, refusedThisStep, thinkingBlocks, providerContinuation, providerEnded, identity: { actionId, attemptId, stepStartSeq } }
+      return { receipt, stepText, toolCallsThisStep, batch, stepUsage: usageReported ? {} : stepUsage, generation, truncatedThisStep, refusedThisStep, thinkingBlocks, providerContinuation, providerEnded, identity: { actionId, attemptId, stepStartSeq } }
     },
   }
 }

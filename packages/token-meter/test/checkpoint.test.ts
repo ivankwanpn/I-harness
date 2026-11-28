@@ -19,6 +19,29 @@ function input(tail = false, prefix = 'prefix', shape = 'shape') {
 }
 const suffix = (next: ReturnType<typeof input>, count: number) => next.units.slice(count).reduce((n, u) => n + u.heuristicTokens, 0)
 
+it('binds a Responses scalar input override to its own user message for calibration', async () => {
+  const options: Record<string, unknown> = { input: 'short' }
+  const client = createOpenAIClient({ apiKey: 'controlled', model: 'm', options })
+  const request = { systemPrompt: 'p', tools: [], messages: [{ role: 'user' as const, content: 'ordinary message' }] }
+  const prepare = async () => (await client.prepare!(request)).measurement.input
+  const source = createAcceptedCalibration('owner', 'live')
+  const first = await prepare()
+  record(source, first, { inputTokens: 50, inputTokenSemantics: 'includes-cache' })
+  expect(source.probe(await prepare(), compatibility)).toEqual({ tokens: 50, calibrated: true })
+  options.input = 'longer replacement '.repeat(8000)
+  const changed = await prepare()
+  const estimate = source.probe(changed, compatibility)
+  expect(estimate).toMatchObject({ calibrated: false, disposition: 'prefix-changed' })
+  expect(estimate.tokens).toBeGreaterThan(40_000)
+  expect(changed.units).toEqual([expect.objectContaining({ role: 'user', heuristicTokens: expect.any(Number) })])
+  delete options.input
+  const ordinary = await prepare()
+  expect(source.probe(ordinary, compatibility)).toMatchObject({ calibrated: false, disposition: 'prefix-changed' })
+  const reverse = createAcceptedCalibration('owner', 'live')
+  record(reverse, ordinary, { inputTokens: 80, inputTokenSemantics: 'includes-cache' })
+  expect(reverse.probe(first, compatibility)).toMatchObject({ calibrated: false, disposition: 'prefix-changed' })
+})
+
 it.each(['image', 'opaque'] as const)('tracks whether the accepted prefix covers every unpriced %s block', kind => {
   function project(tail: 'none' | 'text' | 'unpriced', options: { external?: boolean; fixed?: boolean; replacement?: string } = {}) {
     const counter = new ProjectionCounter('projected-pricing-v2')

@@ -18,6 +18,13 @@ const ev = (type: string, data: Record<string, unknown> = {}): TelemetryEvent =>
   ({ type, ts: 0, data }) as TelemetryEvent
 
 describe("createMetricsSink", () => {
+  it("counts summary observations and aggregates tokens only from valid reports", () => {
+    const metrics = createMetricsSink()
+    metrics.onEvent(ev("compaction/usage", { inputTokens: 8, outputTokens: 7, measurementValidity: "invalid" }))
+    metrics.onEvent(ev("compaction/usage", { inputTokens: 11, outputTokens: 0 }))
+    expect(metrics.snapshot().events["compaction/usage"]).toBe(2)
+    expect(metrics.snapshot().summaries).toEqual({ inputTokens: 11, outputTokens: 0 })
+  })
   it("counts events by type", () => {
     const m = createMetricsSink()
     m.onEvent(ev("turn/start"))

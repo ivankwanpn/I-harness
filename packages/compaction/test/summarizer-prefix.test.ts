@@ -1,8 +1,11 @@
 import { expect, it } from 'vitest'
 import { append, createSession, deriveMessages } from '@i-harness/core-session'
+import { assessPreparedCapacity } from '@i-harness/context-engine'
+import { prepareModelRequest } from '@i-harness/llm-seam'
+import { createAnthropicClient } from '../../llm-anthropic/src/index.ts'
 import { createCompactionHarness } from './fixtures/engine.ts'
 import { closedExchange, spyModel, autoConfig, history } from './fixtures/history.ts'
-import { checkpointOfLength } from './fixtures/checkpoint.ts'
+import { checkpointOfLength, completeCheckpoint } from './fixtures/checkpoint.ts'
 
 it('replays selected native bundles in exact order, excludes protected holes and appends a source manifest', async () => {
   const session = createSession(), f = spyModel()
@@ -44,9 +47,35 @@ it('reports reduced-over-target after reducing history under an oversized fixed 
   expect(f.requests[0]).toMatchObject({ systemPrompt: '', tools: [] })
 })
 
-it('blocks an oversized fixed system when fewer than 512 reducible tokens remain', async () => {
+it('blocks a fixed system larger than the input window without calling a summarizer', async () => {
   const f = spyModel()
   const result = await createCompactionHarness({ model: f.model, config: autoConfig, requestShape: () => ({ systemPrompt: 'fixed '.repeat(14000), tools: [] }) }).compact(history(2, 10))
   expect(result).toMatchObject({ compacted: false, outcome: 'blocked', blockedReason: 'fixed-input' })
   expect(f.requests).toEqual([])
+})
+
+it('recovers a real overfull Messages request when fewer than 512 tokens of history can change', async () => {
+  const model = createAnthropicClient({ model: 'fixture', apiKey: 'fixture', baseUrl: 'http://localhost.invalid' })
+  const summary = spyModel(completeCheckpoint())
+  const session = createSession(), systemPrompt = 'S'.repeat(7250), contextWindow = 3000, maxOutputTokens = 100
+  append(session, { type: 'turn/start' })
+  append(session, { type: 'user/message', text: 'Preserve this instruction.' })
+  closedExchange(session, 'A', 350); closedExchange(session, 'B', 420); closedExchange(session, 'tail', 0)
+  const measure = async () => {
+    const prepared = await prepareModelRequest(model, { systemPrompt, messages: deriveMessages(session), maxOutputTokens, tools: [] })
+    const { decision, estimate } = assessPreparedCapacity(prepared, { purpose: 'main', contextWindow })
+    const fixed = prepared.measurement.input.components.system.heuristicTokens + prepared.measurement.input.components.toolSchemas.heuristicTokens
+    expect(estimate.kind).toBe('estimated')
+    return { decision, variable: estimate.kind === 'estimated' ? estimate.value - fixed : undefined }
+  }
+  const before = await measure()
+  expect(before.decision.pressure).toMatchObject({ hardFits: false, inputBudget: 2600 })
+  expect(before.variable).toBeLessThan(512)
+  const result = await createCompactionHarness({ model, maxOutputTokens, requestShape: () => ({ systemPrompt, tools: [] }),
+    config: { contextWindow, retainTokens: 0, prune: false, summarizationModel: summary.model, minSummaryChars: 64,
+      summaryLimits: { contextWindow: 16000, maxOutputTokens: 4096 } } }).compact(session)
+  expect(result).toMatchObject({ compacted: true, outcome: 'reduced-over-target' })
+  expect(summary.requests).toHaveLength(1)
+  expect((await measure()).decision.pressure).toMatchObject({ hardFits: true, targetReady: false })
+  expect(deriveMessages(session).map(message => message.content)).toEqual(['Preserve this instruction.', completeCheckpoint(), 'tail '])
 })

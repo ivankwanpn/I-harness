@@ -1,5 +1,5 @@
 import type { LLMUsage, PreparedModelRequest } from '@i-harness/llm-seam'
-import { assertOwnedPreparedTerminal } from '@i-harness/llm-seam'
+import { assertOwnedPreparedTerminal, mergeUsageReport, hasConflictingUsage } from '@i-harness/llm-seam'
 import type { SummaryLimits } from '../prepared-summary.ts'
 import { SummaryBlockedError } from '../summary-errors.ts'
 import { summaryPieceCollector, type SummaryPieceObservation } from '../summary-observation.ts'
@@ -32,13 +32,6 @@ function retainedText(ceiling: number) {
     result: () => ({ text, chars, overflow: chars > ceiling }),
   }
 }
-function recordUsage(usage: LLMUsage, next: LLMUsage): void {
-  for (const field of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheCreationTokens'] as const) {
-    const value = next[field]
-    if (typeof value === 'number' && Number.isFinite(value)) usage[field] = value
-  }
-  if (next.inputTokenSemantics === 'includes-cache' || next.inputTokenSemantics === 'excludes-cache') usage.inputTokenSemantics = next.inputTokenSemantics
-}
 /** Drain one actual prepared stream, preserving failed-attempt usage once. */
 export async function readSummaryStream(candidate: PreparedModelRequest,
   limits: Pick<SummaryLimits, 'signal' | 'validateBeforeTransport' | 'onUsage' | 'generation'> & { maxRetainedChars: number },
@@ -57,7 +50,7 @@ export async function readSummaryStream(candidate: PreparedModelRequest,
       if (event.type === 'text/chunk') retained.push(event.text)
       else if (event.type === 'tool_call') tool = true
       else if (event.type === 'error') throw event.error
-      else if (event.type === 'usage') recordUsage(usage, event.usage)
+      else if (event.type === 'usage') mergeUsageReport(usage, event.usage)
       else if (event.type === 'end') {
         const next = JSON.stringify(event)
         if (ended && fingerprint !== next) throw Error('Conflicting summary completion records')
@@ -72,6 +65,7 @@ export async function readSummaryStream(candidate: PreparedModelRequest,
   } catch (error) { failed = true; failure = error }
   finally {
     collector.close()
+    if (hasConflictingUsage(usage)) usage.measurementValidity = 'invalid'
     try { if (Object.keys(usage).length) await limits.onUsage?.(usage) }
     catch (error) {
       throw new AggregateError(failed ? [failure, error] : [error], 'Summary usage observation failed', { cause: failed ? failure : error })

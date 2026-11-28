@@ -37,13 +37,10 @@ export async function reduceContext(ports: ContextReductionPorts, policy: Reduct
     if (baseline.kind === 'blocked') return block(result, baseline.reason)
     if (options.reason === 'auto' && baseline.target === 'ready' || result.compacted && baseline.target === 'ready') return { ...result, outcome: 'ready' }
     if (baseline.capacityFit === 'unavailable' || baseline.target === 'unavailable') return block(result, 'capacity-unavailable')
-    if (baseline.fixedInput) {
-      // A large fixed surface (system prompt or tool schemas) can exceed the
-      // pressure target on its own. That does not make the conversation
-      // unreducible: summarize what is reducible instead of blocking outright.
-      const fixed = baseline.fixedTokens ?? 0
-      if (baseline.inputTokens - fixed < 512) return block(result, 'fixed-input')
-    }
+    // A fully overridden conversation cannot shrink. If only the fixed
+    // overhead exceeds hard capacity, preserve the existing best-effort
+    // summary for substantial history, without spending a call on tiny tails.
+    if (baseline.fixedInput && (baseline.fixedTokens === undefined || baseline.inputTokens - baseline.fixedTokens < 512)) return block(result, 'fixed-input')
     if (accepted && !ports.current(accepted.source, accepted.groups)) accepted = undefined
     const run = accepted ? { id: projectionFingerprint(accepted.groups.map(group => group.id)), groups: accepted.groups }
       : selectReductionRuns(source, policy, options.protectedSeqs).find(run => !tried.has(run.id))
