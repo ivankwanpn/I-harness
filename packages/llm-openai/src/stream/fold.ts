@@ -1,5 +1,6 @@
 import { bindVisibleToolIds, deepSeekCallFingerprint, hasTextAfterTool, hasReorderedTools, isOfficialDeepSeekApi, officialXaiRoute, type LLMStreamEvent, type ProviderBlockOrderEntry } from "@i-harness/llm-seam"
 import { projectionFingerprint } from "@i-harness/token-meter"
+import { isDeepStrictEqual } from "node:util"
 import type { OpenAIConfig } from "../types.ts"
 import { mapUsage } from "./usage.ts"
 
@@ -26,18 +27,100 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
   let outputOrderValid = true
   let hasAssistantPhase = false
   const emittedCalls: { id?: string }[] = []
+  let streamedTextUnits = 0
   const recordOutput = (index: unknown, entry: ProviderBlockOrderEntry): void => {
     if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0 || outputItems.has(index)) { outputOrderValid = false; return }
     outputItems.set(index, entry)
   }
-  const pendingCalls = new Map<string, { name: string; argsBuffer: string; callId?: string; outputIndex?: number }>()
-  const yieldedInline = new Set<string>()
+  type FunctionItem = { id?: string; name?: string; call_id?: string; namespace?: string; arguments?: unknown; status?: unknown }
+  type Call = { itemId?: string; callId?: string; outputIndex?: number; name?: string; buffer: string; finalArgs?: string }
+  const calls = new Set<Call>(), callKeys = new Map<string, Call>()
+  let toolError: string | undefined
   const recordCall = (outputIndex: unknown, id: string | undefined, name: string, args: unknown): LLMStreamEvent => {
     const call = { ...(id ? { id } : {}), name, args }
     deepSeekCalls?.push(deepSeekCallFingerprint(call))
     recordOutput(outputIndex, { kind: "tool", index: emittedCalls.length })
     emittedCalls.push(id ? { id } : {})
     return { type: "tool_call", call }
+  }
+  // The same logical call can finish in an arguments event, an item snapshot,
+  // and the completed response. Match each supplied identity to the same slot.
+  const invalidIdentity = (value: unknown) => value !== undefined && (typeof value !== "string" || !value.trim())
+  const track = (item: FunctionItem, index: unknown): Call | undefined => {
+    if (toolError) return
+    if (invalidIdentity(item.id) || invalidIdentity(item.call_id) || invalidIdentity(item.name)) {
+      toolError = "OpenAI response contains an invalid function_call identity"
+      return
+    }
+    if (index !== undefined && (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0)) {
+      toolError = "OpenAI response contains an invalid function_call output index"
+      return
+    }
+    if (codexSubscription && item.namespace !== undefined && item.namespace !== "ih") {
+      toolError = "Codex subscription returned an undeclared tool namespace"
+      return
+    }
+    const position = typeof index === "number" ? index : undefined
+    const block = position === undefined ? undefined : outputItems.get(position)
+    if (block && block.kind !== "tool") { toolError = "OpenAI response changed an output item's type"; return }
+    const byId = item.id ? callKeys.get("item:" + item.id) : undefined
+    if (byId && item.call_id === undefined && item.name === undefined && (position === undefined || byId.outputIndex === position)) return byId
+    const keys: string[] = []
+    if (item.id) keys.push("item:" + item.id)
+    if (item.call_id) keys.push("call:" + item.call_id)
+    if (position !== undefined) keys.push("index:" + position)
+    const matches = keys.map(key => callKeys.get(key)).filter((call): call is Call => call !== undefined)
+    const call: Call = matches[0] ?? { buffer: "" }
+    if (matches.some(match => match !== call)
+      || (call.itemId && item.id && call.itemId !== item.id)
+      || (item.call_id && (call.callId !== undefined || call.finalArgs !== undefined) && call.callId !== item.call_id)
+      || (call.name && item.name && call.name !== item.name)
+      || (call.outputIndex !== undefined && position !== undefined && call.outputIndex !== position)) {
+      toolError = "OpenAI response contains conflicting function_call identities"
+      return
+    }
+    if (item.id) call.itemId = item.id
+    if (item.call_id) call.callId = item.call_id
+    if (item.name) call.name = item.name
+    if (position !== undefined) call.outputIndex = position
+    for (const key of keys) callKeys.set(key, call)
+    calls.add(call)
+    return call
+  }
+  const completeCall = (call: Call, serialized: unknown, malformed: string | undefined): LLMStreamEvent[] => {
+    if (typeof serialized !== "string" || !call.name) { toolError = malformed; return [] }
+    if (call.finalArgs === serialized) return []
+    try {
+      const args: unknown = JSON.parse(serialized)
+      if (call.finalArgs !== undefined) {
+        if (!isDeepStrictEqual(JSON.parse(call.finalArgs), args)) toolError = "OpenAI response changed completed function_call arguments"
+        return []
+      }
+      call.finalArgs = serialized
+      call.buffer = ""
+      return [recordCall(call.outputIndex, call.callId, call.name, args)]
+    } catch { toolError = malformed; return [] }
+  }
+  const observedSnapshotContent = (output: Record<string, unknown>[]): boolean => {
+    let textUnits = 0
+    for (const [index, item] of output.entries()) {
+      if (item.type === "function_call") continue
+      if (item.type === "reasoning") {
+        const key = typeof item.id === "string" ? item.id : index
+        if (!isDeepStrictEqual(reasoningItems.get(key), item)) return false
+      } else if (item.type === "message" && item.role === "assistant" && Array.isArray(item.content)) {
+        const recorded = outputItems.get(index)
+        let offset = 0
+        for (const part of item.content) {
+          if (part?.type !== "output_text" || typeof part.text !== "string") return false
+          if (part.text && (recorded?.kind !== "text" || !recorded.text.startsWith(part.text, offset))) return false
+          offset += part.text.length
+        }
+        if (recorded?.kind === "text" && offset !== recorded.text.length) return false
+        textUnits += offset
+      } else return false
+    }
+    return streamedTextUnits === textUnits
   }
   // M77 (fix wave): the Responses wire's OTHER refusal shape — a refusal
   // CONTENT PART (`ResponseOutputRefusal`, `{ type: "refusal", refusal:
@@ -66,10 +149,13 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
       refused = true
     }
     if (t === "response.output_text.delta") {
-      return [{ type: "text/chunk", text: (event as { delta: string }).delta }]
+      const text = (event as { delta: string }).delta
+      if (typeof text === "string") streamedTextUnits += text.length
+      return [{ type: "text/chunk", text }]
     }
     if (t === "response.output_item.done") {
       const item = event.item as Record<string, unknown> | undefined
+      if (item?.type !== "function_call" && callKeys.has("index:" + event.output_index)) toolError = "OpenAI response changed a function_call item's type"
       const reasoningKey = typeof item?.id === "string" ? item.id :
         xai && item?.id === undefined && Array.isArray(item?.summary) && typeof item.encrypted_content === "string" && item.encrypted_content.length
           && typeof event.output_index === "number" && Number.isSafeInteger(event.output_index) && event.output_index >= 0 ? event.output_index : undefined
@@ -86,56 +172,40 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
           recordOutput(event.output_index, { kind: "text", text: parts.map((part) => (part as { text: string }).text).join(""), ...(phase !== undefined ? { phase } : {}) })
         }
       } else if (item?.type === "function_call") {
-        if (!outputItems.has(event.output_index as number)) outputOrderValid = false
+        const call = track(item, event.output_index)
+        if (call && (item.status === undefined || item.status === "completed")) {
+          if (item.arguments !== undefined && typeof item.arguments !== "string") { toolError = "openai malformed function_call arguments"; return [] }
+          if (!call.callId && call.finalArgs === undefined) return []
+          // A provider may omit the final arguments here and supply them in
+          // response.output. An incomplete buffer remains pending until then.
+          return completeCall(call, item.arguments === undefined ? call.finalArgs ?? call.buffer : item.arguments,
+            item.arguments === undefined ? undefined : "openai malformed function_call arguments")
+        }
+        if (call) toolError = "OpenAI response contains an unfinished function_call item"
       } else if (item !== undefined) outputOrderValid = false
       return []
     }
     if (t === "response.output_item.added") {
-      const item = event.item as { type: string; id?: string; call_id?: string; name?: string; namespace?: string; arguments?: string }
+      const item = event.item as FunctionItem & { type: string }
       if (item?.type === "function_call") {
-        if (codexSubscription && item.namespace !== undefined && item.namespace !== "ih") {
-          return [{ type: "error", error: new Error("Codex subscription returned an undeclared tool namespace") }]
-        }
-        // Some Responses streams send the full arguments inline on the item.
-        if (item.arguments && item.arguments.trim() !== "") {
-          try {
-            const args = JSON.parse(item.arguments) as unknown
-            if (item.id) yieldedInline.add(item.id)
-            return [recordCall(event.output_index, item.call_id, item.name!, args)]
-          } catch {
-            return [{ type: "error", error: new Error("openai malformed inline function_call arguments") }]
-          }
-        }
-        if (item.id) pendingCalls.set(item.id, { name: item.name ?? "", argsBuffer: "", ...(item.call_id ? { callId: item.call_id } : {}), ...(typeof event.output_index === "number" ? { outputIndex: event.output_index } : {}) })
+        const call = track(item, event.output_index)
+        if (!call || item.arguments === undefined || typeof item.arguments === "string" && !item.arguments.trim()) return []
+        if (item.status === "in_progress" && typeof item.arguments === "string") call.buffer ||= item.arguments
+        else if (item.status === undefined || item.status === "completed") return completeCall(call, item.arguments, "openai malformed inline function_call arguments")
       }
       return []
     }
     if (t === "response.function_call_arguments.delta") {
       const ev = event as { item_id: string; delta: string }
-      const pending = pendingCalls.get(ev.item_id)
-      if (pending) { pending.argsBuffer += ev.delta; if (typeof ev.delta === "string" && ev.delta.length > 0) onToolArguments() }
+      const call = track({ id: ev.item_id }, event.output_index)
+      if (call && call.finalArgs === undefined && typeof ev.delta === "string" && ev.delta.length > 0) { call.buffer += ev.delta; onToolArguments() }
       return []
     }
     if (t === "response.function_call_arguments.done") {
-      const ev = event as { item_id: string; arguments?: unknown }
-      const pending = pendingCalls.get(ev.item_id)
-      if (pending) {
-        pendingCalls.delete(ev.item_id)
-        if (!yieldedInline.has(ev.item_id)) {
-          try {
-            // The done event contains the final argument snapshot. Deltas
-            // are only a fallback for compatible endpoints that omit it.
-            // Never execute a stale delta when a supplied final value is invalid.
-            const serialized = ev.arguments === undefined ? pending.argsBuffer : ev.arguments
-            if (typeof serialized !== "string") throw new Error("Invalid final arguments")
-            const args = JSON.parse(serialized) as unknown
-            return [recordCall(pending.outputIndex, pending.callId, pending.name, args)]
-          } catch {
-            return [{ type: "error", error: new Error("openai malformed function_call arguments") }]
-          }
-        }
-      }
-      return []
+      const ev = event as { item_id: string; name?: string; arguments?: unknown }
+      const call = track({ id: ev.item_id, name: ev.name }, event.output_index)
+      return call ? completeCall(call, ev.arguments === undefined ? call.finalArgs ?? call.buffer : ev.arguments,
+        ev.arguments === undefined ? undefined : "openai malformed function_call arguments") : []
     }
     if (t === "response.reasoning_summary_text.delta" || t === "response.reasoning_text.delta") {
       const itemId = typeof event.item_id === "string" ? event.item_id : undefined
@@ -155,12 +225,38 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
       if (codexSubscription) return [...events, { type: "error", error: new Error(`Codex subscription response incomplete: ${reason ?? "unknown reason"}`) }]
       if (reason === "max_output_tokens") truncated = true
       if (reason === "content_filter") refused = true
+      if (!truncated && !refused) events.push({ type: "error", error: new Error("OpenAI response was incomplete") })
       return events
     }
     if (t === "response.completed") {
       terminal = 'completed'
-      const usage = mapUsage((event.response as { usage?: unknown } | undefined)?.usage)
-      return usage !== undefined ? [{ type: "usage", usage }] : []
+      const response = event.response as { usage?: unknown; output?: unknown; status?: unknown } | undefined
+      const usage = mapUsage(response?.usage)
+      const events: LLMStreamEvent[] = usage ? [{ type: "usage", usage }] : []
+      if (response?.status !== undefined && response.status !== "completed") toolError = "OpenAI response did not complete"
+      if (response?.output !== undefined && !Array.isArray(response.output)) toolError = "OpenAI response has an invalid output snapshot"
+      if (Array.isArray(response?.output)) {
+        const finalCalls = new Set<Call>(), recovered: LLMStreamEvent[] = []
+        for (const [index, item] of response.output.entries()) {
+          if (item === null || typeof item !== "object" || typeof item.type !== "string") { toolError = "OpenAI response has an invalid output item"; break }
+          if (item?.type === "message" && refusalParts(item.content)) refused = true
+          if (item?.type !== "function_call") continue
+          const call = track(item, index)
+          if (!call) break
+          if (finalCalls.has(call) || item.status !== undefined && item.status !== "completed") { toolError = "OpenAI response has an invalid final function_call"; break }
+          if (!call.callId && call.finalArgs === undefined) { toolError = "OpenAI final function_call is missing its call_id"; break }
+          finalCalls.add(call)
+          recovered.push(...completeCall(call, item.arguments === undefined ? call.finalArgs : item.arguments, "openai malformed function_call arguments"))
+        }
+        if (!toolError && finalCalls.size !== calls.size) toolError = "OpenAI response omitted an announced function_call"
+        if (recovered.length && !toolError && !refused) {
+          // Only calls are backfilled. Recovering one must not hide narration
+          // or native reasoning present only in the final response.
+          if (!observedSnapshotContent(response.output)) toolError = "OpenAI final function_call snapshot is missing streamed assistant content"
+        }
+        if (!toolError && !refused) events.push(...recovered)
+      }
+      return events
     }
     // M72 Ⅰ: the Responses API signals failure on the stream (`response.failed`)
     // and can also send a bare `error` event. Both used to fall through to the
@@ -193,6 +289,7 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
     return []
   }
   const finish = (): LLMStreamEvent => {
+    if (!truncated && !refused && toolError) return { type: "error", error: new Error(toolError) }
     if (codexSubscription && terminal !== 'completed') {
       return { type: "error", error: new Error("Codex subscription stream ended without response.completed") }
     }
@@ -202,6 +299,9 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
     // this check it was reported as an empty success.
     if (!terminal) {
       return { type: "error", error: new Error("OpenAI stream ended without response.completed") }
+    }
+    if (!truncated && !refused && [...calls].some(call => call.finalArgs === undefined)) {
+      return { type: "error", error: new Error("OpenAI response closed with an unfinished function_call") }
     }
     // M77: the two bits are independent — each is written on its own, so a
     // response that was both truncated and refused carries both. Both absent

@@ -49,3 +49,15 @@ Chat Completions 的助手訊息以 `content` 和 `tool_calls` 兩個欄位呈�
 - **JSON-RPC 封包。** 回覆須沿用呼叫的 ID 型別和值。成功與失敗各自有獨立的封包形狀；有結果又有錯誤的行會被略過。沒有對應請求的解析錯誤只影響該行。IH 明確的過載通知仍會結束連線上的待辦請求。[SDK 協議實作](../../packages/sdk/src/protocol.ts) · [JSON-RPC 2.0](https://www.jsonrpc.org/specification)
 - **顯示歷史與原始日誌。** 翻頁游標 `nextSeq` 可以直接作為下一頁的 `afterSeq`。獨立讀一頁也能顯示已送出的圖片。要用完整顯示歷史重建含圖片的對話，先收齊頁面，再透過 `restorePromotedHistoryImages` 還原已升格的輸入。尚未送出的圖片仍屬原始來源。即時圖片讀取按已提交的序號查找，後續事件不會改變其對應關係。[SDK 歷史轉換](../../packages/sdk/src/history-events.ts)
 - **舊 JSONL。** 舊會話的分支來源與父會話欄位在匯出時保留。早期缺少明示序號的記錄留在原始歷史前綴，後來新增的事件才寫進新的提交框架。重開後同時驗證對話、來源及格式邊界。[JSONL 實作](../../packages/core-session/src/serialization/jsonl.ts)
+
+## 串流失敗、停止與工具重試
+
+工具提案、工具已啟動、工具結果是三件可以分別核對的事。只要整輪回覆因工具資料不完整而失敗，先前已收到的提案也不會啟動工具。Anthropic Messages 和 Bedrock 的測試涵蓋第二個工具缺少結束事件，以及同一個區塊索引被重用。模型已回報的用量照常保留。[Messages 回歸](../../packages/llm-anthropic/test/partial-tool-terminal.test.ts) · [Bedrock 回歸](../../packages/llm-bedrock/test/partial-tool-terminal.test.ts)
+
+Responses 可以在參數完成事件、輸出項目或最終回覆中送出同一個工具。IH 用事件提供的項目 ID、呼叫 ID 與輸出位置核對身分。最終快照能補全先前只收到一半的呼叫，同一工具只交付一次。如果快照漏掉已宣告的工具、改變已確認的參數，或補回工具時還缺少同一回覆的正文或推理資料，該批工具不會執行。只送串流事件的相容端點仍可用已完整結束的呼叫。[Responses 回歸](../../packages/llm-openai/test/partial-tool-terminal.test.ts)
+
+四種 HTTP 轉接器共用 SSE 回應的讀取與釋放。呼叫端在部分文字後停止讀取，或停在協議回報的終止錯誤，都會關閉尚未讀完的回應。Gemini 成功路徑讀到 EOF，以收齊最後一段用量。HTTP 200 後收到的 Google 串流錯誤會保留其類別。在實際會話執行器中，舊版 `93b3cb8e` 遇到這種錯誤後執行了一次工具並送出第二筆請求。修復後保留第一筆請求已回報的用量，工具執行次數為零。[本機 HTTP 回歸](../../packages/provider/test/stream-disconnect.test.ts) · [Gemini 錯誤回歸](../../packages/llm-gemini/test/stream-error.test.ts) · [Google SDK 讀取邏輯](https://github.com/googleapis/js-genai/blob/3445a09ee9f4bb8a11287533c94a0a5d45235ea3/src/_api_client.ts#L788-L849)
+
+執行中的工具若已寫檔，逾時或按下停止都不能推斷寫入已回滾。新紀錄保留可確認的執行狀態。舊 JSONL 繼續使用原本的呼叫 ID、結果與錯誤旗標。只有工具明示唯讀、且逾時由該次呼叫的執行器確認，才可自動重試。一般工具結果即使含有 `TOOL_TIMEOUT` 字樣，仍按原本的成功或失敗狀態處理。[執行與重開回歸](../../packages/session-executor/test/tool-effect-interruption.test.ts) · [重試歸屬回歸](../../packages/guard-retry/test/prepared-retry.test.ts)
+
+使用者停止某次輸入時，Gateway 同時取消該次輸入的提問、核准與工作流程。下一次輸入可以在前一輪完成儲存後繼續執行。舊輸入最後的清理不會移除新輸入的卡片或目標。[SDK 排隊與停止回歸](../../packages/sdk/test/post-tool-stop.test.ts) · [Gateway 互動回歸](../../packages/desktop-gateway/test/interaction.e2e.test.ts)
