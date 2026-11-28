@@ -178,6 +178,7 @@ export interface ToolSchema {
  * guess, clamp or special-case.
  */
 export type ReasoningEffort = "off" | "low" | "medium" | "high" | "xhigh" | "max"
+export { officialXaiRoute, resolveXaiEffort } from "./xai.ts"
 
 /** Route opt-in for explicit prompt-cache metadata. Absence leaves the wire
  * unchanged. Retention controls Anthropic marker TTL only; other protocols

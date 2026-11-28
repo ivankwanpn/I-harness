@@ -1,5 +1,5 @@
 import { observeTextOutput } from './request/text-output.ts'
-import { preparedModelClient, snapshotModelData, createPreparedHttpPayload, projectImagesForProvider, type ModelClient } from "@i-harness/llm-seam"
+import { officialXaiRoute, preparedModelClient, snapshotModelData, createPreparedHttpPayload, projectImagesForProvider, type ModelClient } from "@i-harness/llm-seam"
 import type { OpenAICompatibleConfig } from "./types.ts"
 import { createRequestBody } from "./request/body.ts"
 import { mergeConfiguredHeaders } from "./request/headers.ts"
@@ -11,6 +11,7 @@ import { chatValidator } from './request/validate.ts'
 
 export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): ModelClient {
   const baseUrl = config.baseUrl ?? "https://api.openai.com"
+  const xai = officialXaiRoute(baseUrl)
   return preparedModelClient(async originalRequest => {
     const request = snapshotModelData(originalRequest)
     const capturedConfig = snapshotModelData(config)
@@ -35,7 +36,8 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
       transport: {
         label: 'openai-compatible', fetchOverride: capturedConfig.fetch,
         prepare(_actualBody, _serialized, control) {
-          return { url: `${baseUrl}/v1/chat/completions`, identity: capturedConfig.executionIdentity, state: undefined, init: {
+          return { url: xai ? `${xai.url}/v1/chat/completions` : `${baseUrl}/v1/chat/completions`, identity: capturedConfig.executionIdentity, state: undefined, init: {
+            ...(xai ? { redirect: "error" as const } : {}),
             headers: mergeConfiguredHeaders(capturedConfig.headers, { "Content-Type": "application/json", Authorization: `Bearer ${capturedConfig.apiKey}` }),
             signal: control.signal,
           } }

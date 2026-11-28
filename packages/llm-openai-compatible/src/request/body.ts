@@ -1,4 +1,4 @@
-import { resolvePromptCacheMode, type LLMRequest } from "@i-harness/llm-seam"
+import { resolvePromptCacheMode, resolveXaiEffort, type LLMRequest } from "@i-harness/llm-seam"
 import type { OpenAICompatibleConfig } from "../types.ts"
 import { toWireMessages } from "./messages.ts"
 import { translateReasoning } from "./reasoning.ts"
@@ -32,7 +32,7 @@ export function createRequestBody(config: OpenAICompatibleConfig, request: LLMRe
     ...((config.usageInStream ?? true) ? { stream_options: { include_usage: true } } : {}),
     ...(config.options ?? {}),
     // M32: request-level effort wins over config.options (explicit per-request intent).
-    ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
+    ...(translateReasoning(config.model, resolveXaiEffort(config.baseUrl, config.model, request.reasoningEffort, config.options?.reasoning_effort)) ?? {}),
     // M72 Ⅱ: the field NAME is a per-route choice — `max_tokens` is what
     // compatible gateways take, `max_completion_tokens` is what the newest
     // OpenAI models demand. Explicit config, not a guess (Pi's

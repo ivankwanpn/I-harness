@@ -1,4 +1,4 @@
-import { resolvePromptCacheMode, type LLMRequest, type ReasoningEffort } from "@i-harness/llm-seam"
+import { officialXaiRoute, resolveXaiEffort, resolvePromptCacheMode, type LLMRequest, type ReasoningEffort } from "@i-harness/llm-seam"
 import type { OpenAIConfig } from "../types.ts"
 import { mapMessages, withoutCacheBreakpoints } from "./messages.ts"
 import type { GeneratedAffinity } from "./cache-evidence.ts"
@@ -41,7 +41,9 @@ export function createRequestBody(
   codexSubscription: boolean,
   subscriptionCacheKey?: () => string,
 ) {
-  const reasoning = translateReasoning(config.model, request.reasoningEffort)
+  const xai = codexSubscription ? undefined : officialXaiRoute(config.baseUrl)
+  const configuredEffort = (config.options?.reasoning as { effort?: unknown } | null | undefined)?.effort
+  const reasoning = translateReasoning(config.model, resolveXaiEffort(config.baseUrl, config.model, request.reasoningEffort, configuredEffort))
   if (reasoning && isDeepSeekResponses(config)) delete reasoning.reasoning.summary
   const cacheMode = resolvePromptCacheMode(config.promptCache, request.promptCache)
   const firstPartyResponses = codexSubscription || isOfficialOpenAIResponses(config.baseUrl)
@@ -63,6 +65,12 @@ export function createRequestBody(
     ...(request.maxOutputTokens !== undefined ? { max_output_tokens: request.maxOutputTokens } : {}),
   }
   let generatedAffinity: GeneratedAffinity | undefined
+  if (xai && body.previous_response_id == null && body.conversation == null && body.prompt == null && !Object.hasOwn(config.options ?? {}, "input")) {
+    // The harness supplies the transcript. Request encrypted reasoning for
+    // Grok models that return it only when explicitly included.
+    if (!Object.hasOwn(body, "store")) body.store = false
+    if (!Object.hasOwn(body, "include")) body.include = ["reasoning.encrypted_content"]
+  }
   if (cacheMode === "off") {
     delete body.prompt_cache_key
     delete body.prompt_cache_retention

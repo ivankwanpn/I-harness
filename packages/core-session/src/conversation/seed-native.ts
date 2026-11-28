@@ -36,7 +36,8 @@ export function validateSeedNative(message: Extract<LLMMessage, { role: 'assista
     seedFields(native, ['kind', 'reasoningContent'], optional)
     if (!text(native.reasoningContent)) seedInvalid()
   } else if (native.kind === 'openai-responses') {
-    seedFields(native, ['kind', 'reasoningItems'], [...optional, 'outputOrder'])
+    seedFields(native, ['kind', 'reasoningItems'], [...optional, 'outputOrder', 'origin'])
+    if (native.origin !== undefined && native.origin !== 'xai-api' && native.origin !== 'xai-us-api') seedInvalid()
     if (!Array.isArray(native.reasoningItems) || native.reasoningItems.some(item => !item || typeof item !== 'object' || Array.isArray(item))) seedInvalid()
     order(native.outputOrder)
   } else if (native.kind === 'gemini') {

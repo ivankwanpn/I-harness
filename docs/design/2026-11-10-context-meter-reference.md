@@ -133,3 +133,33 @@ OpenCode 2.2.6 的桌面由會話指示器開啟右側 Context 面板，完整�
 在 Windows 執行官方發行包，透過隔離服務連上 DeepSeek Flash。測試會話的標頭顯示 5,686 token；點擊後，右側直接開啟完整「上下文」分頁，左側繼續顯示對話與輸入框。窄版標頭以小型選單顯示 Token、使用量和「檢視上下文用量」。右側上方的雙欄欄位列出模型、視窗和各類用量，下面的原始訊息可以逐筆展開。另在已匯入且帶有系統訊息的測試會話中看到系統提示詞區塊。
 
 IH 保留原有的按鈕位置。上下文圓圈在對話輸入框底部、模型選擇器前，寬窄版均可單擊直接切換右側完整分頁。「展開上下文」將同一份明細放入中央閱讀區。已配對的主請求能提供輸入、輸出、快取讀取與快取寫入數，未回報的分項保持未知。IH 的輸入總數已包含正規化後的快取，容量比例仍標示所用分母。分頁顯示當前會話已載入的公開使用者、助手和工具記錄，展開單筆後才序列化其內容；較早歷史和已發布的指令來源各自按需讀取。
+
+## 2026-11-28 從供應商回報到下一次請求
+
+上下文由數個 pnpm workspace 套件分工。協議轉接器辨識最終請求及供應商原生用量。`llm-seam` 負責同一個 HTTP 嘗試內累計欄位的更新，以及最終協議檢查。`token-meter` 把快取按協議計入一次，將歷史用量綁定到已接受的實際輸入前綴。`context-engine` 按已準備的請求和模型限制決定送出或縮減。`compaction` 產生摘要，再交由同一容量判定重算。工具結果的保存和取回另屬 `context-output`。
+
+對照 Pi 1.7.0，其估算會略過標為排除的 shell 輸出，並以已回報用量加後續可見內容推算。IH 對原生續跑、工具結果和被替換的輸入有同樣需求。校準時核對已送出的前綴，量不到的遠端內容保留為未知。OpenCode 2.4.2 則區分可沿用的純文字摘要與需要匹配模型的用量。這兩種資料在 IH 也有各自的有效範圍。[Pi 壓縮與估算](https://github.com/earendil-works/pi/blob/v1.7.0/packages/coding-agent/src/core/compaction/compaction.ts) · [OpenCode 壓縮實作](https://github.com/anomalyco/opencode/blob/v2.4.2/packages/core/src/session/compaction.ts)
+
+| 協議 | 重現的錯誤 | 修正後的行為 |
+| --- | --- | --- |
+| OpenAI Responses | 改寫純文字輸入仍可沿用前次用量。遠端項目 ID 被當成本機文字。明確為 null 的引用反而阻擋本機請求。終止封包附帶的用量可能遺失，連線保持開啟時可能持續等待。 | 純文字輸入納入前綴，依正式協議判斷引用，在終止事件記錄實際附帶的用量並結束讀取。Codex 訂閱仍要求真正的完成事件才接受成功。 |
+| Chat Completions | 中途 EOF 或 DeepSeek 回報資源不足時可能被視為成功。候選回覆的文字和工具可能混在一起。 | 未收到結束原因或結束標記即中斷時回報傳輸錯誤。資源不足走容量錯誤。對話只消費索引 0 候選的內容，保留請求層用量。 |
+| Anthropic Messages | 少計 5 分鐘和 1 小時快取寫入，矛盾分項也可能進入校準。生成期間碰到上下文上限時，IH 可能丟棄已生成的部分。 | 完整分項中的 148＋100 可補出 248。與已報總額衝突時保留回覆、停用這次校準。生成達窗限時保留部分回覆並標成截斷，HTTP 入參超限仍是送出失敗。 |
+| Gemini Developer API | 漏算思考輸出，混入其他候選的工具或回答，工具格式失敗也可能以成功收尾。 | 在同一次回覆合併累計回答與思考用量。輸入已含快取。只顯示主候選，失敗的工具回覆不交給執行器。 |
+| Bedrock ConverseStream | 省略寫入總額時會漏計按 TTL 回報的快取。部分過濾、截斷和工具失敗的結束原因被當成成功。 | SDK 的快取分項和總額互相核對，依 AWS 結束原因保留截斷或拒絕狀態，格式錯誤以失敗結束。 |
+
+共用 SSE 讀取層處理分散在不同網路區塊的 UTF-8、CRLF 和多行資料。各協議仍按各自的終止事件決定何時收尾。Chat 的工具參數可以串流回報活動，只有主候選完整且成功結束後才交付整批工具。壓縮和主回合共用同一個用量合併規則，後續的正常增量不能讓先前矛盾的數字重新變成有效的校準基準。
+
+Gemini 的模型探索、匯入和重啟後的容量檢查分別保留 Google 的輸入和輸出硬上限。例如輸入上限 65,536、輸出上限 8,192 時，兩者都會出現在 IH 的容量判斷，發送請求時只有經配置或依政策決定的輸出長度才進入 `generationConfig`。兩輪 Gateway 測試使用本機 HTTP 服務和一個真實檔案讀取工具，三次生成請求均經 IH 正常入口送出。[Google 模型欄位](https://ai.google.dev/api/models)
+
+### xAI Grok 的 API 路徑
+
+xAI 將 Responses 列為多輪推理和工具對話的首選 REST 介面。Pi 1.7.0 的 xAI provider 亦採用 Responses。IH 的 API key 路由可以設定供應商 ID `xai`、服務根位址 `https://api.x.ai`、協議 `openai-responses` 和金鑰環境變數 `XAI_API_KEY`。xAI 也提供舊 Chat Completions 和原生 SDK 的 gRPC。其 Anthropic 相容 `/v1/messages` 已列為棄用。這次驗收涵蓋 HTTP API，個人訂閱登入和 gRPC 均在驗收範圍之外。[xAI 遷移指南](https://docs.x.ai/developers/model-capabilities/text/comparison) · [xAI 已棄用接口](https://docs.x.ai/developers/rest-api-reference/inference/legacy) · [Pi 的 xAI provider](https://github.com/earendil-works/pi/blob/v1.7.0/packages/ai/src/providers/xai.ts)
+
+用同一個本機 xAI 格式的回覆做兩輪對照。舊版成功執行了讀檔工具，卻在工具結果送回模型及下一個使用者回合時遺失了沒有 `id` 的加密推理項目。修正後，IH 在這兩個請求都依原始順序帶回相同項目。由 IH 管理歷史時，預設請求加密推理並設定 `store: false`。測試另核對 xAI 的實際用量格式：輸入 131 已含 128 個快取 token，輸出 624 已含 246 個推理 token，總計 755。[xAI 推理文件](https://docs.x.ai/developers/model-capabilities/text/reasoning) · [xAI Responses 參考](https://docs.x.ai/developers/rest-api-reference/inference/responses)
+
+Grok 4.7 的 `Max` 會對應到 `xhigh`，選擇關閉思考時會先提示該模型支援的等級。直接使用美國端點 `https://us.api.x.ai` 時，請求仍送往該端點。新保存的加密續跑資料帶有來源標記，只在原來的區域及相符的模型與供應商配置下回放。來源標記識別服務端點，帳號或團隊身分未由這項標記驗證。[xAI 4.7 開發指南](https://docs.x.ai/developers/grok-4-7)
+
+### DeepSeek 長會話的估算誤差
+
+從 11 月 20 日的單一 IH 開發會話配對到 52 次已接受的 DeepSeek Flash 請求。Chat Completions 有 27 次有數值，其中 26 次經供應商回報校準，絕對相對誤差中位數 0.76%，第 90 百分位 3.38%，最大 16.40%。Responses 有 25 次，其中 24 次因無法估價而記為未知。兩個協議各有一次冷啟估算，分別高估 32.84% 和 16.84%。這是舊版本單一會話的觀察，新版 Gemini 的誤差仍需真實供應商樣本。

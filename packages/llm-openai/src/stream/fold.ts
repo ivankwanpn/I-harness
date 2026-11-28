@@ -1,9 +1,10 @@
-import type { LLMStreamEvent, ProviderBlockOrderEntry } from "@i-harness/llm-seam"
+import { officialXaiRoute, type LLMStreamEvent, type ProviderBlockOrderEntry } from "@i-harness/llm-seam"
 import type { OpenAIConfig } from "../types.ts"
 import { mapUsage } from "./usage.ts"
 
 /** One response owns all terminal, continuation, and partial function-call state. */
-export function createResponseFold(config: Pick<OpenAIConfig, "model" | "providerId">, codexSubscription: boolean, onToolArguments: () => void) {
+export function createResponseFold(config: Pick<OpenAIConfig, "model" | "providerId" | "baseUrl">, codexSubscription: boolean, onToolArguments: () => void) {
+  const xai = codexSubscription ? undefined : officialXaiRoute(config.baseUrl)
   let terminal: 'completed' | 'incomplete' | 'done' | 'failed' | undefined
   // M72 Ⅱ: the Responses wire's own truncation literal lives in
   // `response.incomplete.incomplete_details.reason` — set in `handleEvent`
@@ -18,7 +19,7 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
   // response can be both truncated and refused, so neither bit may be
   // produced as the other's `else`. Only `true` is ever written.
   let refused = false
-  const reasoningItems = new Map<string, Record<string, unknown>>()
+  const reasoningItems = new Map<string | number, Record<string, unknown>>()
   const outputItems = new Map<number, ProviderBlockOrderEntry>()
   let outputOrderValid = true
   let hasAssistantPhase = false
@@ -60,9 +61,12 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
     }
     if (t === "response.output_item.done") {
       const item = event.item as Record<string, unknown> | undefined
-      if (item?.type === "reasoning" && typeof item.id === "string") {
-        const index = reasoningItems.has(item.id) ? [...reasoningItems.keys()].indexOf(item.id) : reasoningItems.size
-        reasoningItems.set(item.id, item)
+      const reasoningKey = typeof item?.id === "string" ? item.id :
+        xai && item?.id === undefined && Array.isArray(item?.summary) && typeof item.encrypted_content === "string" && item.encrypted_content.length
+          && typeof event.output_index === "number" && Number.isSafeInteger(event.output_index) && event.output_index >= 0 ? event.output_index : undefined
+      if (item?.type === "reasoning" && reasoningKey !== undefined) {
+        const index = reasoningItems.has(reasoningKey) ? [...reasoningItems.keys()].indexOf(reasoningKey) : reasoningItems.size
+        reasoningItems.set(reasoningKey, item)
         recordOutput(event.output_index, { kind: "reasoning", index })
       } else if (item?.type === "message" && item.role === "assistant") {
         const parts = item.content
@@ -199,7 +203,7 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
     const outputOrder = outputOrderValid && indexedOutput.length > 0 && indexedOutput.every(([index], position) => index === position) && (reasoningItems.size > 0 || hasAssistantPhase)
       ? indexedOutput.map(([, entry]) => entry)
       : undefined
-    return { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningItems.size || outputOrder ? { providerContinuation: { kind: "openai-responses", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), reasoningItems: [...reasoningItems.values()], ...(outputOrder ? { outputOrder } : {}) } as const } : {}) }
+    return { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningItems.size || outputOrder ? { providerContinuation: { kind: "openai-responses", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), ...(xai ? { origin: xai.origin } : {}), reasoningItems: [...reasoningItems.values()], ...(outputOrder ? { outputOrder } : {}) } as const } : {}) }
   }
   return { handleEvent, finish, done() { terminal = 'done' }, get terminal() { return terminal !== undefined } }
 }

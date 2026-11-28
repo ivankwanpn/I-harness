@@ -1,4 +1,4 @@
-import { canReplayContinuation, replayBlockOrder, type LLMContentPart, type LLMRequest } from "@i-harness/llm-seam"
+import { canReplayContinuation, officialXaiRoute, replayBlockOrder, type LLMContentPart, type LLMRequest } from "@i-harness/llm-seam"
 import type { OpenAIConfig } from "../types.ts"
 import { isDeepSeekResponses } from "./deepseek.ts"
 
@@ -61,7 +61,8 @@ export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenA
       }
       // assistant
       const previous = m.providerContinuation
-      const continuation = previous?.kind === "openai-responses" && canReplayContinuation(previous, config) ? previous : undefined
+      const continuation = previous?.kind === "openai-responses" && canReplayContinuation(previous, config)
+        && (previous.origin === undefined || previous.origin === officialXaiRoute(config.baseUrl)?.origin) ? previous : undefined
       // DeepSeek's two APIs use different envelopes for the same provider text.
       // Require explicit matching provenance before translating an older round.
       const chatReasoning = deepSeek && previous?.kind === "openai-compatible" && previous.providerId === config.providerId && previous.model === config.model
