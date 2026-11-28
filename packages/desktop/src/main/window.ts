@@ -27,7 +27,7 @@ export function createDesktopWindow(preferences?: LocalPreferences): BrowserWind
     minHeight: 480,
     frame: false,
     show: false,
-    backgroundColor: "#151515",
+    backgroundColor: "#181818",
     autoHideMenuBar: true,
     webPreferences: windowPreferences(join(__dirname, "../preload/index.cjs")),
   })

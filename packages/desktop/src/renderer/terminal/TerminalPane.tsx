@@ -23,9 +23,9 @@ function appearanceOptions(fontFamily: string, fontSize: number, appearance: App
   const root = document.documentElement
   const style = getComputedStyle(root)
   const light = (root.dataset.theme ?? (appearance === "system" ? window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light" : appearance)) === "light"
-  const background = style.getPropertyValue("--ih-bg").trim() || (light ? "#f8f8f8" : "#151515")
-  const foreground = style.getPropertyValue("--ih-text").trim() || (light ? "#252525" : "#ececec")
-  const selectionBackground = style.getPropertyValue("--ih-accent").trim() || (light ? "#345eac" : "#b8c9ed")
+  const background = style.getPropertyValue("--ih-bg").trim() || (light ? "#f8f8f8" : "#181818")
+  const foreground = style.getPropertyValue("--ih-text").trim() || (light ? "#252525" : "#ededed")
+  const selectionBackground = style.getPropertyValue("--ih-accent").trim() || (light ? "#345eac" : "#9bbfff")
   return { fontFamily, fontSize, theme: { background, foreground, cursor: foreground, cursorAccent: background, selectionBackground, selectionForeground: background } }
 }
 

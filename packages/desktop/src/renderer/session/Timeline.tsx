@@ -368,7 +368,7 @@ export function Timeline({ rows, assistantPreview, reasoningText, navigation, ru
               data-search-target={row.id === target?.id || (row.kind === "activity-group" && row.rows.some(tool => tool.id === target?.id)) ? "true" : undefined}
               data-index={item.index}
               ref={virtualizer.measureElement}
-              style={{ transform: `translateY(${item.start}px)`, ...(row.id === target?.id || (row.kind === "activity-group" && row.rows.some(tool => tool.id === target?.id)) ? { outline: "2px solid var(--accent, #5073c8)", outlineOffset: "-2px" } : {}) }}
+              style={{ transform: `translateY(${item.start}px)`, ...(row.id === target?.id || (row.kind === "activity-group" && row.rows.some(tool => tool.id === target?.id)) ? { outline: "2px solid var(--ih-accent)", outlineOffset: "-2px" } : {}) }}
             >
               {row.id === target?.id || (row.kind === "activity-group" && row.rows.some(tool => tool.id === target?.id)) ? <span className="muted">搜尋命中</span> : null}
               <RowView resultReader={resultReader} row={row} open={open} toggle={toggle} activeReasoningId={activeReasoningId} navigation={navigation} onPreview={setPreview} page={pages.get(row.id) ?? 0} setPage={(page) => {
