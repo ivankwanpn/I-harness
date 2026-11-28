@@ -74,6 +74,11 @@ export function sessionHistoryTurns(events: readonly TurnRecord[], start: number
   }
   index.indexed = events.length
   index.last = events.at(-1)
+  return overlappingTurns(turns, start, end)
+}
+
+function overlappingTurns(turns: readonly SessionHistoryTurn[], start: number, end: number): SessionHistoryTurn[] {
+  if (start >= end) return []
   let lo = 0
   let hi = turns.length
   while (lo < hi) {
@@ -92,12 +97,19 @@ export function sessionHistoryTurns(events: readonly TurnRecord[], start: number
 /** Select logical records from the original verified order. The requesting
  * owner must prove the corresponding physical window before materialization. */
 export function planSessionHistoryPage(facts: readonly SessionHistoryFact[], options: SessionHistoryPageOptions): SessionHistoryPagePlan | undefined {
-  const { afterSeq, beforeSeq, limit, includeTurns } = options
+  return planRange(facts, checkedRange(facts.length, options), options.includeTurns)
+}
+
+function checkedRange(head: number, options: SessionHistoryPageOptions) {
+  const { afterSeq, beforeSeq, limit } = options
   if (!Number.isInteger(afterSeq) || afterSeq < 0 || !Number.isInteger(limit) || limit <= 0 ||
       (beforeSeq !== undefined && (!Number.isSafeInteger(beforeSeq) || beforeSeq < 0)))
     throw new RangeError('Invalid session history range')
-  const range = sessionHistoryRange(facts.length, { afterSeq, beforeSeq, limit: Math.min(limit, SESSION_HISTORY_LIMIT) })
-  const { startSeq, nextSeq, headSeq } = range
+  return sessionHistoryRange(head, { afterSeq, beforeSeq, limit: Math.min(limit, SESSION_HISTORY_LIMIT) })
+}
+
+function planRange(facts: readonly SessionHistoryFact[], range: SessionHistoryPagePlan['range'], includeTurns?: boolean): SessionHistoryPagePlan | undefined {
+  const { startSeq, nextSeq } = range
   const ordinals = Array.from({ length: nextSeq - startSeq }, (_, index) => startSeq + index)
   const imageIds = new Set<string>()
   for (const ordinal of ordinals) {
@@ -116,14 +128,40 @@ export function planSessionHistoryPage(facts: readonly SessionHistoryFact[], opt
       if (admission === undefined) throw new Error(`image admission not found for user/message: ${fact.imageInputId}`)
       admissions.set(ordinal, admission)
     }
-    for (const admission of new Set(admissions.values())) if (admission < startSeq) ordinals.push(admission)
   }
-  // An empty range of a nonempty log still requires its physical proof.
-  if (!ordinals.length && headSeq) ordinals.push(headSeq - 1)
+  appendProofOrdinals(ordinals, range, admissions)
   // Legacy positional events may lack an explicit address. The snapshot path
   // still supports these events without an ordinal read.
   if (ordinals.some(ordinal => facts[ordinal]!.seq !== ordinal)) return undefined
   return { range, ordinals, admissions, ...(includeTurns ? { turns: sessionHistoryTurns(facts, startSeq, nextSeq) } : {}) }
+}
+
+function appendProofOrdinals(ordinals: number[], range: SessionHistoryPagePlan['range'], admissions: Map<number, number>) {
+  for (const admission of new Set(admissions.values())) if (admission < range.startSeq) ordinals.push(admission)
+  if (!ordinals.length && range.headSeq) ordinals.push(range.headSeq - 1)
+}
+
+/** Plan a bounded neighborhood in the scroll direction with absolute image
+ * and turn coordinates. Only this plan needs to survive the original scan. */
+export function planSessionHistoryWindow(facts: readonly SessionHistoryFact[], options: SessionHistoryPageOptions, maxEvents: number) {
+  if (!Number.isSafeInteger(maxEvents) || maxEvents < SESSION_HISTORY_LIMIT) throw new RangeError('Invalid history window size')
+  const requested = checkedRange(facts.length, options), width = Math.min(maxEvents, facts.length)
+  const origin = options.beforeSeq === undefined ? requested.startSeq : requested.nextSeq - width
+  const startSeq = Math.max(0, Math.min(facts.length - width, origin))
+  return planRange(facts, { startSeq, nextSeq: startSeq + width, headSeq: facts.length }, true)
+}
+
+export function pageFromSessionHistoryWindow(window: Pick<SessionHistoryPagePlan, 'range' | 'admissions' | 'turns'>, options: SessionHistoryPageOptions): SessionHistoryPagePlan | undefined {
+  const range = checkedRange(window.range.headSeq, options)
+  if (range.startSeq < window.range.startSeq || range.nextSeq > window.range.nextSeq) return
+  const ordinals = Array.from({ length: range.nextSeq - range.startSeq }, (_, index) => range.startSeq + index)
+  const admissions = new Map<number, number>()
+  for (const ordinal of ordinals) {
+    const admission = window.admissions.get(ordinal)
+    if (admission !== undefined) admissions.set(ordinal, admission)
+  }
+  appendProofOrdinals(ordinals, range, admissions)
+  return { range, ordinals, admissions, ...(options.includeTurns ? { turns: overlappingTurns(window.turns!, range.startSeq, range.nextSeq) } : {}) }
 }
 
 /** Compose owned, physically verified records in the plan's ordinal order. */

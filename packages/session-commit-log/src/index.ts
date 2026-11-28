@@ -6,4 +6,5 @@
 export { COMMIT_LOG_GENERATION, CommitLogConflictError, CommitLogNotFoundError, CommitLogClosedError, createCommitLog, openCommitLog } from './store.ts'
 export type { CommitLog, CommitLogMode } from './store.ts'
 export { CommitLogCleanupError } from './resources.ts'
+export { createCommitHistoryReader } from './history-pages.ts'
 export type { CommitLogCleanup } from './resources.ts'

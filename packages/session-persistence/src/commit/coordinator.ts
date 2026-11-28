@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { CURRENT_FORMAT_VERSION, FactRecoveryRequiredError, validateSemanticBootstrapHistory, canonicalJsonData, decodeFactBatch, encodeFactBatch, legacyPrefixDigest, readInbox, stringifyJsonData, type FactReceipt, type Session, type SessionEvent, type SessionView } from '@i-harness/core-session'
 import { captureCatalogHeader, pendingInputSummary, type PendingInputSummary, type SavedContextBinding, type SavedContextFacts, type SessionCatalogHeader } from '../coordinator/types.ts'
 import { captureSavedContextBinding, savedContextFromObservation, savedContextFromSession } from '../coordinator/saved-context.ts'
-import { COMMIT_LOG_GENERATION, CommitLogConflictError, CommitLogClosedError, CommitLogCleanupError, createCommitLog as createStoredCommitLog, openCommitLog, CommitLogNotFoundError, type CommitLog, type CommitLogMode, type CommitLogCleanup } from '@i-harness/session-commit-log'
+import { COMMIT_LOG_GENERATION, CommitLogConflictError, CommitLogClosedError, CommitLogCleanupError, createCommitHistoryReader, createCommitLog as createStoredCommitLog, openCommitLog, CommitLogNotFoundError, type CommitLog, type CommitLogMode, type CommitLogCleanup } from '@i-harness/session-commit-log'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { buildSession, migrate, preflightSessionFormat } from '../format/validation.ts'
@@ -72,6 +72,7 @@ export type CommitCoordinator = {
   intents(sessionId: string): Promise<ReadonlyMap<string, CommitIntent>>
   load(sessionId: string): Promise<{ session: Session }>
   snapshot(sessionId: string, options?: { includeCatalogHeader?: boolean }): Promise<{ session: Session; catalogHeader?: SessionCatalogHeader }>
+  readHistoryPage(sessionId: string, options: import('@i-harness/core-session').SessionHistoryPageOptions): Promise<import('@i-harness/core-session').OwnedSessionHistoryPage | undefined>
   readPendingInputs(sessionId: string): Promise<readonly PendingInputSummary[]>
   readSavedContext(sessionId: string, binding?: SavedContextBinding): Promise<SavedContextFacts>
   loadOwned(sessionId: string): Promise<{ session: Session }>
@@ -256,10 +257,17 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     }
   }
 
+  const checkedSession = (meta: SessionMeta | undefined, events: SessionEvent[]) => {
+    preflightSessionFormat(CURRENT_FORMAT_VERSION, events, meta)
+    return buildSession(meta, events)
+  }
+  const historyReader = createCommitHistoryReader((sessionId, view) => {
+    if (view.deleted) throw new CommitSessionDeletedError(sessionId)
+    checkedSession(toMeta(view.header, view.meta), [...view.entries])
+  })
   const readSnapshot = async (sessionId: string, includeCatalogHeader = false) => {
     const state = await readState(sessionId)
-    preflightSessionFormat(CURRENT_FORMAT_VERSION, state.events, state.meta)
-    return { session: buildSession(state.meta, state.events), ...(includeCatalogHeader && state.meta ? { catalogHeader: captureCatalogHeader(state.meta) } : {}) }
+    return { session: checkedSession(state.meta, state.events), ...(includeCatalogHeader && state.meta ? { catalogHeader: captureCatalogHeader(state.meta) } : {}) }
   }
 
   // Retiring the writer revokes the attachment. Passive inspection can still
@@ -669,6 +677,12 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       try { return new Map(log.view().intents) } finally { await log.close() }
     },
     snapshot(sessionId, options) { return readSnapshot(sessionId, options?.includeCatalogHeader) },
+    async readHistoryPage(sessionId, options) {
+      const resident = () => managed.has(sessionId) || owned.has(sessionId)
+      if (resident()) return undefined
+      const page = await historyReader.read(logOptions(sessionId), options).catch(retainOpenFailure)
+      return resident() ? undefined : page
+    },
     async readPendingInputs(sessionId) {
       const inputs = await readCommittedDisplay(sessionId, execution => {
         const observation = execution.observe()
@@ -903,6 +917,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     },
     close() {
       return admission.retire(async () => {
+        historyReader.clear()
         const failures: unknown[] = []
         for (const id of [...pending.keys()]) {
           try { await this.flush(id) } catch (error) { failures.push(error) }
