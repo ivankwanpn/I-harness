@@ -8,7 +8,7 @@ const request: LLMRequest = {
   systemPrompt: "", messages: [{ role: "user", content: "Read the file" }],
   tools: [{ name: "read", description: "", inputSchema: { type: "object" } }],
 }
-const item = { type: "reasoning", id: "rs_1", summary: [], content: [{ type: "reasoning_text", text: "one" }, { type: "reasoning_text", text: " two" }] }
+const item = { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "opaque-companion", content: [{ type: "reasoning_text", text: "one" }, { type: "reasoning_text", text: " two" }] }
 const call = { type: "function_call", id: "fc_1", call_id: "call_1", name: "read", arguments: '{"path":"file.txt"}' }
 
 async function collect(client: ModelClient, input: LLMRequest) {
@@ -58,6 +58,7 @@ it.each([[config.providerId, config.baseUrl], ["my-account", config.baseUrl + "/
     { role: "assistant", content: "Reading.", reasoning_content: "one two", tool_calls: [{ id: call.call_id, type: "function", function: { name: call.name, arguments: call.arguments } }] },
     { role: "tool", tool_call_id: call.call_id, content: "contents" },
   ])
+  expect(JSON.stringify(body)).not.toContain(item.encrypted_content)
 })
 
 it("retains the original Responses replay and fences subsequent Chat/Responses destination changes", async () => {
@@ -87,7 +88,7 @@ it("rejects edited text, replaced arguments and non-plain reasoning from the cro
   const modified = [
     { ...assistant, content: "Edited." },
     { ...assistant, toolCalls: [{ id: call.call_id, name: call.name, args: { path: "other.txt" } }] },
-    ...[{ encrypted_content: "opaque" }, { summary: [{ type: "summary_text", text: "summary" }] },
+    ...[{ content: undefined }, { encrypted_content: 12 }, { summary: [{ type: "summary_text", text: "summary" }] },
       { content: [...item.content, { type: "summary_text", text: "summary" }] }].map(changes => ({
         ...assistant, providerContinuation: { ...continuation, reasoningItems: [{ ...item, ...changes }] },
       })),

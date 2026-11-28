@@ -36,7 +36,7 @@ import { reportTaskProjectionIssues } from './task-projection-diagnostics.ts'
 import { createFsWatchService } from '@i-harness/fs-watch'
 import { createSdkServer } from "@i-harness/sdk/server"
 import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsProviderProtocol, type SettingsContextSubsystems } from "@i-harness/settings"
-import { commitModelSwitch } from "./model-switch.ts"
+import { commitModelSwitch, switchJsonlModel } from "./model-switch.ts"
 import { createSessionManagement } from "./session-management.ts"
 import { readListedSessions } from "./catalog-rows.ts"
 import { createJsonlDashboardSummaryCache, describeSavedSession, describeSession, loadCatalogSession } from "./session-dashboard-summary.ts"
@@ -832,15 +832,29 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
       await coordinator.profile(sessionId)
       return service.modelState(sessionId)
     },
-    setSessionModel: (sessionId, selection) => fence.run(sessionId, async () => {
-      const { meta } = await coordinator.profile(sessionId)
-      if (selection.protocol !== undefined && !(PROVIDER_PROTOCOLS as readonly string[]).includes(selection.protocol)) throw new Error("Invalid model protocol")
+    setSessionModel: async (sessionId, selection) => {
       const durable = { provider: selection.provider, model: selection.model, ...(selection.reasoningEffort !== undefined ? { reasoningEffort: selection.reasoningEffort } : {}) }
       const transient = { ...durable, ...(selection.protocol !== undefined ? { protocol: selection.protocol as SettingsProviderProtocol } : {}) }
-      const state = await modelBindingFor(sessionId, { ...meta, modelSelection: transient })
-      if (state.status !== "ready") throw new Error(state.reason)
-      await commitModelSwitch(service, sessionId, state.binding, () => coordinator.updateMeta(sessionId, { modelSelection: durable }))
-    }),
+      const persist = () => coordinator.updateMeta(sessionId, { modelSelection: durable })
+      const rotation = await fence.run(sessionId, async () => {
+        const { meta } = await coordinator.profile(sessionId)
+        if (selection.protocol !== undefined && !(PROVIDER_PROTOCOLS as readonly string[]).includes(selection.protocol)) throw new Error("Invalid model protocol")
+        const state = await modelBindingFor(sessionId, { ...meta, modelSelection: transient })
+        if (state.status !== "ready") throw new Error(state.reason)
+        const saved = meta.modelSelection
+        if (saved?.provider === durable.provider && saved.model === durable.model && saved.reasoningEffort === durable.reasoningEffort && saved.protocol === undefined) {
+          // A wire override is live-only and does not change the saved header.
+          service.rebindModel(sessionId, state.binding)
+        } else if (commitLogStore) {
+          await commitModelSwitch(service, sessionId, state.binding, persist)
+        } else return state.binding
+      })
+      if (rotation) await switchJsonlModel(service, fence, sessionId, rotation, {
+        hasDocument: () => coordinator.hasManagedDocument?.(sessionId) ?? false,
+        hasActiveWorkflow: () => workflow.hasActiveWork(sessionId),
+        persist,
+      })
+    },
     createSession: async () => ({ sessionId: (await coordinator.create()).id }),
     listSessions: () => readListedSessions(coordinator, ids => {
       const saved = savedDashboardSummary.forListing(options.sessionDir, ids)

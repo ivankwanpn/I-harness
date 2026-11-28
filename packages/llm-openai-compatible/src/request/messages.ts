@@ -13,11 +13,11 @@ function chatReasoning(message: Extract<LLMMessage, { role: "assistant" }>, targ
   const calls = message.toolCalls ?? []
   if (native.deepSeekReplayFingerprint !== projectionFingerprint([message.content, calls.map(deepSeekCallFingerprint)])) return
 
-  // DeepSeek accepts only verbatim reasoning_text on this route. A summary,
-  // ciphertext, or mixed item cannot represent the original reasoning.
+  // The official Responses service can put an opaque field beside its plain
+  // reasoning_text. Only the verified plain content belongs in Chat.
   const texts: string[] = []
   for (const item of native.reasoningItems) {
-    if (item.type !== "reasoning" || item.encrypted_content != null
+    if (item.type !== "reasoning" || item.encrypted_content != null && typeof item.encrypted_content !== "string"
       || item.summary !== undefined && (!Array.isArray(item.summary) || item.summary.length !== 0)
       || !Array.isArray(item.content) || item.content.length === 0
       || !item.content.every(part => part?.type === "reasoning_text" && typeof part.text === "string")) return
