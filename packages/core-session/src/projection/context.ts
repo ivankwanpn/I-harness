@@ -1,9 +1,9 @@
 import type { SessionView as Session } from "../managed/types.ts";
 import { readManagedAssessmentEvents } from '../managed/committed-events.ts';
 import { validContextEvent, type ContextRecoveryFacts, type RequestBudgetSnapshot } from "../events/context.ts";
-import type { RequestBudgetSnapshotV2 } from '../events/admission.ts';
+import { isConversationBudget, type RequestBudgetSnapshotV2 } from '../events/admission.ts';
 import {createPlanModeIndex} from './plan.ts';
-import {createProjectionRewriteIndex} from './rewrite.ts';
+import {changesContextProjection,createProjectionRewriteIndex} from './rewrite.ts';
 import { stageProviderInput, type ProviderInputState } from './provider-input.ts';
 export function deriveContextRecovery(session: Session, ownerSessionId: string, binding?: {
     providerId?: string;
@@ -23,12 +23,12 @@ export function deriveContextRecovery(session: Session, ownerSessionId: string, 
         }
     return selectRecovery(recoveries, binding);
 }
-export function deriveContextBudget(session: Session, ownerSessionId: string): RequestBudgetSnapshot | RequestBudgetSnapshotV2 | undefined {
-    let current: RequestBudgetSnapshot | RequestBudgetSnapshotV2 | undefined;
-    for (const event of session.events)
-        if (event.type === "context/budget" && event.snapshot.ownerSessionId === ownerSessionId && validContextEvent(event))
-            current = event.snapshot;
-    return current;
+export function deriveContextBudget(session: Session, ownerSessionId: string, select?: 'conversation'): RequestBudgetSnapshot | RequestBudgetSnapshotV2 | undefined {
+    for (let index = session.events.length - 1; index >= 0; index--) {
+        const event = session.events[index]!;
+        if (event.type === "context/budget" && event.snapshot.ownerSessionId === ownerSessionId &&
+            (select !== 'conversation' || isConversationBudget(event.snapshot)) && validContextEvent(event)) return event.snapshot;
+    }
 }
 function selectRecovery(recoveries: ReadonlyMap<string, ContextRecoveryFacts>, binding?: {
     providerId?: string;
@@ -62,6 +62,8 @@ function selectRecovery(recoveries: ReadonlyMap<string, ContextRecoveryFacts>, b
 export function createContextStateIndex(sessionId: string) {
     const recoveries = new Map<string, Map<string, ContextRecoveryFacts>>();
     const budgets = new Map<string, RequestBudgetSnapshot | RequestBudgetSnapshotV2>();
+    let conversationBudget: RequestBudgetSnapshot | RequestBudgetSnapshotV2 | undefined;
+    let conversationBudgetRewritten = false;
     let revision = 0;
     let providerInput: ProviderInputState = {};
     const plan=createPlanModeIndex(),rewrite=createProjectionRewriteIndex();
@@ -69,9 +71,12 @@ export function createContextStateIndex(sessionId: string) {
     return {
         stage(events: readonly import('../managed/types.ts').SessionEventView[]) {
             const expected = revision, changed = new Map<string, Map<string, ContextRecoveryFacts>>(), nextBudgets = new Map<string, RequestBudgetSnapshot | RequestBudgetSnapshotV2>();
+            let nextConversationBudget = conversationBudget;
+            let nextBudgetRewritten = conversationBudgetRewritten;
             const planStage=plan.stage(events),rewriteStage=rewrite.stage(events);let nextPrunes=prunes,nextContext=contextRevision,nextSchedule=scheduleRevision,nextSandbox=sandbox;
             const nextProviderInput = stageProviderInput(providerInput, events, sessionId);
             for (const [index,event] of events.entries()) {
+                if (nextConversationBudget?.version === 2 && changesContextProjection(event)) nextBudgetRewritten = true;
                 if(event.type==='compaction/prune')nextPrunes++;
                 if(event.type==='context/usage'||event.type==='context/recovery')nextContext++;
                 if(event.type==='schedule/change')nextSchedule++;
@@ -87,8 +92,14 @@ export function createContextStateIndex(sessionId: string) {
                     lane.delete(event.recoveryId);
                     lane.set(event.recoveryId, folded);
                 }
-                if (event.type === 'context/budget' && validContextEvent(event))
-                    nextBudgets.set(event.snapshot.ownerSessionId, structuredClone(event.snapshot));
+                if (event.type === 'context/budget' && validContextEvent(event)) {
+                    const snapshot = structuredClone(event.snapshot);
+                    nextBudgets.set(snapshot.ownerSessionId, snapshot);
+                    if (snapshot.ownerSessionId === sessionId && isConversationBudget(snapshot)) {
+                        nextConversationBudget = snapshot;
+                        nextBudgetRewritten = false;
+                    }
+                }
             }
             let installed = false;
             return {
@@ -99,6 +110,8 @@ export function createContextStateIndex(sessionId: string) {
                         throw new Error('Stale context state suffix');
                     planStage.commit();rewriteStage.commit();prunes=nextPrunes;contextRevision=nextContext;scheduleRevision=nextSchedule;sandbox=nextSandbox;eventCount+=events.length;
                     providerInput = nextProviderInput;
+                    conversationBudget = nextConversationBudget;
+                    conversationBudgetRewritten = nextBudgetRewritten;
                     for (const [owner, lane] of changed)
                         recoveries.set(owner, lane);
                     for (const [owner, budget] of nextBudgets)
@@ -110,8 +123,9 @@ export function createContextStateIndex(sessionId: string) {
         },
         plan:plan.read,rewrite:rewrite.read,
         releasePayloads(){plan.releasePayloads();providerInput={}},
-        lastReportedInputTokens(){return providerInput.reported?.tokens},
+        lastReportedInputTokens(select?: 'conversation'){return (select === 'conversation' ? providerInput.conversationReported : providerInput.reported)?.tokens},
         projectionRevision(){return rewrite.read().markers+prunes},
+        conversationBudgetRewritten(){return conversationBudgetRewritten},
         contextRevision(){return contextRevision},scheduleRevision(){return scheduleRevision},
         sandboxMode(fromSeq=0){if(!Number.isSafeInteger(fromSeq)||fromSeq<0||fromSeq>eventCount)throw RangeError('Invalid original policy floor');return sandbox&&sandbox.seq>=fromSeq?sandbox.mode:undefined},
         sandboxPolicy(fromSeq=0){if(!Number.isSafeInteger(fromSeq)||fromSeq<0||fromSeq>eventCount)throw RangeError('Invalid original policy floor');return sandbox&&sandbox.seq>=fromSeq?sandbox:undefined},
@@ -123,9 +137,20 @@ export function createContextStateIndex(sessionId: string) {
             const value = selectRecovery(recoveries.get(owner) ?? new Map(), binding);
             return value && { ...value };
         },
-        budget(owner: string) {
-            const value = budgets.get(owner);
+        budget(owner: string, select?: 'conversation') {
+            if (select === 'conversation' && owner !== sessionId) return undefined;
+            const value = select === 'conversation' ? conversationBudget : budgets.get(owner);
             return value && structuredClone(value);
         },
     };
+}
+/** The snapshot is the exact selected event returned by deriveContextBudget. */
+export function wasContextBudgetRewritten(events: Session['events'], budget: RequestBudgetSnapshotV2): boolean {
+    let seenBudget = false, rewrites = 0;
+    for (let i = events.length - 1; i >= 0; i--) {
+        const event = events[i]!;
+        if (event.type === 'context/budget' && event.snapshot === budget) seenBudget = true;
+        if (changesContextProjection(event) && (!seenBudget || ++rewrites > budget.projectionRevision)) return true;
+    }
+    return false;
 }

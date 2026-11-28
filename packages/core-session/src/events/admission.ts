@@ -1,6 +1,10 @@
 import { scalarCount, scalarDigest, scalarFields, scalarId } from './attribution.ts'
 /** Browser-safe scalar observations. No execution or preparation imports. */
 export type AdmissionPurpose = 'main' | 'recovery' | 'summary' | 'approval' | 'title' | 'media'
+/** A provider-recovery retry continues the same conversation request. */
+export function isConversationBudget(budget: { version: 1 | 2; purpose?: AdmissionPurpose }): boolean {
+  return budget.version === 1 || budget.purpose === 'main' || budget.purpose === 'recovery'
+}
 export type AdmissionUnknownReason = 'unconfigured' | 'coupling-unverified' | 'output-unbounded' | 'token-cost-unavailable' | 'remote-input-unavailable' | 'protocol-unverified' | 'body-limit-unverified' | 'stale'
 export type AdmissionEstimate = { kind: 'estimated'; value: number; source: 'projected-heuristic' | 'provider-anchor-plus-projection' | 'neutral-only' } | { kind: 'unknown'; reason: AdmissionUnknownReason }
 export type AdmissionDimension = 'context' | 'input' | 'output' | 'http-bytes' | 'protocol'

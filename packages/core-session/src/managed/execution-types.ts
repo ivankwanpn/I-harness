@@ -70,6 +70,7 @@ export interface ExecutionObservation {
  readonly header?:SessionView['header']
  readonly prefix:Readonly<JournalPrefix>
  readonly projectionRevision:number
+ readonly conversationBudgetRewritten:boolean
  readonly contextRevision:number
  readonly hasConversationMessages:boolean
  readonly turnCount:number
@@ -96,8 +97,8 @@ readonly schedules:Readonly<{kind:'unavailable';reason:'original-schedule-adapte
  sandboxMode(fromSeq?:number):Extract<SessionEventView,{type:'sandbox/mode'}>['mode']|undefined
  sandboxPolicy(fromSeq?:number):Readonly<{mode:Extract<SessionEventView,{type:'sandbox/mode'}>['mode'];seq:number}>|undefined
  rewrite():Readonly<ProjectionRewrite>
- budget():DeepReadonly<ReturnType<ReturnType<typeof createContextStateIndex>['budget']>>
- lastReportedInputTokens():number|undefined
+ budget(select?:'conversation'):DeepReadonly<ReturnType<ReturnType<typeof createContextStateIndex>['budget']>>
+ lastReportedInputTokens(select?:'conversation'):number|undefined
  recovery(binding?:Parameters<ReturnType<typeof createContextStateIndex>['recovery']>[1]):DeepReadonly<ReturnType<ReturnType<typeof createContextStateIndex>['recovery']>>
  generations():DeepReadonly<readonly GenerationActionState[]>
  semanticsStartSeq():number|undefined

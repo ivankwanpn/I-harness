@@ -99,6 +99,7 @@ it('keeps accepted calibration, execution observation and installed facts throug
   expect(session.events.filter(event => event.type === 'context/usage' && event.version === 2 && event.op === 'sample')).toHaveLength(1)
   // A real committed rewrite uses the existing calibration invalidation owner.
   append(session, { type: 'compaction/prune', version: 1, pruned: [] })
+  expect(context.ownedBudget.read()).toEqual({kind:'unavailable',reason:'Conversation history changed since the last prepared budget'})
   context.contextMeter.invalidate(); context.contextMeter.invalidate()
   await context.ownedBudget.checkpoint()
   expect(session.events.filter(event => event.type === 'context/usage' && event.version === 2 && event.op === 'retire')).toHaveLength(1)

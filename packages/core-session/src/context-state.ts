@@ -1,5 +1,5 @@
 import { validBudgetSnapshot, type BudgetRead, type RequestBudgetSnapshot } from "./events/context-scalars.ts"
-import { validAdmissionObservation, type RequestBudgetSnapshotV2 } from './events/admission.ts'
+import { isConversationBudget, validAdmissionObservation, type RequestBudgetSnapshotV2 } from './events/admission.ts'
 
 /** Additive v1 wire contract. A snapshot may be known while admission is unavailable. */
 export type SessionContextState = (
@@ -35,6 +35,7 @@ export function readSessionContextState(value: unknown, ownerSessionId?: string)
   if (candidate.kind !== "ready" && candidate.kind !== "unavailable") return invalid()
   if (candidate.observation !== undefined) {
     if (!validAdmissionObservation(candidate.observation) || ownerSessionId !== undefined && candidate.observation.ownerSessionId !== ownerSessionId) return invalid()
+    if (!isConversationBudget(candidate.observation)) return { kind: 'unavailable', reason: 'No conversation request budget is available' }
     const state = contextStateFromObservation(candidate.observation)
     const tokens = candidate.lastReportedInputTokens
     const observation = candidate.observation

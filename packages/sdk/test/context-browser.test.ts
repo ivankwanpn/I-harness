@@ -14,6 +14,12 @@ it('bundles the actual SDK context reader for browsers and preserves v1/v2 valid
   for(const value of cases) for(const owner of ['owner','other',undefined]) expect(reader.readSessionContextState(value,owner)).toEqual(readSessionContextState(value,owner))
   expect(reader.readSessionContextState(v1,'owner').kind).toBe('ready')
   expect(reader.readSessionContextState(v2,'owner').kind).toBe('ready')
+  for(const purpose of ['approval', 'summary', 'title', 'media'] as const) {
+    const auxiliary = contextStateFromObservation({ ...observation, purpose })
+    expect(auxiliary.kind).toBe('ready')
+    expect(reader.readSessionContextState(auxiliary, 'owner')).toEqual({ kind: 'unavailable', reason: 'No conversation request budget is available' })
+  }
+  expect(reader.readSessionContextState(contextStateFromObservation({ ...observation, purpose: 'recovery' }), 'owner').kind).toBe('ready')
   expect(reader.readSessionContextState({...v1,snapshot:{...snapshot,outputReserve:-1}},'owner').kind).toBe('unavailable')
   expect(Object.keys(result.metafile!.inputs).some(path=>/managed\/|generation\.ts|soft-reduction\.ts/.test(path))).toBe(false)
 })

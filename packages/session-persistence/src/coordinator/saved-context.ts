@@ -1,5 +1,5 @@
 import { types } from 'node:util'
-import { deriveContextBudget, deriveContextRecovery, type SessionView } from '@i-harness/core-session'
+import { deriveContextBudget, deriveContextRecovery, wasContextBudgetRewritten, type SessionView } from '@i-harness/core-session'
 import { deriveLastProviderInput } from '@i-harness/core-session/internal/archive'
 import type { ExecutionObservation } from '@i-harness/core-session/internal/execution'
 import type { SavedContextBinding, SavedContextFacts } from './types.ts'
@@ -28,21 +28,23 @@ function hasOriginalBinding(budget: SavedContextFacts['budget'], binding?: Saved
     budget.providerId !== undefined && budget.providerId === binding.providerId && budget.modelId === binding.modelId && budget.protocol === binding.protocol
 }
 
-function detach(budget: SavedContextFacts['budget'], recovery: SavedContextFacts['recovery'], tokens?: number): SavedContextFacts {
+function detach(budget: SavedContextFacts['budget'], recovery: SavedContextFacts['recovery'], tokens?: number, superseded = false): SavedContextFacts {
   return structuredClone({ ...(budget ? { budget } : {}), ...(recovery ? { recovery } : {}),
-    ...(tokens === undefined ? {} : { lastReportedInputTokens: tokens }) })
+    ...(superseded ? { budgetSupersededByRewrite: true as const } : tokens === undefined ? {} : { lastReportedInputTokens: tokens }) })
 }
 
-export function savedContextFromSession(session: SessionView, sessionId: string, binding?: SavedContextBinding): SavedContextFacts {
-  const budget = deriveContextBudget(session, sessionId)
-  const tokens = hasOriginalBinding(budget, binding) ? deriveLastProviderInput(session.events, sessionId)?.tokens : undefined
-  return detach(budget, deriveContextRecovery(session, sessionId, binding ?? budget), tokens)
+export function savedContextFromSession(session: SessionView, sessionId: string, binding?: SavedContextBinding, verifiedRewrite?: boolean): SavedContextFacts {
+  const budget = deriveContextBudget(session, sessionId, 'conversation')
+  const tokens = hasOriginalBinding(budget, binding) ? deriveLastProviderInput(session.events, sessionId, 'conversation')?.tokens : undefined
+  const superseded = budget?.version === 2 && (verifiedRewrite ?? wasContextBudgetRewritten(session.events, budget))
+  return detach(budget, deriveContextRecovery(session, sessionId, binding ?? budget), tokens, superseded)
 }
 
 export function savedContextFromObservation(observation: ExecutionObservation, binding?: SavedContextBinding): SavedContextFacts {
-  const budget = observation.budget()
-  const tokens = hasOriginalBinding(budget, binding) ? observation.lastReportedInputTokens() : undefined
-  const facts = detach(budget, observation.recovery(binding ?? budget), tokens)
+  const budget = observation.budget('conversation')
+  const tokens = hasOriginalBinding(budget, binding) ? observation.lastReportedInputTokens('conversation') : undefined
+  const facts = detach(budget, observation.recovery(binding ?? budget), tokens, budget?.version === 2 &&
+    (observation.conversationBudgetRewritten || observation.projectionRevision > budget.projectionRevision))
   observation.assertCurrent()
   return facts
 }

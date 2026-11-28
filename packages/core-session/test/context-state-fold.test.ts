@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { createContextStateIndex, deriveContextRecovery, deriveContextBudget } from '../src/projection/context.ts';
+import { createContextStateIndex, deriveContextRecovery, deriveContextBudget, wasContextBudgetRewritten } from '../src/projection/context.ts';
 import { deriveLastProviderInput } from '../src/projection/provider-input.ts';
 import { contextUsageAnchorId } from '../src/events/usage-anchor.ts';
 import type { Session, SessionEvent } from '../src/events/types.ts';
@@ -53,6 +53,40 @@ it('keeps detached acceptance and usage witnesses only when another batch needs 
     expect(index.lastReportedInputTokens()).toBe(41);
 });
 
+it('prioritizes a physical rewrite over an ahead-of-history budget revision, retaining the original observation', () => {
+    const {budget} = providerEvidence();
+    const original = {...budget, snapshot:{...budget.snapshot, projectionRevision:500}};
+    const rewrite = {type:'compaction/reset', removedSeqs:[1], seq:original.seq+1} as const;
+    const index = createContextStateIndex('owner');
+    index.stage([original]).commit();
+    const staged = index.stage([rewrite]);
+    expect(index.conversationBudgetRewritten()).toBe(false);
+    staged.commit();
+    expect(index.conversationBudgetRewritten()).toBe(true);
+    expect(index.budget('owner','conversation')).toEqual(original.snapshot);
+    expect(wasContextBudgetRewritten([original,rewrite],original.snapshot)).toBe(true);
+    const next={...budget,seq:rewrite.seq+1,snapshot:{...budget.snapshot,projectionRevision:1}};
+    index.stage([next]).commit();
+    expect(index.conversationBudgetRewritten()).toBe(false);
+    expect(wasContextBudgetRewritten([original,rewrite,next],next.snapshot)).toBe(false);
+});
+
+it('selects conversation budgets consistently for an auxiliary-only history and a mixed batch', () => {
+    const { budget } = providerEvidence();
+    const events: SessionEvent[] = [];
+    const index = createContextStateIndex('owner');
+    for (const purposes of [['title', 'summary'], ['main', 'approval', 'media'], ['recovery', 'title']] as const) {
+        const batch = purposes.map(purpose => ({ ...budget, snapshot: { ...budget.snapshot, purpose } }));
+        events.push(...batch);
+        index.stage(batch).commit();
+        const display = deriveContextBudget({ formatVersion: 14, events }, 'owner', 'conversation');
+        const expected = purposes.find(purpose => purpose === 'main' || purpose === 'recovery');
+        expect(display).toEqual(expected && { ...budget.snapshot, purpose: expected });
+        expect(index.budget('owner', 'conversation')).toEqual(display);
+        expect(index.budget('owner')).toEqual(batch.at(-1)!.snapshot);
+    }
+});
+
 it('cold and restored folds never visit an old usage payload before the latest owning acceptance', () => {
     const prior = providerEvidence();
     const latest = providerEvidence(42);
@@ -85,5 +119,26 @@ it('matches the incremental fold after a foreign receipt, retirement, auxiliary 
         for (const event of events) index.stage([event]).commit();
         expect(index.lastReportedInputTokens()).toBe(tokens);
         expect(deriveLastProviderInput(events,'owner')?.tokens).toBe(tokens);
+        const expectedConversation = suffix[0]?.type === 'context/budget' && suffix[0].version === 2 && suffix[0].snapshot.purpose === 'approval' ? 41 : tokens;
+        expect(index.lastReportedInputTokens('conversation')).toBe(expectedConversation);
+        expect(deriveLastProviderInput(events, 'owner', 'conversation')?.tokens).toBe(expectedConversation);
     }
+});
+
+it('never carries a main measurement across an unclassified same-owner acceptance or another main action', () => {
+    const { accepted, usage, budget } = providerEvidence();
+    const auxiliary = { ...budget, snapshot: { ...budget.snapshot, purpose: 'approval' as const } };
+    const main = { type:'context/action',version:1,op:'open',ownerSessionId:'owner',actionId:'next-main',purpose:'main',origin:{kind:'input',seq:0},startedAt:1,trustedAt:1,expiresAt:2 } as const;
+    for (const next of [main, providerEvidence(18).accepted]) {
+        const events = [accepted,usage,budget,auxiliary,next,auxiliary];
+        const index = createContextStateIndex('owner');
+        for (const event of events) index.stage([event]).commit();
+        expect(index.lastReportedInputTokens('conversation')).toBeUndefined();
+        expect(deriveLastProviderInput(events, 'owner', 'conversation')).toBeUndefined();
+    }
+    // A delayed sample for the old response can remain valid on its own,
+    // while the conversation already has a newer main action.
+    const late = [accepted, main, usage, budget];
+    expect(deriveLastProviderInput(late, 'owner')?.tokens).toBe(41);
+    expect(deriveLastProviderInput(late, 'owner', 'conversation')).toBeUndefined();
 });

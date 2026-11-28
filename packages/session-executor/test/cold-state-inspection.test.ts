@@ -63,9 +63,10 @@ it.each([
     expect(await cold.contextState(id)).toEqual(expected)
     expect(await cold.contextState(id)).toEqual(expected)
     expect(cold.hasAssembly(id)).toBe(false)
-    // A visible provider count repeats only the inexpensive binding lookup.
+    // Recheck the selected binding across the durable read, including when
+    // the only display candidate is an estimate.
     // Snapshot, provider preparation, authentication and transport remain untouched.
-    expect(inspect.mock.calls.length - metadataBeforeCold).toBe(expected.lastReportedInputTokens === undefined ? 2 : 4)
+    expect(inspect.mock.calls.length - metadataBeforeCold).toBe(4)
     expect(fullSnapshot).not.toHaveBeenCalled()
     expect({ prepare: prepare.mock.calls.length, transport: transport.mock.calls.length, authenticate: authenticate.mock.calls.length, resolve: resolve.mock.calls.length }).toEqual(counts)
     expect(await readFile(file, "utf8")).toBe(before)
@@ -101,8 +102,12 @@ it.each(["matching", "different", "missing", "legacy"] as const)("retains cold s
     modelMetadataFor: async () => binding === "missing" ? undefined : binding === "different" ? { ...metadata, bindingConfigFingerprint: "b".repeat(64) } : metadata })
   try {
     const state = await service.contextState("owner")
-    expect(state).toMatchObject({ kind: "unavailable", observation: { version: 2, freshness: 'stale', neutralFingerprint: saved.snapshot.neutralFingerprint, estimate: saved.snapshot.estimate } })
-    expect(state.observation?.requestContext).toEqual(saved.snapshot.requestContext)
+    if (binding === 'different') {
+      expect(state).toEqual({ kind: 'unavailable', reason: 'Model context binding changed since the last prepared budget' })
+    } else {
+      expect(state).toMatchObject({ kind: "unavailable", observation: { version: 2, freshness: 'stale', neutralFingerprint: saved.snapshot.neutralFingerprint, estimate: saved.snapshot.estimate } })
+      expect(state.observation?.requestContext).toEqual(saved.snapshot.requestContext)
+    }
     expect(service.hasAssembly("owner")).toBe(false); expect(resolve).not.toHaveBeenCalled()
   } finally { await service.close() }
 })
@@ -193,7 +198,8 @@ it('adds a reported input count only to the same historical v2 observation, with
   expect(readSessionContextState({...cold,lastReportedInputTokens:-1},id)).not.toHaveProperty('lastReportedInputTokens')
   expect(readSessionContextState(cold,'another')).not.toHaveProperty('lastReportedInputTokens')
   saved.mockImplementationOnce(async () => { selected = {...selected,modelId:'changed-during-read'}; return report })
-  expect(await read(id)).not.toHaveProperty('lastReportedInputTokens')
+  const changedModel = {kind:'unavailable',reason:'Model context binding changed since the last prepared budget'}
+  expect(await read(id)).toEqual(changedModel)
   selected = {...selected,modelId:'m'}
   live = contextStateFromObservation(budget)
   expect(await read(id)).toEqual(expected)
@@ -207,13 +213,18 @@ it('adds a reported input count only to the same historical v2 observation, with
   modelMetadata.mockRejectedValueOnce(new Error('Model settings unavailable'))
   expect(await read(id)).toEqual(live)
   selected = {...selected,modelId:'another'}
-  expect(await read(id)).toEqual(live)
+  expect(await read(id)).toEqual(changedModel)
   selected = {...selected,modelId:'m'}
   saved.mockImplementationOnce(async()=>{
     live = contextStateFromObservation({...budget,selectedPayloadId:'b'.repeat(64)})
     return report
   })
   expect(await read(id)).toEqual(live)
+  live = contextStateFromObservation({...budget,purpose:'summary'})
+  expect(await read(id)).toEqual(expected)
+  live = undefined
+  saved.mockResolvedValueOnce({...report, budgetSupersededByRewrite:true} as typeof report)
+  expect(await read(id)).toEqual({kind:'unavailable',reason:'Conversation history changed since the last prepared budget'})
   expect(snapshot).not.toHaveBeenCalled()
   live = undefined
   meta.mockRejectedValueOnce(new Error('Profile unavailable'))

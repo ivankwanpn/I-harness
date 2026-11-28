@@ -1,6 +1,6 @@
 import { createExecutionOwner } from "./execution.ts"
 import { resolveCompactSpec, type CompactionConfig } from "@i-harness/compaction"
-import { deriveProjectionRewrite, type ContextBindingMetadata } from "@i-harness/core-session"
+import { contextProjectionRevision, type ContextBindingMetadata } from "@i-harness/core-session"
 import type { AgentBudgetConfig, AgentDeps, AgentConfig, Agent, ModelContextBindingDescriptor } from "./types.ts"
 import { createOwnedBudget } from "./budget.ts"
 import { captureRequestCandidate, rejectUnsupportedRequestContext, sameRequestIdentity, type RequestCandidateIdentity } from "./request-snapshot.ts"
@@ -37,8 +37,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
   const reductionScopes = new WeakMap<import('@i-harness/context-engine').ReductionAttempts, import('@i-harness/llm-seam').LLMRequest['requestScope']>()
   const execution = createExecutionOwner()
   validateBudget(deps.budget)
-  const projectionRevision = (): number => deriveProjectionRewrite(deps.session).markers
-    + deps.session.events.filter(event => event.type === "compaction/prune").length
+  const projectionRevision = (): number => contextProjectionRevision(deps.session.events)
   let currentCompact = deps.compact
   let inherited = deps.bindingForStep?.()
   let inheritedScalars = inherited && scalarIdentity(inherited)

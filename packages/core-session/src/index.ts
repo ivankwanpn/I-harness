@@ -37,7 +37,7 @@ export type {
 export { createSession, append } from "./events/append.ts"
 export type { ContextBindingMetadata, ContextUsageCheckpoint, RequestBudgetSnapshot, BudgetRead, ContextRecoveryFacts, ContextEvent } from "./events/context.ts"
 export { validContextEvent, isContextEventType } from "./events/context.ts"
-export { deriveContextBudget, deriveContextRecovery } from "./projection/context.ts"
+export { deriveContextBudget, deriveContextRecovery, wasContextBudgetRewritten } from "./projection/context.ts"
 export { contextStateFromBudget, contextStateFromObservation, readSessionContextState, type SessionContextState } from "./context-state.ts"
 export { subscribe, publishTransient } from "./events/subscription.ts"
 
@@ -48,7 +48,7 @@ export { renderPruneSubstitute, derivePruneSubstitutes } from "./projection/prun
 export type { PruneRecord } from "./projection/pruning.ts"
 export { rewindCuts } from "./projection/rewind.ts"
 export type { RewindCut } from "./projection/rewind.ts"
-export { deriveProjectionRewrite } from "./projection/rewrite.ts"
+export { changesContextProjection, contextProjectionRevision, deriveProjectionRewrite } from "./projection/rewrite.ts"
 export { deriveMessages } from "./projection/messages.ts"
 export { projectConversation, projectCurrentContext } from "./conversation/project.ts"
 export { readConversationState } from "./conversation/state.ts"
@@ -98,7 +98,7 @@ export { validSoftReductionEvent, validSoftTerminalDraft } from './events/soft-r
 export { createSoftReductionIndex } from './conversation/soft-reduction.ts'
 export type { SoftReductionState } from './conversation/soft-reduction.ts'
 export type { RequestBudgetSnapshotV2, AdmissionPurpose, AdmissionEstimate, AdmissionDimension, AdmissionDimensionResult, AdmissionPressure, AdmissionDisposition, AdmissionReason, AdmissionUnknownReason } from './events/admission.ts'
-export { validAdmissionObservation } from './events/admission.ts'
+export { isConversationBudget, validAdmissionObservation } from './events/admission.ts'
 
 export type * from './results/types.ts'
 export { validManagedArtifactRef, validRetainedResultRevision } from './results/validate.ts'

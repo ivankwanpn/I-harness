@@ -1,4 +1,4 @@
-import { deriveContextRecovery, type BudgetRead, type SessionView as Session, type ExchangeAcceptedEventV2, type CalibrationRetirementReason, type FactPorts, type ProducerFactOutcome, type SettlementFacts, type SessionEvent } from "@i-harness/core-session"
+import { changesContextProjection, contextProjectionRevision, deriveContextRecovery, type BudgetRead, type SessionView as Session, type ExchangeAcceptedEventV2, type CalibrationRetirementReason, type FactPorts, type ProducerFactOutcome, type SettlementFacts, type SessionEvent } from "@i-harness/core-session"
 import { readManagedAssessmentEvents } from '@i-harness/core-session/internal/restoration'
 import { agentFacts, committedFactSeqs } from './facts.ts'
 import { createAcceptedCalibration, type PreparedRequestMeasurement } from "@i-harness/token-meter"
@@ -8,6 +8,7 @@ import { freezePreparedFacts, type PreparedModelRequest } from "@i-harness/llm-s
 export interface OwnedBudgetHistory {
  readonly kind:'managed-budget-history'
  assessmentRevision():string
+ projectionRewrittenSince(revision:number):boolean
  recovery(binding?:{providerId?:string;modelId:string;protocol:string}):import('@i-harness/core-session').ContextRecoveryFacts|undefined
  coordinates():ReturnType<typeof readContextCoordinates>
  ownsAccepted(event:ExchangeAcceptedEventV2):boolean
@@ -17,8 +18,15 @@ export interface OwnedBudgetHistory {
 export function createOwnedBudget(session: Session|undefined, ownerSessionId: string, freshness: () => RequestCandidateIdentity, observationLifetimeId: string, expectedExecution: (base: import("@i-harness/llm-seam").LiveExecutionIdentity | undefined) => import("./execution.ts").EpochObservation,
   facts: () => FactPorts<ProducerFactOutcome> = () => {if(!session)throw TypeError('Original budget fact ports required');return agentFacts({session})}, settlement: () => SettlementFacts<ProducerFactOutcome> | undefined = () => undefined,sourceHistory?:OwnedBudgetHistory) {
   if(!sourceHistory&&!session)throw TypeError('Original budget history required')
+  let assessedEvents: Session['events'] | undefined, assessedCount = 0
   const history: OwnedBudgetHistory = sourceHistory ?? {
     kind: 'managed-budget-history',
+    projectionRewrittenSince(revision) {
+      const events = session!.events
+      if (events !== assessedEvents || events.length < assessedCount) return contextProjectionRevision(events) > revision
+      for (let index = assessedCount; index < events.length; index++) if (changesContextProjection(events[index]!)) return true
+      return false
+    },
     assessmentRevision() {
       let revision = ''
       for (const event of readManagedAssessmentEvents(session!) ?? session!.events) {
@@ -66,6 +74,9 @@ export function createOwnedBudget(session: Session|undefined, ownerSessionId: st
     invalidate(retireSample = true) { if (retireSample) retire("binding-changed"); invalidated = "Model context binding changed"; bindingRevision++ },
     read(reason?: string): BudgetRead {
       if (latest.kind !== "ready") return latest
+      if (latest.observation && history.projectionRewrittenSince(latest.observation.projectionRevision)) {
+        return { kind: 'unavailable', reason: 'Conversation history changed since the last prepared budget' }
+      }
       let unavailable = reason ?? invalidated
       if (!unavailable && captured && (latest.observation?.freshness === 'current' || latest.snapshot.admission !== "unavailable")) {
         try { if (!sameRequestIdentity(captured, freshness())) unavailable = "Model context or request surface/binding changed since the prepared budget" }
@@ -103,6 +114,8 @@ export function createOwnedBudget(session: Session|undefined, ownerSessionId: st
       })
       latest = { kind: "ready", snapshot: result.snapshot, observation: freezePreparedFacts(admissionObservation(result, purpose)) }
       latestDecision = result.decision
+      assessedEvents = session?.events
+      assessedCount = assessedEvents?.length ?? 0
       const { model, bindingIdentity, snapshot: { coordinates, surfaceRevision } } = evidence
       captured = { model, bindingIdentity, snapshot: { coordinates, surfaceRevision } }
       invalidated = undefined

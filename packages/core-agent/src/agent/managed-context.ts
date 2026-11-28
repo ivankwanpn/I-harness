@@ -63,13 +63,17 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
             return false;
         }
     };
-    const history: OwnedBudgetHistory = { kind: 'managed-budget-history', assessmentRevision: () => String(host.execution.observe().contextRevision), recovery: binding => { const value = host.execution.observe().recovery(binding); return value ? { ...value } : undefined; }, coordinates: () => {
+    const history: OwnedBudgetHistory = { kind: 'managed-budget-history', assessmentRevision: () => String(host.execution.observe().contextRevision),
+        projectionRewrittenSince: revision => host.execution.observe().projectionRevision > revision,
+        recovery: binding => { const value = host.execution.observe().recovery(binding); return value ? { ...value } : undefined; }, coordinates: () => {
             if (!active)
                 throw TypeError('Original request preparation unavailable');
             return readRestoredContextCoordinates(active.lease.archive, { ownerSessionId: host.domain.sessionId });
         }, ownsAccepted: event => accepted.has(event) };
     const budget = createOwnedBudget(undefined, host.domain.sessionId, () => {
-        if (!active || !current(active.evidence))
+        // Reading the already prepared budget does not admit another write.
+        // Its committed input, hooks and current model surface are still checked.
+        if (!active || !current(active.evidence, false))
             throw TypeError('Original request preparation expired');
         return active.evidence;
     }, execution.observationLifetimeId, execution.peekExpected, () => {

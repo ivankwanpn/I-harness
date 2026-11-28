@@ -212,9 +212,28 @@ it('preserves a legacy budget and recovery selection across cold and live commit
   await expect(coordinator.readSavedContext!(sessionId)).resolves.toEqual(cold)
 })
 
+it.each(['jsonl', 'commit'] as const)('keeps auxiliary budgets out of cold and managed conversation readings (%s)', async storage => {
+  const { coordinator } = await fixture(storage === 'commit')
+  const conversation = { ...v2Budget, purpose: 'recovery' as const, estimate: { kind: 'estimated' as const, source: 'projected-heuristic' as const, value: 27000 } }
+  const auxiliary = { ...v2Budget, purpose: 'approval' as const, estimate: { kind: 'estimated' as const, source: 'projected-heuristic' as const, value: 50 } }
+  await coordinator.append(sessionId, [conversation, auxiliary].map(snapshot => ({ type: 'context/budget', version: 2, snapshot })))
+  await coordinator.releaseOwnership(sessionId)
+  await expect(coordinator.readSavedContext!(sessionId)).resolves.toMatchObject({ budget: conversation })
+  if (storage === 'jsonl') {
+    await coordinator.readHistoryPage!(sessionId, { afterSeq: 0, limit: 1 })
+    await expect(coordinator.readSavedContext!(sessionId)).resolves.toMatchObject({ budget: conversation })
+    expect(probe.windows.at(-1)).toEqual([1, 2, 3])
+  }
+  const execution = await acquireManagedExecution(coordinator, sessionId)
+  expect(execution.observe().budget()).toEqual(auxiliary)
+  await expect(coordinator.readSavedContext!(sessionId)).resolves.toMatchObject({ budget: conversation })
+  await execution.close()
+})
+
 it.each(['jsonl', 'commit'] as const)('reads the accepted provider-input total for the same bound budget (%s)', async storage => {
   const { coordinator } = await fixture(storage === 'commit')
   const currentBinding = { ...binding, identityCoverage: 'complete', bindingConfigFingerprint: digest } as const
+  await coordinator.append(sessionId, [{ type: 'user/message', text: 'question', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' } }])
   const initial = (await coordinator.snapshot!(sessionId)).session.events.length
   const request = { version:1,ownerSessionId:sessionId,observationLifetimeId:'live',candidateId:'candidate',sendId:'send',
     semanticId:digest,payloadId:digest,payloadKind:'http-json-body',executionEpochId:'epoch',coldCompatible:false,
@@ -232,6 +251,9 @@ it.each(['jsonl', 'commit'] as const)('reads the accepted provider-input total f
     {type:'context/usage',version:2,op:'sample',checkpoint:{...sample,anchorId:contextUsageAnchorId(sample)}},
     {type:'context/budget',version:2,snapshot:budget},
     {type:'step/end'},
+    {type:'context/action',op:'open',version:1,ownerSessionId:sessionId,actionId:'title-action',purpose:'title',origin:{kind:'input',seq:initial-1},startedAt:1,trustedAt:1,expiresAt:10},
+    {type:'context/budget',version:2,snapshot:{...budget,purpose:'title'}},
+    {type:'context/action',op:'close',version:1,ownerSessionId:sessionId,actionId:'title-action',trustedAt:2,disposition:'completed'},
   ]
   await coordinator.append(sessionId, completed.map((event, index) => ({ ...event, seq: initial + index })))
   await coordinator.releaseOwnership(sessionId)
@@ -241,10 +263,12 @@ it.each(['jsonl', 'commit'] as const)('reads the accepted provider-input total f
   await expect(coordinator.readSavedContext!(sessionId)).resolves.not.toHaveProperty('lastReportedInputTokens')
   const execution = await acquireManagedExecution(coordinator,sessionId)
   expect(Object.hasOwn(execution.owner,'view')).toBe(false)
+  expect(execution.observe().lastReportedInputTokens()).toBeUndefined()
   await expect(coordinator.readSavedContext!(sessionId,currentBinding)).resolves.toMatchObject({lastReportedInputTokens:41})
   expect(Object.hasOwn(execution.owner,'view')).toBe(false)
   const nextSeq = execution.observe().eventCount
   await execution.close()
   await coordinator.append(sessionId,[{type:'compaction/reset',removedSeqs:[],seq:nextSeq}])
+  await expect(coordinator.readSavedContext!(sessionId,currentBinding)).resolves.toMatchObject({ budgetSupersededByRewrite: true })
   await expect(coordinator.readSavedContext!(sessionId,currentBinding)).resolves.not.toHaveProperty('lastReportedInputTokens')
 })

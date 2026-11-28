@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useId, useRef, useState, useCallback, lazy, Suspense, type CSSProperties } from "react"
 import { Activity, ArrowLeft, Bell, Brain, Code2, FileDiff, FileText, FolderOpen, GitBranch, Globe, ListTodo, PanelLeft, PanelRight, Search, ShieldCheck, Target, TerminalSquare, UsersRound, Wrench, type LucideIcon } from "lucide-react"
 import { BrowserPane } from "../browser/BrowserPane.tsx"
+import { ContextUsage } from "../session/ContextUsage.tsx"
 import { WorkbenchTools, type WorkbenchTool } from "./WorkbenchTools.tsx"
 import { CommandPalette } from "./CommandPalette.tsx"
 import { useUiStore } from "./ui-store.ts"
@@ -575,8 +576,9 @@ export function Workbench({
                   workflowEnabled={capabilities["desktop-workflow"]?.includes("1")}
                   fileReferencesEnabled={capabilities["prompt-context"]?.includes("1") && capabilities["desktop-review"]?.includes("1")}
                   imageAttachmentsEnabled={capabilities["prompt-images"]?.includes("1") && conversation.modelState?.status === "ready" && conversation.modelState.imageInput === true}
-                  contextUsageEnabled={capabilities["session-context"]?.includes("1")}
-                  contextRefreshKey={JSON.stringify([conversation.modelState, contextModelRevision])}
+                  contextUsage={bridge && capabilities["session-context"]?.includes("1") ? <ContextUsage
+                    bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId}
+                    modelState={conversation.modelState} refreshKey={JSON.stringify([conversation.modelState, contextModelRevision])} /> : undefined}
                   canCompact={conversation.canCompact}
                   onCompact={capabilities["desktop-compaction"]?.includes("1") ? conversation.onCompact : undefined}
                   bridge={bridge}

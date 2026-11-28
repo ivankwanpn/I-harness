@@ -12,6 +12,7 @@ export type SavedContextBinding = {
   identityCoverage?: 'complete' | 'partial'; bindingConfigFingerprint?: string
 }
 export type SavedContextFacts = DeepReadonly<{
+  budgetSupersededByRewrite?: true
   budget?: RequestBudgetSnapshot | RequestBudgetSnapshotV2
   recovery?: ContextRecoveryFacts
   lastReportedInputTokens?: number

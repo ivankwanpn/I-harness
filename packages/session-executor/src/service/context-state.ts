@@ -1,5 +1,5 @@
 import { readContextCoordinates } from "@i-harness/context-engine"
-import { contextStateFromBudget, contextStateFromObservation, deriveContextBudget, deriveContextRecovery, type ContextBindingMetadata, type RequestBudgetSnapshot, type SessionView as Session, type SessionContextState } from "@i-harness/core-session"
+import { contextStateFromBudget, contextStateFromObservation, deriveContextBudget, deriveContextRecovery, isConversationBudget, wasContextBudgetRewritten, type ContextBindingMetadata, type RequestBudgetSnapshot, type SessionView as Session, type SessionContextState } from "@i-harness/core-session"
 import type { SavedContextFacts, SessionCoordinator } from "@i-harness/session-persistence"
 
 interface ContextStateReaders<Meta> {
@@ -36,8 +36,26 @@ function matchesCoordinates(session: Session, sessionId: string, saved: RequestB
     && id.branchId === coordinates.coordinates.branchId && id.contextEpoch === coordinates.coordinates.contextEpoch
 }
 
-function historicalState({ budget, recovery }: SavedContextFacts, matchingCoordinates = false): SessionContextState {
+function matchesDisplayBinding(state: SessionContextState, binding?: DisplayBinding): SessionContextState {
+  const budget = state.observation
+  if (!budget || !binding) return state
+  // Hosts without a physical projection record "custom"/"unknown" even
+  // when their configuration can identify a model. Those placeholders cannot
+  // establish that the selected model changed.
+  const identifiesModel = !(budget.protocol === 'custom' && budget.modelId === 'unknown')
+  if (identifiesModel && (binding.modelId !== budget.modelId || binding.protocol !== budget.protocol) ||
+    binding.providerId !== undefined && budget.providerId !== undefined && binding.providerId !== budget.providerId ||
+    binding.identityCoverage === 'complete' && budget.identityCoverage === 'complete' &&
+      binding.bindingConfigFingerprint !== undefined && budget.bindingConfigFingerprint !== undefined &&
+      binding.bindingConfigFingerprint !== budget.bindingConfigFingerprint) {
+    return { kind: 'unavailable', reason: 'Model context binding changed since the last prepared budget' }
+  }
+  return state
+}
+
+function historicalState({ budget, recovery, budgetSupersededByRewrite }: SavedContextFacts, matchingCoordinates = false): SessionContextState {
   if (!budget) return { kind: "unavailable", reason: "No saved prepared budget is available" }
+  if (budgetSupersededByRewrite) return { kind: 'unavailable', reason: 'Conversation history changed since the last prepared budget' }
   const recoveryRequired = recovery !== undefined && recovery.state !== "resolved"
   const flags = recoveryRequired ? { recoveryRequired: true, fullByProvider: true } : {}
   if (budget.version === 2) return contextStateFromObservation({ ...budget, freshness: budget.freshness === "current" ? "stale" : budget.freshness, ...flags })
@@ -77,13 +95,18 @@ function withReportedInput(state: SessionContextState, { budget, lastReportedInp
  * describe prior usage, but only a live assessment can confirm current fit. */
 export function createContextStateReader<Meta>(readers: ContextStateReaders<Meta>) {
   return async (sessionId: string): Promise<SessionContextState> => {
-    const current = () => { readers.assertOpen(); return readers.live(sessionId) }
+    const current = () => {
+      readers.assertOpen()
+      const live = readers.live(sessionId)
+      return live?.observation && !isConversationBudget(live.observation) ? undefined : live
+    }
     const currentOrThrow = (cause: unknown): SessionContextState => {
       const active = current()
       if (active) return active
       throw cause
     }
-    const done = (state: SessionContextState) => !readers.readSavedContext || !canObserveReportedInput(state)
+    const done = (state: SessionContextState) => !state.observation || state.observation.freshness === 'current' ||
+      !readers.metadata && (!readers.readSavedContext || !canObserveReportedInput(state))
     let live = current()
     if (live && done(live)) return live
     let meta: Meta | undefined
@@ -92,15 +115,15 @@ export function createContextStateReader<Meta>(readers: ContextStateReaders<Meta
     if (live && done(live)) return live
 
     let session: Session | undefined
-    if (!readers.readSavedContext) {
+    if (!readers.readSavedContext && !live) {
       session = await readers.snapshot(sessionId)
       live = current()
-      if (live) return live
+      if (live && done(live)) return live
     }
     let configured: ContextBindingMetadata | undefined
     try { configured = await readers.metadata?.(sessionId, meta) } catch (cause) { return currentOrThrow(cause) }
     live = current()
-    if (live && (done(live) || configured?.identityCoverage !== 'complete')) return live
+    if (live && (done(live) || !readers.readSavedContext || configured?.identityCoverage !== 'complete' || !canObserveReportedInput(live))) return matchesDisplayBinding(live, configured)
     // Keep recovery selection and legacy coordinate comparison on the same
     // model configuration even if the host changes it during the store read.
     const metadata = configured && captureDisplayBinding(configured)
@@ -109,30 +132,29 @@ export function createContextStateReader<Meta>(readers: ContextStateReaders<Meta
       try { facts = await readers.readSavedContext(sessionId, metadata) }
       catch (cause) { return currentOrThrow(cause) }
       live = current()
-      let displayBinding: DisplayBinding | undefined
-      if (facts.lastReportedInputTokens !== undefined && readers.metadata && (!live || !done(live))) {
+      let displayBinding = metadata
+      if ((facts.budget?.version === 2 || live?.observation) && readers.metadata && (!live || !done(live))) {
         // A model selector or provider setting may have changed while the
-        // persisted prefix was being read. Recheck only for the optional
-        // provider count, using the same cheap metadata read as before.
+        // persisted prefix was being read. Recheck without resolving a client.
         try {
           const latestMeta = await readers.meta(sessionId)
           live = current()
           if (live && done(live)) return live
           const latest = await readers.metadata(sessionId, latestMeta)
           displayBinding = latest && captureDisplayBinding(latest)
-        } catch { /* The optional count is unavailable when its binding cannot be rechecked. */ }
+        } catch { displayBinding = undefined }
         live = current()
       }
-      if (live) return withReportedInput(live, facts, displayBinding)
-      if (!needsLegacyCoordinates(facts, metadata)) return withReportedInput(historicalState(facts), facts, displayBinding)
+      if (live) return matchesDisplayBinding(withReportedInput(live, facts, displayBinding), displayBinding ?? metadata)
+      if (!needsLegacyCoordinates(facts, metadata)) return matchesDisplayBinding(withReportedInput(historicalState(facts), facts, displayBinding), displayBinding ?? metadata)
       session = await readers.snapshot(sessionId)
       live = current()
       if (live) return live
     }
 
-    const budget = session && deriveContextBudget(session, sessionId)
+    const budget = session && deriveContextBudget(session, sessionId, 'conversation')
     const recovery = session && budget && deriveContextRecovery(session, sessionId, metadata ?? budget)
-    const facts = { budget, recovery }
-    return historicalState(facts, !!session && budget?.version === 1 && needsLegacyCoordinates(facts, metadata) && matchesCoordinates(session, sessionId, budget))
+    const facts = { budget, recovery, ...(session && budget?.version === 2 && wasContextBudgetRewritten(session.events, budget) ? { budgetSupersededByRewrite: true as const } : {}) }
+    return matchesDisplayBinding(historicalState(facts, !!session && budget?.version === 1 && needsLegacyCoordinates(facts, metadata) && matchesCoordinates(session, sessionId, budget)), metadata)
   }
 }

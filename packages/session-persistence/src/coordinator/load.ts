@@ -1,4 +1,4 @@
-import { CURRENT_FORMAT_VERSION, copyConversationData, freezeJsonData, readInbox, stringifyJsonData, validContextEvent, validateSubagentHeader, type JournalPrefix, type OwnedSessionHistoryPage, type Session, type SessionView, type SessionEvent, type SessionEventView, type SessionHistoryPageOptions } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, changesContextProjection, copyConversationData, freezeJsonData, isConversationBudget, readInbox, stringifyJsonData, validContextEvent, validateSubagentHeader, type JournalPrefix, type OwnedSessionHistoryPage, type Session, type SessionView, type SessionEvent, type SessionEventView, type SessionHistoryPageOptions } from "@i-harness/core-session"
 import { deriveLastProviderInput, materializeSessionHistoryPage, planSessionHistoryPage, sessionHistoryFact, type SessionHistoryFact } from '@i-harness/core-session/internal/archive'
 import { prepareManagedSessionClone, type ManagedSessionClone } from '@i-harness/core-session/internal/restoration'
 import { repairTurnTail } from "../repair.ts"
@@ -29,7 +29,7 @@ const MAX_COLD_HISTORY_FACTS = 16_384
 const MAX_COLD_HISTORY_IMAGE_ID_UNITS = 262_144
 const MAX_COLD_PENDING_ORDINALS = 256
 const MAX_COLD_CONTEXT_RECOVERY_ORDINALS = 256
-type ColdContextOrdinals = { budget?: number; provider?: { accepted: number; sample: number }; selected: readonly number[] }
+type ColdContextOrdinals = { budgetRewritten: boolean; budget?: number; provider?: { accepted: number; sample: number }; selected: readonly number[] }
 type ColdHistoryCoordinates = { facts: readonly SessionHistoryFact[]; context?: ColdContextOrdinals }
 type ColdHistory = ColdHistoryCoordinates & { evidence: object; pendingOrdinals?: readonly number[] }
 type InitialColdHistory = {
@@ -51,7 +51,9 @@ function historyCoordinates(sessionId: string, events: readonly SessionEvent[]):
   let imageIdUnits = 0
   let budget: number | undefined
   let recoveries: number[] | undefined = []
+  let projectionRevision = 0, lastRewrite = -1
   for (const event of events) {
+    if (changesContextProjection(event)) { projectionRevision++; lastRewrite = facts.length }
     const fact = sessionHistoryFact(event)
     imageIdUnits += (fact.inputId?.length ?? 0) + (fact.imageInputId?.length ?? 0)
     if (fact.seq !== facts.length || imageIdUnits > MAX_COLD_HISTORY_IMAGE_ID_UNITS) return undefined
@@ -59,7 +61,7 @@ function historyCoordinates(sessionId: string, events: readonly SessionEvent[]):
     // where its error cannot prevent a changed file from being read afresh.
     if (fact.imageInputId !== undefined && !admissions.has(fact.imageInputId)) return undefined
     if (fact.inputId !== undefined) admissions.add(fact.inputId)
-    if (event.type === 'context/budget' && event.snapshot.ownerSessionId === sessionId) budget = fact.seq
+    if (event.type === 'context/budget' && event.snapshot.ownerSessionId === sessionId && isConversationBudget(event.snapshot)) budget = fact.seq
     if (event.type === 'context/recovery' && event.ownerSessionId === sessionId && recoveries) {
       if (recoveries.length === MAX_COLD_CONTEXT_RECOVERY_ORDINALS) recoveries = undefined
       else recoveries.push(fact.seq)
@@ -70,10 +72,12 @@ function historyCoordinates(sessionId: string, events: readonly SessionEvent[]):
   // lookup also verifies its last budget explicitly before dropping older ones.
   if (!recoveries || budget !== undefined && !validContextEvent(events[budget])) return { facts }
   if (budget !== undefined) recoveries.push(budget)
-  const report = deriveLastProviderInput(events, sessionId)
+  const report = deriveLastProviderInput(events, sessionId, 'conversation')
   const provider = report && report.budgetSeq === budget ? { accepted: report.acceptedSeq, sample: report.usageSeq } : undefined
   if (provider) recoveries.push(provider.accepted, provider.sample)
-  return { facts, context: { budget, provider, selected: recoveries.sort((a, b) => a - b) } }
+  const event = budget === undefined ? undefined : events[budget]
+  const budgetRewritten = event?.type === 'context/budget' && event.version === 2 && (lastRewrite > budget! || projectionRevision > event.snapshot.projectionRevision)
+  return { facts, context: { budget, provider, budgetRewritten, selected: recoveries.sort((a, b) => a - b) } }
 }
 
 async function materializeHistory(backend: object, proof: HistoryProof, retainArchivePrefix = false): Promise<MaterializedHistory> {
@@ -406,7 +410,7 @@ export function createLoads(
           }
           if (ordered.length !== context.selected.length || ordered.some((event, index) => event.seq !== context.selected[index] || !ownedContextRecord(event)))
             throw new Error('History context ordinal mismatch')
-          const facts = savedContextFromSession({ formatVersion: CURRENT_FORMAT_VERSION, events: ordered }, sessionId, binding)
+          const facts = savedContextFromSession({ formatVersion: CURRENT_FORMAT_VERSION, events: ordered }, sessionId, binding, context.budgetRewritten)
           if (coldHistory.get(sessionId) === history) rememberColdHistory(sessionId, history)
           return { value: facts, originalSealCurrent: isCurrent }
         }

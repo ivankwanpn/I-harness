@@ -5,6 +5,19 @@ import type { SessionView as Session } from "../managed/types.ts"
  * ONLY through one of these, which is what makes it derivable. */
 type ProjectionRewriteCause = "compaction/summary" | "compaction/reset" | "rewind" | 'compaction/replacement'
 
+/** Includes pruned tool output as well as transcript replacements. */
+export function changesContextProjection(event: Session['events'][number]): boolean {
+  return event.type === 'compaction/prune' || event.type === 'compaction/reset' ||
+    event.type === 'compaction/summary' || event.type === 'compaction/replacement' ||
+    event.type === 'rewind/point' && typeof event.seq === 'number' && typeof event.anchorSeq === 'number' && event.anchorSeq < event.seq
+}
+
+export function contextProjectionRevision(events: Session['events']): number {
+  let count = 0
+  for (const event of events) if (changesContextProjection(event)) count++
+  return count
+}
+
 export interface ProjectionRewrite {
   /** How many rewrite markers the log carries right now. A CONSUMER COMPARES
    * THIS BETWEEN REQUESTS: a bigger number than last time means a rewrite landed
