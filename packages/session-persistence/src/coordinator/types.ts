@@ -16,6 +16,7 @@ export type SavedContextFacts = DeepReadonly<{
   budget?: RequestBudgetSnapshot | RequestBudgetSnapshotV2
   recovery?: ContextRecoveryFacts
   lastReportedInputTokens?: number
+  lastReportedUsage?: import('@i-harness/core-session').ProviderReportedUsage
 }>
 
 export interface SessionMeta extends SessionHeader {

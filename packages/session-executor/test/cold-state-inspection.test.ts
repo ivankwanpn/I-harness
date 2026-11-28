@@ -186,17 +186,19 @@ it('adds a reported input count only to the same historical v2 observation, with
     selectedSemanticId:digest,selectedPayloadId:digest }
   let live: SessionContextState | undefined
   let selected = { ...metadata, modelId: 'm' as string }
-  const report = {budget,lastReportedInputTokens:0}
+  const lastReportedUsage = {inputTokens:0,outputTokens:12,cacheReadTokens:0}
+  const report = {budget,lastReportedInputTokens:0,lastReportedUsage}
   const saved = vi.fn(async () => report)
   const snapshot = vi.fn(async () => { throw Error('Accepted usage inspection must not materialize a snapshot') })
   const meta = vi.fn(async () => undefined), modelMetadata = vi.fn(async () => selected)
   const read = createContextStateReader({assertOpen(){}, live:()=>live,meta,metadata:modelMetadata,readSavedContext:saved,snapshot})
-  const expected = {...contextStateFromObservation(budget),lastReportedInputTokens:0}
+  const expected = {...contextStateFromObservation(budget),lastReportedInputTokens:0,lastReportedUsage}
   const cold = await read(id)
   expect(cold).toEqual(expected)
   expect(readSessionContextState(cold,id)).toEqual(expected)
   expect(readSessionContextState({...cold,lastReportedInputTokens:-1},id)).not.toHaveProperty('lastReportedInputTokens')
   expect(readSessionContextState(cold,'another')).not.toHaveProperty('lastReportedInputTokens')
+  expect(readSessionContextState(cold,'another')).not.toHaveProperty('lastReportedUsage')
   saved.mockImplementationOnce(async () => { selected = {...selected,modelId:'changed-during-read'}; return report })
   const changedModel = {kind:'unavailable',reason:'Model context binding changed since the last prepared budget'}
   expect(await read(id)).toEqual(changedModel)
@@ -204,7 +206,7 @@ it('adds a reported input count only to the same historical v2 observation, with
   live = contextStateFromObservation(budget)
   expect(await read(id)).toEqual(expected)
   live = contextStateFromObservation({ ...budget, freshness: 'stale' })
-  expect(await read(id)).toEqual({ ...live, lastReportedInputTokens: 0 })
+  expect(await read(id)).toEqual({ ...live, lastReportedInputTokens: 0, lastReportedUsage })
   live = contextStateFromObservation({ ...budget, freshness: 'stale', requestContext: { ...budget.requestContext, branchId: 'b'.repeat(64) } })
   expect(await read(id)).toEqual(live)
   live = contextStateFromObservation(budget)

@@ -1,5 +1,5 @@
 import { readContextCoordinates } from "@i-harness/context-engine"
-import { contextStateFromBudget, contextStateFromObservation, deriveContextBudget, deriveContextRecovery, isConversationBudget, wasContextBudgetRewritten, type ContextBindingMetadata, type RequestBudgetSnapshot, type SessionView as Session, type SessionContextState } from "@i-harness/core-session"
+import { contextStateFromBudget, contextStateFromObservation, deriveContextBudget, deriveContextRecovery, isConversationBudget, validProviderReportedUsage, wasContextBudgetRewritten, type ContextBindingMetadata, type RequestBudgetSnapshot, type SessionView as Session, type SessionContextState } from "@i-harness/core-session"
 import type { SavedContextFacts, SessionCoordinator } from "@i-harness/session-persistence"
 
 interface ContextStateReaders<Meta> {
@@ -74,7 +74,7 @@ function canObserveReportedInput(state: SessionContextState): boolean {
     observation.bindingConfigFingerprint !== undefined && observation.selectedSemanticId !== undefined && observation.selectedPayloadId !== undefined
 }
 
-function withReportedInput(state: SessionContextState, { budget, lastReportedInputTokens }: SavedContextFacts, binding?: DisplayBinding): SessionContextState {
+function withReportedInput(state: SessionContextState, { budget, lastReportedInputTokens, lastReportedUsage }: SavedContextFacts, binding?: DisplayBinding): SessionContextState {
   if (budget?.version !== 2 || budget.purpose !== 'main' || budget.freshness !== 'awaiting-projection' ||
     lastReportedInputTokens === undefined || !Number.isSafeInteger(lastReportedInputTokens) || lastReportedInputTokens < 0 || !canObserveReportedInput(state)) return state
   if (binding?.identityCoverage !== 'complete' || binding.bindingConfigFingerprint === undefined ||
@@ -88,7 +88,7 @@ function withReportedInput(state: SessionContextState, { budget, lastReportedInp
     current.neutralFingerprint !== budget.neutralFingerprint || current.requestContext.semanticRevision !== budget.requestContext.semanticRevision ||
     current.requestContext.protectionRevision !== budget.requestContext.protectionRevision || current.requestContext.branchId !== budget.requestContext.branchId ||
     current.requestContext.contextEpoch !== budget.requestContext.contextEpoch || current.requestContext.surfaceRevision !== budget.requestContext.surfaceRevision) return state
-  return { ...state, lastReportedInputTokens }
+  return { ...state, lastReportedInputTokens, ...(validProviderReportedUsage(lastReportedUsage, lastReportedInputTokens) ? { lastReportedUsage: { ...lastReportedUsage } } : {}) }
 }
 
 /** Recheck live owners after each awaited read. A persisted observation can

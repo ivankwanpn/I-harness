@@ -1,5 +1,5 @@
 import { isConversationBudget, validAdmissionObservation, type RequestBudgetSnapshotV2 } from '../events/admission.ts'
-import { sameAcceptedRequest, validAcceptedRequest, validContextUsageV2, type ContextUsageEventV2 } from '../events/attribution.ts'
+import { sameAcceptedRequest, validAcceptedRequest, validContextUsageV2, type ContextUsageEventV2, type ProviderReportedUsage } from '../events/attribution.ts'
 import type { ExchangeAcceptedEventV2 } from '../events/conversation.ts'
 import { contextUsageAnchorId } from '../events/usage-anchor.ts'
 import { freezeJsonData } from '../managed/capture.ts'
@@ -8,7 +8,7 @@ import type { SessionEventView } from '../managed/types.ts'
 type Accepted = Pick<ExchangeAcceptedEventV2, 'seq' | 'exchangeId' | 'actionId' | 'attemptId' | 'request'>
 type Sample = Extract<ContextUsageEventV2, { op: 'sample' }>
 
-export type LastProviderInput = { acceptedSeq: number; usageSeq: number; budgetSeq: number; tokens: number }
+export type LastProviderInput = { acceptedSeq: number; usageSeq: number; budgetSeq: number; tokens: number; usage: Readonly<ProviderReportedUsage> }
 export type ProviderInputState = { accepted?: Accepted; sample?: Sample; reported?: LastProviderInput; conversationReported?: LastProviderInput; supersededAcceptance?: true }
 
 function budgetMatchesUsage(budget: Readonly<RequestBudgetSnapshotV2>, sample: Sample): boolean {
@@ -54,7 +54,13 @@ function advanceProviderInput(state: ProviderInputState, event: SessionEventView
         accepted.attemptId === ref.attemptId && sameAcceptedRequest(accepted.request, checkpoint.request) &&
         (checkpoint.cacheReadTokens ?? 0) + (checkpoint.cacheCreationTokens ?? 0) <= checkpoint.reportedInputTokens &&
         contextUsageAnchorId(checkpoint) === checkpoint.anchorId) {
-        const reported = { acceptedSeq: accepted.seq, usageSeq: sample.seq, budgetSeq, tokens: checkpoint.reportedInputTokens }
+        const usage = Object.freeze({
+          inputTokens: checkpoint.reportedInputTokens,
+          ...(checkpoint.reportedOutputTokens !== undefined ? {outputTokens: checkpoint.reportedOutputTokens} : {}),
+          ...(checkpoint.cacheReadTokens !== undefined ? {cacheReadTokens: checkpoint.cacheReadTokens} : {}),
+          ...(checkpoint.cacheCreationTokens !== undefined ? {cacheCreationTokens: checkpoint.cacheCreationTokens} : {}),
+        })
+        const reported = { acceptedSeq: accepted.seq, usageSeq: sample.seq, budgetSeq, tokens: usage.inputTokens, usage }
         return state.supersededAcceptance ? { reported } : { reported, conversationReported: reported }
       }
     }

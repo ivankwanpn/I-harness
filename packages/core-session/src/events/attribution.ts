@@ -7,6 +7,19 @@ export interface AcceptedRequestAttributionV1 {
   projectionRevision: number
 }
 export interface AcceptedUsageReference { acceptedSeq: number; exchangeId: string; actionId: string; attemptId: string }
+/** One matched physical request. Cache reads and writes are subsets of inputTokens. */
+export interface ProviderReportedUsage {
+  inputTokens: number
+  outputTokens?: number
+  cacheReadTokens?: number
+  cacheCreationTokens?: number
+}
+
+export function validProviderReportedUsage(value: unknown, inputTokens: number): value is ProviderReportedUsage {
+  if (!scalarFields(value, { inputTokens: scalarCount }, { outputTokens: scalarCount, cacheReadTokens: scalarCount, cacheCreationTokens: scalarCount })) return false
+  const usage = value as ProviderReportedUsage
+  return usage.inputTokens === inputTokens && (usage.cacheReadTokens ?? 0) + (usage.cacheCreationTokens ?? 0) <= inputTokens
+}
 export interface ContextUsageCheckpointV2 {
   version: 2; anchorId: string; accepted: AcceptedUsageReference; request: AcceptedRequestAttributionV1
   bindingId: string; shapeId: string; pricingVersion: string; normalizationVersion: 'input-usage-v1'

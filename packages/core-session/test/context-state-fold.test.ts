@@ -51,6 +51,8 @@ it('keeps detached acceptance and usage witnesses only when another batch needs 
     usage.checkpoint.request.snapshot.branchId = 'b'.repeat(64);
     index.stage([budget]).commit();
     expect(index.lastReportedInputTokens()).toBe(41);
+    expect(index.lastConversationUsage()).toEqual({ inputTokens: 41 });
+    expect(Object.isFrozen(index.lastConversationUsage())).toBe(true);
 });
 
 it('prioritizes a physical rewrite over an ahead-of-history budget revision, retaining the original observation', () => {
@@ -93,7 +95,7 @@ it('cold and restored folds never visit an old usage payload before the latest o
     let visits = 0;
     const olderUsage = Object.defineProperty({...prior.usage},'checkpoint',{get(){visits++;return prior.usage.checkpoint}});
     const events = [prior.accepted, ...Array(32).fill(olderUsage), prior.budget, latest.accepted, latest.usage, latest.budget];
-    expect(deriveLastProviderInput(events,'owner')).toEqual({acceptedSeq:42,usageSeq:43,budgetSeq:44,tokens:41});
+    expect(deriveLastProviderInput(events,'owner')).toEqual({acceptedSeq:42,usageSeq:43,budgetSeq:44,tokens:41,usage:{inputTokens:41}});
     const index = createContextStateIndex('owner');
     index.stage(events).commit();
     expect(index.lastReportedInputTokens()).toBe(41);

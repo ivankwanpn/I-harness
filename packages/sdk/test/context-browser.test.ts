@@ -20,6 +20,17 @@ it('bundles the actual SDK context reader for browsers and preserves v1/v2 valid
     expect(reader.readSessionContextState(auxiliary, 'owner')).toEqual({ kind: 'unavailable', reason: 'No conversation request budget is available' })
   }
   expect(reader.readSessionContextState(contextStateFromObservation({ ...observation, purpose: 'recovery' }), 'owner').kind).toBe('ready')
+  const matched = { ...contextStateFromObservation({ ...observation, freshness:'awaiting-projection', identityCoverage:'complete',
+    bindingConfigFingerprint:digest, selectedPayloadId:digest, selectedSemanticId:digest }), lastReportedInputTokens:41 }
+  const decodeUsage = (usage: unknown) => reader.readSessionContextState({ ...matched, lastReportedUsage: usage }, 'owner')
+  for (const usage of [{inputTokens:41}, {inputTokens:41,outputTokens:0,cacheReadTokens:12,cacheCreationTokens:0}]) {
+    expect(decodeUsage(usage).lastReportedUsage).toEqual(usage)
+  }
+  for (const invalid of [{inputTokens:42}, {inputTokens:41,cacheReadTokens:23,cacheCreationTokens:20}, {inputTokens:41,outputTokens:-1}, {inputTokens:41,unverified:'data'}]) {
+    expect(decodeUsage(invalid).lastReportedUsage).toBeUndefined()
+    expect(decodeUsage(invalid).lastReportedInputTokens).toBe(41)
+  }
+  expect(reader.readSessionContextState({ ...v2, lastReportedInputTokens:41, lastReportedUsage:{inputTokens:41}}, 'owner').lastReportedUsage).toBeUndefined()
   expect(reader.readSessionContextState({...v1,snapshot:{...snapshot,outputReserve:-1}},'owner').kind).toBe('unavailable')
   expect(Object.keys(result.metafile!.inputs).some(path=>/managed\/|generation\.ts|soft-reduction\.ts/.test(path))).toBe(false)
 })
