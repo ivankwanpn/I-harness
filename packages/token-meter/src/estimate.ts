@@ -17,8 +17,10 @@ export const IMAGE_TOKEN_ESTIMATE = 1024
 export function estimateTextTokens(text: string): number {
   const bytes = Buffer.byteLength(text)
   if (bytes === text.length) return Math.ceil(bytes / CHARS_PER_TOKEN)
-  let ascii = text.length
-  for (const [run] of text.matchAll(/[^\x00-\x7f]+/g)) ascii -= run.length
+  let ascii = 0
+  for (let index = 0; index < text.length; index++) {
+    if (text.charCodeAt(index) < 128) ascii++
+  }
   return Math.ceil(ascii / CHARS_PER_TOKEN) + bytes - ascii
 }
 export function estimateMessage(m: LLMMessage): number {

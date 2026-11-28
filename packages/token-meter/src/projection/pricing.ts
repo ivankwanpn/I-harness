@@ -17,14 +17,13 @@ export function priceProjectedText(text: string): number {
 /** The projection records the UTF-8 length alongside its token estimate. */
 export function priceProjectedBytes(text: string, utf8Bytes: number): number {
   if (utf8Bytes === text.length) return Math.ceil(utf8Bytes / 3)
-  let ascii = text.length, cjkDiscount = 0
-  for (const [run] of text.matchAll(/[^\x00-\x7f]+/g)) {
-    ascii -= run.length
-    for (const char of run) {
-      const codePoint = char.codePointAt(0)!
-      // A CJK code point costs one token instead of three or four UTF-8 bytes.
-      if (isCjk(codePoint)) cjkDiscount += codePoint > 0xffff ? 3 : 2
-    }
+  let ascii = 0, cjkDiscount = 0
+  for (let index = 0; index < text.length; index++) {
+    const codePoint = text.codePointAt(index)!
+    if (codePoint < 128) { ascii++; continue }
+    // A CJK code point costs one token instead of three or four UTF-8 bytes.
+    if (isCjk(codePoint)) cjkDiscount += codePoint > 0xffff ? 3 : 2
+    if (codePoint > 0xffff) index++
   }
   return Math.ceil(ascii / 3) + utf8Bytes - ascii - cjkDiscount
 }
