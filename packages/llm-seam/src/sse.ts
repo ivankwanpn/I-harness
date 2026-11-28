@@ -1,4 +1,4 @@
-import type { LLMStreamEvent } from "./index.ts"
+import type { LLMRequest, LLMStreamEvent } from "./index.ts"
 
 /**
  * One SSE framer for every adapter.
@@ -16,10 +16,45 @@ export interface SseFrame {
 
 /** Unwind the body reader before the decoder yields a terminal failure.
  * A consumer can keep the iterator suspended on that event indefinitely. */
-export function* forwardSseEvents(events: LLMStreamEvent[]): Generator<LLMStreamEvent> {
+export function* forwardSseEvents(events: LLMStreamEvent[], request?: Pick<LLMRequest, "signal">): Generator<LLMStreamEvent> {
   for (const event of events) {
+    if (event.type !== "usage") request?.signal?.throwIfAborted()
     if (event.type === "error") throw event.error
     yield event
+  }
+}
+
+/** The protocol decides when a normal reply is complete. A classified
+ * failure always ends the response, including a frame that also reports usage. */
+export async function* decodeModelSse(
+  body: ReadableStream<Uint8Array>,
+  request: Pick<LLMRequest, "signal">,
+  decode: (block: string) => LLMStreamEvent[],
+  finish: () => Iterable<LLMStreamEvent>,
+  complete?: () => boolean,
+): AsyncGenerator<LLMStreamEvent> {
+  try {
+    let finalEvents: LLMStreamEvent[] = []
+    for await (const block of readSseBlocks(body)) {
+      const events = decode(block)
+      if (complete?.() || events.some(event => event.type === "error")) {
+        finalEvents = events
+        break
+      }
+      for (const event of events) yield event
+    }
+    // The body is now released even if the consumer pauses on the usage
+    // preceding an error or on text recovered from a terminal snapshot.
+    for (const event of forwardSseEvents(finalEvents, request)) yield event
+    request.signal?.throwIfAborted()
+    for (const event of finish()) {
+      if (event.type !== "usage") request.signal?.throwIfAborted()
+      yield event
+      if (event.type === "error") return
+    }
+  } catch (error) {
+    if (request.signal?.aborted) throw error
+    yield { type: "error", error: error instanceof Error ? error : new Error(String(error)) }
   }
 }
 

@@ -1,4 +1,4 @@
-import { forwardSseEvents, readSseBlocks, SSEParseError, parseSseFrames, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
+import { decodeModelSse, SSEParseError, parseSseFrames, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
 import type { createAnthropicFold } from "./fold.ts"
 
 export function parseSSE(text: string): Record<string, unknown>[] {
@@ -12,20 +12,9 @@ export function parseSSE(text: string): Record<string, unknown>[] {
   })
 }
 /** Release the transport as soon as the message's terminal event arrives. */
-export async function* decodeAnthropicStream(body: ReadableStream<Uint8Array>, fold: ReturnType<typeof createAnthropicFold>, request: Pick<LLMRequest, "signal">): AsyncIterable<LLMStreamEvent> {
-  try {
-    for await (const chunk of readSseBlocks(body)) {
-      for (const event of parseSSE(chunk)) {
-        yield* forwardSseEvents(fold.handleEvent(event))
-      }
-      if (fold.terminal) break
-    }
-  } catch (err) {
-    // M72 Ⅰ: a corrupt chunk is a provider failure → the seam's error channel.
-    // Abort is NOT: an aborted signal keeps today's behaviour (a throw).
-    if (request.signal?.aborted === true) throw err
-    yield { type: "error", error: err instanceof Error ? err : new Error(String(err)) }
-    return
-  }
-  yield fold.finish()
+export function decodeAnthropicStream(body: ReadableStream<Uint8Array>, fold: ReturnType<typeof createAnthropicFold>, request: Pick<LLMRequest, "signal">): AsyncIterable<LLMStreamEvent> {
+  return decodeModelSse(body, request, block => {
+    const events = parseSSE(block)
+    return events.length ? fold.handleEvent(events[0]!) : []
+  }, () => [fold.finish()], () => fold.terminal)
 }

@@ -1,4 +1,4 @@
-import { forwardSseEvents, readSseBlocks, SSEParseError, parseSseFrames, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
+import { decodeModelSse, SSEParseError, parseSseFrames, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
 import type { GeminiConfig } from "../types.ts"
 import { createGeminiFold } from "./fold.ts"
 
@@ -30,21 +30,12 @@ function parseObject(data: string): Record<string,unknown> {
 }
 
 /** Own byte/SSE buffers and reader cleanup; release precedes the end event. */
-export async function* decodeGeminiStream(body: ReadableStream<Uint8Array>, request: LLMRequest, config: GeminiConfig): AsyncIterable<LLMStreamEvent> {
+export function decodeGeminiStream(body: ReadableStream<Uint8Array>, request: LLMRequest, config: GeminiConfig): AsyncIterable<LLMStreamEvent> {
   const fold = createGeminiFold(request, config)
-  try {
-    for await (const chunk of readSseBlocks(body)) {
-      for (const event of parseSSE(chunk)) {
-        yield* forwardSseEvents(fold.handleChunk(event))
-      }
-    }
-    if (yield* fold.finalizeCalls()) return
-  } catch (err) {
-    // M72 Ⅰ: a corrupt chunk is a provider failure → the seam's error channel.
-    // Abort is NOT: an aborted signal keeps today's behaviour (a throw).
-    if (request.signal?.aborted === true) throw err
-    yield { type: "error", error: err instanceof Error ? err : new Error(String(err)) }
-    return
-  }
-  yield fold.finish()
+  return decodeModelSse(body, request, block => {
+    const [event] = parseSSE(block)
+    return event ? fold.handleChunk(event) : []
+  }, function* () {
+    if (!(yield* fold.finalizeCalls())) yield fold.finish()
+  })
 }

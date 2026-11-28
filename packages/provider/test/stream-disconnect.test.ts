@@ -52,27 +52,33 @@ describe.each(protocols)("$name SSE response lifetime", ({ create, delta, failur
   })
 })
 
-it.each(["completed", "failed"])("closes a %s Responses exchange before delivering its final usage", async status => {
+it.each([
+  { name: "Responses success", create: createOpenAIClient, text: true, frame: { type: "response.completed",
+    response: { status: "completed", usage: { output_tokens: 7 }, output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] }] } } },
+  { name: "Responses error", create: createOpenAIClient, text: false, frame: { type: "response.failed",
+    response: { status: "failed", usage: { output_tokens: 7 }, error: { code: "server_error", message: "fixture" } } } },
+  { name: "Chat error", create: createOpenAICompatibleClient, text: false,
+    frame: { error: { code: "server_error", message: "fixture" }, usage: { completion_tokens: 7 } } },
+  { name: "Gemini error", create: createGeminiClient, text: false,
+    frame: { error: { code: 503, status: "UNAVAILABLE" }, usageMetadata: { candidatesTokenCount: 7 } } },
+])("closes the $name exchange before delivering its final usage", async ({ create, text, frame }) => {
   let disconnected = false
   const server = createServer((_request, response) => {
     response.once("close", () => { disconnected = true })
     response.writeHead(200, { "content-type": "text/event-stream" })
-    const terminal = { type: "response." + status, response: { status, usage: { output_tokens: 7 },
-      ...(status === "completed" ? { output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] }] }
-        : { error: { code: "server_error", message: "fixture" } }) } }
-    response.write("data: " + JSON.stringify(terminal) + "\n\n")
+    response.write("data: " + JSON.stringify(frame) + "\n\n")
   })
   server.listen(0, "127.0.0.1")
   await once(server, "listening")
   const address = server.address()
   if (!address || typeof address === "string") throw new Error("No loopback port")
-  const client = createOpenAIClient({ apiKey: "fixture", model: "fixture", baseUrl: `http://127.0.0.1:${address.port}` })
+  const client = create({ apiKey: "fixture", model: "fixture", baseUrl: `http://127.0.0.1:${address.port}` })
   const it = client.stream({ systemPrompt: "", tools: [], messages: [], signal: AbortSignal.timeout(5_000) })[Symbol.asyncIterator]()
   try {
     expect((await it.next()).value).toMatchObject({ type: "usage", usage: { outputTokens: 7 } })
     await vi.waitFor(() => expect(disconnected).toBe(true), { timeout: 1500 })
-    if (status === "completed") expect((await it.next()).value).toEqual({ type: "text/chunk", text: "answer" })
-    expect((await it.next()).value.type).toBe(status === "completed" ? "end" : "error")
+    if (text) expect((await it.next()).value).toEqual({ type: "text/chunk", text: "answer" })
+    expect((await it.next()).value.type).toBe(text ? "end" : "error")
   } finally {
     server.closeAllConnections()
     await it.return?.()
