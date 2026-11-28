@@ -25,7 +25,6 @@ import {
   emptyEventWindow,
   createHistoryPreviewCache,
   RECENT_HISTORY_LIMIT,
-  timelineEvents,
   markDisconnected,
   isAssistantPreview,
   updateAssistantPreview,
@@ -42,7 +41,7 @@ import type { ReviewChanges, ReviewText } from "./review/ReviewPane.tsx"
 import { pendingForSession, type PendingInteraction } from "./interaction/pending.ts"
 import { usePendingInteractions } from "./interaction/use-pending-interactions.ts"
 import { affectsSessionDashboard, affectsSessionQueue, affectsSessionTasks, classifyNotification } from "./session/notifications.ts"
-import { projectTimeline } from "./session/project.ts"
+import { createLiveTimelineProjection } from "./session/live-timeline.ts"
 import { sendGate } from "./session/send-gate.ts"
 import { createWorkspaceConnections } from "./session/workspace-connections.ts"
 import { Workbench } from "./shell/Workbench.tsx"
@@ -855,11 +854,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   useEffect(() => {
     if (visibleEchoes !== optimistic) setOptimistic(current => current === optimistic ? visibleEchoes : current)
   }, [optimistic, visibleEchoes])
-  const conversationRows = useMemo(() => {
-    const rows = windowKey === currentScope ? projectTimeline(timelineEvents({ events, live })) : []
-    for (const echo of visibleEchoes) rows.push({ id: `optimistic:${echo.token}`, kind: "message", role: "user", text: echo.text })
-    return rows
-  }, [currentScope, events, live, visibleEchoes, windowKey])
+  const projectLive = useMemo(createLiveTimelineProjection, [currentScope])
+  const projection = useMemo(() => windowKey === currentScope ? projectLive({events, live}) : {rows: []}, [currentScope, events, live, projectLive, windowKey])
+  const conversationRows = useMemo(() => visibleEchoes.length ? [...projection.rows, ...visibleEchoes.map(echo => ({
+    id: `optimistic:${echo.token}`, kind: "message" as const, role: "user" as const, text: echo.text,
+  }))] : projection.rows, [projection.rows, visibleEchoes])
   function sendInput(delivery: "queue" | "steer"): ComposerProps["onPrompt"] {
     return async (text, context, images, onAdmitted, captured) => {
       if (!selectedWorkspaceId || !selectedSessionId) throw new Error("No conversation selected")
@@ -912,6 +911,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     ? undefined
     : {
         rows: conversationRows,
+        reasoningText: projection.reasoningText,
         recentEvents: windowKey === currentScope ? events : undefined,
         history: scrollHistory.earlier || scrollHistory.viewport || scrollHistory.loading || scrollHistory.error ? scrollHistory : undefined,
         assistantPreview: windowKey === currentScope && eventWindow.assistantPreview?.offset === 0 ? eventWindow.assistantPreview : undefined,

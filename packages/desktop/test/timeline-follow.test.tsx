@@ -18,6 +18,22 @@ vi.mock("@tanstack/react-virtual", () => ({
 }))
 import { Timeline } from "../src/renderer/session/Timeline.tsx"
 afterEach(() => { cleanup(); vi.useRealTimers(); virtual.showItems = false; virtual.scrollToIndex.mockClear(); virtual.write.mockClear(); vi.unstubAllGlobals() })
+
+it("updates the expanded reasoning text in its existing row and keeps the disclosure through settlement", async () => {
+  virtual.showItems = true
+  const row = {id:"reasoning:r",kind:"other" as const,label:"reasoning",detail:"first",transient:true as const}
+  const rows = [row]
+  const view = render(<Timeline rows={rows} running />)
+  const trigger = view.container.querySelector<HTMLButtonElement>(".timeline-reasoning-trigger")!
+  fireEvent.click(trigger)
+  expect(await screen.findByText("first")).toBeTruthy()
+  view.rerender(<Timeline rows={rows} reasoningText={new Map([[row.id,"first and second"]])} running />)
+  expect(await screen.findByText("first and second")).toBeTruthy()
+  expect(view.container.querySelector(".timeline-reasoning-trigger")).toBe(trigger)
+  view.rerender(<Timeline rows={[{...row,transient:undefined,detail:"canonical"}]} />)
+  expect(await screen.findByText("canonical")).toBeTruthy()
+  expect(trigger.getAttribute("aria-expanded")).toBe("true")
+})
 it("loads earlier history at the top, enables virtual anchoring during browsing, and returns to the live tail", () => {
   vi.useFakeTimers()
   virtual.showItems = true

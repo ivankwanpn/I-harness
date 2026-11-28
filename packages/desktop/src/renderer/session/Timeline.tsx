@@ -123,12 +123,12 @@ function RowView({ row, open, toggle, activeReasoningId, page, setPage, navigati
 }
 
 /** Only the visible rows are mounted, so a long session stays bounded. */
-export interface TimelineProps { resultReader?: RecordedResultReader; rows: TimelineRow[]; assistantPreview?: AssistantPreview; navigation?: FileNavigation; running?: boolean; targetSeq?: number; historical?: boolean; history?: HistoryScroll; onTargetVisible?(seq: number): void }
+export interface TimelineProps { resultReader?: RecordedResultReader; rows: TimelineRow[]; assistantPreview?: AssistantPreview; reasoningText?: ReadonlyMap<string,string>; navigation?: FileNavigation; running?: boolean; targetSeq?: number; historical?: boolean; history?: HistoryScroll; onTargetVisible?(seq: number): void }
 const HISTORY_EDGE_PX = 96
 function timelineKey(row: WorkItem): string {
   return row.kind === "message" && row.stepStartSeq !== undefined ? `assistant:${row.stepStartSeq}` : row.id
 }
-export function Timeline({ rows, assistantPreview, navigation, running = false, targetSeq, historical = false, history, onTargetVisible, resultReader }: TimelineProps) {
+export function Timeline({ rows, assistantPreview, reasoningText, navigation, running = false, targetSeq, historical = false, history, onTargetVisible, resultReader }: TimelineProps) {
   const t = useText()
   const tt = useToolText()
   const latestTurn = rows.at(-1)?.turn
@@ -148,7 +148,11 @@ export function Timeline({ rows, assistantPreview, navigation, running = false, 
   }
   const itemCount = items.length + (previewItem ? 1 : 0)
   const previewStep = assistantPreview?.stepStartSeq
-  const itemAt = (index: number): WorkItem => items[index] ?? previewItem!
+  const itemAt = (index: number): WorkItem => {
+    const item = items[index] ?? previewItem!
+    const detail = item.kind === "other" && item.transient && item.label === "reasoning" ? reasoningText?.get(item.id) : undefined
+    return detail !== undefined && item.kind === "other" ? { ...item, detail } : item
+  }
   const itemKey = useCallback((index: number) => index < items.length
     ? timelineKey(items[index]!) : `assistant:${previewStep}`, [items, previewStep])
   const [pages, setPages] = useState(new Map<string, number>())
@@ -246,7 +250,7 @@ export function Timeline({ rows, assistantPreview, navigation, running = false, 
     wasHistorical.current = historical
     if (parentRef.current) updateHistoryEdges(parentRef.current)
   }, [historical, items, updateHistoryEdges])
-  const target = rows.find(row => targetSeq !== undefined && row.seqs?.includes(targetSeq))
+  const target = targetSeq === undefined ? undefined : rows.find(row => row.seqs?.includes(targetSeq))
   const targetGroup = target ? grouped.find(row => row.kind === "activity-group" && row.rows.some(tool => tool.id === target.id)) : undefined
   useEffect(() => {
     if (!target || targetSeq === undefined) return

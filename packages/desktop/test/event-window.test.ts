@@ -144,6 +144,33 @@ describe("Desktop event window", () => {
     expect(applyHistory(original, page(incoming, 5)).events).toEqual([original.events[0], incoming[3], incoming[0], original.events[2]])
   })
 
+  it("recovers mixed legacy and framed rows by physical position across overlap and reconnect", () => {
+    const source = [event(44, "old explicit address"), event(undefined, "old positional"), event(2, "new framed")]
+    const transcript = { startSeq: 0, nextSeq: 3, headSeq: 3, events: source, turns: [{startSeq:0,endSeq:2}] }
+    const tail = applyHistory(emptyEventWindow(), { ...transcript, startSeq: 1, events: source.slice(1) })
+    const restored = applyHistory(markDisconnected(tail), transcript)
+    expect(restored.events.map(row => row.seq)).toEqual([0,1,2])
+    expect(restored.events.map(row => row.historySourceSeq)).toEqual([44,null,undefined])
+    expect(restored.events.every(row => row.historyTurn?.endSeq === 2)).toBe(true)
+    expect(source.map(row => row.seq)).toEqual([44,undefined,2])
+    expect(applyHistory(restored, {events:source.slice(1),nextSeq:3}).events).toEqual([
+      restored.events[0],expect.objectContaining({seq:1,historySourceSeq:null}),expect.objectContaining({seq:2}),
+    ])
+    const older = pageHistoryViewport(historyViewport({events:source.slice(1),nextSeq:3},1),
+      {events:source.slice(0,1),startSeq:0,nextSeq:1},0,"before")
+    expect(older.events.map(row=>row.seq)).toEqual([0,1,2])
+    expect(restored.cursor).toBe(3)
+  })
+
+  it("leaves transient notifications and untrusted mixed ranges outside positional history", () => {
+    const transient = {type:"reasoning/chunk",text:"live",streamId:"r",offset:0,atSeq:3} as const
+    const incoming = applyNotification(emptyEventWindow(),transient)
+    expect(incoming.events).toEqual([])
+    expect(incoming.live).toEqual([transient])
+    expect(historyEvents({events:[transient],nextSeq:4})).toEqual([transient])
+    expect(historyEvents({events:[event(undefined,"old")],nextSeq:9,startSeq:0})[0]?.seq).toBeUndefined()
+  })
+
   it("drops a disjoint cached prefix while keeping newer notifications beyond a refreshed tail", () => {
     const cached = applyHistory(emptyEventWindow(), page([event(9, "cached")], 10))
     const withArrival = applyNotification(cached, event(51, "newer live arrival"))

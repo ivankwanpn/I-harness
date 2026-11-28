@@ -65,7 +65,7 @@ export function SessionHistoryView({ selection, request, readScope, navigation, 
     void readPage(start, (page, current) => {
       const viewport = historyViewport(page, start)
       setState(previous => current() ? viewport : previous)
-      if (!page.events.some(event => event.seq === seq)) setError("搜尋內容已變更，請重新搜尋")
+      if (!viewport.events.some(event => event.seq === seq)) setError("搜尋內容已變更，請重新搜尋")
     })
   }, [readPage, seq, validTarget])
 

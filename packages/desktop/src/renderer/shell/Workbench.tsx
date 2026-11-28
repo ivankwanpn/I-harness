@@ -75,6 +75,7 @@ export interface ConversationView {
   recentEvents?: readonly WireEvent[]
   history?: HistoryScroll
   assistantPreview?: import("../session/event-window.ts").AssistantPreview
+  reasoningText?: ReadonlyMap<string, string>
   loading?: boolean
   canSend: boolean
   projectReady?: boolean
@@ -567,7 +568,8 @@ export function Workbench({
                         </div>
                       : <div className="empty-conversation"><div className="empty-introduction"><h1>{t("今天想完成甚麼？")}</h1><p>{t(displayProject ? "描述你的目標，從這個專案開始。" : "延續左側的會話，或開始一項新任務。")}</p></div></div>
                     : <Timeline resultReader={resultReader} key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={olderRows ?? conversation.rows}
-                        assistantPreview={olderRows ? undefined : conversation.assistantPreview} running={conversation.running} historical={olderRows !== undefined}
+                        assistantPreview={olderRows ? undefined : conversation.assistantPreview} reasoningText={olderRows ? undefined : conversation.reasoningText}
+                        running={conversation.running} historical={olderRows !== undefined}
                         history={conversation.history} navigation={fileNavigation} />}
                 </div>
                 <div className="conversation-dock">

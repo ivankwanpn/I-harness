@@ -153,6 +153,19 @@ export function applyHistory(state: EventWindow, page: IncomingHistoryPage): Eve
   }
 }
 
+// A durable replay/append installs a new events array. Between durable
+// updates, stream ticks can check settlement without rescanning the log.
+const settledReasoning = new WeakMap<WireEvent[], Set<string>>()
+function hasSettledReasoning(events: WireEvent[], streamId: string): boolean {
+  let streams = settledReasoning.get(events)
+  if (!streams) {
+    streams = new Set()
+    for (const event of events) if (event.type === "reasoning" && event.streamId) streams.add(event.streamId)
+    settledReasoning.set(events, streams)
+  }
+  return streams.has(streamId)
+}
+
 export function applyNotification(state: EventWindow, incoming: IncomingWireEvent): EventWindow {
   if (incoming.type === "model/activity") return state
   const event = displayEvent(incoming)
@@ -163,7 +176,7 @@ export function applyNotification(state: EventWindow, incoming: IncomingWireEven
   }
   if (event.type === "reasoning/chunk") {
     // The canonical notification may reach React before its buffered chunks.
-    if (state.events.some((item) => item.type === "reasoning" && item.streamId === event.streamId)) return state
+    if (hasSettledReasoning(state.events, event.streamId)) return state
     let combined = event
     const live: WireEvent[] = []
     let insertAt: number | undefined
@@ -200,10 +213,10 @@ export interface HistoryViewport { events: WireEvent[]; startSeq: number; endSeq
 export const HISTORY_PAGE_SIZE = 200
 export const MAX_HISTORY_VIEW_EVENTS = 2000
 export function historyViewport(page: IncomingHistoryPage, startSeq: number): HistoryViewport {
-  return { events: historyEvents(page).filter(event => event.type !== "model/activity"), startSeq, endSeq: page.nextSeq, hasBefore: startSeq > 0, hasAfter: page.events.length === HISTORY_PAGE_SIZE }
+  return { events: historyEvents(page, startSeq).filter(event => event.type !== "model/activity"), startSeq, endSeq: page.nextSeq, hasBefore: startSeq > 0, hasAfter: page.events.length === HISTORY_PAGE_SIZE }
 }
 export function pageHistoryViewport(state: HistoryViewport, page: IncomingHistoryPage, startSeq: number, direction: "before" | "after"): HistoryViewport {
-  const merged = mergeBySeq(orderedBySeq(state.events), historyEvents(page).filter(event => event.type !== "model/activity"))
+  const merged = mergeBySeq(orderedBySeq(state.events), historyEvents(page, startSeq).filter(event => event.type !== "model/activity"))
   const events = direction === "before" ? merged.slice(0, MAX_HISTORY_VIEW_EVENTS) : merged.slice(-MAX_HISTORY_VIEW_EVENTS)
   const first = events[0]?.seq ?? startSeq
   const last = events.at(-1)?.seq

@@ -3,6 +3,7 @@ import type { HistoryRange } from "@i-harness/sdk"
 import { HISTORY_PAGE_SIZE, MAX_HISTORY_VIEW_EVENTS, historyViewport, pageHistoryViewport, type HistoryViewport, type WireEvent } from "./event-window.ts"
 import { loadEarlierHistory, type HistoryPageRequest, type HistoryReadScope } from "./history.ts"
 import type { HistoryRequest } from "./SessionHistoryView.tsx"
+import { historyEvents } from "./history-events.ts"
 
 type Selection = { workspaceId?: string; sessionId?: string }
 
@@ -73,7 +74,8 @@ export function useHistoryScroll(
         : await read({ afterSeq: cursor, limit: HISTORY_PAGE_SIZE })
       if (!valid()) return
       if (!Array.isArray(range.events) || !Number.isSafeInteger(range.nextSeq) || range.nextSeq < 0) throw new Error("Invalid history page")
-      const events = range.events.filter(event => event.seq !== undefined && (direction === "before" ? event.seq < cursor : event.seq >= cursor))
+      const events = historyEvents(range, direction === "after" ? cursor : undefined)
+        .filter(event => event.seq !== undefined && (direction === "before" ? event.seq < cursor : event.seq >= cursor))
       let previous = viewport
       if (!previous) {
         const seed = tail.slice(0, MAX_HISTORY_VIEW_EVENTS - HISTORY_PAGE_SIZE)

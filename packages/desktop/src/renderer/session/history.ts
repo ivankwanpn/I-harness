@@ -1,4 +1,4 @@
-import { displayEvents, historyEvents, type IncomingHistoryPage } from "./history-events.ts"
+import { historyEvents, type IncomingHistoryPage } from "./history-events.ts"
 import type { HistoryRange } from "@i-harness/sdk"
 
 export interface HistoryPageRequest {
@@ -34,7 +34,7 @@ export async function loadEarlierHistory(
 ): Promise<HistoryRange> {
   let page = await request({ afterSeq: 0, beforeSeq, limit })
   if (!Number.isSafeInteger(page.startSeq) && page.events.length > 0 && beforeSeq > limit) page = await request({ afterSeq: beforeSeq - limit, limit })
-  return { ...page, events: displayEvents(page.events) }
+  return { ...page, events: historyEvents(page, Math.max(0, beforeSeq - limit)) }
 }
 
 /** Tail read: one request returns the newest bounded window plus the durable
@@ -70,7 +70,7 @@ export async function loadHistory(
   let cursor = options.afterSeq
   for (let page = 0; page < maxPages; page += 1) {
     const result = await request({ afterSeq: cursor, limit: options.limit })
-    events.push(...historyEvents(result))
+    events.push(...historyEvents(result, cursor))
     const previous = cursor
     cursor = Math.max(cursor, result.nextSeq)
     // A short page means the log is exhausted; a non-advancing cursor means a
