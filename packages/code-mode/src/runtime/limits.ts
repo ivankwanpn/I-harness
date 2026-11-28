@@ -28,13 +28,15 @@ export function message(error: unknown): string {
 }
 export function diagnostic(error: unknown, bytes: number): {text:string; truncated:boolean} {
   const raw = message(error)
-  // Slice before encoding to avoid allocating a copy of an oversized message.
-  const text = textSlice(raw.slice(0,bytes),bytes)
+  const text = textSlice(raw,bytes)
   return {text,truncated:text !== raw}
 }
+const encoder = new TextEncoder()
 export function textSlice(value: string, bytes: number): string {
-  let result = Buffer.from(value).subarray(0, bytes).toString('utf8')
-  while (Buffer.byteLength(result) > bytes) result = result.slice(0, -1)
-  return result
+  if (bytes <= 0) return ''
+  const prefix = value.slice(0, bytes)
+  if (Buffer.byteLength(prefix) <= bytes) return prefix
+  const { read } = encoder.encodeInto(prefix, new Uint8Array(bytes))
+  return prefix.slice(0, read)
 }
 export type RuntimeLimits = ReturnType<typeof limits>

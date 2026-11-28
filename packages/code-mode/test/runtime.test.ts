@@ -11,6 +11,20 @@ const make = (options: Partial<CodeModeRuntimeOptions> = {}) => createCodeModeRu
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
 describe('isolated Code Mode runtime', () => {
+  it.each([
+    ['x🙂abcdef', 1, 'x'],
+    ['文🙂', 1, '文'],
+    ['🙂abc', 1, '🙂'],
+    ['文', 0, ''],
+  ] as const)('returns a UTF-8 prefix of %s within %i output tokens', async (value, tokens, expected) => {
+    const runtime = make()
+    try {
+      const result = await runtime.exec({ code: 'text(' + JSON.stringify(value) + ')', max_output_tokens: tokens, yield_time_ms: 3000 })
+      expect(result).toMatchObject({ status: 'completed', text: expected, truncated: true,
+        textRetention: { omittedBytes: Buffer.byteLength(value) - Buffer.byteLength(expected) } })
+    } finally { await runtime.dispose() }
+  })
+
   it('keeps option getters lazy, ordered and called with the original receiver', async () => {
     const trace: string[] = []
     const options: CodeModeRuntimeOptions = {
