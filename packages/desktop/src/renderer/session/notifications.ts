@@ -4,8 +4,7 @@ export type NotificationClass =
   | { kind: "status"; sessionId: string; status?: string }
   | { kind: "ignore" }
 
-/** One classification decides every refresh rule: chunks are cheap and
- * transient, durable rows and status transitions are refresh points. */
+/** Classify timeline delivery separately from changes to other session views. */
 export function classifyNotification(method: string, params: unknown): NotificationClass {
   const record = params !== null && typeof params === "object" && !Array.isArray(params)
     ? params as Record<string, unknown>
@@ -27,6 +26,15 @@ export function classifyNotification(method: string, params: unknown): Notificat
 }
 
 const dashboardEvents = new Set(["turn/start", "turn/end", "session/title", "step/failed", "job/status", "rewind/point"])
+export function affectsSessionQueue(type: string): boolean {
+  return type.startsWith("agent/input/") || type === "turn/start" || type === "turn/end" || type === "rewind/point"
+}
+
+export function affectsSessionTasks(type: string): boolean {
+  return type.startsWith("subagent/") || type.startsWith("workflow/") || type === "job/status"
+    || type === "exec/end" || type === "rewind/point" || type === "tool/result" || type === "code/result"
+}
+
 export function affectsSessionDashboard(method: string, params: unknown): boolean {
   if (method === "session/status" || method === "session/execution-state" || method === "desktop/session/navigation/changed") return true
   if (method !== "session/event") return false

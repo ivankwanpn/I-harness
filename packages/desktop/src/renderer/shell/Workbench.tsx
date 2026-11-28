@@ -576,7 +576,7 @@ export function Workbench({
                   fileReferencesEnabled={capabilities["prompt-context"]?.includes("1") && capabilities["desktop-review"]?.includes("1")}
                   imageAttachmentsEnabled={capabilities["prompt-images"]?.includes("1") && conversation.modelState?.status === "ready" && conversation.modelState.imageInput === true}
                   contextUsageEnabled={capabilities["session-context"]?.includes("1")}
-                  contextRefreshKey={JSON.stringify([conversation.modelState, conversation.running, conversation.operation?.busy === true, contextModelRevision])}
+                  contextRefreshKey={JSON.stringify([conversation.modelState, contextModelRevision])}
                   canCompact={conversation.canCompact}
                   onCompact={capabilities["desktop-compaction"]?.includes("1") ? conversation.onCompact : undefined}
                   bridge={bridge}

@@ -124,7 +124,7 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
         if (!active) return
         control.key = key
         revision++
-        // Keep operation/model changes scoped without restarting an offline gateway.
+        // Keep model changes scoped without restarting an offline gateway.
         if (disconnected && !urgent) {
           setEstimate({ bridge, workspaceId, sessionId, refreshKey: key, error: disconnected.message, loading: false })
           return
@@ -173,9 +173,10 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
         return
       }
       if (disconnected) return
-      const params = message.params as { sessionId?: unknown; event?: { type?: unknown } } | undefined
+      const params = message.params as { sessionId?: unknown; status?: unknown; event?: { type?: unknown } } | undefined
       if (params?.sessionId !== sessionId) return
-      if (message.method === "session/status" || message.method === "session/event" && typeof params.event?.type === "string" && contextEvents.has(params.event.type)) schedule()
+      if (message.method === "session/status" && params.status !== "queued" && params.status !== "running") schedule()
+      if (message.method === "session/event" && typeof params.event?.type === "string" && contextEvents.has(params.event.type)) schedule()
     })
     // StrictMode tears down its first effect before this read; a disconnect or
     // model change can also invalidate the mount request before it starts.

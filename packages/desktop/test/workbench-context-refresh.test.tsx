@@ -13,14 +13,21 @@ it("refreshes the visible context percentage when the selected model changes wit
     ? { kind: "ready", estimatedTokens: 2000, contextWindow } : undefined)
   const bridge: DesktopBridge = { request, onEvent: () => () => {} }
   const workspace = { id: "context-workspace", path: "D:/context-fixture", label: "Fixture" }
-  const viewFor = (modelId: string) => <Workbench bridge={bridge} workspaces={[workspace]} projects={[]}
+  const viewFor = (modelId: string, running = false) => <Workbench bridge={bridge} workspaces={[workspace]} projects={[]}
     selectedWorkspaceId={workspace.id} selectedSessionId="context-session" capabilities={{ "session-context": ["1"] }}
     onSelectWorkspace={() => {}} onSelectSession={() => {}}
-    conversation={{ rows: [], canSend: false, running: false, pending: [],
+    conversation={{ rows: [], canSend: false, running, pending: [], operation: { kind: "prompt", busy: running },
       modelState: { status: "ready", providerId: "fixture", modelId, label: "Preview Model" },
       onPrompt: async () => {}, onCancel() {}, onCancelTask() {}, onCancelQueue() {}, onReply: async () => {} }} />
   const view = render(viewFor("small-window"))
   await waitFor(() => expect(screen.getByRole("button", { name: "上下文容量" }).textContent).toContain("10.0%"))
+  vi.useFakeTimers()
+  try {
+    view.rerender(viewFor("small-window", true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+    expect(screen.getByRole("button", { name: "上下文容量" }).textContent).toContain("10.0%")
+    expect(request.mock.calls.filter(([input]) => input.kind === "session/context")).toHaveLength(1)
+  } finally { vi.useRealTimers() }
   contextWindow = 100000
   view.rerender(viewFor("large-window"))
   // The meter intentionally bounds background reads to once per second.

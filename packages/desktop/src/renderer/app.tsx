@@ -41,7 +41,7 @@ import type { InteractionReply } from "./interaction/PendingPanel.tsx"
 import type { ReviewChanges, ReviewText } from "./review/ReviewPane.tsx"
 import { pendingForSession, type PendingInteraction } from "./interaction/pending.ts"
 import { usePendingInteractions } from "./interaction/use-pending-interactions.ts"
-import { affectsSessionDashboard, classifyNotification } from "./session/notifications.ts"
+import { affectsSessionDashboard, affectsSessionQueue, affectsSessionTasks, classifyNotification } from "./session/notifications.ts"
 import { projectTimeline } from "./session/project.ts"
 import { sendGate } from "./session/send-gate.ts"
 import { createWorkspaceConnections } from "./session/workspace-connections.ts"
@@ -152,6 +152,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [model, setModel] = useState<SessionModelState>()
   const [tasks, setTasks] = useState<AgentTaskView[]>()
   const [taskError, setTaskError] = useState<string>()
+  const [queueError, setQueueError] = useState<string>()
   const [taskActionFailure, setTaskActionFailure] = useState<{ scope: { workspaceId?: string; sessionId?: string }; message: string }>()
   const [historyError, setHistoryError] = useState<string>()
   const [historyCount, setHistoryCount] = useState<number>()
@@ -206,6 +207,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const dashboardApplied = useRef(0)
   const reconciledWorkspaces = useRef(new Set<string>())
   const tasksRequest = useRef(0)
+  const queueRequest = useRef(0)
   const workStateRequest = useRef(0)
   const workspaceSelection = useRef({ workspaceId: selectedWorkspaceId })
   if (workspaceSelection.current.workspaceId !== selectedWorkspaceId) workspaceSelection.current = { workspaceId: selectedWorkspaceId }
@@ -320,22 +322,32 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   if (!forkCallbacks.current) forkCallbacks.current = createForkCallbackAdapters(forkOperations.current)
   useEffect(() => () => forkOperations.current?.retireNavigation(), [])
 
-  const refreshTasks = useCallback(async (workspaceId: string, sessionId: string): Promise<void> => {
+  const refreshQueue = useCallback(async (workspaceId: string, sessionId: string): Promise<void> => {
     const scope = selection.current
     if (scope.workspaceId !== workspaceId || scope.sessionId !== sessionId) return
-    const request = ++tasksRequest.current
+    const request = ++queueRequest.current
     const statusRevision = runningRevision.current
     try {
-      const [queueRows, taskRows] = await Promise.all([
-        bridge.request({ kind: durableInputSupported.current ? "desktop/session/input/state" : "session/queue", workspaceId, sessionId }),
-        bridge.request({ kind: "session/tasks", workspaceId, sessionId }),
-      ])
-      if (selection.current !== scope || request !== tasksRequest.current) return
+      const queueRows = await bridge.request({ kind: durableInputSupported.current ? "desktop/session/input/state" : "session/queue", workspaceId, sessionId })
+      if (selection.current !== scope || request !== queueRequest.current) return
       const items = Array.isArray(queueRows) ? queueRows as SessionQueueItem[] : (queueRows as { items: SessionQueueItem[] }).items
       setQueueSnapshot({ scope, items })
       // A status notification received during this read is newer than its snapshot.
       if (executionRevision.current === undefined && statusRevision === runningRevision.current) setRunning(items.some(row => row.state === "running"))
       setQueueResumable(!Array.isArray(queueRows) && (queueRows as { resumable: boolean }).resumable)
+      setQueueError(undefined)
+    } catch (reason) {
+      if (selection.current === scope && request === queueRequest.current) setQueueError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }, [bridge])
+
+  const refreshTasks = useCallback(async (workspaceId: string, sessionId: string): Promise<void> => {
+    const scope = selection.current
+    if (scope.workspaceId !== workspaceId || scope.sessionId !== sessionId) return
+    const request = ++tasksRequest.current
+    try {
+      const taskRows = await bridge.request({ kind: "session/tasks", workspaceId, sessionId })
+      if (selection.current !== scope || request !== tasksRequest.current) return
       setTasks(taskRows as AgentTaskView[])
       setTaskError(undefined)
     } catch (reason) {
@@ -513,10 +525,12 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     const flushVisibleChunks = () => { if (document.visibilityState !== "hidden") flushChunks() }
     const runtimeAvailable = () => workspaceConnections.get(selectedWorkspaceId)?.phase !== "idle"
     const refreshList = createRefreshScheduler(async () => { if (runtimeAvailable()) await refreshDashboard(selectedWorkspaceId) })
-    const refreshTurn = selectedSessionId ? createRefreshScheduler(async () => {
+    const refreshTaskList = selectedSessionId ? createRefreshScheduler(async () => {
       if (runtimeAvailable()) await refreshTasks(selectedWorkspaceId, selectedSessionId)
     }) : undefined
-    const refresh = () => { refreshList.schedule(); refreshTurn?.schedule() }
+    const refreshInput = selectedSessionId ? createRefreshScheduler(async () => {
+      if (runtimeAvailable()) await refreshQueue(selectedWorkspaceId, selectedSessionId)
+    }) : undefined
     const handle = (event: DesktopEvent) => {
       if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity") return
       // Notifications for all workspaces arrive on this bridge. Keep unfinished
@@ -551,7 +565,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           // replay could splice an older disjoint page back into that window.
           setRetryNonce(value => value + 1)
           executionRevision.current = undefined
-          refresh()
+          refreshList.schedule()
+          refreshInput?.schedule()
+          refreshTaskList?.schedule()
         }
         return
       }
@@ -563,6 +579,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         executionRevision.current = undefined
         runningRevision.current++
         tasksRequest.current++
+        queueRequest.current++
         setRunning(false)
         setQueueSnapshot(snapshot => snapshot && { ...snapshot, items: snapshot.items.filter(row => row.state !== "running") })
         if (event.kind === "sdk/idle") {
@@ -588,10 +605,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         if (executionRevision.current !== undefined && state.revision <= executionRevision.current) return
         executionRevision.current = state.revision
         runningRevision.current++
-        // Invalidate queue/task reads started before the authoritative event.
-        tasksRequest.current++
+        // A previous input snapshot cannot identify the new running input.
+        queueRequest.current++
         setRunning(state.running)
-        refresh()
+        refreshList.schedule()
+        refreshInput?.schedule()
         return
       }
       if (event.method === "desktop/interaction/request") {
@@ -608,6 +626,10 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         return
       }
       if (event.method === "desktop/session/navigation/changed") { refreshList.schedule(); return }
+      if (event.method === "desktop/session/subagents/changed" || event.method === "desktop/workflow/changed" || event.method === "desktop/tasks/projection") {
+        if (selection.current === scope && (event.params as { sessionId?: unknown } | undefined)?.sessionId === selectedSessionId) refreshTaskList?.schedule()
+        return
+      }
       if (event.method !== "session/event" && event.method !== "session/status") return
       const info = classifyNotification(event.method, event.params)
       if (info.kind === "ignore") return
@@ -643,7 +665,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           setEventWindow(current => selection.current === scope ? applyNotification(current, record) : current)
           if ((record.type === "todo/write" || record.type === "goal/change") && workStateSupported.current) void refreshWorkState(selectedWorkspaceId, selectedSessionId)
         }
-        refreshTurn?.schedule()
+        if (record && affectsSessionQueue(record.type)) refreshInput?.schedule()
+        if (record && affectsSessionTasks(record.type)) refreshTaskList?.schedule()
         if (affectsSessionDashboard(event.method, event.params)) refreshList.schedule()
         return
       }
@@ -652,16 +675,18 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       // Legacy transport status describes one request; service state describes
       // every submission, including a following turn already running.
       if (executionRevision.current === undefined) setRunning(info.status === "queued")
-      refresh()
+      refreshList.schedule()
+      refreshInput?.schedule()
+      if (info.status !== "queued" && info.status !== "running") refreshTaskList?.schedule()
     }
     document.addEventListener("visibilitychange", flushVisibleChunks)
     selectedWorkspaceEvents.current = handle
     return () => {
       if (selectedWorkspaceEvents.current === handle) selectedWorkspaceEvents.current = undefined
       document.removeEventListener("visibilitychange", flushVisibleChunks)
-      refreshList.dispose(); refreshTurn?.dispose(); clearChunks()
+      refreshList.dispose(); refreshInput?.dispose(); refreshTaskList?.dispose(); clearChunks()
     }
-  }, [bridge, interactions.update, refreshDashboard, refreshTasks, refreshWorkState, selectedSessionId, selectedWorkspaceId, workspaceConnections])
+  }, [bridge, interactions.update, refreshDashboard, refreshQueue, refreshTasks, refreshWorkState, selectedSessionId, selectedWorkspaceId, workspaceConnections])
 
   // A background runtime can become ready, disconnect or go idle while it is unselected.
   useEffect(() => bridge.onEvent(event => {
@@ -728,6 +753,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     setQueueSnapshot(undefined)
     setTasks(undefined)
     setTaskError(undefined)
+    setQueueError(undefined)
     setHistoryError(undefined)
     setHistoryCount(undefined)
     if (executionRevision.current === undefined) setRunning(false)
@@ -780,8 +806,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   // Select the authoritative queue surface only after this workspace has
   // negotiated its capabilities. History loading does not own execution state.
   useEffect(() => {
-    if (capabilitiesReady && selectedWorkspaceId && selectedSessionId) void refreshTasks(selectedWorkspaceId, selectedSessionId)
-  }, [capabilitiesReady, capabilities, refreshTasks, selectedSessionId, selectedWorkspaceId])
+    if (capabilitiesReady && selectedWorkspaceId && selectedSessionId) {
+      void refreshQueue(selectedWorkspaceId, selectedSessionId)
+      void refreshTasks(selectedWorkspaceId, selectedSessionId)
+    }
+  }, [capabilitiesReady, capabilities, refreshQueue, refreshTasks, selectedSessionId, selectedWorkspaceId])
 
   useEffect(() => {
     if (!selectedWorkspaceId || !selectedSessionId || operation?.kind !== "model" || operation.busy) return
@@ -843,7 +872,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         // The durable RPC acknowledges admission and refreshes below. Its
         // execution notifications already cover changes before that reply.
         // Legacy prompt RPCs stay open until the end of the turn.
-        if (!usesDurableInput) timer = setTimeout(() => { if (selection.current === owner) void refreshTasks(selectedWorkspaceId, selectedSessionId) }, 500)
+        if (!usesDurableInput) timer = setTimeout(() => { if (selection.current === owner) void refreshQueue(selectedWorkspaceId, selectedSessionId) }, 500)
         const accepted = (inputId?: string) => {
           if (showEcho && inputId) setOptimistic(current => current.map(row => ownsEcho(row) ? { ...row, inputId } : row))
           const consume = () => consumeSessionSubmission(selectedWorkspaceId, selectedSessionId, token)
@@ -857,7 +886,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       if (selection.current !== owner) return
       if (workspaceConnections.get(selectedWorkspaceId)?.phase === "online")
         void pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
-      void refreshTasks(selectedWorkspaceId, selectedSessionId)
+      void refreshQueue(selectedWorkspaceId, selectedSessionId)
+      if (!usesDurableInput) void refreshTasks(selectedWorkspaceId, selectedSessionId)
       void refreshDashboard(selectedWorkspaceId)
     }
   }
@@ -905,7 +935,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           try {
             await bridge.request({ kind: "desktop/session/input/resume", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
             if (selection.current === scope) setTaskActionFailure(undefined)
-            await refreshTasks(selectedWorkspaceId, selectedSessionId)
+            await refreshQueue(selectedWorkspaceId, selectedSessionId)
           } catch (reason) {
             if (selection.current === scope) setTaskActionFailure({ scope, message: reason instanceof Error ? reason.message : String(reason) })
             throw reason
@@ -933,7 +963,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
             if (selection.current === scope) setWorkStateResult({ scope, view })
           } catch (error) { await refreshWorkState(selectedWorkspaceId, selectedSessionId); throw error }
         },
-        taskError: taskActionFailure?.scope === selection.current ? taskActionFailure.message : taskError,
+        taskError: taskActionFailure?.scope === selection.current ? taskActionFailure.message : queueError ?? taskError,
         historyError,
         historyNotice: historyCount === undefined ? undefined : t("歷史視窗已載入 {count} 筆；可使用會話搜尋查找其他內容。", { count: historyCount }),
         pending: pendingForSession(pending, selectedSessionId),
@@ -950,7 +980,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
             if (stopTarget.kind === "legacy" && stopTarget.inputId && current() && result?.cancelled !== true && result?.reason === "not-found") {
               result = await bridge.request({ kind: "desktop/session/input/cancel", ...scope, inputId: stopTarget.inputId }) as { cancelled?: boolean; reason?: string }
             }
-            if (current()) { setTaskActionFailure(undefined); void refreshTasks(selectedWorkspaceId, selectedSessionId) }
+            if (current()) { setTaskActionFailure(undefined); void refreshQueue(selectedWorkspaceId, selectedSessionId) }
             return result?.cancelled === true
           } catch (reason) {
             if (current()) setTaskActionFailure({ scope: stopScope, message: reason instanceof Error ? reason.message : String(reason) })
@@ -980,7 +1010,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
             }
             if (cancelled) setOptimistic(current => current.filter(row => row.scope !== currentScope || row.inputId !== queueId))
             if (selection.current === scope) setTaskActionFailure(undefined)
-            return refreshTasks(selectedWorkspaceId, selectedSessionId)
+            return refreshQueue(selectedWorkspaceId, selectedSessionId)
           })().catch((reason: unknown) => { if (selection.current === scope) setTaskActionFailure({ scope, message: reason instanceof Error ? reason.message : String(reason) }) })
         },
         onReply: async ({ requestId, decision }: InteractionReply) => {
@@ -996,6 +1026,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           // Deferral keeps the gateway's interrupted card. Only a final answer
           // closes it; a later cancel/expiry notification still owns removal.
           if (!(decision.kind === "question" && "deferred" in decision)) interactions.update(requestId)
+          void refreshQueue(selectedWorkspaceId, sessionId)
           void refreshTasks(selectedWorkspaceId, sessionId)
         },
       }

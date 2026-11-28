@@ -12,7 +12,7 @@ describe("classifyNotification", () => {
       .toEqual({ kind: "chunk", sessionId: "s1" })
   })
 
-  it("marks durable events for task refresh but not dashboard churn", () => {
+  it("marks saved assistant messages for the timeline without a dashboard refresh", () => {
     expect(classifyNotification("session/event", { sessionId: "s1", event: { type: "assistant/message", text: "x", seq: 4 } }))
       .toEqual({ kind: "durable", sessionId: "s1" })
     expect(affectsSessionDashboard("session/event", { event: { type: "tool/result" } })).toBe(false)

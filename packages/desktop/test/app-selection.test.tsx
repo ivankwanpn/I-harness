@@ -579,6 +579,32 @@ function fixture(override: (request: DesktopRequest) => Promise<unknown> | undef
   return request
 }
 
+it("refreshes the selected queue and task list only from events that can change their rows", async () => {
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  const request = fixture(input => input.kind === "session/queue" || input.kind === "session/tasks" ? Promise.resolve([]) : undefined,
+    listener => { emit = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props!.conversation?.tasks).toEqual([]))
+  const records = (type: string) => emit({ kind: "sdk/notification", workspaceId: "w1", method: "session/event", params: {
+    sessionId: "a", event: { type, inputId: "i", text: "hello" },
+  } })
+  const reads = () => request.mock.calls.map(([input]) => input.kind).filter(kind => kind === "session/tasks" || kind === "session/queue")
+  request.mockClear()
+  vi.useFakeTimers()
+  try {
+    act(() => { records("assistant/message"); records("context/budget"); records("step/start") })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    expect(reads()).toEqual([])
+    act(() => records("agent/input/admitted"))
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+    expect(reads()).toEqual(["session/queue"])
+    act(() => emit({ kind: "sdk/notification", workspaceId: "w1", method: "desktop/workflow/changed", params: { sessionId: "a" } }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+    expect(reads()).toEqual(["session/queue", "session/tasks"])
+  } finally { vi.useRealTimers() }
+})
+
 it("refreshes a durable input on acknowledgement without polling while admission is pending", async () => {
   const admission = defer()
   const request = fixture(message => {
