@@ -60,22 +60,29 @@ export async function* readSseBlocks(source: ReadableStream<Uint8Array> | Readab
   }
 }
 
+/** Decode a single LF-normalized block supplied by readSseBlocks. */
+export function parseSseBlock(block: string): SseFrame | undefined {
+  let data: string | undefined
+  let event: string | undefined
+  for (let start = 0; start < block.length;) {
+    const end = block.indexOf("\n", start)
+    const line = end < 0 ? block.slice(start) : block.slice(start, end)
+    start = end < 0 ? block.length : end + 1
+    const colon = line.indexOf(":")
+    const field = colon < 0 ? line : line.slice(0, colon)
+    if (field !== "data" && field !== "event") continue
+    const value = colon < 0 ? "" : line.slice(colon + (line.charCodeAt(colon + 1) === 32 ? 2 : 1))
+    if (field === "event") event = value
+    else data = data === undefined ? value : data + "\n" + value
+  }
+  if (data !== undefined) return event === undefined ? { data } : { data, event }
+}
+
 export function parseSseFrames(text: string): SseFrame[] {
   const frames: SseFrame[] = []
-  for (const chunk of text.replace(/\r\n|\r/g, "\n").split("\n\n")) {
-    const data: string[] = []
-    let event: string | undefined
-    for (const line of chunk.split("\n")) {
-      if (line === "" || line.startsWith(":")) continue
-      const colon = line.indexOf(":")
-      const field = colon === -1 ? line : line.slice(0, colon)
-      let value = colon === -1 ? "" : line.slice(colon + 1)
-      if (value.startsWith(" ")) value = value.slice(1)
-      if (field === "data") data.push(value)
-      else if (field === "event") event = value
-    }
-    if (data.length === 0) continue
-    frames.push(event === undefined ? { data: data.join("\n") } : { data: data.join("\n"), event })
+  for (const block of text.replace(/\r\n|\r/g, "\n").split("\n\n")) {
+    const frame = parseSseBlock(block)
+    if (frame) frames.push(frame)
   }
   return frames
 }

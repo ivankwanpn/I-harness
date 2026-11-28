@@ -112,9 +112,11 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
   }
   const recordMessage = (position: unknown, item: Record<string, unknown>) => {
     if (typeof position !== "number" || !Number.isSafeInteger(position) || position < 0) { outputOrderValid = false; return }
-    if (!Array.isArray(item.content) || item.content.some(part => part?.type !== "output_text" || typeof part.text !== "string")) {
-      outputOrderValid = false
-      return
+    if (!Array.isArray(item.content)) { outputOrderValid = false; return }
+    let value = ""
+    for (const part of item.content) {
+      if (part?.type !== "output_text" || typeof part.text !== "string") { outputOrderValid = false; return }
+      value += part.text
     }
     const previous = outputItems.get(position)
     if ((previous && previous.kind !== "text") || callKeys.has("index:" + position)) {
@@ -127,7 +129,8 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
       return
     }
     if (phase !== undefined) hasAssistantPhase = true
-    outputItems.set(position, { kind: "text", text: item.content.map(part => part.text).join(""), ...(phase !== undefined ? { phase } : {}) })
+    if (previous?.text === value && previous.phase === phase) return
+    outputItems.set(position, { kind: "text", text: value, ...(phase !== undefined ? { phase } : {}) })
   }
   const replayableSnapshotItem = (item: Record<string, unknown>, index: number): boolean => {
     if (item.type === "function_call") return true

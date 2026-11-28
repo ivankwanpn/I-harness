@@ -1,30 +1,29 @@
-import { forwardSseEvents, readSseBlocks, SSEParseError, parseSseFrames, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
+import { forwardSseEvents, readSseBlocks, SSEParseError, parseSseBlock, parseSseFrames, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
 import type { createResponseFold } from "./fold.ts"
 
 const doneFrame = Object.freeze({ type: "[DONE]" })
 
+function parseEvent(data: string): Record<string, unknown> {
+  if (data.trim() === "[DONE]") return doneFrame
+  try { return JSON.parse(data) as Record<string, unknown> }
+  catch { throw new SSEParseError(data) }
+}
 export function parseSSE(text: string): Record<string, unknown>[] {
-  return parseSseFrames(text).map(({ data }) => {
-    if (data.trim() === "[DONE]") return doneFrame
-    try {
-      return JSON.parse(data) as Record<string, unknown>
-    } catch (err) {
-      throw new SSEParseError(data)
-    }
-  })
+  return parseSseFrames(text).map(frame => parseEvent(frame.data))
 }
 export async function* decodeResponseStream(body: ReadableStream<Uint8Array>, fold: ReturnType<typeof createResponseFold>, request: Pick<LLMRequest, "signal">): AsyncIterable<LLMStreamEvent> {
   try {
     let finalEvents: LLMStreamEvent[] = []
-    frames: for await (const chunk of readSseBlocks(body)) {
-      for (const event of parseSSE(chunk)) {
-        const events = event === doneFrame ? fold.done() : fold.handleEvent(event)
-        if (fold.terminal) {
-          finalEvents = events
-          break frames
-        }
-        yield* forwardSseEvents(events)
+    for await (const block of readSseBlocks(body)) {
+      const frame = parseSseBlock(block)
+      if (!frame) continue
+      const event = parseEvent(frame.data)
+      const events = event === doneFrame ? fold.done() : fold.handleEvent(event)
+      if (fold.terminal) {
+        finalEvents = events
+        break
       }
+      for (const streamed of forwardSseEvents(events)) yield streamed
     }
     // A consumer may pause on usage or text from the final snapshot.
     // Release the HTTP response before exposing any part of that snapshot.

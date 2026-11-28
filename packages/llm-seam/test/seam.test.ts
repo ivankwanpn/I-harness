@@ -1,7 +1,15 @@
 import { describe, expect, expectTypeOf, it } from "vitest"
-import { assertMessagesFromLog, bindVisibleToolIds, canReplayContinuation, describeTransportError, readSseBlocks, replayBlockOrder, replayVisibleToolOrder } from "../src/index.ts"
+import { assertMessagesFromLog, bindVisibleToolIds, canReplayContinuation, describeTransportError, parseSseBlock, parseSseFrames, readSseBlocks, replayBlockOrder, replayVisibleToolOrder } from "../src/index.ts"
 import type { LLMMessage, LLMRequest, ProviderBlockOrderEntry, ReasoningEffort } from "../src/index.ts"
 import { createSession, append } from "@i-harness/core-session"
+
+it("decodes a framed block and a raw CRLF stream with the same multiline data", () => {
+  const block = ": heartbeat\nevent: old\nevent: next\ndata\ndata:  keep a space\nid: ignored\ndata:trail"
+  const expected = { event: "next", data: "\n keep a space\ntrail" }
+  expect(parseSseBlock(block)).toEqual(expected)
+  expect(parseSseFrames(block.replaceAll("\n", "\r\n") + "\r\n\r\ndata:\r\n\r\n")).toEqual([expected, { data: "" }])
+  expect(parseSseBlock(": heartbeat\nevent: next")).toBeUndefined()
+})
 
 it("leaves an externally acquired SSE reader available to its owner", async () => {
   const bytes = new TextEncoder()
