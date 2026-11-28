@@ -1307,7 +1307,10 @@ it("drains a full hidden reasoning batch through the existing reducer without dr
     expect(captured.props?.conversation?.rows).toMatchObject([{ id: "reasoning:ongoing", detail: "x".repeat(limit), transient: true }])
     visibility.mockReturnValue("visible")
     act(() => document.dispatchEvent(new Event("visibilitychange")))
-    expect(captured.props?.conversation?.rows).toMatchObject([{ id: "reasoning:ongoing", detail: "x".repeat(limit + 1), transient: true }])
+    const view = captured.props?.conversation
+    const row = view?.rows[0]
+    // Growing reasoning may update its text without rebuilding the timeline row.
+    expect(row?.kind === "other" && (view?.reasoningText?.get(row.id) ?? row.detail)).toBe("x".repeat(limit + 1))
   } finally { scheduleFrame.mockRestore(); visibility.mockRestore() }
 })
 

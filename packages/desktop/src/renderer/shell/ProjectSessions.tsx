@@ -2,7 +2,7 @@ import { displayError } from "../design/error-display.ts"
 import type { SessionDashboardResult } from "@i-harness/sdk"
 import type { WorkspaceEntry } from "../../main/workspaces.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
-import { useEffect, useRef, type Dispatch, type RefObject, type SetStateAction } from "react"
+import { useEffect, useLayoutEffect, useRef, type Dispatch, type RefObject, type SetStateAction } from "react"
 import { useLocale, useText } from "../design/i18n.ts"
 import { createRefreshScheduler } from "../session/refresh-scheduler.ts"
 import type { ProjectSidebarProps } from "./ProjectSidebar.tsx"
@@ -49,8 +49,9 @@ export interface SidebarWorkspaceSnapshot extends WorkspaceSessionSnapshot {
 }
 export interface SidebarWorkspaceReader {
   mode: SidebarReadMode
+  setVisible(visible: boolean): void
   followsForeground(sessionId: unknown): boolean
-  refresh(): void
+  refresh(ownershipChanged?: boolean): void
   ready(): void
   standby(): void
   disconnect(message: string): void
@@ -58,9 +59,10 @@ export interface SidebarWorkspaceReader {
 }
 
 /** Every project that displays this workspace consumes the same paired snapshot. */
-export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, details, snapshot, readOpeningDashboard, readers, setSnapshots }: {
+export function WorkspaceCatalogReader({ bridge, workspaceId, visible, mode, revision, details, snapshot, readOpeningDashboard, readers, setSnapshots }: {
   bridge: DesktopBridge
   workspaceId: string
+  visible: boolean
   mode: SidebarReadMode
   revision?: number
   details?: SessionDashboardResult
@@ -70,6 +72,11 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
   setSnapshots: Dispatch<SetStateAction<Record<string, SidebarWorkspaceSnapshot>>>
 }) {
   const en = useLocale(state => state.locale) === "en"
+  const visibility = useRef(visible)
+  useLayoutEffect(() => {
+    visibility.current = visible
+    readers.current.get(workspaceId)?.setVisible(visible)
+  }, [visible, workspaceId, readers])
   const foreground = useRef(details)
   foreground.current = details
   const retiredOpening = useRef<{ details?: SessionDashboardResult } | undefined>(undefined)
@@ -82,6 +89,8 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
     let generation = 0
     let initial = true
     let joinOnReady = false
+    let needsRead = false
+    let recheckOwners = false
     let confirmedRows: WorkspaceSessionSnapshot["navigation"]
     paired.current = undefined
     if (mode === "owners") {
@@ -130,8 +139,12 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
         dashboard: mode === "owners" ? undefined : dashboard ?? previous[workspaceId]?.dashboard,
         navigation: mode === "owners" ? undefined : navigation, owners: owners ?? previous[workspaceId]?.owners, error,
       } }))
-      if (dashboard && foreground.current !== supplied && membershipChanged(dashboard, foreground.current)) refresh.schedule()
+      if (dashboard && foreground.current !== supplied && membershipChanged(dashboard, foreground.current)) schedule()
     })
+    function schedule(wait?: number) {
+      if (visibility.current) refresh.schedule(wait)
+      else needsRead = true
+    }
     const retireReads = () => {
       generation++
       initial = false
@@ -141,28 +154,52 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
     }
     const reader: SidebarWorkspaceReader = {
       mode,
+      setVisible(shown) {
+        if (!shown) {
+          // A reply can arrive after a newer visible generation has started.
+          generation++
+          if (refresh.retire()) {
+            needsRead = true
+            recheckOwners = true
+          }
+        } else if (needsRead) {
+          needsRead = false
+          if (recheckOwners) {
+            recheckOwners = false
+            confirmedRows = undefined
+            setSnapshots(previous => previous[workspaceId]?.navigation
+              ? { ...previous, [workspaceId]: { ...previous[workspaceId], navigation: undefined } }
+              : previous)
+          }
+          refresh.schedule(0)
+        }
+      },
       followsForeground(id) {
         return !!foreground.current && !foreground.current.listingUnavailable && typeof id === "string"
           && confirmedSessionNavigation(confirmedRows?.[id])
       },
-      refresh() { joinOnReady = false; refresh.schedule() },
+      refresh(ownershipChanged) {
+        if (ownershipChanged && !visibility.current) recheckOwners = true
+        joinOnReady = false
+        schedule()
+      },
       ready() {
         joinOnReady = mode === "foreground" && !retiredOpening.current
-        refresh.schedule()
+        schedule()
       },
       standby() {
         if (!active || !retireReads()) return
         const last = latestSnapshot.current
         // IPC has already retired the active route. Only replace interrupted
         // discovery or an unconfirmed open list through the cold catalog.
-        if (mode === "owners" || !last?.dashboard || last.dashboard.listingUnavailable || !last.navigation) refresh.schedule(0)
+        if (mode === "owners" || !last?.dashboard || last.dashboard.listingUnavailable || !last.navigation) schedule(0)
       },
       disconnect(message) {
         if (!active) return
         retireReads()
         confirmedRows = undefined
         setSnapshots(previous => ({ ...previous, [workspaceId]: { ...previous[workspaceId], navigation: undefined, error: message } }))
-        refresh.schedule()
+        schedule()
       },
       reportError(reason) {
         if (active) setSnapshots(previous => ({ ...previous, [workspaceId]: {
@@ -171,12 +208,12 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
       },
     }
     readers.current.set(workspaceId, reader)
-    refresh.schedule(0)
+    schedule(0)
     return () => { active = false; refresh.dispose(); readers.current.delete(workspaceId) }
   }, [bridge, workspaceId, mode, revision, en, readOpeningDashboard, readers, setSnapshots])
 
   useEffect(() => {
-    if (!details || details.listingUnavailable || !paired.current) return
+    if (!visible || !details || details.listingUnavailable || !paired.current) return
     if (membershipChanged(paired.current, details)) readers.current.get(workspaceId)?.refresh()
     setSnapshots(previous => {
       const snapshot = previous[workspaceId]
@@ -184,7 +221,7 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
       const dashboard = withDashboardDetails(snapshot.dashboard, details)
       return dashboard === snapshot.dashboard ? previous : { ...previous, [workspaceId]: { ...snapshot, dashboard } }
     })
-  }, [workspaceId, details, readers, setSnapshots])
+  }, [workspaceId, visible, details, readers, setSnapshots])
   return null
 }
 

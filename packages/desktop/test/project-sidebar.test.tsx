@@ -33,6 +33,31 @@ function fixture(handle?: (request: DesktopRequest) => unknown) {
 }
 
 describe("project conversation sidebar", () => {
+  it("rechecks invalidated ownership on return and ignores a late pre-hide reply", async () => {
+    const stale = Promise.withResolvers<unknown>()
+    const resumed = Promise.withResolvers<unknown>()
+    let reads = 0
+    const { props, emit } = fixture(request => {
+      if (request.kind !== "desktop/session/navigation/state") return undefined
+      reads++
+      if (reads === 1) return { s1: { pinned: false, unread: false, projectId: "p1" } }
+      return reads === 2 ? stale.promise : resumed.promise
+    })
+    const sidebar = (visible: boolean) => <ProjectSidebar {...props} projects={[projects[0]!]}
+      workspaces={[workspaces[0]!]} visible={visible} />
+    const tree = render(sidebar(true))
+    await screen.findByText("Current chat")
+    act(() => emit({ kind: "sdk/notification", workspaceId: "w1", method: "desktop/session/navigation/changed", params: {} }))
+    await waitFor(() => expect(reads).toBe(2))
+    tree.rerender(sidebar(false))
+    tree.rerender(sidebar(true))
+    expect(screen.queryByText("Current chat")).toBeNull()
+    await waitFor(() => expect(reads).toBe(3))
+    await act(async () => resumed.resolve({ s1: { pinned: false, unread: false, projectId: "p2" } }))
+    await act(async () => stale.resolve({ s1: { pinned: false, unread: false, projectId: "p1" } }))
+    expect(screen.queryByText("Current chat")).toBeNull()
+  })
+
   it("shows confirmed rows beside a partial-list retry and recovers the missing row", async () => {
     let unreadable = true
     const { props } = fixture(request => {

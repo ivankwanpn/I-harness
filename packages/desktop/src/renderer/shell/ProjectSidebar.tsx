@@ -9,11 +9,13 @@ import { useText } from "../design/i18n.ts"
 import { Button } from "../vendor/opencode/Button.tsx"
 import { affectsSessionDashboard } from "../session/notifications.ts"
 import { createWorkspaceConnections } from "../session/workspace-connections.ts"
+import { useWindowVisibility } from "../window-visibility.tsx"
 import { ProjectSessions, WorkspaceCatalogReader, type SidebarReadMode, type SidebarWorkspaceReader, type SidebarWorkspaceSnapshot } from "./ProjectSessions.tsx"
 import "./projects-sidebar.css"
 
 export interface ProjectSidebarProps {
   bridge: DesktopBridge
+  visible?: boolean
   sessionRevisionsByWorkspace?: ReadonlyMap<string, number>
   onManageSessions?(workspaceId: string, sessionId?: string): void
   projects: ProjectEntry[]
@@ -56,6 +58,8 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
 
 function ProjectTree(props: ProjectSidebarProps) {
   const t = useText()
+  const windowVisible = useWindowVisibility()
+  const visible = windowVisible && props.visible !== false
   const { projects, workspaces, selectedProjectId, selectedWorkspaceId, selectedSessionId, bridge } = props
   const [snapshots, setSnapshots] = useState<Record<string, SidebarWorkspaceSnapshot>>({})
   const readers = useRef(new Map<string, SidebarWorkspaceReader>())
@@ -77,7 +81,7 @@ function ProjectTree(props: ProjectSidebarProps) {
       if (!reader) return
       if (event.kind === "sdk/idle") { reader.standby(); return }
       if (event.kind === "sdk/disconnected") { reader.disconnect(event.message); return }
-      if (event.method === "desktop/session/navigation/changed") { reader.refresh(); return }
+      if (event.method === "desktop/session/navigation/changed") { reader.refresh(true); return }
       if (reader.mode === "owners") return
       if (event.kind === "sdk/ready") { reader.ready(); return }
       // App refreshes the foreground dashboard for status/activity changes.
@@ -158,7 +162,7 @@ function ProjectTree(props: ProjectSidebarProps) {
   }
 
   return <nav className="sidebar project-sidebar" aria-label={t("專案")}>
-    {workspaces.map(folder => <WorkspaceCatalogReader key={folder.id} bridge={bridge} workspaceId={folder.id}
+    {workspaces.map(folder => <WorkspaceCatalogReader key={folder.id} bridge={bridge} workspaceId={folder.id} visible={visible}
       mode={readModes.get(folder.id) ?? "owners"} revision={props.sessionRevisionsByWorkspace?.get(folder.id)} readers={readers} setSnapshots={setSnapshots} snapshot={snapshots[folder.id]}
       readOpeningDashboard={props.readOpeningDashboard}
       details={folder.id === selectedWorkspaceId ? props.dashboard : undefined} />)}
