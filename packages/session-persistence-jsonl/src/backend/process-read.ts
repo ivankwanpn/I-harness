@@ -394,6 +394,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
         let observing: Promise<{ initial: import('@i-harness/core-session').SessionView; seedLength: number; assertCurrent(): Promise<void>; assertRoot(): Promise<void> }> | undefined;
         let observingClean: Promise<Awaited<NonNullable<typeof observing>> | undefined> | undefined;
         let checking: Promise<void> | undefined, cleanup: Promise<void> | undefined, retiring = false;
+        let verificationBuffer: Buffer | undefined;
         async function closeResource(resource: { handle: FileHandle; close: FileHandle['close']; failed: boolean; cause?: unknown }) {
             if (resource.failed && resource.handle.fd < 0) throw resource.cause;
             try { await Reflect.apply(resource.close, resource.handle, []); resources.delete(resource); }
@@ -401,8 +402,8 @@ export function createJsonlProcessReadCapability(ports: Ports) {
         }
         type CapturedHistory = { bytes: Buffer; witness: Witness };
         async function readOriginal(parents: DirectoryChain): Promise<CapturedHistory>;
-        async function readOriginal(parents: DirectoryChain, expected: Witness): Promise<void>;
-        async function readOriginal(parents: DirectoryChain, expected?: Witness): Promise<CapturedHistory | void> {
+        async function readOriginal(parents: DirectoryChain, expected: Witness, scratch?: Buffer): Promise<void>;
+        async function readOriginal(parents: DirectoryChain, expected?: Witness, scratch?: Buffer): Promise<CapturedHistory | void> {
             scope.assertActive(); if (resources.size) bad();
             const before = await lstat(path, { bigint: true }); scope.assertActive(); if (!before.isFile() || before.isSymbolicLink()) bad();
             const first = identity(before);
@@ -413,12 +414,13 @@ export function createJsonlProcessReadCapability(ports: Ports) {
                 scope.assertActive(); if (!same(first, identity(await handle.stat({ bigint: true })))) bad();
                 // Include one byte past the fixed extent to detect early EOF and growth.
                 const length = first.size + 1, digest = createHash('sha256');
-                const buffer = expected ? Buffer.allocUnsafe(Math.min(65536, length)) : Buffer.alloc(length);
+                const buffer = scratch ?? (expected ? Buffer.allocUnsafe(Math.min(65536, length)) : Buffer.alloc(length));
+                const chunkSize = scratch?.length ?? 65536;
                 let offset = 0;
                 while (offset < length) {
                     scope.assertActive();
                     const targetOffset = expected ? 0 : offset;
-                    const { bytesRead } = await handle.read(buffer, targetOffset, Math.min(65536, length - offset), offset);
+                    const { bytesRead } = await handle.read(buffer, targetOffset, Math.min(chunkSize, length - offset), offset);
                     if (!bytesRead) break;
                     digest.update(buffer.subarray(targetOffset, targetOffset + bytesRead));
                     offset += bytesRead;
@@ -509,7 +511,13 @@ export function createJsonlProcessReadCapability(ports: Ports) {
                 checking = Promise.resolve().then(async () => {
                     scope.assertActive(); ports.assertOriginal(); await ports.checkDeleted('session', id); const currentDigest = await checkNamespace(); if (currentDigest !== undefined && currentDigest !== captured.witness.digest) bad();
                     if (!stableParents(parents, await ancestors(path))) bad();
-                    await readOriginal(parents, captured.witness);
+                    // This proof admits one descriptor check at a time. Reuse
+                    // its scratch across full-byte checks, then release it
+                    // with the original Task scope.
+                    const scratch = validatedClean && captured.witness.identity.size > 65536 && cleanDecodeEnvironment()
+                        ? verificationBuffer ??= Buffer.allocUnsafe(Math.min(1024 * 1024, captured.witness.identity.size + 1))
+                        : undefined;
+                    await readOriginal(parents, captured.witness, scratch);
                     if (!stableParents(parents, await ancestors(path))) bad();
                     scope.assertActive(); ports.assertOriginal();
                 });
@@ -530,7 +538,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
         }
         function settle(retire: boolean) {
             if (retire) retiring = true; if (cleanup) return cleanup;
-            cleanup = Promise.resolve().then(async () => { await observing?.catch(() => {}); await observingClean?.catch(() => {}); await checking?.catch(() => {}); let failed = false, cause: unknown; for (const resource of resources) try { await closeResource(resource); } catch (error) { if (!failed) { failed = true; cause = error; } } if (failed) throw cause; });
+            cleanup = Promise.resolve().then(async () => { await observing?.catch(() => {}); await observingClean?.catch(() => {}); await checking?.catch(() => {}); verificationBuffer = undefined; let failed = false, cause: unknown; for (const resource of resources) try { await closeResource(resource); } catch (error) { if (!failed) { failed = true; cause = error; } } if (failed) throw cause; });
             void cleanup.then(() => { cleanup = undefined }, () => { cleanup = undefined }); return cleanup;
         }
         const session = Object.freeze({

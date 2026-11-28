@@ -2,6 +2,9 @@ import { expect, it, vi } from 'vitest'
 type StreamFault = {
   reads: Array<{ descriptor: symbol; capacity: number; position: number; bytesRead: number }>
   changedByte?: number
+  maxRead?: number
+  changeDuringVerification?: boolean
+  verificationBuffers?: Set<Buffer>
 }
 const faults = vi.hoisted(() => ({ target: '', fail: false, closes: 0, stream: undefined as StreamFault | undefined }))
 vi.mock('node:fs/promises', async original => {
@@ -16,11 +19,13 @@ vi.mock('node:fs/promises', async original => {
         const read = handle.read.bind(handle)
         const descriptor = Symbol()
         handle.read = (async (buffer: Buffer, offset: number, length: number, position: number) => {
-          const result = await read(buffer, offset, Math.min(length, 4093), position)
+          const result = await read(buffer, offset, Math.min(length, stream.maxRead ?? 4093), position)
           stream.reads.push({ descriptor, capacity: buffer.length, position, bytesRead: result.bytesRead })
+          const verifying = buffer.length === 1024 * 1024
+          if (verifying) stream.verificationBuffers?.add(buffer)
           const changedByte = stream.changedByte
           // Simulate changed bytes visible through the original descriptor while every stat is unchanged.
-          if (changedByte !== undefined && changedByte >= position && changedByte < position + result.bytesRead) {
+          if (changedByte !== undefined && (!stream.changeDuringVerification || verifying) && changedByte >= position && changedByte < position + result.bytesRead) {
             const index = offset + changedByte - position
             buffer[index] = buffer[index]! ^ 1
           }
@@ -31,12 +36,51 @@ vi.mock('node:fs/promises', async original => {
     return handle
   } }
 })
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createJsonlBackend, lookupJsonlProcessRead } from '../src/backend-factory.ts'
 import { createPredecessorSession } from './helpers/predecessor.ts'
 import { createOwnership } from '../../session-persistence/src/coordinator/ownership.ts'
 import { issueHeldTaskDocumentScope } from '../../session-persistence/src/coordinator/task-document-scope.ts'
+import { createSessionCoordinatorAt } from './helpers/composed.ts'
+import { encodeFactBatch } from '@i-harness/core-session'
+
+it('reuses one bounded buffer to verify the entire ordinary journal at each owned restore check', async () => {
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-history-verified-'))
+  const path = join(root, 'p.jsonl')
+  const create = createSessionCoordinatorAt(root)
+  await create.create({ sessionId: 'p' })
+  await create.close()
+  const header = await readFile(path)
+  const frame = encodeFactBatch('history', JSON.parse(header.toString()).journal.legacyPrefixDigest, [
+    { type: 'user/message', seq: 0, text: 'history'.repeat(330000) },
+  ])
+  const raw = Buffer.concat([header, frame.bytes])
+  const stream: StreamFault = { reads: [], maxRead: Infinity, verificationBuffers: new Set() }
+  faults.target = path
+  faults.stream = stream
+  try {
+    await writeFile(path, raw)
+    const coordinator = createSessionCoordinatorAt(root)
+    try { expect((await coordinator.loadOwned('p')).session.events).toMatchObject([{ type: 'user/message', seq: 0 }]) }
+    finally { await coordinator.close() }
+    expect(stream.verificationBuffers?.size).toBe(1)
+    const checks = stream.reads.filter(read => read.capacity === 1024 * 1024)
+    const descriptors = new Set(checks.map(read => read.descriptor))
+    expect(descriptors.size).toBeGreaterThan(1)
+    for (const descriptor of descriptors) {
+      const reads = checks.filter(read => read.descriptor === descriptor)
+      expect(reads.map(read => read.position)).toEqual([0, 1024 * 1024, 2 * 1024 * 1024, raw.length])
+      expect(reads.reduce((total, read) => total + read.bytesRead, 0)).toBe(raw.length)
+    }
+    stream.changeDuringVerification = true
+    stream.changedByte = raw.length - 1
+    const retry = createSessionCoordinatorAt(root)
+    try { await expect(retry.loadOwned('p')).rejects.toMatchObject({ message: 'TASK_TRANSITION_FAILED', cause: { message: 'PROCESS_READ_UNAVAILABLE' } }) }
+    finally { await retry.close() }
+    expect((await readFile(path)).equals(raw)).toBe(true)
+  } finally { faults.stream = undefined; faults.target = ''; await rm(root, { recursive: true, force: true }) }
+})
 
 it('retains the original history file close failure until explicit settlement', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-history-debt-'))
