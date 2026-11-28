@@ -17,6 +17,7 @@ import {createProjectInstructionEnvironment} from './context/instructions/index.
 import {mountOwnedFilesystem} from './owned-filesystem.ts'
 import {mountOwnedSchedule} from './owned-schedule.ts'
 import {createExecutionApprovalPolicy} from '@i-harness/guard-approval'
+import {createRepeatToolReminder} from '@i-harness/guard-repeat-tool'
 import {composeCompactConfig,summaryFactory} from './context-composition.ts'
 import {diagnosticsFor} from '@i-harness/diagnostics'
 import {approxTokens,type CompactionRequest} from '@i-harness/compaction'
@@ -197,7 +198,8 @@ function finish(options:ManagedExecutionRuntimeOptions,prepared:ReturnType<typeo
  const overhead=options.contextWindow===undefined||surface?.prepareModelSurface?undefined:modelOverheadTokens()
  const compact=composeCompactConfig(options.compact,options.contextWindow,overhead,diagnosticsFor('mount'),originalBudget?.limits)
  const inputs=receivedExecutionInputsFor(execution)
- const agent=createManagedAgent(ctx,{execution,domain:origin.domain,hooks:captureExecutionHookChannel(ctx),modelCallOrigin:origin.bind(pair.registry,pair.driver),tools:pair.registry,get model(){return model},systemPrompt:surface?()=>surface.systemPrompt():options.systemPrompt,modelToolSchemas,modelOverheadTokens,...surface?.modelSurface?{modelSurface:()=>surface.modelSurface!()}:{} ,...surface?.prepareModelSurface?{prepareModelSurface:(signal:AbortSignal)=>surface.prepareModelSurface!(signal)}:{},
+ const repeatReminder = createRepeatToolReminder()
+ const agent=createManagedAgent(ctx,{execution,repeatToolReminder:(name,args)=>repeatReminder(origin.domain,name,args),domain:origin.domain,hooks:captureExecutionHookChannel(ctx),modelCallOrigin:origin.bind(pair.registry,pair.driver),tools:pair.registry,get model(){return model},systemPrompt:surface?()=>surface.systemPrompt():options.systemPrompt,modelToolSchemas,modelOverheadTokens,...surface?.modelSurface?{modelSurface:()=>surface.modelSurface!()}:{} ,...surface?.prepareModelSurface?{prepareModelSurface:(signal:AbortSignal)=>surface.prepareModelSurface!(signal)}:{},
   ...(options.contextWindow!==undefined?{budget:{contextWindow:options.contextWindow,overheadTokens:overhead}}:{}),...(compact?{compact}:{}),summaryFactory,...(options.autoCompactionEnabled!==undefined?{autoCompactionEnabled:options.autoCompactionEnabled}:{}),maxOutputTokens:options.maxOutputTokens,requestContext,
   modelActionTimeoutMs:options.modelActionTimeoutMs,modelActionMaxAttempts:options.modelActionMaxAttempts,get reasoningEffort(){return reasoningEffort},maxParallelToolCalls:options.maxParallelToolCalls,budgetBinding:options.budgetBinding,contextMetadata:options.contextMetadata,telemetry:options.telemetry,modelBindingIdentity:()=>model,...(options.sandboxMode ? {sandboxMode:options.sandboxMode} : options.sandbox!==undefined ? {sandboxMode:()=>options.sandbox!} : {}),
   stepInputs:{claimAtStepBoundary:(facts,prepare,claim)=>inputs.inbox.claimAtStepBoundary(facts,prepare,claim)},

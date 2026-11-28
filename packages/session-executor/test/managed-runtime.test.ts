@@ -26,6 +26,33 @@ import {approxTokens} from '@i-harness/compaction'
 import type {LLMRequest} from '@i-harness/llm-seam'
 import {createSessionManagement} from '../../desktop-gateway/src/session-management.ts'
 
+it('delivers semantic repeat reminders into the managed turn that actually ran the tool', async () => {
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'managed-repeat-'))
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  await coordinator.create({ sessionId: 'main' })
+  const seen: number[] = []
+  let executions = 0
+  const model = controlledModel(async function* (request) {
+    seen.push(request.messages.filter(m => m.role === 'user' && typeof m.content === 'string' && m.content.includes('Heads-up: tool')).length)
+    if (seen.length <= 5) {
+      const args = seen.length % 2 ? { path: 'sample', offset: 1 } : { offset: 1, path: 'sample' }
+      yield { type: 'tool_call', call: { id: 'r' + seen.length, name: 'fixture_read', args } }
+    } else yield { type: 'text/chunk', text: 'done' }
+    yield { type: 'end' }
+  })
+  const service = createSessionService({ workspace: root, coordinator, model, contextWindow: 8192, maxOutputTokens: 128,
+    managedRuntime: { systemPrompt: 'test', tools: [{ name: 'fixture_read', description: 'read', inputSchema: { type: 'object' },
+      isReadOnly: true, async execute() { executions++; return 'read' } }] } })
+  try {
+    await service.submit('main', 'repeat', new AbortController().signal)
+    expect(executions).toBe(5)
+    expect(seen).toEqual([0, 0, 0, 1, 1, 2])
+    await service.closeSession('main')
+    const journal = await backend.read('main')
+    expect(journal.events.filter(e => e.type === 'user/message' && e.internal && e.source?.kind === 'plugin' && e.source.plugin === 'guard-repeat-tool')).toHaveLength(2)
+  } finally { await service.close(); await coordinator.close() }
+}, 30_000)
+
 it('inspects a held managed request without claiming a legacy assembly',async()=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'managed-activity-'))
  const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)

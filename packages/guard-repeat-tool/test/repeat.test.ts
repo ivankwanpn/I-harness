@@ -28,6 +28,20 @@ function reminderTexts(session: Session): string[] {
 }
 
 describe("guard-repeat-tool", () => {
+  it("groups reordered objects but resets on reordered array elements", async () => {
+    const ctx = createContext(), session = createSession()
+    ctx.mount(createRepeatToolGuard(ctx, { thresholds: [3] }))
+    for (const args of [
+      { file: "a", range: { start: 2, end: 5 }, flags: ["a", "b"] },
+      { flags: ["a", "b"], range: { end: 5, start: 2 }, file: "a" },
+      { range: { start: 2, end: 5 }, file: "a", flags: ["a", "b"] },
+      { file: "a", range: { start: 2, end: 5 }, flags: ["b", "a"] },
+      { flags: ["a", "b"], range: { end: 5, start: 2 }, file: "a" },
+      { flags: ["a", "b"], range: { end: 5, start: 2 }, file: "a" },
+    ]) await runPostTool(ctx, "read", args, session)
+    expect(reminderTexts(session)).toHaveLength(1)
+  })
+
   it("thresholds [3,5,8] fire at counts 3, 5, 8 and no more", async () => {
     const ctx = createContext()
     const session = createSession()

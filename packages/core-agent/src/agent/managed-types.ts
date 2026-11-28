@@ -38,6 +38,7 @@ export interface ManagedAgentDeps extends Omit<AgentDeps,'session'|'factOwner'|'
  /** The host's standing execution mode for this managed runtime. The first
   *  turn action records it durably, replacing the legacy assembly producer. */
  readonly sandboxMode?:()=>'read-only'|'workspace-write'|'danger-full-access'
+ repeatToolReminder?:(name:string,args:unknown)=>string|undefined
  prepareModelSurface?:(signal:AbortSignal)=>Promise<void>
  modelSurface?(): Pick<import('@i-harness/llm-seam').LLMRequest, 'systemPrompt' | 'baseInstructions' | 'tools'>
  modelCallOrigin:object

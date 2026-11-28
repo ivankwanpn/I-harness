@@ -393,7 +393,7 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
                                     if (record.call && step!.batch.includes(record.call))
                                         record.handled = true;
                                 return actual;
-                            });
+                            }, host.repeatToolReminder);
                             return executeToolCalls(_ctx, batchSource, host.tools, step!.batch, { maxParallel, signal, sessionId: host.domain.sessionId, modelGeneration: managedToolGenerationFactory(host, batchSource, run.lifecycle!, parentActionId), ...pendingInstructions ? { instructionBatch: pendingInstructions } : {}, telemetry: host.telemetry, flush: host.flush });
                         }, async () => { await pendingInstructions?.release(); });
                         instructions = undefined;

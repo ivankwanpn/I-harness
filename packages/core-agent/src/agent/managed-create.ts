@@ -32,7 +32,7 @@ export interface ManagedRun {
 }
 function captureDependencies(host: ManagedAgentHost): ManagedAgentHost {
     const deps = {} as ManagedAgentHost;
-    for (const key of ['execution', 'domain', 'hooks', 'modelCallOrigin', 'tools', 'requestContext', 'generationFactory', 'inputPreparationFactory', 'summaryFactory', 'maxTurns', 'maxParallelToolCalls'] as const) {
+    for (const key of ['execution', 'domain', 'hooks', 'modelCallOrigin', 'tools', 'requestContext', 'generationFactory', 'inputPreparationFactory', 'summaryFactory', 'repeatToolReminder', 'maxTurns', 'maxParallelToolCalls'] as const) {
         const value = host[key];
         Object.defineProperty(deps, key, { enumerable: true, value: typeof value === 'function' ? value.bind(host) : value });
     }

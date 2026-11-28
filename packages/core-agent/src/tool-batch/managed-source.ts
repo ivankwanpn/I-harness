@@ -1,4 +1,4 @@
-import { canonicalJsonData, type SessionView, type ManagedAction, type FactOutcome, type SettlementFacts } from '@i-harness/core-session';
+import { canonicalJsonData, committedFactSeqs, type SessionView, type ManagedAction, type FactOutcome, type SettlementFacts } from '@i-harness/core-session';
 import { isManagedExecutionDomain, isManagedExecutionSource, readManagedActionMembers, type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution';
 import { isExecutionHookChannel, type ExecutionHookChannel, type PluginContext } from '@i-harness/core-plugin';
 import type { PreparedCall } from '@i-harness/core-tools';
@@ -22,7 +22,7 @@ export interface ManagedBatchSource {
     indexOfCall(call: BatchCall): number;
     attach(index: number, prepared: PreparedCall, source: SettlementFacts<FactOutcome>): void;
     synthetic(index: number, source: SettlementFacts<FactOutcome>): import('@i-harness/core-tools').ManagedSyntheticResultContext;
-    postTool(payload: object): Promise<unknown>;
+    postTool(payload: { name: string; args: unknown; signal?: AbortSignal }): Promise<unknown>;
     projectSynthetic(payload: {
         name: string;
         output: unknown;
@@ -31,7 +31,7 @@ export interface ManagedBatchSource {
 }
 export type BatchSource = SessionView | ManagedBatchSource;
 export function isManagedBatchSource(source: BatchSource): source is ManagedBatchSource { return originals.has(source); }
-export function createManagedBatchSource(domain: ManagedExecutionDomain, action: ManagedAction<FactOutcome>, invocation: ReturnType<typeof createManagedModelInvocation>, batch: object, calls: readonly BatchCall[], witnesses: readonly ManagedFactWitness[], hooks: ExecutionHookChannel, register: (drain: () => Promise<void>) => SettlementFacts<FactOutcome>): ManagedBatchSource {
+export function createManagedBatchSource(domain: ManagedExecutionDomain, action: ManagedAction<FactOutcome>, invocation: ReturnType<typeof createManagedModelInvocation>, batch: object, calls: readonly BatchCall[], witnesses: readonly ManagedFactWitness[], hooks: ExecutionHookChannel, register: (drain: () => Promise<void>) => SettlementFacts<FactOutcome>, repeatToolReminder?: (name: string, args: unknown) => string | undefined): ManagedBatchSource {
     // The nominal map comparison uses the domain's original context identity.
     if (!isManagedExecutionDomain(domain) || !isExecutionHookChannel(hooks, domain.context as PluginContext)) throw TypeError('Original batch hook channel required');
     domain.assertCurrent();
@@ -145,10 +145,15 @@ export function createManagedBatchSource(domain: ManagedExecutionDomain, action:
             const call = owned[index]!, witness = member(index, call);
             return { domain, source: settlement, callId: call.callId, name: call.name, ...witness };
         },
-        postTool(payload: object) {
+        async postTool(payload: { name: string; args: unknown; signal?: AbortSignal }) {
             if (this !== source)
                 throw TypeError('Original batch receiver required');
-            return hooks.emit('agent/post-tool', { ...payload, domain }, surface);
+            await hooks.emit('agent/post-tool', { ...payload, domain }, surface);
+            if (payload.signal?.aborted) return;
+            const text = repeatToolReminder?.(payload.name, payload.args);
+            if (text) committedFactSeqs(await action.facts.agent.feedback({
+              type: 'user/message', text, internal: true, source: { kind: 'plugin', plugin: 'guard-repeat-tool' },
+            }));
         },
         async projectSynthetic(payload: { name: string; output: unknown }): Promise<SyntheticProjection> {
             if (this !== source) throw TypeError('Original batch receiver required');
