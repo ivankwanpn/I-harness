@@ -25,7 +25,7 @@ export { captureBootstrapTargetPreparationRequest } from './coordinator/bootstra
 export type { BootstrapTargetPreparationRequest, BootstrapTargetPreparationOutcome, BootstrapTargetPreparationPort } from './coordinator/bootstrap-types.ts'
 
 export type {
-  SessionMeta, SessionCreateOptions, SessionModelSelection, PendingInputSummary, SavedContextFacts, SavedContextBinding, PersistenceBackend, SessionArtifactManifest,
+  SessionMeta, SessionCatalogHeader, SessionCreateOptions, SessionModelSelection, PendingInputSummary, SavedContextFacts, SavedContextBinding, PersistenceBackend, SessionArtifactManifest,
   CoordinatorOptions, SessionCoordinator, ObservedDocument, SessionBindingObservationRequest, SessionBindingObservation, ExistingSessionBindingObservationRequest, ExistingSessionBindingObservation,
 } from "./coordinator/types.ts"
 export type { ProcessReadOptions, ProcessReadInitial, ProcessReadUpdate, ProcessReadObservation } from './coordinator/process-read-owner.ts'

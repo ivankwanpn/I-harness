@@ -7,6 +7,108 @@ import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createJsonlCommitCoordinator } from "@i-harness/session-persistence-jsonl/internal/commit-coordinator"
 import { createDesktopHost } from "../src/host.ts"
 import { createCommittedSessionCatalog } from "../src/session-catalog.ts"
+import { readListedSessions } from "../src/catalog-rows.ts"
+import { createJsonlDashboardSummaryCache, describeSavedSession, loadCatalogSession } from "../src/session-dashboard-summary.ts"
+
+it.each(['rename', 'archive', 'churn'] as const)('rechecks the public catalog row when its journal changes during %s', async change => {
+  const dir = await mkdtemp(join(tmpdir(), 'ih-catalog-change-'))
+  const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+  const cache = createJsonlDashboardSummaryCache()
+  let changes = 0
+  try {
+    await coordinator.create({ sessionId: 'stable', title: 'Stable' })
+    await coordinator.create({ sessionId: 'moving', title: 'Original' })
+    const list = () => readListedSessions(coordinator, ids => {
+      const read = cache.forListing(dir, ids)
+      return (id, header) => read(id, header, async () => {
+        const session = await loadCatalogSession(coordinator, id, header)
+        if (id === 'moving' && (changes === 0 || change === 'churn')) {
+          changes++
+          await coordinator.updateMeta(id, change === 'archive' ? { archived: true } : { title: 'Renamed ' + changes })
+        }
+        return session
+      })
+    })
+    const result = await list()
+    const expected = (title: string, id: string) => expect.objectContaining({ id, title, turnCount: 0 })
+    expect(result.sessions).toContainEqual(expected('Stable', 'stable'))
+    const moving = result.sessions.filter(row => row.id === 'moving')
+    if (change === 'rename') expect(moving).toEqual([expected('Renamed 1', 'moving')])
+    if (change === 'archive') expect(moving).toEqual([])
+    if (change === 'churn') {
+      expect(moving).toEqual([expect.objectContaining({ id: 'moving', title: 'Renamed 2' })])
+      expect(moving[0]).not.toHaveProperty('turnCount')
+    }
+    expect(result.listingPartial).toBe(change === 'churn' ? true : undefined)
+    expect(changes).toBe(change === 'churn' ? 2 : 1)
+  } finally { await coordinator.close(); cache.clear(); await rm(dir, { recursive: true, force: true }) }
+})
+
+it.each(['jsonl', 'commit-log'] as const)('omits a %s session archived between its profile and its first summary read', async store => {
+  const dir = await mkdtemp(join(tmpdir(), 'ih-catalog-archive-'))
+  const coordinator = store === 'jsonl' ? createSessionCoordinator(createJsonlBackend(dir)) : createJsonlCommitCoordinator(dir)
+  const cache = createJsonlDashboardSummaryCache()
+  try {
+    await coordinator.create({ sessionId: 'moving', title: 'Original' })
+    const result = await readListedSessions(coordinator, ids => {
+      const saved = cache.forListing(dir, ids)
+      return async (id, header) => {
+        await coordinator.updateMeta(id, { archived: true })
+        const load = () => loadCatalogSession(coordinator, id, header)
+        return store === 'jsonl' ? saved(id, header, load) : describeSavedSession(await load(), header.title)
+      }
+    })
+    expect(result).toEqual({ sessions: [] })
+  } finally { await coordinator.close(); cache.clear(); await rm(dir, { recursive: true, force: true }) }
+})
+
+it.each(['jsonl', 'commit-log'] as const)('keeps the %s header title and turn count from the same incarnation', async store => {
+  const dir = await mkdtemp(join(tmpdir(), 'ih-catalog-title-'))
+  const coordinator = store === 'jsonl' ? createSessionCoordinator(createJsonlBackend(dir)) : createJsonlCommitCoordinator(dir)
+  const cache = createJsonlDashboardSummaryCache()
+  try {
+    await coordinator.create({ sessionId: 'moving', title: 'Before' })
+    let changed = false
+    const list = () => readListedSessions(coordinator, ids => {
+      const saved = cache.forListing(dir, ids)
+      return async (id, header) => {
+        if (!changed) {
+          changed = true
+          await coordinator.updateMeta(id, { title: 'After' })
+          await coordinator.append(id, [{ type: 'turn/start' }, { type: 'user/message', text: 'first' }, { type: 'turn/end' }])
+        }
+        const load = () => loadCatalogSession(coordinator, id, header)
+        return store === 'jsonl' ? saved(id, header, load) : describeSavedSession(await load(), header.title)
+      }
+    })
+    expect((await list()).sessions).toEqual([expect.objectContaining({ id: 'moving', title: 'After', turnCount: 1 })])
+    expect((await list()).sessions).toEqual([expect.objectContaining({ id: 'moving', title: 'After', turnCount: 1 })])
+    expect(await coordinator.snapshot!('moving')).not.toHaveProperty('catalogHeader')
+    const snapshot = await coordinator.snapshot!('moving', { includeCatalogHeader: true })
+    expect(snapshot.catalogHeader).toMatchObject({ sessionId: 'moving', title: 'After' })
+    snapshot.catalogHeader!.title = 'Local copy'
+    expect((await coordinator.profile('moving')).meta.title).toBe('After')
+  } finally { await coordinator.close(); cache.clear(); await rm(dir, { recursive: true, force: true }) }
+})
+
+it.each(['native', 'legacy'] as const)('uses the %s snapshot header when available and reuses the verified cache entry', async version => {
+  const dir = await mkdtemp(join(tmpdir(), 'ih-catalog-profile-'))
+  const writer = createSessionCoordinator(createJsonlBackend(dir)), cache = createJsonlDashboardSummaryCache()
+  try {
+    await writer.create({ sessionId: 'saved', title: 'Title' })
+    const profile = vi.fn(writer.profile.bind(writer))
+    const snapshot = vi.fn((id: string, options?: { includeCatalogHeader?: boolean }) =>
+      writer.snapshot!(id, version === 'native' ? options : undefined))
+    const list = () => readListedSessions(writer, ids => {
+      const read = cache.forListing(dir, ids)
+      return (id, meta) => read(id, meta, () => loadCatalogSession({ snapshot, profile }, id, meta))
+    })
+    expect((await list()).sessions).toEqual([expect.objectContaining({ id: 'saved', title: 'Title', turnCount: 0 })])
+    expect((await list()).sessions).toEqual([expect.objectContaining({ id: 'saved', title: 'Title', turnCount: 0 })])
+    expect(snapshot).toHaveBeenCalledTimes(1)
+    expect(profile).toHaveBeenCalledTimes(version === 'native' ? 0 : 1)
+  } finally { await writer.close(); cache.clear(); await rm(dir, { recursive: true, force: true }) }
+})
 
 it.each(["jsonl", "commit-log"])("preserves healthy %s rows across cold and live catalog reads", async store => {
   const root = await mkdtemp(join(tmpdir(), "ih-catalog-partial-"))

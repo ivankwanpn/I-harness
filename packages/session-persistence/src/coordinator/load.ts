@@ -5,7 +5,7 @@ import { repairTurnTail } from "../repair.ts"
 import { preflightSessionFormat, preflightBatchShape, preflightDecodedFactHistory, migrate, guardIgnorable, buildSession } from "../format/validation.ts"
 import { originalColdArchiveHistoryReader, originalDecodedArchiveRead, readArchiveHistoryPrefix, recognizesOriginalCleanHistoryMaterialization, type ColdArchiveHistoryReader } from '../archive-read-internal.ts'
 import { assertUpgradeCapability, ensureWritableFormatUnlocked } from "./writable-format.ts"
-import { pendingInputSummary, type PendingInputSummary, type PersistenceBackend, type SavedContextBinding, type SavedContextFacts, type SessionMeta } from "./types.ts"
+import { captureCatalogHeader, pendingInputSummary, type PendingInputSummary, type PersistenceBackend, type SavedContextBinding, type SavedContextFacts, type SessionMeta } from "./types.ts"
 import { savedContextFromSession } from './saved-context.ts'
 import type { Ownership } from "./ownership.ts"
 import type { Mutations } from "./mutations.ts"
@@ -309,7 +309,7 @@ export function createLoads(
   return {
     transitionLoad,
     loadOwnedExecution,
-    async snapshot(sessionId: string, prepareHistoryPages = false) {
+    async snapshot(sessionId: string, prepareHistoryPages = false, includeCatalogHeader = false) {
       const cold = prepareHistoryPages && !coldHistoryRetired ? originalColdArchiveHistoryReader(backend) : undefined
       const previous = cold ? coldHistory.get(sessionId) : undefined
       const decoded = await read(sessionId, cold?.readFull.bind(cold) ?? originalDecodedArchiveRead(backend))
@@ -320,7 +320,7 @@ export function createLoads(
         if (coordinates && evidence) rememberColdHistory(sessionId, { evidence, ...coordinates })
         else if (coldHistory.get(sessionId) === previous) coldHistory.delete(sessionId)
       }
-      return { session: await asSnapshot(decoded, qualified) }
+      return { session: await asSnapshot(decoded, qualified), ...(includeCatalogHeader && decoded.meta ? { catalogHeader: captureCatalogHeader(decoded.meta) } : {}) }
     },
     async readColdPendingInputs(sessionId: string): Promise<ColdCommittedObservation<readonly PendingInputSummary[]> | undefined> {
       if (coldHistoryRetired) return undefined

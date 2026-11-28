@@ -217,7 +217,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     async snapshot(sessionId, options) {
       archiveReads?.assertPublicReadAdmission()
       const session = await managed.snapshot(sessionId)
-      const candidate = session ? { session } : await loads.snapshot(sessionId, options?.prepareHistoryPages === true && !managed.has(sessionId))
+      const candidate = session ? { session } : await loads.snapshot(sessionId, options?.prepareHistoryPages === true && !managed.has(sessionId), options?.includeCatalogHeader)
       archiveReads?.assertPublicReadAdmission()
       return candidate
     },

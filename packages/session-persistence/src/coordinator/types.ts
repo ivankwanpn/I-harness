@@ -36,6 +36,12 @@ export interface SessionMeta extends SessionHeader {
   modelSelection?: SessionModelSelection
 }
 
+/** Scalar metadata from the same physical read as a catalog snapshot. */
+export type SessionCatalogHeader = Pick<SessionMeta, 'sessionId' | 'createdAt' | 'title' | 'archived' | 'origin' | 'parentSession' | 'forkPublication'>
+export function captureCatalogHeader({sessionId, createdAt, title, archived, origin, parentSession, forkPublication}: SessionMeta): SessionCatalogHeader {
+  return { sessionId, createdAt, title, archived, origin, parentSession, forkPublication }
+}
+
 /** C5: one per-session model selection. */
 export interface SessionModelSelection {
   /** Provider route ("deepseek" | "anthropic" | a custom route). */
@@ -183,8 +189,10 @@ export interface SessionCoordinator {
    * durability barrier (close/delete still flush it defensively). */
   enqueue(sessionId: string, events: SessionEvent[]): void
   load(sessionId: string): Promise<{ session: Session }>
-  /** Read the durable prefix without ownership, disk repair or runtime creation. */
-  snapshot?(sessionId: string, options?: { prepareHistoryPages?: boolean }): Promise<{ session: Session }>
+  /** Read the durable prefix without ownership, disk repair or runtime creation.
+   * Cold storage readers can return catalogHeader from that same read on request.
+   * A resident document or an older coordinator may omit it. */
+  snapshot?(sessionId: string, options?: { prepareHistoryPages?: boolean; includeCatalogHeader?: boolean }): Promise<{ session: Session; catalogHeader?: SessionCatalogHeader }>
   /** Read a bounded page from an existing private execution or verified cold archive. */
   readHistoryPage?(sessionId: string, options: SessionHistoryPageOptions, onSnapshotFallback?: (session: Session) => void): Promise<OwnedSessionHistoryPage | undefined>
   /** Read the committed inbox without opening an execution engine or materializing its full Session. */

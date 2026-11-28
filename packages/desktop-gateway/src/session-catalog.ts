@@ -5,7 +5,7 @@ import { createJsonlCommitCoordinator } from '@i-harness/session-persistence-jso
 import { SettingsStore, resolveSettingsPath } from '@i-harness/settings'
 import { stat } from 'node:fs/promises'
 import type { SessionDashboardResult } from '@i-harness/sdk'
-import { createJsonlDashboardSummaryCache, describeSession } from './session-dashboard-summary.ts'
+import { createJsonlDashboardSummaryCache, describeSavedSession, loadCatalogSession } from './session-dashboard-summary.ts'
 import { isConversationMetadata } from './session-visibility.ts'
 import { navigationDocumentKey, projectBindingDocumentKey, parseSessionNavigation, parseSessionProjectBinding, type SessionNavigation } from './session-navigation.ts'
 
@@ -61,9 +61,9 @@ export function createCommittedSessionCatalog() {
       return read<SessionDashboardResult>(root, { sessions: [] }, async (coordinator, store) => {
         const listed = await readListedSessions(coordinator, ids => {
           const saved = savedSummary.forListing(root, ids)
-          return async (id, title) => {
-            const load = async () => (await coordinator.snapshot(id)).session
-            return store === 'jsonl' ? saved(id, title, load) : describeSession(await load(), title)
+          return async (id, header) => {
+            const load = () => loadCatalogSession(coordinator, id, header)
+            return store === 'jsonl' ? saved(id, header, load) : describeSavedSession(await load(), header.title)
           }
         }, true)
         return { ...listed, sessions: listed.sessions.map(row => ({ ...row, live: false })) }

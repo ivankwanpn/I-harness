@@ -104,7 +104,7 @@ it('shares a JSONL listing summary for an unchanged file, then reads its newer c
     { type: 'session/title', source: 'user', title: name, messageSeqs: [] },
     { type: 'turn/end' },
   ] } as const))
-  const summary = () => cache.forListing(root, ['session'])('session', 'Header title', load)
+  const summary = () => cache.forListing(root, ['session'])('session', {sessionId:'session',createdAt:'original',title:'Header title'}, load)
   await expect(Promise.all([summary(), summary()])).resolves.toEqual([
     { title: name, turnCount: 1 }, { title: name, turnCount: 1 },
   ])
@@ -124,13 +124,13 @@ it('keeps complete per-session summaries across a 513-session scan and forgets r
   const load = vi.fn(async () => ({ formatVersion: 1, events: [{ type: 'turn/end' }] } as const))
   async function scan() {
     const read = cache.forListing(root, ids)
-    for (const id of ids) await read(id, undefined, load)
+    for (const id of ids) await read(id, {sessionId:id,createdAt:'original'}, load)
   }
   await scan()
   await scan()
   expect(load).toHaveBeenCalledTimes(513)
   cache.forListing(root, ids.slice(1))
-  await cache.forListing(root, ids)(ids[0]!, undefined, load)
+  await cache.forListing(root, ids)(ids[0]!, {sessionId:ids[0]!,createdAt:'original'}, load)
   expect(load).toHaveBeenCalledTimes(514)
 }, 30000)
 

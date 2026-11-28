@@ -1,7 +1,7 @@
 import { createCoordinatorAdmission } from '../coordinator/public-admission.ts'
 import { createHash } from 'node:crypto'
 import { CURRENT_FORMAT_VERSION, FactRecoveryRequiredError, validateSemanticBootstrapHistory, canonicalJsonData, decodeFactBatch, encodeFactBatch, legacyPrefixDigest, readInbox, stringifyJsonData, type FactReceipt, type Session, type SessionEvent, type SessionView } from '@i-harness/core-session'
-import { pendingInputSummary, type PendingInputSummary, type SavedContextBinding, type SavedContextFacts } from '../coordinator/types.ts'
+import { captureCatalogHeader, pendingInputSummary, type PendingInputSummary, type SavedContextBinding, type SavedContextFacts, type SessionCatalogHeader } from '../coordinator/types.ts'
 import { captureSavedContextBinding, savedContextFromObservation, savedContextFromSession } from '../coordinator/saved-context.ts'
 import { COMMIT_LOG_GENERATION, CommitLogConflictError, CommitLogClosedError, CommitLogCleanupError, createCommitLog as createStoredCommitLog, openCommitLog, CommitLogNotFoundError, type CommitLog, type CommitLogMode, type CommitLogCleanup } from '@i-harness/session-commit-log'
 import { readdir, stat } from 'node:fs/promises'
@@ -71,7 +71,7 @@ export type CommitCoordinator = {
   endIntent(sessionId: string, id: string, outcome: 'committed' | 'failed'): Promise<void>
   intents(sessionId: string): Promise<ReadonlyMap<string, CommitIntent>>
   load(sessionId: string): Promise<{ session: Session }>
-  snapshot(sessionId: string): Promise<{ session: Session }>
+  snapshot(sessionId: string, options?: { includeCatalogHeader?: boolean }): Promise<{ session: Session; catalogHeader?: SessionCatalogHeader }>
   readPendingInputs(sessionId: string): Promise<readonly PendingInputSummary[]>
   readSavedContext(sessionId: string, binding?: SavedContextBinding): Promise<SavedContextFacts>
   loadOwned(sessionId: string): Promise<{ session: Session }>
@@ -256,10 +256,10 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     }
   }
 
-  const readSession = async (sessionId: string): Promise<Session> => {
+  const readSnapshot = async (sessionId: string, includeCatalogHeader = false) => {
     const state = await readState(sessionId)
     preflightSessionFormat(CURRENT_FORMAT_VERSION, state.events, state.meta)
-    return buildSession(state.meta, state.events)
+    return { session: buildSession(state.meta, state.events), ...(includeCatalogHeader && state.meta ? { catalogHeader: captureCatalogHeader(state.meta) } : {}) }
   }
 
   // Retiring the writer revokes the attachment. Passive inspection can still
@@ -277,7 +277,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     }
     const result = current()
     if (result !== undefined) return result
-    const session = await readSession(sessionId)
+    const { session } = await readSnapshot(sessionId)
     return current() ?? fromSession(session)
   }
 
@@ -565,7 +565,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
         && seed?.operationId === invocation.operationId && seed.requestDigest === invocation.requestDigest
       return { kind: matching ? 'ready' : 'conflict', invocation, needsConfirmation: false }
     },
-    async load(sessionId) { return { session: await readSession(sessionId) } },
+    load(sessionId) { return readSnapshot(sessionId) },
     createChildSession(request, options) {
       const task = options.initialTaskDocument === undefined ? undefined : captureTaskSnapshot(options.initialTaskDocument)
       const initializeTask = async (id: string) => {
@@ -668,7 +668,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       const log = await open(sessionId, 'read')
       try { return new Map(log.view().intents) } finally { await log.close() }
     },
-    async snapshot(sessionId) { return { session: await readSession(sessionId) } },
+    snapshot(sessionId, options) { return readSnapshot(sessionId, options?.includeCatalogHeader) },
     async readPendingInputs(sessionId) {
       const inputs = await readCommittedDisplay(sessionId, execution => {
         const observation = execution.observe()

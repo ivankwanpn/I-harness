@@ -39,7 +39,7 @@ import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsPr
 import { commitModelSwitch } from "./model-switch.ts"
 import { createSessionManagement } from "./session-management.ts"
 import { readListedSessions } from "./catalog-rows.ts"
-import { createJsonlDashboardSummaryCache, describeSession } from "./session-dashboard-summary.ts"
+import { createJsonlDashboardSummaryCache, describeSavedSession, describeSession, loadCatalogSession } from "./session-dashboard-summary.ts"
 import { createGatewayForkHost } from './fork-session.ts'
 import { assertOutsideForkController } from '../../session-persistence/src/fork-controller.ts'
 import { createContextPicker } from "./context-picker.ts"
@@ -844,7 +844,8 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
     createSession: async () => ({ sessionId: (await coordinator.create()).id }),
     listSessions: () => readListedSessions(coordinator, ids => {
       const saved = savedDashboardSummary.forListing(options.sessionDir, ids)
-      return async (id, title) => {
+      return async (id, header) => {
+        let title = header.title
         const execution = originalManagedExecutionFor(service, id)
         if (execution) {
           const observation = execution.observe()
@@ -858,8 +859,8 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
           return { title, turnCount }
         }
         const live = service.liveSession(id)
-        const load = async () => (await (coordinator.snapshot?.(id) ?? coordinator.load(id))).session
-        return live ? describeSession(live, title) : commitLogStore ? describeSession(await load(), title) : saved(id, title, load)
+        const load = () => loadCatalogSession(coordinator, id, header)
+        return live ? describeSession(live, title) : commitLogStore ? describeSavedSession(await load(), title) : saved(id, header, load)
       }
     }),
     onWrite: createGatewayWrite(options.onWrite, handlers, internalIds),

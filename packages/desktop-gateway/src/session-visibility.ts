@@ -5,10 +5,10 @@ import type { ConversationSearch, SessionQuery } from "@i-harness/session-query"
 // exact internal request envelope plus its lineage, never an untitled name.
 const LEGACY_REVIEW_PREFIX = "An agent requests execution of a tool call. Decide: approve (execute now, never ask the user),\nallow (ask the user first), or deny (never execute)."
 
-export function isConversationMetadata(meta: Readonly<SessionMeta>): boolean {
+export function isConversationMetadata(meta: Readonly<Pick<SessionMeta, 'parentSession' | 'origin' | 'forkPublication'>>): boolean {
   // A pending selected-fork target is not a normal conversation yet even if a
   // crash left archived:false: only the original fork operation may publish it.
-  if ((meta as SessionMeta & { forkPublication?: string }).forkPublication === 'pending') return false
+  if (meta.forkPublication === 'pending') return false
   return meta.origin !== 'subagent' && meta.origin !== 'approval-review' && !(meta.origin === 'team' && meta.parentSession)
 }
 
