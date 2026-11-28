@@ -27,6 +27,7 @@ import { normalizeInheritedCodeStore } from '../src/projection/passive-code-stor
 import { replaySessionCodeStore } from '../src/projection/passive-code-store/restore.ts'
 import { literalSeed } from './fixtures/format11-seed.ts'
 import { literalSession } from './fixtures/semantic-observation.ts'
+import { deriveMessages, fromJSONL, toJSONL } from '../src/index.ts'
 
 function heldSource(source: Session, sessionId: string) {
   const managed = createManagedSessionState(source, { sessionId }), factOwner = {} as FactOwner
@@ -45,6 +46,26 @@ function declaredSource(): Session {
     { type: 'step/end' }, { type: 'turn/end' }]
   return { formatVersion: 13, events: events.map((event, seq) => ({ ...event, seq })) }
 }
+
+it('places selected result media on the addressed tool through a cold child and nested selected fork', async () => {
+  const raw = declaredSource(), image = { mediaType: 'image/png' as const, dataBase64: 'AQID' }
+  const result = raw.events.find(event => event.type === 'tool/result')
+  if (result?.type !== 'tool/result' || !result.envelope) throw Error('Expected the original envelope')
+  result.envelope = { ...result.envelope, media: [image] }
+  let current = raw
+  for (const id of ['source', 'child']) {
+    const held = heldSource(current, id)
+    const capture = await exportSelectedResultsConversationSeed(held.context(), held.inherited)
+    if (capture.kind !== 'seed') throw Error('Expected selected result capture')
+    const exchange = capture.seed.groups.flatMap(group => group.items).find(item => item.kind === 'exchange')
+    expect(exchange).toMatchObject({ results: [{ message: 1, media: [{ message: 1, part: 1 }] }] })
+    current = fromJSONL(toJSONL(codecWire(capture)))
+    const messages = deriveMessages(current)
+    expect(messages.find(message => message.role === 'tool')).toMatchObject({ toolCallId: 'c', content: [{ type: 'text' }, { type: 'image', image }] })
+    expect(messages.some(message=>message.role === 'user' && Array.isArray(message.content))).toBe(false)
+    held.retire()
+  }
+})
 
 it('keeps result-only historical origin zero across actual held S→A→B metadata projection after validated producer consumption', async () => {
   const source = heldSource(declaredSource(), 'S')

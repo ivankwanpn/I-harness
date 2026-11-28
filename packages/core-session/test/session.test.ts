@@ -600,26 +600,25 @@ describe("M14 multimodal", () => {
     expect(deriveMessages(s)[0]).toEqual({ role: "user", content: "hi" })
   })
 
-  it("flushes tool-result images into a synthetic user message after the tool result", () => {
+  it("keeps tool-result images with the originating result", () => {
     const s = createSession()
     append(s, { type: "user/message", text: "go" })
     append(s, { type: "tool/call", callId: "c1", name: "shot", args: {} })
     append(s, { type: "tool/result", callId: "c1", name: "shot", output: { ok: true, images: [{ mediaType: "image/png", dataBase64: PNG }] } })
     append(s, { type: "step/end" })
     const msgs = deriveMessages(s)
-    const results = msgs.filter((m) => m.role === "user" || m.role === "tool")
     // M61: the tool text keeps the NON-image members only — the base64 rides
     // the image part below, never the text (it used to be stringified whole).
-    const toolMsg = results.find((m) => m.role === "tool")!
-    expect(toolMsg.content).toContain('{"ok":true}')
-    expect(toolMsg.content).toContain("image: unnamed")
-    expect(toolMsg.content).not.toContain(PNG)
-    const synthetic = results.find((m) => m.role === "user" && Array.isArray(m.content) && m.content.length === 2)! as { content: { type: string; text?: string; image?: unknown }[] }
-    expect(synthetic.content[0]).toEqual({ type: "text", text: "Attached image(s) from tool result:" })
-    expect(synthetic.content[1]).toMatchObject({ type: "image", image: { mediaType: "image/png" } })
+    const toolMsg = msgs.find((m) => m.role === "tool")!
+    expect(toolMsg.toolCallId).toBe("c1")
+    if (!Array.isArray(toolMsg.content) || toolMsg.content[0]?.type !== "text") throw Error("Expected the text and image on one result")
+    expect(toolMsg.content[0].text).toContain('{"ok":true}')
+    expect(toolMsg.content[0].text).toContain("image: unnamed")
+    expect(toolMsg.content[0].text).not.toContain(PNG)
+    expect(toolMsg.content[1]).toEqual({ type: "image", image: { mediaType: "image/png", dataBase64: PNG } })
   })
 
-  it("keeps parallel tool results contiguous before any synthetic image message", () => {
+  it("keeps parallel tool results contiguous with an image on its own call", () => {
     const session = createSession()
     append(session, { type: "user/message", text: "read two files" })
     append(session, { type: "step/start" })
@@ -630,10 +629,9 @@ describe("M14 multimodal", () => {
     append(session, { type: "tool/result", callId: "c2", name: "read", output: { text: "second" } })
     append(session, { type: "step/end" })
     const messages = deriveMessages(session)
-    expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "tool", "tool", "user"])
-    expect(messages[2]).toMatchObject({ toolCallId: "c1" })
+    expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "tool", "tool"])
+    expect(messages[2]).toMatchObject({ toolCallId: "c1", content: [{ type: "text" }, { type: "image" }] })
     expect(messages[3]).toMatchObject({ toolCallId: "c2" })
-    expect(messages[4]?.content).toMatchObject([{ type: "text" }, { type: "image" }])
   })
 
   it("deriveSearchText emits an image descriptor, never base64", () => {

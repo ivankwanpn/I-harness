@@ -1,7 +1,26 @@
 import { expect, it } from 'vitest'
-import { deriveMessages, fromJSONL, toJSONL, validateSemanticSeed, type SemanticSeedV1 } from '../src/index.ts'
+import { append, deriveMessages, exportConversationSeed, fromJSONL, toJSONL, validateSemanticSeed, type SemanticSeedV1 } from '../src/index.ts'
 import { literalSeed } from './fixtures/format11-seed.ts'
 import { literalSession } from './fixtures/semantic-observation.ts'
+
+it('restores addressed legacy fork media to its tool and preserves an independent user image across a nested fork', () => {
+  const seed = structuredClone(literalSeed), exchange = seed.groups[0]!.items[1]!
+  if (exchange.kind !== 'exchange') throw Error('Expected literal exchange')
+  const human = { mediaType:'image/png' as const, dataBase64:'AA==' }, tool = { ...human, dataBase64:'AQ==' }
+  const marker = {type:'text' as const,text:'Attached image(s) from tool result:'}
+  exchange.messages = [...exchange.messages,{role:'user',content:[marker,{type:'image',image:tool}]}]
+  exchange.results[0]!.media = [{message:2,part:1}]
+  const old = literalSession(seed)
+  append(old,{type:'user/message',text:marker.text,images:[human]})
+  const disk = toJSONL(old)
+  const cold = fromJSONL(disk), original = toJSONL(cold), messages = deriveMessages(cold)
+  expect(messages).toContainEqual({role:'tool',toolCallId:'same',content:[{type:'text',text:'seed exact'},{type:'image',image:tool}]})
+  expect(messages.filter(row=>row.role==='user' && Array.isArray(row.content))).toEqual([{role:'user',content:[marker,{type:'image',image:human}]}])
+  expect(toJSONL(cold)).toBe(original)
+  const nested = exportConversationSeed(cold, {kind:'session',sessionId:'child'}, {kind:'all'})
+  if (nested.kind!=='seed' || nested.seed.version!==1) throw Error('Expected a portable seed')
+  expect(deriveMessages(fromJSONL(toJSONL(literalSession(nested.seed))))).toEqual(messages)
+})
 
 it('rejects unknown native carriers and malformed thinking blocks after valid independent hashes', () => {
   for (const change of [
@@ -39,4 +58,19 @@ it('rejects misordered tool exchanges and missing image companions after indepen
     const seed = structuredClone(literalSeed); change(seed); literalSession(seed)
     expect(() => validateSemanticSeed(seed)).toThrow()
   }
+})
+
+it('rejects an authoritative failed envelope paired with a successful tool message', () => {
+  const seed = structuredClone(literalSeed), item = seed.groups[0]!.items[1]!
+  if (item.kind !== 'exchange') throw Error('Expected fixture exchange')
+  const prior = item.results[0]!
+  item.results = [{kind:'envelope',message:prior.message,source:prior.source,media:[],
+    execution:{outcome:'failed',dispatch:'dispatched'},sourceRetention:{kind:'inline-observation',encodedBytes:1}}]
+  item.calls[0]!.outcome = 'error'
+  const tool = item.messages[prior.message]
+  if (tool?.role !== 'tool') throw Error('Expected fixture tool')
+  tool.isError = true
+  literalSession(seed); expect(() => validateSemanticSeed(seed)).not.toThrow()
+  delete tool.isError
+  literalSession(seed); expect(() => validateSemanticSeed(seed)).toThrow()
 })

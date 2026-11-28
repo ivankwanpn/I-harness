@@ -59,13 +59,14 @@ descriptors, image summaries, and interval merging are not public package export
   replay resolves it against the latest earlier admission, including admissions
   hidden by compaction or rewind.
 - The message fold retains assistant/tool-call/result adjacency, deferred
-  mid-step user messages, tool image follow-ups, signed provider continuation
+  mid-step user messages, images on their originating tool results, signed provider continuation
   metadata, and suppression of failed or unresolved tool steps. It stays one
   algorithm because its buffered state and flush order form one protocol unit.
 - `projectConversation` owns the only model-visible fold; `deriveMessages` and
   `deriveMessagesUpTo` are rendering facades. Prefix projection keeps original
   archive indices and full archive event count. A selected exchange includes its
-  result-image companions; reminders remain separately attributed input items.
+  tool-result media. Older fork seeds use recorded image addresses to restore the
+  association. Reminders remain separately attributed input items.
 - Source IDs are opaque owner-local coordinates, never authority. Missing,
   invalid or duplicate legacy sequences render compatibly but have no durable
   reduction address. Only matching durable human admission establishes recorded

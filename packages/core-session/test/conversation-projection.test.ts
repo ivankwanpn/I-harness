@@ -126,12 +126,12 @@ describe("semantic conversation projection", () => {
     expect(deriveMessages(session)).toEqual([{ role: 'user', content: [{ type: 'text', text: 'H' }, { type: 'image', image }] }])
     expect(projectConversation(session).items[0]!.sources.map(source => [source.seq, source.part])).toEqual(expect.arrayContaining([[1, 'admission'], [2, 'message']]))
   })
-  it('renders a result body once when the same descriptor also supplies an image companion', () => {
+  it('renders a result body once when it also supplies an image', () => {
     let serializations = 0
     const value = { toJSON() { serializations++; return 'lowered' } }
     const session = log(call(), { type: 'tool/result', callId: 'a', name: 'read', output: { value, images: [{ mediaType: 'image/png', dataBase64: 'aW1hZ2U=' }] } })
     const messages = deriveMessages(session)
-    expect(messages.map(message => message.role)).toEqual(['assistant', 'tool', 'user'])
+    expect(messages.map(message => message.role)).toEqual(['assistant', 'tool'])
     expect(serializations).toBe(1)
   })
   // Removing the projector or flattening source metadata must fail these independent expectations.
@@ -162,8 +162,7 @@ describe("semantic conversation projection", () => {
     expect(renderConversation(projection)).toEqual([
       { role: "assistant", content: "Checking.", toolCalls: [{ id: "a", name: "read", args: { path: "a" } }, { id: "b", name: "read", args: { path: "b" } }], providerContinuation: continuation },
       { role: "tool", toolCallId: "b", content: '"B"' },
-      { role: "tool", toolCallId: "a", content: '{"text":"A"}\nimage: unnamed ?x? 6B base64:aW1hZ2U=' },
-      { role: "user", content: [{ type: "text", text: "Attached image(s) from tool result:" }, { type: "image", image }] },
+      { role: "tool", toolCallId: "a", content: [{ type: "text", text: '{"text":"A"}\nimage: unnamed ?x? 6B base64:aW1hZ2U=' }, { type: "image", image }] },
       { role: "user", content: "Reminder" },
     ])
   })
@@ -247,8 +246,7 @@ describe("semantic conversation projection", () => {
     const expected = [
       { role: "assistant", content: "", toolCalls: [{ id: "a", name: "read", args: { path: "a" } }] },
       { role: "assistant", content: "Checking", providerContinuation: continuation },
-      { role: "tool", toolCallId: "a", content: withImage ? '{"text":"A"}\nimage: unnamed ?x? 6B base64:aW1hZ2U=' : '"A"' },
-      ...(withImage ? [{ role: "user", content: [{ type: "text", text: "Attached image(s) from tool result:" }, { type: "image", image }] }] : []),
+      { role: "tool", toolCallId: "a", content: withImage ? [{ type: "text", text: '{"text":"A"}\nimage: unnamed ?x? 6B base64:aW1hZ2U=' }, { type: "image", image }] : '"A"' },
     ]
     expect(renderConversation(projection)).toEqual(expected)
     expect(exchange.exchange).toMatchObject({ state: "closed", calls: [{ callId: "a", call: { eventIndex: 0 }, result: { eventIndex: 2 }, outcome: "success" }] })
@@ -266,8 +264,7 @@ describe("semantic conversation projection", () => {
       { role: "assistant", content: "", toolCalls: [{ id: "a", name: "read", args: { path: "a" } }] },
       { role: "assistant", content: "Checking" },
       { role: "user", content: "Interleaved" },
-      { role: "tool", toolCallId: "a", content: "image: unnamed ?x? 6B base64:aW1hZ2U=" },
-      { role: "user", content: [{ type: "text", text: "Attached image(s) from tool result:" }, { type: "image", image }] },
+      { role: "tool", toolCallId: "a", content: [{ type: "text", text: "image: unnamed ?x? 6B base64:aW1hZ2U=" }, { type: "image", image }] },
     ])
     expect(projection.items[0]!.exchange).toMatchObject({ state: "unresolved", calls: [{ result: { eventIndex: 3 } }] })
     const input = projection.items.find(item => item.kind === "input")!
@@ -327,8 +324,8 @@ describe("semantic conversation projection", () => {
     const image = { mediaType: "image/png" as const, dataBase64: "aW1hZ2U=" }
     const projection = projectConversation(log({ type: "step/start" }, call(), { type: "assistant/message", text: "Checking" }, { type: "tool/result", callId: "a", name: "read", output: { images: [image] } }, { type: "user/message", text: "Reminder" }, { type: "step/end" }))
     const selected = { ...projection, items: [projection.items[0]!] }
-    expect(renderConversation(selected).map(message => message.role)).toEqual(["assistant", "tool", "user"])
-    expect(renderConversation(selected).at(-1)!.content).toEqual([{ type: "text", text: "Attached image(s) from tool result:" }, { type: "image", image }])
+    expect(renderConversation(selected).map(message => message.role)).toEqual(["assistant", "tool"])
+    expect(renderConversation(selected).at(-1)!).toMatchObject({ toolCallId: "a", content: [{ type: "text" }, { type: "image", image }] })
     expect(projection.items[1]!.sources[0]).toMatchObject({ eventIndex: 4, part: "message" })
     expect(renderConversation({ ...projection, items: [projection.items[1]!] })).toEqual([{ role: "user", content: "Reminder" }])
   })

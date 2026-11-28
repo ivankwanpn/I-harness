@@ -97,9 +97,8 @@ describe('candidate payload and historical equivalence', () => {
   it.each(['prune', 'replacement+prune'] as const)('retains parallel native order, image companions and actual source identities through %s', mode => {
     const source = nativeFixture(), original = core.projectConversation(source, { ownerSessionId: 'owner' })
     const { candidate, messages } = equivalent(source, mode === 'prune' ? [prune] : [prune, rewrite])
-    expect(messages.map(message => message.role)).toEqual(['user', mode === 'prune' ? 'assistant' : 'user', 'user', 'assistant', 'tool', 'tool', 'user', 'user'])
-    expect(messages[4]).toEqual({ role: 'tool', toolCallId: 'b', content: '雪"\n…(pruned 93 bytes)…\n\\end' })
-    expect(messages[6]).toEqual({ role: 'user', content: [{ type: 'text', text: 'Attached image(s) from tool result:' }, { type: 'image', image: { mediaType: 'image/png', dataBase64: 'aW1hZ2U=' } }] })
+    expect(messages.map(message => message.role)).toEqual(['user', mode === 'prune' ? 'assistant' : 'user', 'user', 'assistant', 'tool', 'tool', 'user'])
+    expect(messages[4]).toEqual({ role: 'tool', toolCallId: 'b', content: [{ type: 'text', text: '雪"\n…(pruned 93 bytes)…\n\\end' }, { type: 'image', image: { mediaType: 'image/png', dataBase64: 'aW1hZ2U=' } }] })
     expect(messages[5]).toEqual({ role: 'tool', toolCallId: 'a', content: '"A"' })
     expect(messages[3]).toMatchObject({ role: 'assistant', content: 'Checking', toolCalls: [{ id: 'a', name: 'read', args: { z: 1, a: '雪"\n' } }, { id: 'b', name: 'read', args: {} }], thinkingBlocks: [{ type: 'thinking', thinking: 'reason', signature: 'signed' }], providerContinuation: { contentOrder: [{ kind: 'reasoning', index: 0 }, { kind: 'text', text: 'Checking' }, { kind: 'tool', index: 0 }, { kind: 'tool', index: 1 }] } })
     const exchange = candidate.projection.items.find(item => item.exchange?.calls.length === 2)!

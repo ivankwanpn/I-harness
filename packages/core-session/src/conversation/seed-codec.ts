@@ -262,12 +262,16 @@ function semanticSeed(value: unknown, payload: boolean, partial = false): Semant
     }
     for (const result of item.results) {
       seedFields(result, ['kind', 'message', 'source', 'media', ...(result.kind === 'envelope' ? ['execution', 'sourceRetention'] : [])], result.kind === 'legacy' ? ['isError'] : ['dependencies'])
-      if (!seedCount(result.message) || item.messages[result.message]?.role !== 'tool') seedInvalid()
+      if (!seedCount(result.message)) seedInvalid()
+      const message = item.messages[result.message]
+      if (message?.role !== 'tool') seedInvalid()
       addresses(result.source); media(result.media)
-      if (result.kind === 'legacy') { if (result.isError !== undefined && result.isError !== true || !!result.isError !== !!(item.messages[result.message] as { isError?: true }).isError) seedInvalid(); continue }
+      for (const ref of result.media) if (item.messages[ref.message]?.role !== 'user' && ref.message !== result.message) seedInvalid()
+      if (result.kind === 'legacy') { if (result.isError !== undefined && result.isError !== true || !!result.isError !== !!message.isError) seedInvalid(); continue }
       if (result.kind !== 'envelope') seedInvalid()
       seedFields(result.execution, ['outcome', 'dispatch'])
       if (!['succeeded', 'failed', 'canceled'].includes(result.execution.outcome) || !['dispatched', 'not-dispatched'].includes(result.execution.dispatch)) seedInvalid()
+      if (Boolean(message.isError) !== (result.execution.outcome !== 'succeeded')) seedInvalid()
       const retention = result.sourceRetention
       seedFields(retention, ['kind', ...(retention.kind === 'inline-observation' ? ['encodedBytes'] : retention.kind === 'artifact' ? ['artifact'] : ['reason'])], retention.kind === 'inline-observation' ? ['sourceValueDigest'] : retention.kind === 'unavailable' ? ['observedEncodedBytes'] : [])
       if (retention.kind === 'artifact') artifact(retention.artifact, { kind: 'result' })

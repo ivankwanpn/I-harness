@@ -281,7 +281,8 @@ it('treats a rewind point as a turn boundary for replacement validation', () => 
     expect(labels(session)).toEqual(['H', 'S'])
     const prefix = projectConversation(session, { throughSeq: 12 }).items[1]!
     expect(prefix.ref).toEqual({ kind: 'exchange', at: { seq: 4, part: 'call' } })
-    expect(prefix.messages.map(message => message.role)).toEqual(['assistant', 'tool', 'tool', 'user'])
+    expect(prefix.messages.map(message => message.role)).toEqual(['assistant', 'tool', 'tool'])
+    expect(prefix.messages.slice(1).filter(message => Array.isArray(message.content) && message.content.some(part => part.type === 'image'))).toHaveLength(1)
     expect(prefix.messages[0]).toMatchObject({ providerContinuation: { producerWitness: { version: 1 } }, thinkingBlocks: [{ signature: 'signed' }] })
     expect(JSON.stringify(session)).toBe(raw)
     for (const omitted of [5, 6, 7, 8]) {

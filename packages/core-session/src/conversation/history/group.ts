@@ -20,7 +20,6 @@ class HistoryGrouping {
   private readonly admissions = new Map<string, number>()
   private pendingCalls: number[] | undefined
   private readonly pendingResults: HistoryRecipe[] = []
-  private readonly pendingToolImages = new Map<HistoryItem, HistoryRecipe[]>()
   private readonly deferredUser: HistoryItem[] = []
   private stepOpen = false
   private toolResultsPending = false
@@ -69,10 +68,6 @@ class HistoryGrouping {
     }
     if (this.pendingResults.length) { this.block!.recipes.push(...this.pendingResults); this.pendingResults.length = 0 }
     const awaiting = this.block && awaitingItemResults(this.block)
-    if (this.block && !awaiting) {
-      this.block.recipes.push(...this.pendingToolImages.get(this.block) ?? [])
-      this.pendingToolImages.delete(this.block)
-    }
     if ((!awaiting || boundary) && this.deferredUser.length) { this.items.push(...this.deferredUser); this.deferredUser.length = 0 }
     if ((!this.stepOpen || !this.toolResultsPending) && !(this.block && awaitingItemResults(this.block))) this.block = undefined
   }
@@ -156,12 +151,7 @@ class HistoryGrouping {
       addItemSource(this.block, resultSource)
       this.block.receivedResults.add(resultSource.id)
       this.pendingResults.push({ kind: 'result', index })
-      if (event.images) {
-        addItemSource(this.block, this.sources.ref(index, 'image'))
-        const companions = this.pendingToolImages.get(this.block) ?? []
-        companions.push({ kind: 'images', index })
-        this.pendingToolImages.set(this.block, companions)
-      }
+      if (event.images) addItemSource(this.block, this.sources.ref(index, 'image'))
     } else if (event.type === "step/end" || event.type === "step/failed") {
       this.stepOpen = false
       this.toolResultsPending = false
@@ -172,7 +162,6 @@ class HistoryGrouping {
 
   finish() {
     this.flushToolBlock(undefined, true)
-    for (const [owner, images] of this.pendingToolImages) owner.recipes.push(...images)
     return { items: this.items, diagnostics: this.diagnostics, ...(this.current ? { current: this.current } : {}) }
   }
 }

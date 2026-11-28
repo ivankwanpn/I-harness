@@ -64,7 +64,7 @@ export function projectToolResult(event: Extract<SessionEvent, { type: "tool/res
   return { content, ...(Array.isArray(images) && images.length ? { images } : {}) }
 }
 
-/** Images travel in a companion message, never as base64 in result text. */
+/** The textual description is separate from the tool's image content parts. */
 function toolResultText(output: unknown): string {
   if (output === null || typeof output !== "object" || Array.isArray(output)) return stringifyJsonData(output) ?? String(output)
   const record = output as Record<string, unknown>

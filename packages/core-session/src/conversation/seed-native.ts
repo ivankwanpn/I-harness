@@ -6,7 +6,8 @@ function order(entries: readonly ProviderBlockOrderEntry[] | undefined): void {
   if (entries === undefined) return
   if (!Array.isArray(entries)) seedInvalid()
   for (const entry of entries) {
-    seedFields(entry, entry.kind === 'text' ? ['kind', 'text'] : ['kind', 'index'], entry.kind === 'text' ? ['phase', 'thoughtSignature'] : [])
+    seedFields(entry, entry.kind === 'text' ? ['kind', 'text'] : ['kind', 'index'], entry.kind === 'text' ? ['phase', 'thoughtSignature'] : entry.kind === 'tool' ? ['id'] : [])
+    if (entry.kind === 'tool' && entry.id !== undefined && !seedId(entry.id)) seedInvalid()
     if (entry.kind === 'text' ? !text(entry.text) || entry.phase !== undefined && entry.phase !== null && !text(entry.phase) || entry.thoughtSignature !== undefined && !text(entry.thoughtSignature)
       : !['reasoning', 'tool'].includes(entry.kind) || !seedCount(entry.index)) seedInvalid()
   }

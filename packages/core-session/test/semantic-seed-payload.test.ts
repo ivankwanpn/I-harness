@@ -26,7 +26,7 @@ it('preserves human, plugin and child-report provenance and typed input media as
   expect(state.kind === 'available' && state.state.itemIds).toContain(projection.items[0]!.id)
 })
 
-it('captures one exact result/catalog ref, exact wire text and tool image companions without reading artifact bodies', () => {
+it('captures one exact result/catalog ref and the sourced tool image without reading artifact bodies', () => {
   const source = createSession(), image = { mediaType: 'image/png' as const, dataBase64: 'AQID' }
   const ref = { version: 1 as const, id: `ctxv1_${'c'.repeat(64)}`, revision: 'd'.repeat(64), codec: 'json-utf8-v1' as const, encodedBytes: 10, contentDigest: 'e'.repeat(64), completeness: 'complete' as const }
   const envelope = { version: 1 as const, execution: { outcome: 'succeeded' as const, dispatch: 'dispatched' as const }, preview: 'result preview', media: [image], retention: { kind: 'artifact' as const, ref }, dependencies: { kind: 'artifact-set' as const, ref, count: 2 } }
@@ -36,11 +36,10 @@ it('captures one exact result/catalog ref, exact wire text and tool image compan
   expect(exported.kind).toBe('seed')
   if (exported.kind !== 'seed') throw Error('seed required')
   const item = exported.seed.groups[0]!.items[0]!
-  expect(item.messages[1]!.content).toBe(JSON.stringify({ version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: 'result preview', retention: { kind: 'artifact', ref }, dependencies: { kind: 'artifact-set', ref, count: 2 } }))
-  expect(item.messages[2]).toEqual({ role: 'user', content: [{ type: 'text', text: 'Attached image(s) from tool result:' }, { type: 'image', image }] })
+  expect(item.messages[1]).toEqual({ role: 'tool', toolCallId: 'ref', content: [{ type: 'text', text: JSON.stringify({ version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: 'result preview', retention: { kind: 'artifact', ref }, dependencies: { kind: 'artifact-set', ref, count: 2 } }) }, { type: 'image', image }] })
   expect(exported.seed.artifacts).toHaveLength(1)
   expect(exported.seed.artifacts[0]).toMatchObject({ ref, uses: [{ kind: 'result' }, { kind: 'dependency-catalog', count: 2 }] })
-  expect(item).toMatchObject({ kind: 'exchange', results: [{ kind: 'envelope', sourceRetention: { kind: 'artifact', artifact: 0 }, dependencies: { kind: 'catalog', artifact: 0, count: 2 }, media: [{ message: 2, part: 1 }] }] })
+  expect(item).toMatchObject({ kind: 'exchange', results: [{ kind: 'envelope', sourceRetention: { kind: 'artifact', artifact: 0 }, dependencies: { kind: 'catalog', artifact: 0, count: 2 }, media: [{ message: 1, part: 1 }] }] })
 })
 
 it('preserves legacy result content without inventing execution or retention descriptors', () => {

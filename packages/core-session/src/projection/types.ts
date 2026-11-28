@@ -9,7 +9,7 @@ export type ProviderThinkingBlock =
 /** Opaque state needed when a provider continues an assistant tool turn. */
 export type ProviderBlockOrderEntry =
   | { kind: "reasoning"; index: number }
-  | { kind: "tool"; index: number }
+  | { kind: "tool"; index: number; id?: string }
   | { kind: "text"; text: string; phase?: string | null; thoughtSignature?: string }
 
 export type AnthropicProducerWitnessV1 = {

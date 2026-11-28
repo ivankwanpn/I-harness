@@ -31,7 +31,7 @@ export function captureSeedSelectionFromArchive(archive: ConversationEventArchiv
 }
 function captureSelection(archive: ConversationEventArchive, header: SessionView['header'], manifest: Extract<import('../managed/types.ts').SessionEventView, { type: 'conversation/seed-manifest' }> | undefined, selected: Extract<ReturnType<typeof selectSeedHistory>, { kind: 'selected' }>, fixed?: SeedOriginNormalizer, options?: { sourceCoordinates: import('./restoration-types.ts').ConversationSourceCoordinateView; pruneSubstitutes: ReadonlyMap<string, import('../projection/pruning.ts').PruneRecord> }) {
   const descriptors = selected.groups.flatMap(group => group.items)
-  const projection = renderConversationItems(archive, { items: descriptors, diagnostics: selected.diagnostics }, { header, capturePayload: captureSelectedData, ...options })
+  const projection = renderConversationItems(archive, { items: descriptors, diagnostics: selected.diagnostics }, { header, capturePayload: captureSelectedData, preserveSeedMessageAddresses: true, ...options })
   const artifacts: SeedArtifact[] = [], omissions: SeedOmission[] = []
   const normalizer = fixed ?? createSeedOriginNormalizer(), origin = normalizer.origin
   const artifactSlots = new Map<string, number>()
@@ -110,7 +110,7 @@ function captureSelection(archive: ConversationEventArchive, header: SessionView
       const event = ref && archive.get(ref.eventIndex)
       if (event?.type !== 'tool/result') seedInvalid()
       const source = [localAddress(ref!)]
-      const media = images(base.messages).filter(image => descriptor.recipes[image.message]?.index === ref!.eventIndex)
+      const media = Array.isArray(message.content) ? message.content.flatMap((part, index) => part.type === 'image' ? [{message:messageIndex,part:index}] : []) : []
       const envelope = event.envelope
       resultById.set(message.toolCallId, results.length)
       if (!envelope) { results.push({ kind: 'legacy', message: messageIndex, source, media, ...(message.isError ? { isError: true } : {}) }); continue }

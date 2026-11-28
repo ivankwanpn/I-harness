@@ -2,7 +2,7 @@ import type { ItemBuilder } from '../exchange.ts'
 
 export interface HistoryCurrent { readonly index: number }
 export interface HistoryRecipe {
-  readonly kind: 'input' | 'summary' | 'assistant' | 'result' | 'images' | 'seed-item'
+  readonly kind: 'input' | 'summary' | 'assistant' | 'result' | 'seed-item'
   readonly item?: number
   readonly index?: number
   readonly calls?: readonly number[]
