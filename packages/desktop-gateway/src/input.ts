@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto"
 import type { AsyncInbox, ImageInput, SessionEventView } from "@i-harness/core-session"
-import type { PendingInputSummary, SessionCoordinator } from "@i-harness/session-persistence"
+import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
-import { createDurableSessionLoader, waitForStopSettlement } from "@i-harness/session-executor"
-import { isFactRecoveryRequired, isManagedFactOwner, readInbox, validateImages } from "@i-harness/core-session"
+import { createDurableSessionLoader, observeSessionQueue, waitForStopSettlement } from "@i-harness/session-executor"
+import { isFactRecoveryRequired, isManagedFactOwner, validateImages } from "@i-harness/core-session"
 import { modelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 
 /** Exact producer-owned document identity for permanent session cleanup. */
@@ -83,9 +83,10 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
       .finally(() => { scheduled.delete(key); jobs.delete(job); controllers.delete(controller) })
     jobs.add(job)
   }
-  function schedulePending(id: string, inbox: Pick<AsyncInbox, 'pending'>, managed = false) {
+  function schedulePending(id: string, inbox: Pick<AsyncInbox, 'pending'>, managed = false, onlyInputId?: string) {
     const running = service.queueState(id).running
     for (const pending of inbox.pending()) {
+      if (onlyInputId !== undefined && onlyInputId !== pending.inputId) continue
       if (pending.delivery === "queue" || !running) start(id, pending.inputId, pending.text, managed)
     }
   }
@@ -94,7 +95,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     if(managed){
       if(!observation)throw Error('Original admission observation required')
       observation.assertCurrent()
-      if(shouldStart&&existing.delivery==='queue')schedulePending(id,managed.inbox,true)
+      if(shouldStart&&existing.delivery==='queue')schedulePending(id,managed.inbox,true,existing.inputId)
       return {accepted:true as const,inputId:existing.inputId,delivery:existing.delivery}
     }
     const document = await coordinator.openManagedDocument(id)
@@ -111,7 +112,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     // now start; promoted/completed/cancelled inputs are absent from pending.
     let ready = true
     try { document.assertReady() } catch { ready = false }
-    if (shouldStart && ready && persisted.delivery === "queue") schedulePending(id, await service.receivedInputFor(id))
+    if (shouldStart && ready && persisted.delivery === "queue") schedulePending(id, await service.receivedInputFor(id), false, persisted.inputId)
     return { accepted: true as const, inputId: persisted.inputId, delivery: persisted.delivery }
   }
   return {
@@ -182,28 +183,15 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     },
     async state(id: string) {
       await coordinator.profile(id)
-      const current = service.liveSession(id)
-      let pending: readonly PendingInputSummary[]
-      if (current) pending = readInbox(current).pending()
-      else if (coordinator.readPendingInputs) {
-        const saved = await coordinator.readPendingInputs(id)
-        const live = service.liveSession(id)
-        pending = live ? readInbox(live).pending() : saved
-      } else {
-        if (!coordinator.snapshot) throw new Error("Read-only input snapshots unavailable")
-        const saved = (await coordinator.snapshot(id)).session
-        pending = readInbox(service.liveSession(id) ?? saved).pending()
-      }
-      const queue = service.queue(id)
-      const rows = new Map(queue.map((row) => [row.id, row]))
-      for (const input of pending) if (!rows.has(input.inputId)) rows.set(input.inputId, { id: input.inputId, text: input.text, delivery: input.delivery, intent: input.intent, state: "queued", order: input.admittedSeq })
-      return { items: [...rows.values()], resumable: pending.some((input) => !scheduled.has(keyFor(id, input.inputId))) && !queue.some(row => row.state === "running") }
+      const { items, pendingIds } = await observeSessionQueue(service, coordinator, id)
+      return { items, resumable: pendingIds.some(inputId => !scheduled.has(keyFor(id, inputId))) && !items.some(row => row.state === "running") }
     },
     cancel(id: string, inputId: string) {
       return serial(id, async () => {
         await coordinator.profile(id)
-        const cancelled = (await service.cancelQueued(id, inputId)).cancelled || await (await service.receivedInputFor(id)).cancel(inputId)
-        return { cancelled }
+        const result = await service.cancelQueued(id, inputId)
+        if (result.cancelled || service.queueAsync) return result
+        return { cancelled: await (await service.receivedInputFor(id)).cancel(inputId) }
       })
     },
     ...(typeof service.stopRunningInput === "function" ? {

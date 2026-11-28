@@ -63,7 +63,8 @@ import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type Re
 import { modelFailureFacts, type ModelClient } from "@i-harness/llm-seam"
 import { projectRecoveredTaskRows } from './task-fallback.ts'
 import { registerSubagent, projectWorkflowRows, ParentNotificationStoppedError, inspectTaskProjection, reconcileTaskProjection, inspectJobRecordProjection, inspectDocumentWriteIntents, readRecoveredTaskRows, type AgentTaskView, type ParentInputAdmission, type RegisterSubagentOptions, type RegisterSubagentResult, type TaskProjectionIssue } from "@i-harness/subagent"
-import type { SessionMeta } from "@i-harness/session-persistence"
+import { isSessionMissing, type SessionMeta } from "@i-harness/session-persistence"
+import { observeSessionQueue } from "./service/queue-observation.ts"
 import type { Telemetry } from "@i-harness/telemetry"
 import { diagnosticsFor } from "@i-harness/diagnostics"
 import { createContextStateReader } from "./service/context-state.ts"
@@ -324,6 +325,8 @@ export interface SessionService {
    * the running row is first, the rest FIFO. Never fabricated: {} here means
    * literally no queued/running work for the session. */
   queue(sessionId: string): SessionQueueItem[]
+  /** Public queue inspection also reads cold committed admissions without mounting a writer. */
+  queueAsync?(sessionId: string): Promise<SessionQueueItem[]>
   /** Cancel ONE queued row by its stable public id: the submit settles without
    * executing (never leaving the lane to turn). `cancelled: false` for an
    * unknown/already-finished row or a RUNNING one (whole-turn cancel is
@@ -1727,7 +1730,20 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return out
   }
 
-  async function cancelQueued(sessionId: string, id: string): Promise<{ cancelled: boolean }> {
+  async function queueAsync(sessionId: string): Promise<SessionQueueItem[]> {
+    const store = opts.coordinator
+    const mounted = () => managedRuntimes.has(sessionId) || assemblies.has(sessionId)
+    if (mounted() || closed || closing.has(sessionId) || !store || !store.readPendingInputs && !store.snapshot) return queue(sessionId)
+    try {
+      const saved = await observeSessionQueue(service, store, sessionId)
+      return mounted() || closed || closing.has(sessionId) ? queue(sessionId) : saved.items
+    } catch (error) {
+      if (isSessionMissing(error)) return queue(sessionId)
+      throw error
+    }
+  }
+
+  async function cancelLiveQueued(sessionId: string, id: string): Promise<{ cancelled: boolean } | undefined> {
     // THE LANE is the ground truth for "running": the record's state is a
     // queue()-read projection and can lag a fresh promotion — consulting it
     // alone would abort a running turn's controller (agent.run's signal) and
@@ -1736,7 +1752,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const rec = queues.get(sessionId)?.byId.get(id)
     // Already-cancelled / running / unknown ids are all an honest false — the
     // row is no longer cancellable at the moment (the UI refresh shows truth).
-    if (rec === undefined || rec.postTurn || rec.state === "running" || rec.state === "cancelled") return { cancelled: false }
+    if (rec === undefined) return undefined
+    if (rec.postTurn || rec.state === "running" || rec.state === "cancelled") return { cancelled: false }
     // Abort the row controller (settles the submit's chain gate without
     // executing) and retract a lane-admitted input synchronously — the inbox
     // cancel is append-marked, so the projection drops the row immediately.
@@ -1746,6 +1763,28 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     rec.state = "cancelled"
     notifyExecutionState(sessionId)
     return { cancelled: true }
+  }
+
+  async function cancelQueued(sessionId: string, id: string): Promise<{ cancelled: boolean }> {
+    const cancel = async () => {
+      const live = await cancelLiveQueued(sessionId, id)
+      if (live) return live
+      // Unknown IDs stay passive. Only acquire the original inbox after a
+      // committed pending row was found, then check promotion/currentness again.
+      if (!(await queueAsync(sessionId)).some(row => row.id === id && row.state === "queued")) return { cancelled: false }
+      try {
+        const inbox = await receivedInputFor(sessionId)
+        const adopted = await cancelLiveQueued(sessionId, id)
+        if (adopted) return adopted
+        const cancelled = await inbox.cancel(id)
+        if (cancelled) notifyExecutionState(sessionId)
+        return { cancelled }
+      } catch (error) {
+        if (isSessionMissing(error)) return { cancelled: false }
+        throw error
+      }
+    }
+    return opts.sessionOperation ? opts.sessionOperation.run(sessionId, cancel) : cancel()
   }
 
   function beginRunningStop(sessionId: string): void {
@@ -2140,6 +2179,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       return () => { executionListeners.delete(listener) }
     },
     queue: (sessionId) => queue(sessionId),
+    queueAsync,
     cancelQueued: (sessionId, id) => cancelQueued(sessionId, id),
     cancelRunning,
     stopRunningInput,

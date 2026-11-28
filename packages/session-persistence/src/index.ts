@@ -29,7 +29,7 @@ export type {
   CoordinatorOptions, SessionCoordinator, ObservedDocument, SessionBindingObservationRequest, SessionBindingObservation, ExistingSessionBindingObservationRequest, ExistingSessionBindingObservation,
 } from "./coordinator/types.ts"
 export type { ProcessReadOptions, ProcessReadInitial, ProcessReadUpdate, ProcessReadObservation } from './coordinator/process-read-owner.ts'
-export { SessionBindingObservationError } from './coordinator/types.ts'
+export { SessionBindingObservationError, isSessionMissing } from './coordinator/types.ts'
 export { SessionFormatUnsupportedError, registerUpgrade, registerEventType } from "./format/registry.ts"
 
 export { SessionWriteBehind, type SessionWriteBehindOptions }

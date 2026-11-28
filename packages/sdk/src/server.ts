@@ -1,6 +1,6 @@
 import { modelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { captureBootstrapCaptureRequest, type ForkExecutionControl } from '@i-harness/session-persistence'
+import { captureBootstrapCaptureRequest, isSessionMissing, type ForkExecutionControl } from '@i-harness/session-persistence'
 import { hasForkActivity } from '@i-harness/session-persistence/internal/fork-activity'
 import { readForkPrepareRequest, readForkPrepareResult, readForkCommand, readForkOperation, readForkOutcome, readForkHostErrorData, ForkOperationError,
   type ForkPrepareRequest, type ForkPrepareResult, type ForkCommand, type ForkOutcome, type ForkOperation } from './fork.ts'
@@ -412,7 +412,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
     if (opts.coordinator?.snapshot !== undefined) {
       try { return (await opts.coordinator.snapshot(sessionId, { prepareHistoryPages: true })).session }
       catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined
+        if (isSessionMissing(error)) return undefined
         throw error
       }
     }
@@ -649,7 +649,9 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
           return makeFailure(id, INVALID_PARAMS, "session/status requires a non-empty sessionId")
         }
-        return makeSuccess(id, service.queueState(p.sessionId))
+        if (!service.queueAsync) return makeSuccess(id, service.queueState(p.sessionId))
+        const items = await service.queueAsync(p.sessionId)
+        return makeSuccess(id, { running: items.some(item => item.state === "running"), queued: items.filter(item => item.state === "queued").length })
       }
       case "session/queue": {
         // M49 Task 11: the REAL projection — the running row is first, the
@@ -659,7 +661,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
           return makeFailure(id, INVALID_PARAMS, "session/queue requires a non-empty sessionId")
         }
-        return makeSuccess(id, { items: service.queue(p.sessionId) })
+        return makeSuccess(id, { items: service.queueAsync ? await service.queueAsync(p.sessionId) : service.queue(p.sessionId) })
       }
       case "session/queue/cancel": {
         const p = params as { sessionId?: unknown; id?: unknown } | undefined
@@ -799,6 +801,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             if (page === undefined && session === undefined) session = await sessionForHistory(p.sessionId)
           }
         } catch (error) {
+          if (isSessionMissing(error)) return makeFailure(id, INVALID_PARAMS, `session/history: session not found: ${p.sessionId}`)
           const message = error instanceof Error ? error.message : String(error)
           return makeFailure(id, INTERNAL_ERROR, `session/history: failed to prepare session: ${message}`)
         }

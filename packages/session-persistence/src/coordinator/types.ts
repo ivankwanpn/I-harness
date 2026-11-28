@@ -6,6 +6,11 @@ export type PendingInputSummary = Pick<PendingInput, 'inputId' | 'text' | 'inten
 export function pendingInputSummary({ inputId, text, intent, delivery, admittedSeq }: PendingInputSummary): PendingInputSummary {
   return { inputId, text, intent, delivery, admittedSeq }
 }
+/** Both stores distinguish an absent session from a corrupt or inaccessible one. */
+export function isSessionMissing(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code
+  return code === 'ENOENT' || code === 'COMMIT_LOG_NOT_FOUND'
+}
 
 export type SavedContextBinding = {
   providerId?: string; modelId: string; protocol: string
