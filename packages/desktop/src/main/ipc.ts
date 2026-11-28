@@ -549,13 +549,18 @@ export async function dispatchDesktopRequest(
       if (live) return live.client.dashboard()
       const starting = dependencies.runtimes.pendingRuntime?.(workspaceId)
       if (value.opening === true && dependencies.sessionCatalog) {
-        const committed = dependencies.sessionCatalog.dashboard(workspace).then(result => ({ ...result, committedOnly: true as const }))
+        const preview = starting ? new AbortController() : undefined
+        const committed = dependencies.sessionCatalog.dashboard(workspace, preview?.signal).then(result => ({ ...result, committedOnly: true as const }))
         if (!starting) return committed
         // A busy catalog must not hold up a ready Gateway. Choosing the live
         // reader here also avoids issuing a live scan if saved rows won.
         const first = await Promise.any([committed, starting]).catch(() => committed)
         if ("committedOnly" in first) return first
-        return first.client.dashboard().catch(() => committed)
+        try {
+          const result = await first.client.dashboard()
+          preview?.abort()
+          return result
+        } catch { return committed }
       }
       const ready = await starting?.catch(() => undefined)
       if (!ready && dependencies.sessionCatalog) return dependencies.sessionCatalog.dashboard(workspace)

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
@@ -13,6 +13,27 @@ import { navigationDocumentKey, projectBindingDocumentKey } from '../../desktop-
 import { createJsonlDashboardSummaryCache } from '../../desktop-gateway/src/session-dashboard-summary.ts'
 
 const roots: string[] = []
+async function heldWorkspaceCatalog(phase: 'root' | 'generation' = 'root') {
+  const root = await mkdtemp(join(tmpdir(), 'ih-desktop-catalog-')); roots.push(root)
+  vi.stubEnv('IH_CONFIG_DIR', root)
+  const sessions = join(root, 'sessions'), held = join(root, 'read-started'), release = join(root, 'release')
+  await mkdir(join(sessions, 'a'), {recursive:true}); await mkdir(join(sessions, 'b'))
+  let target = join(sessions,'a')
+  if (phase === 'generation') {
+    await writeFile(join(root,'settings.json'), JSON.stringify({sessionStore:'commit-log'}))
+    const writer = createJsonlCommitCoordinator(target)
+    try { await writer.create({sessionId:'held-session'}) } finally { await writer.close() }
+    const directory = join(target,'held-session')
+    const generation = (await readdir(directory)).find(name => /^session\.v\d+\.jsonl$/.test(name))
+    if (!generation) throw Error('Missing real commit-log generation')
+    target = join(directory,generation)
+  }
+  vi.stubEnv('IH_TEST_CATALOG_PATH', target)
+  vi.stubEnv('IH_TEST_CATALOG_OPERATION', phase === 'generation' ? 'readFile' : 'stat')
+  const wrapper = new URL('./helpers/held-session-catalog-worker.mjs', import.meta.url)
+  const workspace = (id:string) => ({id,path:root,label:id})
+  return { catalog:createDesktopSessionCatalog(sessions, wrapper), workspace, held, sessions, release:()=>writeFile(release,'ok') }
+}
 afterEach(async () => {
   vi.unstubAllEnvs()
   for (const root of roots.splice(0)) {
@@ -187,6 +208,65 @@ it('uses a ready Gateway if the saved opening scan is still pending', async () =
   await expect(dispatchDesktopRequest({ kind: 'session/dashboard', workspaceId: 'one', opening: true }, dependencies)).resolves.toEqual(result)
   disk.reject(Error('Late saved read failed'))
 })
+
+it('releases an obsolete opening scan before another workspace dashboard or quit', async () => {
+  const {catalog,workspace,held,release} = await heldWorkspaceCatalog()
+  const startup = Promise.withResolvers<unknown>()
+  const dependencies = { catalog:{get:workspace}, runtimes:{peek:()=>undefined,pendingRuntime:(id:string)=>id==='a'?startup.promise:undefined},
+    sessionCatalog:catalog } as unknown as DesktopIpcDependencies
+  try {
+    const opening=dispatchDesktopRequest({kind:'session/dashboard',workspaceId:'a',opening:true},dependencies)
+    await vi.waitFor(async()=>expect(await readFile(held,'utf8')).toBe('read\n'), {timeout:15000})
+    startup.resolve({client:{dashboard:async()=>({sessions:[],active:true})}})
+    await expect(opening).resolves.toMatchObject({active:true})
+    let done=false
+    const next = dispatchDesktopRequest({kind:'session/dashboard',workspaceId:'b'},dependencies).then(()=>{done=true})
+    await vi.waitFor(()=>expect(done).toBe(true),{timeout:2500})
+    await next
+    let closed=false
+    const closing=catalog.close().then(()=>{closed=true})
+    await vi.waitFor(()=>expect(closed).toBe(true),{timeout:2500})
+    await closing
+  } finally { await release(); await catalog.close() }
+},30000)
+
+it('does not cancel a shared scan while another dashboard reader still needs it', async () => {
+  const {catalog,workspace,held,release} = await heldWorkspaceCatalog()
+  const preview = new AbortController()
+  try {
+    const active = catalog.dashboard(workspace('a'))
+    const speculative = catalog.dashboard(workspace('a'),preview.signal)
+    await vi.waitFor(async()=>expect(await readFile(held,'utf8')).toBe('read\n'),{timeout:15000})
+    await catalog.navigation(workspace('b')) // independent requests reached the worker
+    preview.abort()
+    await expect(speculative).rejects.toMatchObject({name:'AbortError'})
+    const closing=catalog.close()
+    await release()
+    expect((await active).sessions).toEqual([])
+    await closing
+    expect(await readFile(held,'utf8')).toBe('read\n')
+  } finally { await release(); await catalog.close() }
+},30000)
+
+it('waits for an acquired commit-log snapshot lease and releases it on cancellation before closing', async () => {
+  const {catalog,workspace,held,sessions,release} = await heldWorkspaceCatalog('generation')
+  const {acquireCommitSnapshotLease} = await import('../../session-commit-log/src/lease.ts')
+  const exclusive = () => acquireCommitSnapshotLease('held-session',{lockRoot:join(sessions,'a'),retryMs:5,deadlineMs:100},'exclusive')
+  try {
+    const preview = new AbortController()
+    const pending = catalog.dashboard(workspace('a'),preview.signal)
+    await vi.waitFor(async()=>expect(await readFile(held,'utf8')).toContain('read'),{timeout:15000})
+    const rejected=expect(pending).rejects.toMatchObject({name:'AbortError'})
+    let closed=false
+    const close=catalog.close().then(()=>{closed=true})
+    await rejected
+    await expect(exclusive()).rejects.toThrow()
+    expect(closed).toBe(false)
+    await release(); await close
+    const receipt=await exclusive()
+    await receipt.release()
+  } finally { await release(); await catalog.close() }
+},30000)
 
 it('rejects interrupted queries, reopens a fresh reader and drains work admitted before close', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-desktop-catalog-')); roots.push(root)

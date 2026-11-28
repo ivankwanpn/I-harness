@@ -122,6 +122,7 @@ async function runtimeIsIdle(runtime: WorkspaceRuntime): Promise<boolean> {
 export function createWorkspaceRuntimeManager(options: {
   sessionsRoot: string
   resourcesPath?: string
+  workspaceForRecovery?: (id: string) => WorkspaceEntry | undefined
   projectContexts?: () => Promise<DesktopProjectContext[]>
   projectContextsForWorkspace?: (workspaceId: string, contexts: DesktopProjectContext[]) => Promise<DesktopProjectContext[]>
   launch?: (workspace: WorkspaceEntry, sessionDir: string) => LaunchedRuntime
@@ -282,15 +283,14 @@ export function createWorkspaceRuntimeManager(options: {
       state.timer = undefined
       if (recoveryState(workspace.id) !== state || state.count !== attempt) return
       if (closed || (generations.get(workspace.id) ?? 0) !== generation || runtimes.has(workspace.id) || pending.has(workspace.id)) return
-      void manager.get(workspace).catch(() => { /* The manager owns the next bounded retry. */ })
+      const current = workspace.id === DESKTOP_CONFIGURATION_ID || !options.workspaceForRecovery
+        ? workspace : options.workspaceForRecovery(workspace.id)
+      if (current) void manager.get(current).catch(() => { /* The manager owns the next bounded retry. */ })
     }, state.retryAt - now)
   }
   const manager: WorkspaceRuntimeManager = {
     async recover(workspace) {
       await manager.invalidate!(workspace.id)
-      const timer = restartWindow.get(workspace.id)?.timer
-      if (timer) clearTimeout(timer)
-      restartWindow.delete(workspace.id)
       return manager.get(workspace)
     },
     peek(id) {
@@ -302,6 +302,11 @@ export function createWorkspaceRuntimeManager(options: {
       const runtime = runtimes.get(id)
       const starting = pending.get(id)
       const child = workspaceOwners.get(id)
+      const recovery = restartWindow.get(id)
+      if (recovery?.timer) clearTimeout(recovery.timer)
+      restartWindow.delete(id)
+      // A retired generation has already advanced. Removing its retry
+      // reservation is sufficient when no replacement has started yet.
       if (!runtime && !starting && !child) return
       const generation = generations.get(id) ?? 0
       const health = healthTimers.get(id)

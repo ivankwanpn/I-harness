@@ -18,18 +18,34 @@ export function createCommittedSessionCatalog() {
   const reads = new Set<Promise<unknown>>()
   const owners = new Set<CatalogRead>()
   const savedSummary = createJsonlDashboardSummaryCache()
-  function read<T>(root: string, empty: T, work: (coordinator: CatalogRead, store: 'commit-log' | 'jsonl') => Promise<T>): Promise<T> {
+  function read<T>(root: string, empty: T, work: (coordinator: CatalogRead, store: 'commit-log' | 'jsonl') => Promise<T>, signal?: AbortSignal): Promise<T> {
     if (closing) return Promise.reject(Error('Session catalog is closed'))
     const job = (async () => {
-      const settings = new SettingsStore({ path: resolveSettingsPath() })
-      await settings.loadObserved()
-      const directory = await stat(root).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === 'ENOENT') return undefined
-        throw error
-      })
-      if (!directory) return empty
-      if (!directory.isDirectory()) throw Error('Session storage is not a directory')
-      const store = settings.get().sessionStore ?? (process.env.IH_SESSION_STORE === 'commit-log' ? 'commit-log' : 'jsonl')
+      signal?.throwIfAborted()
+      const location = async () => {
+        const settings = new SettingsStore({ path: resolveSettingsPath() })
+        await settings.loadObserved()
+        signal?.throwIfAborted()
+        const directory = await stat(root).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return undefined
+          throw error
+        })
+        if (!directory) return undefined
+        if (!directory.isDirectory()) throw Error('Session storage is not a directory')
+        return settings.get().sessionStore ?? (process.env.IH_SESSION_STORE === 'commit-log' ? 'commit-log' : 'jsonl')
+      }
+      // Settings and stat own no session lease. Beyond this point an in-flight
+      // read must finish and close its original snapshot before this job settles.
+      let lookup = location()
+      if (signal) {
+        const aborted = Promise.withResolvers<never>()
+        const abort = () => aborted.reject(signal.reason)
+        signal.addEventListener('abort', abort, { once: true })
+        lookup = Promise.race([lookup, aborted.promise]).finally(() => signal.removeEventListener('abort', abort))
+      }
+      const store = await lookup
+      signal?.throwIfAborted()
+      if (!store) return empty
       const coordinator = store === 'commit-log'
         ? createJsonlCommitCoordinator(root)
         : createReadOnlySessionCoordinator(createJsonlBackend(root, { fixedCapabilities: true }))
@@ -57,7 +73,7 @@ export function createCommittedSessionCatalog() {
     async navigation(root: string, onlyId?: string): Promise<Record<string, SessionNavigation>> {
       return (await navigationSnapshot(root, onlyId)).entries
     },
-    dashboard(root: string): Promise<SessionDashboardResult> {
+    dashboard(root: string, signal?: AbortSignal): Promise<SessionDashboardResult> {
       return read<SessionDashboardResult>(root, { sessions: [] }, async (coordinator, store) => {
         const listed = await readListedSessions(coordinator, ids => {
           const saved = savedSummary.forListing(root, ids)
@@ -65,9 +81,9 @@ export function createCommittedSessionCatalog() {
             const load = () => loadCatalogSession(coordinator, id, header)
             return store === 'jsonl' ? saved(id, header, load) : describeSavedSession(await load(), header.title)
           }
-        }, true)
+        }, true, signal)
         return { ...listed, sessions: listed.sessions.map(row => ({ ...row, live: false })) }
-      })
+      }, signal)
     },
     close() {
       closing = true

@@ -223,6 +223,40 @@ function workspace(id = "ws-1", path = "C:/workspace"): WorkspaceEntry {
 }
 
 describe("Desktop SDK runtime manager", () => {
+  it("cancels the preceding recovery generation when a worktree moves during crash backoff", async () => {
+    vi.useFakeTimers()
+    const first = fakeClient(), moved = fakeClient()
+    const launch = vi.fn((_workspace: WorkspaceEntry) => moved).mockImplementationOnce(() => first)
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch })
+    const lost = Promise.withResolvers<void>()
+    manager.onEvent(event => { if (event.kind === "sdk/disconnected") lost.resolve() })
+    try {
+      await manager.get(workspace("stable-id", "C:/before"))
+      first.exit()
+      await lost.promise
+      await manager.invalidate!("stable-id")
+      await vi.advanceTimersByTimeAsync(1000)
+      await expect(manager.get(workspace("stable-id", "C:/after"))).resolves.toMatchObject({ client: moved.client })
+      expect(launch.mock.calls.map(([entry]) => entry.path)).toEqual(["C:/before", "C:/after"])
+    } finally { await manager.close(); vi.useRealTimers() }
+  })
+  it("resolves automatic recovery against the current workspace catalog entry", async () => {
+    vi.useFakeTimers()
+    const first = fakeClient(), next = fakeClient()
+    const launch = vi.fn((_workspace: WorkspaceEntry) => next).mockImplementationOnce(() => first)
+    let location = workspace("registered", "C:/before")
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch, workspaceForRecovery: () => location })
+    const disconnected = Promise.withResolvers<void>()
+    manager.onEvent(event => { if (event.kind === "sdk/disconnected") disconnected.resolve() })
+    try {
+      await manager.get(location)
+      first.exit(); await disconnected.promise
+      location = workspace("registered", "C:/after")
+      await vi.advanceTimersByTimeAsync(1000)
+      await manager.get(location)
+      expect(launch.mock.calls.map(([entry]) => entry.path)).toEqual(["C:/before", "C:/after"])
+    } finally { await manager.close(); vi.useRealTimers() }
+  })
   it("single-flights concurrent gets and shuts each child down exactly once", async () => {
     const root = tempRoot()
     const host = fakeClient()

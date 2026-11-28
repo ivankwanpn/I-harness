@@ -9,10 +9,13 @@ export async function readCatalogRows<T>(
   prepare: (ids: readonly string[], markPartial: () => void) => (id: string) => Promise<T | undefined>,
   sequential = false,
   onlyId?: string,
+  signal?: AbortSignal,
 ): Promise<{ rows: T[]; partial: boolean }> {
+  signal?.throwIfAborted()
   let partial = false
   const incomplete = () => { partial = true }
   const listed = onlyId === undefined ? await source.list(incomplete) : await source.list(incomplete, onlyId)
+  signal?.throwIfAborted()
   // Embedded coordinators may implement only the original unfiltered list.
   const ids = onlyId === undefined ? listed : listed.filter(id => id === onlyId)
   const project = prepare(ids, incomplete)
@@ -23,6 +26,7 @@ export async function readCatalogRows<T>(
   const rows: T[] = []
   if (sequential) {
     for (const id of ids) {
+      signal?.throwIfAborted()
       const row = await read(id)
       if (row !== undefined) rows.push(row)
     }
@@ -30,6 +34,7 @@ export async function readCatalogRows<T>(
     const projected = await Promise.all(ids.map(read))
     for (const row of projected) if (row !== undefined) rows.push(row)
   }
+  signal?.throwIfAborted()
   return { rows, partial }
 }
 
@@ -40,6 +45,7 @@ export async function readListedSessions(
   source: Pick<SessionCoordinator, "list" | "profile">,
   summaries: (ids: readonly string[]) => (id: string, header: SessionCatalogHeader) => Promise<{ title?: string; turnCount: number } | undefined>,
   sequential = false,
+  signal?: AbortSignal,
 ): Promise<SessionListResult> {
   const { rows: sessions, partial } = await readCatalogRows(source, (ids, markPartial) => {
     const summary = summaries(ids)
@@ -58,8 +64,10 @@ export async function readListedSessions(
     }
     return async id => {
       for (let attempt = 0; attempt < 2; attempt++) {
+        signal?.throwIfAborted()
         const profile = await visibleRow(id)
         if (!profile) return undefined
+        signal?.throwIfAborted()
         try {
           const details = await summary(id, profile.meta)
           if (details) return { ...profile.row, ...details }
@@ -67,10 +75,11 @@ export async function readListedSessions(
       }
       // A damaged or continuously changing but still visible conversation keeps its
       // newly observed header. Its title override and turn count are unknown.
+      signal?.throwIfAborted()
       const latest = await visibleRow(id)
       if (latest) markPartial()
       return latest?.row
     }
-  }, sequential)
+  }, sequential, undefined, signal)
   return { sessions, ...(partial ? { listingPartial: true } : {}) }
 }

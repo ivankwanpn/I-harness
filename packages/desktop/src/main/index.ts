@@ -48,6 +48,7 @@ app.whenReady().then(() => {
   const worktrees = createDesktopWorktrees(join(app.getPath("userData"), "git-worktrees"), workspaces, projects)
   const sessionCatalog = createDesktopSessionCatalog(join(app.getPath('userData'), 'sessions'))
   const manager = createWorkspaceRuntimeManager({
+    workspaceForRecovery: id => workspaces.get(id),
     projectContexts: () => projectRuntimeContexts(projects, workspaces),
     async projectContextsForWorkspace(id, contexts) {
       const workspace = workspaces.get(id)

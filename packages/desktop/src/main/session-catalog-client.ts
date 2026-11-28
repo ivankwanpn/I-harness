@@ -23,13 +23,25 @@ export function startCatalogReader(entry: string | URL, onExit: () => void) {
     onExit()
     resolve()
   }))
-  function request<T>(request: CatalogRequest): Promise<T> {
+  function request<T>(request: CatalogRequest, signal?: AbortSignal): Promise<T> {
+    if (signal?.aborted) return Promise.reject(signal.reason)
     const id = ++nextId
-    return new Promise<T>((resolve, reject) => {
+    const abort = () => {
+      const call = pending.get(id)
+      if (!call) return
+      pending.delete(id)
+      try { worker.postMessage({ id, request: { method: 'cancel', target: id } satisfies CatalogRequest }) }
+      catch (error) { call.reject(error instanceof Error ? error : new Error(String(error))); return }
+      call.reject(signal!.reason)
+    }
+    const result = new Promise<T>((resolve, reject) => {
       pending.set(id, { resolve: value => resolve(value as T), reject })
       try { worker.postMessage({ id, request }) }
       catch (error) { pending.delete(id); reject(error) }
     })
+    if (!signal) return result
+    signal.addEventListener('abort', abort, { once: true })
+    return result.finally(() => signal.removeEventListener('abort', abort))
   }
-  return { request, exited }
+  return { request, exited, terminate: () => worker.terminate() }
 }
