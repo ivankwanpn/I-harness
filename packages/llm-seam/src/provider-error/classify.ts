@@ -2,7 +2,7 @@ import { canonicalErrorCodes, errorChain, errorRecord } from "./types.ts"
 import { localValidationRejection } from '../prepared/validation.ts'
 
 const capacityMessage = /\b(?:selected\s+)?model\s+is\s+at\s+capacity\b/i
-const capacityCode = /^server_(?:is_)?overloaded$/i
+const capacityCode = /^(?:server_(?:is_)?overloaded|insufficient_system_resource)$/i
 
 export function normalizedCode(code: string): string {
   if (/^(?:context[ _-]?(?:length|window)[ _-]?(?:exceeded|overflow)|CONTEXT_TOO_LONG)$/i.test(code)) return "CONTEXT_WINDOW_EXCEEDED"

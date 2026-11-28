@@ -1,4 +1,4 @@
-import { describeChatStreamError, reportStreamActivity, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
+import { describeChatStreamError, reportStreamActivity, type LLMRequest, type LLMStreamEvent, type RetryableErrorCode } from "@i-harness/llm-seam"
 import type { OpenAICompatibleConfig } from "../types.ts"
 import { mapUsage } from "./usage.ts"
 
@@ -67,7 +67,7 @@ export function createChatFold(config: Pick<OpenAICompatibleConfig, "model" | "p
       }
       if (finishReason === "insufficient_system_resource") {
         if (usage !== undefined) events.push({ type: "usage", usage })
-        events.push({ type: "error", error: Object.assign(new Error("Provider stopped generation due to insufficient resources"), { code: "CAPACITY" }) })
+        events.push({ type: "error", error: Object.assign(new Error("Provider stopped generation due to insufficient resources"), { code: finishReason }) })
         return events
       }
       if (finishReason === "length") truncated = true
@@ -137,7 +137,7 @@ export function createChatFold(config: Pick<OpenAICompatibleConfig, "model" | "p
   }
 
   const finish = (receivedDone: boolean): LLMStreamEvent[] => {
-    if (!receivedDone && !primaryFinish) return [{ type: "error", error: Object.assign(new Error("Chat stream closed before a finish reason or [DONE]"), { code: "TRANSPORT" }) }]
+    if (!receivedDone && !primaryFinish) return [{ type: "error", error: Object.assign(new Error("Chat stream closed before a finish reason or [DONE]"), { code: "TRANSPORT" satisfies RetryableErrorCode }) }]
     const end: LLMStreamEvent = { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningContent ? { providerContinuation: { kind: "openai-compatible", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), reasoningContent } as const } : {}) }
     if (truncated || refused) return [end]
 

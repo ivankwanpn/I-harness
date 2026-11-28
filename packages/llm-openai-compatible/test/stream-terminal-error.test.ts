@@ -20,7 +20,20 @@ it('preserves partial text and reports an unconfirmed EOF as a transport failure
 it('reports DeepSeek resource exhaustion with observed usage and no successful end', async () => {
   const events = await collect(client(frame({ choices: [{ delta: {}, finish_reason: 'insufficient_system_resource' }], usage: { completion_tokens: 2 } })).stream(request))
   expect(events.map(event => event.type)).toEqual(['usage', 'error'])
-  expect(events.at(-1)).toMatchObject({ error: { code: 'CAPACITY' } })
+  expect(events.at(-1)).toMatchObject({ error: { code: 'insufficient_system_resource' } })
+  expect(retryErrorCode((events.at(-1) as Extract<LLMStreamEvent, { type: 'error' }>).error)).toBe('SERVER')
+})
+it('applies the normal capacity backoff to a DeepSeek resource finish reason', async () => {
+  const stop = new AbortController()
+  const source = client(frame({ choices: [{ delta: {}, finish_reason: 'insufficient_system_resource' }] }))
+  const retrying = createRetryingClient(source, resolveRetryPolicy({ mode: 'normal', maxRetries: 1, backoff: { jitterRatio: 0 } }))
+  const stream = retrying.stream({ ...request, signal: stop.signal })[Symbol.asyncIterator]()
+  try {
+    expect((await stream.next()).value).toMatchObject({ type: 'retry', retry: { phase: 'waiting', code: 'CAPACITY', delayMs: 10_000 } })
+  } finally {
+    stop.abort()
+    await stream.return?.()
+  }
 })
 async function collect(stream: AsyncIterable<LLMStreamEvent>) { const events: LLMStreamEvent[] = []; for await (const event of stream) events.push(event); return events }
 function client(wire: string, chunks?: Uint8Array[], cancel?: () => void | Promise<void>) {
