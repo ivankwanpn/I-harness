@@ -53,11 +53,11 @@ export function toWireMessages(config: AnthropicConfig, request: LLMRequest, mes
       let replayThinking = invalidThinkingChain ? [] : m.thinkingBlocks ?? []
       const toolBlocks = calls.map((c) => ({ type: "tool_use", id: c.id, name: c.name, input: c.args }))
       const order = continuation && sourceMatches ? continuation.contentOrder : undefined
-      let orderedContent = replayBlockOrder<unknown>(invalidThinkingChain ? order?.filter((entry) => entry.kind !== "reasoning") : order, m.content, replayThinking, toolBlocks, (text) => ({ type: "text", text }))
+      let orderedContent = replayBlockOrder<unknown>(invalidThinkingChain ? order?.filter((entry) => entry.kind !== "reasoning") : order, m.content, replayThinking, toolBlocks, (text) => ({ type: "text", text }), calls)
       if (order && orderedContent === undefined && replayThinking.length) {
         invalidThinkingChain = true
         replayThinking = []
-        orderedContent = replayBlockOrder<unknown>(order.filter((entry) => entry.kind !== "reasoning"), m.content, [], toolBlocks, (text) => ({ type: "text", text }))
+        orderedContent = replayBlockOrder<unknown>(order.filter((entry) => entry.kind !== "reasoning"), m.content, [], toolBlocks, (text) => ({ type: "text", text }), calls)
       }
       const portable = !orderedContent && !sourceMatches ? replayVisibleToolOrder<unknown>(m, toolBlocks, text => ({ type: "text", text })) : undefined
       const content: unknown[] = orderedContent ?? portable ?? [...replayThinking, ...(m.content.trim() !== "" ? [{ type: "text", text: m.content }] : []), ...toolBlocks]

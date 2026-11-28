@@ -1,4 +1,4 @@
-import { reportStreamActivity, type LLMRequest, type LLMStreamEvent, type ProviderBlockOrderEntry } from "@i-harness/llm-seam"
+import { bindVisibleToolIds, hasReorderedTools, reportStreamActivity, type LLMRequest, type LLMStreamEvent, type ProviderBlockOrderEntry } from "@i-harness/llm-seam"
 import type { BedrockConfig } from "../types.ts"
 import { mapUsage } from "./usage.ts"
 import { completeConverseWitness, type ConverseInputWitness, type ConverseCall } from '../request/validate-native.ts'
@@ -9,13 +9,13 @@ export function createBedrockFold(config: BedrockConfig, request: LLMRequest, wi
   // a toolUse delta carries the args as one JSON string split across
   // deltas; the stop event completes the block, and the args are parsed
   // there (mirrors the llm-openai-compatible accumulation).
-  const pendingToolUses = new Map<number, { id: string; name: string; buffer: string; ordinal: number }>()
+  const pendingToolUses = new Map<number, { id: string; name: string; buffer: string }>()
   const calls: ConverseCall[] = []
   const pendingReasoning = new Map<number, { text: string; signature: string }>()
   const pendingRedacted = new Map<number, Uint8Array[]>()
   const reasoningBlocks: ({ reasoningText: { text: string; signature?: string } } | { redactedContentBase64: string })[] = []
   const blockOrder = new Map<number, ProviderBlockOrderEntry>()
-  let toolOrdinal = 0
+  let startedTools = 0
   let truncated = false
   let receivedTerminal = false
   let malformed: string | undefined
@@ -38,13 +38,11 @@ export function createBedrockFold(config: BedrockConfig, request: LLMRequest, wi
     }
     if (m.contentBlockStart !== undefined && m.contentBlockStart.start?.toolUse !== undefined) {
       const toolUse = m.contentBlockStart.start.toolUse
-      const ordinal = toolOrdinal++
-      blockOrder.set(m.contentBlockStart.contentBlockIndex ?? 0, { kind: "tool", index: ordinal })
+      startedTools++
       pendingToolUses.set(m.contentBlockStart.contentBlockIndex ?? 0, {
         id: toolUse.toolUseId ?? "",
         name: toolUse.name ?? "",
         buffer: "",
-        ordinal,
       })
       return []
     }
@@ -106,7 +104,8 @@ export function createBedrockFold(config: BedrockConfig, request: LLMRequest, wi
       if (pending !== undefined) {
         try {
           const args = JSON.parse(pending.buffer.trim() === "" ? "{}" : pending.buffer) as unknown
-          calls[pending.ordinal] = { ...(pending.id ? { id: pending.id } : {}), name: pending.name, args }
+          blockOrder.set(index, { kind: "tool", index: calls.length })
+          calls.push({ ...(pending.id ? { id: pending.id } : {}), name: pending.name, args })
           return [{ type: "tool_call", call: { ...(pending.id ? { id: pending.id } : {}), name: pending.name, args } }]
         } catch {
           return [{
@@ -147,7 +146,7 @@ export function createBedrockFold(config: BedrockConfig, request: LLMRequest, wi
     if (malformed) return { type: "error", error: new Error(`Bedrock stopped with ${malformed}`) }
     // M77: each bit is written on its own (a response can be both), and both
     // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
-    const contentOrder = [...blockOrder.entries()].sort(([left], [right]) => left - right).map(([, entry]) => entry)
+    const contentOrder = bindVisibleToolIds([...blockOrder.entries()].sort(([left], [right]) => left - right).map(([, entry]) => entry), calls)
     const rank = { reasoning: 0, text: 1, tool: 2 } as const
     let previousRank = -1
     const interleaved = contentOrder.some((entry) => {
@@ -155,8 +154,8 @@ export function createBedrockFold(config: BedrockConfig, request: LLMRequest, wi
       const outOfOrder = current < previousRank
       previousRank = Math.max(previousRank, current)
       return outOfOrder
-    })
-    const producerWitness = witness && !truncated && !refused && !pendingToolUses.size && !pendingReasoning.size && !pendingRedacted.size && calls.length === toolOrdinal ? completeConverseWitness(witness, calls) : undefined
+    }) || hasReorderedTools(contentOrder)
+    const producerWitness = witness && !truncated && !refused && !pendingToolUses.size && !pendingReasoning.size && !pendingRedacted.size && calls.length === startedTools ? completeConverseWitness(witness, calls) : undefined
     return { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningBlocks.length || interleaved ? { providerContinuation: { kind: "bedrock", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), reasoningBlocks, ...(interleaved || producerWitness ? { contentOrder } : {}), ...(producerWitness ? { producerWitness } : {}) } as const } : {}) }
   }
   return { handleMember, end }

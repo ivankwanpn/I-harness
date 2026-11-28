@@ -1,4 +1,4 @@
-import { deepSeekCallFingerprint, hasTextAfterTool, isOfficialDeepSeekApi, officialXaiRoute, type LLMStreamEvent, type ProviderBlockOrderEntry } from "@i-harness/llm-seam"
+import { bindVisibleToolIds, deepSeekCallFingerprint, hasTextAfterTool, hasReorderedTools, isOfficialDeepSeekApi, officialXaiRoute, type LLMStreamEvent, type ProviderBlockOrderEntry } from "@i-harness/llm-seam"
 import { projectionFingerprint } from "@i-harness/token-meter"
 import type { OpenAIConfig } from "../types.ts"
 import { mapUsage } from "./usage.ts"
@@ -25,7 +25,7 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
   const outputItems = new Map<number, ProviderBlockOrderEntry>()
   let outputOrderValid = true
   let hasAssistantPhase = false
-  let toolCount = 0
+  const emittedCalls: { id?: string }[] = []
   const recordOutput = (index: unknown, entry: ProviderBlockOrderEntry): void => {
     if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0 || outputItems.has(index)) { outputOrderValid = false; return }
     outputItems.set(index, entry)
@@ -35,7 +35,8 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
   const recordCall = (outputIndex: unknown, id: string | undefined, name: string, args: unknown): LLMStreamEvent => {
     const call = { ...(id ? { id } : {}), name, args }
     deepSeekCalls?.push(deepSeekCallFingerprint(call))
-    recordOutput(outputIndex, { kind: "tool", index: toolCount++ })
+    recordOutput(outputIndex, { kind: "tool", index: emittedCalls.length })
+    emittedCalls.push(id ? { id } : {})
     return { type: "tool_call", call }
   }
   // M77 (fix wave): the Responses wire's OTHER refusal shape — a refusal
@@ -208,7 +209,7 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
     const indexedOutput = [...outputItems.entries()].sort(([a], [b]) => a - b)
     const indexedOrder = outputOrderValid && indexedOutput.length > 0 && indexedOutput.every(([index], position) => index === position)
       ? indexedOutput.map(([, entry]) => entry) : undefined
-    const outputOrder = indexedOrder && (reasoningItems.size > 0 || hasAssistantPhase || hasTextAfterTool(indexedOrder)) ? indexedOrder : undefined
+    const outputOrder = indexedOrder && (reasoningItems.size > 0 || hasAssistantPhase || hasTextAfterTool(indexedOrder) || hasReorderedTools(indexedOrder)) ? bindVisibleToolIds(indexedOrder, emittedCalls) : undefined
     const deepSeekReplayFingerprint = deepSeekCalls && outputOrder && reasoningItems.size > 0
       ? projectionFingerprint([outputOrder.map(entry => entry.kind === "text" ? entry.text : "").join(""), deepSeekCalls])
       : undefined

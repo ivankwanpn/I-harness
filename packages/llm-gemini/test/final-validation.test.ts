@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { createGeminiClient } from '../src/index.ts'
 import type { LLMRequest } from '@i-harness/llm-seam'
+import { PNG, JPEG, GIF } from '../../image-validation/test/fixtures.ts'
 afterEach(() => vi.unstubAllGlobals())
 const request: LLMRequest = { systemPrompt: '', tools: [], messages: [{ role: 'user', content: 'go' }] }
 it("applies Google's evidenced parameter restrictions to the actual endpoint and model resource", async () => {
@@ -39,9 +40,66 @@ it('preserves actual error outcome and image bytes without inventing successful 
   for await (const _ of prepared.stream()) {}
   expect(sent.contents[2].parts[0]).toEqual({ functionResponse: { id: 'a', name: 'read', response: { error: { output: 'original error' } } } })
   expect(sent.contents[2].parts[1]).toEqual({ functionResponse: { id: 'b', name: 'read', response: { output: 'B' } } })
-  expect(sent.contents[3]).toEqual({ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: image } }] })
+  expect(sent.contents[3]).toEqual({ role: 'user', parts: [{ text: 'Images from tool call "a":' }, { inlineData: { mimeType: 'image/png', data: image } }] })
   expect(sent.contents[4]).toEqual({ role: 'user', parts: [{ text: 'human' }] })
   expect(prepared.measurement.input.components.images).toMatchObject({ imageCount: 1, binaryBytes: 70 })
+})
+
+it('places each supported Gemini 3 tool image inside its own function response', async () => {
+  let body: any
+  vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit) => { body = JSON.parse(String(init.body)); return new Response('') })
+  const input: LLMRequest = { ...request, messages: [...request.messages,
+    {role:'assistant',content:'',toolCalls:[{id:'first',name:'read',args:{}},{id:'second',name:'read',args:{}}]},
+    {role:'tool',toolCallId:'second',isError:true,content:[{type:'text',text:'partial'}, {type:'image',image:{mediaType:'image/jpeg',dataBase64:JPEG}}]},
+    {role:'tool',toolCallId:'first',content:[{type:'image',image:{mediaType:'image/png',dataBase64:PNG}}]},
+    {role:'user',content:'Use those results.'},
+  ] }
+  const target = createGeminiClient({ apiKey:'test', model:'models/gemini-3.8-flash', inputModalities:['text','image'] })
+  const p = await target.prepare!(input)
+  for await (const _ of p.stream()) {}
+  expect(body.contents[2].parts).toEqual([
+    {functionResponse:{id:'second',name:'read',response:{error:{output:'partial'}},parts:[{inlineData:{mimeType:'image/jpeg',data:JPEG}}]}},
+    {functionResponse:{id:'first',name:'read',response:{output:''},parts:[{inlineData:{mimeType:'image/png',data:PNG}}]}},
+  ])
+  expect(body.contents.slice(3)).toEqual([{role:'user',parts:[{text:'Use those results.'}]}])
+  expect(p.measurement.input.components.images.imageCount).toBe(2)
+})
+
+it('looks up a reused call id in its own exchange and keeps a successful error-shaped payload successful', async () => {
+  let body: any
+  vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit) => { body=JSON.parse(String(init.body));return new Response('') })
+  const p=await createGeminiClient({apiKey:'test',model:'fixture'}).prepare!({...request,messages:[...request.messages,
+    {role:'assistant',content:'',toolCalls:[{id:'reused',name:'read',args:{}}]}, {role:'tool',toolCallId:'reused',content:'{"error":"a log field"}'},
+    {role:'assistant',content:'',toolCalls:[{id:'reused',name:'write',args:{}}]}, {role:'tool',toolCallId:'reused',isError:true,content:'failed'},
+  ]})
+  for await(const _ of p.stream()) {}
+  expect(body.contents[2].parts[0].functionResponse).toEqual({id:'reused',name:'read',response:{output:{error:'a log field'}}})
+  expect(body.contents[4].parts[0].functionResponse).toEqual({id:'reused',name:'write',response:{error:{output:'failed'}}})
+})
+
+it('uses the sent call order when returning same-name results to a positional Gemini 2.5 route', async () => {
+  let body: any
+  vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit) => { body=JSON.parse(String(init.body));return new Response('') })
+  const prepared=await createGeminiClient({apiKey:'test',model:'gemini-2.5-flash'}).prepare!({...request,messages:[...request.messages,
+    { role:'assistant',content:'',toolCalls:[{id:'issued-b',name:'read',args:{file:'b'}},{id:'issued-a',name:'read',args:{file:'a'}}],
+      providerContinuation:{kind:'anthropic',model:'other',contentOrder:[{kind:'tool',index:1,id:'issued-a'},{kind:'tool',index:0,id:'issued-b'}]} },
+    {role:'tool',toolCallId:'issued-b',content:'B'}, {role:'tool',toolCallId:'issued-a',content:'A'},
+  ]})
+  for await(const _ of prepared.stream()) {}
+  expect(body.contents[1].parts.map((p: any)=>p.functionCall.id)).toEqual(['issued-a','issued-b'])
+  expect(body.contents[2].parts.map((p: any)=>[p.functionResponse.id,p.functionResponse.response.output])).toEqual([['issued-a','A'],['issued-b','B']])
+})
+
+it('classifies remote function media separately from local bytes and rejects a known unsupported GIF before sending', async () => {
+  const target = createGeminiClient({apiKey:'test',model:'gemini-3.8-flash',inputModalities:['text','image']})
+  await expect(target.prepare!({...request,messages:[{role:'user',content:[{type:'image',image:{mediaType:'image/gif',dataBase64:GIF}}]}]})).rejects.toMatchObject({code:'INVALID_ARGUMENT'})
+  const remote = createGeminiClient({apiKey:'test',model:'fixture',options:{contents:[
+    {role:'model',parts:[{functionCall:{name:'read',id:'x',args:{}}}]},
+    {role:'user',parts:[{functionResponse:{name:'read',id:'x',response:{},parts:[{fileData:{mimeType:'image/png',fileUri:'https://fixture.invalid/image'}}]}}]},
+  ]}})
+  const facts = (await remote.prepare!(request)).measurement.input
+  expect(facts.coverage).toBe('incomplete')
+  expect(facts.components.images).toMatchObject({imageCount:1,binaryBytes:0})
 })
 it('validates and measures supported raw FunctionResponse media at its original native position', async () => {
   const image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='

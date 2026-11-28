@@ -28,5 +28,5 @@ it('retains unknown-capability direct tool images in an owned user companion', a
   expect(prepared.measurement.input.components.images).toMatchObject({ imageCount: 1, binaryBytes: 70 })
   for await (const _ of prepared.stream()) {}
   expect(sent.messages[2].content[1].toolResult.content).toEqual([{ text: '[Adapter representation: image content from this tool result is supplied in the following user image companion.]' }])
-  expect(sent.messages[3]).toEqual({ role: 'user', content: [{ image: { format: 'png', source: { bytes: Buffer.from(image, 'base64') } } }] })
+  expect(sent.messages[3]).toEqual({ role: 'user', content: [{ text: 'Images from tool call "a":' }, { image: { format: 'png', source: { bytes: Buffer.from(image, 'base64') } } }] })
 })

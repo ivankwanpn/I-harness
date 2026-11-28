@@ -31,21 +31,6 @@ export function withoutCacheBreakpoints(input: unknown): unknown {
   })
 }
 
-// M14 direct-path collapse: a host hand-built tool message with image parts
-// becomes a function_call_output carrying only the text, followed by a user
-// item carrying the images (matching what deriveMessages emits for the agent
-// path). Returns undefined when there is nothing to split.
-function splitToolContent(content: string | LLMContentPart[]): { text: string; images: Extract<LLMContentPart, { type: "image" }>[] } {
-  if (typeof content === "string") return { text: content, images: [] }
-  let text = ""
-  const images: Extract<LLMContentPart, { type: "image" }>[] = []
-  for (const part of content) {
-    if (part.type === "text") text += part.text
-    else images.push(part)
-  }
-  return { text, images }
-}
-
 /** Map projected history, preserving native continuation ordering and tool images. */
 export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenAIConfig, "model" | "providerId" | "baseUrl">, codexSubscription: boolean): unknown[] {
   const deepSeek = !codexSubscription && isOfficialDeepSeekApi(config.baseUrl)
@@ -53,10 +38,12 @@ export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenA
     .map((m) => {
       if (m.role === "user") return { role: "user", content: toInputContent(m.content) }
       if (m.role === "tool") {
-        const { text, images } = splitToolContent(textProtocolToolResult(m))
-        const output = { type: "function_call_output", call_id: m.toolCallId, output: text }
-        if (images.length === 0) return output
-        return [output, { role: "user", content: images.map((part) => ({ type: "input_image", image_url: `data:${part.image.mediaType};base64,${part.image.dataBase64}` })) }]
+        const content = textProtocolToolResult(m)
+        // Responses scopes ordered text and image parts to the original
+        // call_id. Keep the existing string encoding for text-only results.
+        const output = Array.isArray(content) && content.every(part => part.type === "text")
+          ? content.map(part => part.text).join("") : toInputContent(content)
+        return { type: "function_call_output", call_id: m.toolCallId, output }
       }
       // assistant
       const previous = m.providerContinuation
@@ -76,7 +63,7 @@ export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenA
         arguments: JSON.stringify(c.args),
       })) ?? []
       const ordered = replayBlockOrder<unknown>(continuation?.outputOrder, m.content, originalReasoningItems, calls,
-        (content, phase) => ({ role: "assistant", content, ...(phase !== undefined ? { phase } : {}) }))
+        (content, phase) => ({ role: "assistant", content, ...(phase !== undefined ? { phase } : {}) }), m.toolCalls)
       if (ordered !== undefined) return ordered
       if (!continuation && !originalReasoningItems.length) {
         const visible = replayVisibleToolOrder<unknown>(m, calls, text => ({ role: "assistant", content: text }))

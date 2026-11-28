@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest"
-import { assertMessagesFromLog, canReplayContinuation, describeTransportError, replayBlockOrder } from "../src/index.ts"
-import type { LLMRequest, ReasoningEffort } from "../src/index.ts"
+import { assertMessagesFromLog, bindVisibleToolIds, canReplayContinuation, describeTransportError, replayBlockOrder, replayVisibleToolOrder } from "../src/index.ts"
+import type { LLMMessage, LLMRequest, ProviderBlockOrderEntry, ReasoningEffort } from "../src/index.ts"
 import { createSession, append } from "@i-harness/core-session"
 
 describe("llm-seam invariant (audit F01-3)", () => {
@@ -37,6 +37,20 @@ it("uses ordered replay only when every native block still matches neutral conte
 })
 
 import { projectImagesForProvider } from "../src/index.ts"
+
+it("requires matching call IDs before applying a recorded tool-only permutation across protocols", () => {
+  const calls = ["B", "A"].map(id => ({ id, name: "read", args: { path: id } }))
+  const order: ProviderBlockOrderEntry[] = [{ kind: "tool", index: 1 }, { kind: "tool", index: 0 }]
+  const assistant = (toolCalls: typeof calls, outputOrder: ProviderBlockOrderEntry[]): Extract<LLMMessage, {role:"assistant"}> => ({
+    role:"assistant", content:"", toolCalls, providerContinuation:{kind:"openai-responses",reasoningItems:[],outputOrder},
+  })
+  const bound = bindVisibleToolIds(order, calls)
+  expect(replayVisibleToolOrder(assistant(calls, bound), calls.map(c => c.id), text => text)).toEqual(["A", "B"])
+  expect(replayVisibleToolOrder(assistant(calls, order), calls.map(c => c.id), text => text)).toBeUndefined()
+  const edited = [calls[1]!, calls[0]!]
+  expect(replayVisibleToolOrder(assistant(edited, bound), edited.map(c => c.id), text => text)).toBeUndefined()
+  expect(bindVisibleToolIds(order, [{}, {}])).toEqual(order)
+})
 
 describe("M14 projectImagesForProvider", async () => {
   const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="

@@ -16,6 +16,21 @@ const plan = (extra = {}) => createOpenAIClient({ apiKey: "unused-key", model: "
 afterEach(() => vi.unstubAllGlobals())
 
 describe("Codex subscription Responses contract", () => {
+  it("keeps an image-only tool output on its namespaced function call", async () => {
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response(sse(completed)))
+    vi.stubGlobal("fetch", fetchMock)
+    const events = await collect(plan({ inputModalities: ["text", "image"] }), { ...request, messages: [
+      { role: "assistant", content: "", toolCalls: [{ id: "photo", name: "read", args: {} }] },
+      { role: "tool", toolCallId: "photo", content: [{ type: "image", image: { mediaType: "image/png", dataBase64: png } }] },
+    ] })
+    expect(events.filter(event => event.type === "error")).toEqual([])
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body)).input).toEqual([
+      { type: "function_call", call_id: "photo", namespace: "ih", name: "read", arguments: "{}" },
+      { type: "function_call_output", call_id: "photo", output: [{type:"input_image", image_url:`data:image/png;base64,${png}`}] },
+    ])
+  })
+
   it("uses the shared safe context classifier on the distinct subscription HTTP route", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: { type: "invalid_request_error", code: "CONTEXT_TOO_LONG", message: "private subscription prompt" } }), { status: 400, headers: { "x-request-id": "req-subscription-123" } }))
     vi.stubGlobal("fetch", fetchMock)

@@ -10,7 +10,6 @@ import { createBedrockSdkTerminal } from './sdk-terminal.ts'
 
 export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRuntimeFace): ModelClient {
   const terminal = createBedrockSdkTerminal(config, runtime), runtimeRegion = terminal.region
-  const nativeEndpoint = runtime === undefined && config.runtimeOptions?.endpoint === undefined
   return preparedModelClient(async originalRequest => {
     assertNativeProducerWitnesses(originalRequest.messages, 'bedrock')
     const request = snapshotModelData(originalRequest)
@@ -22,7 +21,9 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
     // M14 negative capability: text-only routes never see image bytes.
     const vision = capturedConfig.inputModalities?.includes("image") ?? false
     const messages = await projectImagesForProvider(request.messages, vision, request.signal)
-    const mapped = buildConverseBody(capturedConfig, request, messages, runtime === undefined)
+    const nativeEndpoint = await terminal.usesNativeEndpoint()
+    request.signal?.throwIfAborted()
+    const mapped = buildConverseBody(capturedConfig, request, messages, nativeEndpoint)
     if (mapped.error !== undefined) {
       throw invalidPreparedRequest(mapped.error.message)
     }
@@ -31,7 +32,7 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
     return terminal.prepare({
       textOutput: observeTextOutput,
       body: body, request, kind: "sdk-command-estimate", describe: body => describeContext(body, capturedConfig),
-      validate: bedrockValidator(capturedConfig, runtime === undefined, messages, nativeEndpoint),
+      validate: bedrockValidator(capturedConfig, nativeEndpoint, messages),
       output: (body, request) => outputFacts(body, request, nativeEndpoint),
       cap: (body, cap) => capBody(body, cap, request, capturedConfig),
     }, capturedConfig)

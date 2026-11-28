@@ -55,9 +55,12 @@ describe.each([false, true])("Responses complete tool arguments (subscription: %
       { type: "response.function_call_arguments.done", item_id: "fc_2", arguments: '{"path":"second.md"}' },
       { type: "response.function_call_arguments.done", item_id: "fc_1", arguments: '{"path":"first.md"}' }, completed,
     ])
-    expect(result).toEqual([
+    expect(result.slice(0, -1)).toEqual([
       { type: "tool_call", call: { id: "call_2", name: "read", args: { path: "second.md" } } },
-      { type: "tool_call", call: { id: "call_1", name: "read", args: { path: "first.md" } } }, { type: "end" },
+      { type: "tool_call", call: { id: "call_1", name: "read", args: { path: "first.md" } } },
     ])
+    expect(result.at(-1)).toMatchObject({ type: "end", providerContinuation: { outputOrder: [
+      { kind: "tool", index: 1, id: "call_1" }, { kind: "tool", index: 0, id: "call_2" },
+    ] } })
   })
 })

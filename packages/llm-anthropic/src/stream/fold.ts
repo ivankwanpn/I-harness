@@ -1,4 +1,4 @@
-import { stringifyJsonData, type LLMStreamEvent, type ProviderThinkingBlock, type ProviderBlockOrderEntry, type ProviderContinuation } from "@i-harness/llm-seam"
+import { bindVisibleToolIds, hasReorderedTools, stringifyJsonData, type LLMStreamEvent, type ProviderThinkingBlock, type ProviderBlockOrderEntry, type ProviderContinuation } from "@i-harness/llm-seam"
 import type { AnthropicConfig } from "../types.ts"
 import { mapUsage } from "./usage.ts"
 
@@ -8,10 +8,10 @@ export function createAnthropicFold(config: Pick<AnthropicConfig, "model" | "pro
   let refused = false
   const thinkingBlocks: ProviderThinkingBlock[] = []
   const blockOrder = new Map<number, ProviderBlockOrderEntry>()
-  let toolOrdinal = 0
+  let startedTools = 0
   const toolBindings: { id?: string; name: string; inputJson: string }[] = []
   const pendingThinking = new Map<number, { thinking: string; signature: string }>()
-  const pendingToolUses = new Map<number, { id?: string; name: string; argsBuffer: string; ordinal: number }>()
+  const pendingToolUses = new Map<number, { id?: string; name: string; argsBuffer: string }>()
   // A-01: the Messages wire terminates with message_stop. Its absence means the
   // connection dropped mid-turn; previously EOF was reported as a clean end.
   let receivedStop = false
@@ -38,8 +38,7 @@ export function createAnthropicFold(config: Pick<AnthropicConfig, "model" | "pro
     if (t === "content_block_start") {
       const block = event.content_block as { type: string; id?: string; name?: string; input?: unknown; text?: string; thinking?: string; signature?: string; data?: string }
       if (block?.type === "tool_use") {
-        const ordinal = toolOrdinal++
-        blockOrder.set(index, { kind: "tool", index: ordinal })
+        startedTools++
         const input = block.input as Record<string, unknown> | undefined
         // Some streams send the full input inline on the start event; if
         // present (and non-empty) seed the args buffer with it.
@@ -48,7 +47,6 @@ export function createAnthropicFold(config: Pick<AnthropicConfig, "model" | "pro
           ...(block.id ? { id: block.id } : {}),
           name: block.name ?? "",
           argsBuffer: hasInlineInput ? stringifyJsonData(input)! : "",
-          ordinal,
         })
       } else if (block?.type === "thinking") {
         pendingThinking.set(index, { thinking: block.thinking ?? "", signature: block.signature ?? "" })
@@ -97,14 +95,10 @@ export function createAnthropicFold(config: Pick<AnthropicConfig, "model" | "pro
       const pending = pendingToolUses.get(index)
       if (pending) {
         pendingToolUses.delete(index)
-        if (pending.argsBuffer.trim() === "") {
-          // Empty inline input ({}) with no deltas → no-arg tool call.
-          toolBindings[pending.ordinal] = { ...(pending.id ? { id: pending.id } : {}), name: pending.name, inputJson: "{}" }
-          return [{ type: "tool_call", call: { ...(pending.id ? { id: pending.id } : {}), name: pending.name, args: {} } }]
-        }
         try {
-          const args = JSON.parse(pending.argsBuffer) as unknown
-          toolBindings[pending.ordinal] = { ...(pending.id ? { id: pending.id } : {}), name: pending.name, inputJson: stringifyJsonData(args)! }
+          const args = JSON.parse(pending.argsBuffer.trim() === "" ? "{}" : pending.argsBuffer) as unknown
+          blockOrder.set(index, { kind: "tool", index: toolBindings.length })
+          toolBindings.push({ ...(pending.id ? { id: pending.id } : {}), name: pending.name, inputJson: stringifyJsonData(args)! })
           return [{ type: "tool_call", call: { ...(pending.id ? { id: pending.id } : {}), name: pending.name, args } }]
         } catch {
           return [{ type: "error", error: new Error("anthropic malformed tool_use input") }]
@@ -126,7 +120,7 @@ export function createAnthropicFold(config: Pick<AnthropicConfig, "model" | "pro
     if (!receivedStop) return { type: "error", error: new Error("Anthropic stream ended without message_stop") }
     // M77: each bit is written on its own (a response can be both), and both
     // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
-    const contentOrder = [...blockOrder.entries()].sort(([left], [right]) => left - right).map(([, entry]) => entry)
+    const contentOrder = bindVisibleToolIds([...blockOrder.entries()].sort(([left], [right]) => left - right).map(([, entry]) => entry), toolBindings)
     const rank = { reasoning: 0, text: 1, tool: 2 } as const
     let previousRank = -1
     const interleaved = contentOrder.some((entry) => {
@@ -134,9 +128,9 @@ export function createAnthropicFold(config: Pick<AnthropicConfig, "model" | "pro
       const outOfOrder = current < previousRank
       previousRank = Math.max(previousRank, current)
       return outOfOrder
-    })
+    }) || hasReorderedTools(contentOrder)
     const ids = new Set<string>()
-    const bindingsComplete = toolBindings.length === toolOrdinal && [...toolBindings].every(binding => {
+    const bindingsComplete = toolBindings.length === startedTools && toolBindings.every(binding => {
       if (!binding || !binding.id || ids.has(binding.id) || !/^[a-zA-Z0-9_-]{1,64}$/.test(binding.name)) return false
       ids.add(binding.id)
       const input: unknown = JSON.parse(binding.inputJson)

@@ -63,8 +63,8 @@ export function createGeminiFold(request: LLMRequest, config: GeminiConfig) {
   // may be partial — the docs' canonical accumulation is to store the
   // name and accumulate the args pieces). Emitted just before `end`.
   // Delimiters: a chunk carrying a name ALWAYS starts a new pending call
-  // (two parallel calls of the same function are distinct calls); args-only
-  // chunks continue the LAST pending call.
+  // (two parallel calls of the same function are distinct calls). Unaddressed
+  // args fragments continue the last call; an explicit ID identifies a call.
   interface PendingCall {
     id?: string
     name: string
@@ -96,7 +96,9 @@ export function createGeminiFold(request: LLMRequest, config: GeminiConfig) {
       pendingCalls.push(call)
       if (fc.args !== undefined) accumulateArgs(call, fc.args)
     } else if (fc.args !== undefined) {
-      const call = pendingCalls[pendingCalls.length - 1]
+      const last = pendingCalls.at(-1)
+      const call = fc.id ? pendingCalls.find(pending => pending.id === fc.id) ?? (last?.id ? undefined : last) : last
+      if (fc.id && !call) throw new Error("Gemini argument fragment does not identify a pending function call")
       if (call !== undefined) { accumulateArgs(call, fc.args); if (fc.id) call.id = fc.id; if (signature) call.signature = signature }
     }
   }

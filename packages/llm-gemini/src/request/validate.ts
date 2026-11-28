@@ -3,7 +3,7 @@ import { validationCollector, type FinalValidator } from '@i-harness/llm-seam'
 import type { GeminiConfig } from '../types.ts'
 import { field, record, protocolKeys, enumValue } from './protojson.ts'
 import { validateGeminiGeneration } from './validate-generation.ts'
-import { geminiCapabilities } from './capabilities.ts'
+import { geminiCapabilities, officialGeminiGeneration } from './capabilities.ts'
 import { validateGeminiContents } from './validate-content.ts'
 import { validateGeminiNative } from './validate-native.ts'
 import type { LLMMessage } from '@i-harness/llm-seam'
@@ -29,7 +29,8 @@ export function geminiValidator(config: GeminiConfig, mapped: readonly unknown[]
       if (field(body, 'continuationToken') !== undefined) { check.gap('native-contract-unavailable'); check.issue('unsupported-parameter', 'native', 'unsupported-parameter') }
       const cap = geminiCapabilities(config)
       if (!cap) check.gap('protocol-contract-unavailable')
-      validateGeminiContents(field(body, 'contents'), check, cap?.signature === true)
+      const generation = officialGeminiGeneration(config)
+      validateGeminiContents(field(body, 'contents'), check, cap?.signature === true, generation === undefined ? undefined : generation >= 3)
       const system = field(body, 'systemInstruction')
       if (system !== undefined && (!record(system) || !Array.isArray(system.parts) || system.parts.some(part => !record(part) || typeof field(part, 'text') !== 'string'))) check.issue('shape', 'input')
       validateGeminiGeneration(field(body, 'generationConfig'), cap, check)

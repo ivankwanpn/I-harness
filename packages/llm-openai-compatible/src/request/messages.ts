@@ -1,4 +1,4 @@
-import { textProtocolToolResult, canReplayContinuation, deepSeekCallFingerprint, isOfficialDeepSeekApi, replayBlockOrder, type LLMContentPart, type LLMMessage } from "@i-harness/llm-seam"
+import { textProtocolToolResult, toolResultImageLabel, canReplayContinuation, deepSeekCallFingerprint, isOfficialDeepSeekApi, replayBlockOrder, type LLMContentPart, type LLMMessage } from "@i-harness/llm-seam"
 import { projectionFingerprint } from "@i-harness/token-meter"
 import type { OpenAICompatibleConfig } from "../types.ts"
 
@@ -23,7 +23,7 @@ function chatReasoning(message: Extract<LLMMessage, { role: "assistant" }>, targ
       || !item.content.every(part => part?.type === "reasoning_text" && typeof part.text === "string")) return
     texts.push(item.content.map(part => part.text).join(""))
   }
-  return replayBlockOrder(native.outputOrder, message.content, texts, calls.map(() => ""), () => "")?.join("")
+  return replayBlockOrder(native.outputOrder, message.content, texts, calls.map(() => ""), () => "", calls)?.join("")
 }
 
 // Shape LLM content parts into the Chat Completions `content` array. String
@@ -66,8 +66,12 @@ export function toWireMessages(messages: LLMMessage[], target: Target): Record<s
     if (message.role === 'assistant') for (const call of message.toolCalls ?? []) pending.add(call.id)
     if (message.role === 'tool' && Array.isArray(message.content)) {
       const images = message.content.filter(part => part.type === 'image')
-      result.push(toWireMessage({ ...message, content: message.content.filter(part => part.type === 'text') }, target))
-      if (images.length) companions.push({ role: 'user', content: toContent(images) })
+      const text = message.content.filter(part => part.type === 'text')
+      const content = text.length ? text : images.length ? "See attached tool images." : ""
+      result.push(toWireMessage({ ...message, content }, target))
+      if (images.length) companions.push({ role: 'user', content: toContent([
+        { type: 'text', text: toolResultImageLabel(message.toolCallId) }, ...images,
+      ]) })
     } else result.push(toWireMessage(message, target))
     if (message.role === 'tool') pending.delete(message.toolCallId)
     if (!pending.size) flushImages()

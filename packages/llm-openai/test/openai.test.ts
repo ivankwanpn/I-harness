@@ -486,7 +486,8 @@ describe("M14 openai responses wire", () => {
     expect(body.input[1]).toEqual({ role: "user", content: "plain" })
   })
 
-  it("collapses a vision tool message with image parts into function_call_output + following user item", async () => {
+  it("keeps mixed tool result parts within their original Responses call", async () => {
+    const gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify({ id: "r", type: "response.completed", response: { output: [] } }), { status: 200 }))
     vi.stubGlobal("fetch", fetchMock)
     const client = createOpenAIClient({ apiKey: "k", model: "m", inputModalities: ["text", "image"] })
@@ -496,19 +497,30 @@ describe("M14 openai responses wire", () => {
       model: "m",
       messages: [
         { role: "user", content: "hi" },
-        { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "read", args: {} }] },
-        { role: "tool", toolCallId: "call_1", content: [{ type: "text", text: "saw this:" }, { type: "image", image: { mediaType: "image/png", dataBase64: PNG } }] },
+        { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "read", args: {} }, { id: "call_2", name: "read", args: {} }] },
+        { role: "tool", toolCallId: "call_1", content: [{ type: "image", image: { mediaType: "image/png", dataBase64: PNG } }, {type: "text", text: "caption after image"}] },
+        { role: "tool", toolCallId: "call_2", isError: true, content: [{ type: "text", text: "decode failed" }, {type:"image",image:{mediaType:"image/gif",dataBase64:gif}}] },
+        { role: "user", content: "continue" },
       ],
     })) {
       /* drain */
     }
     const [, init] = fetchMock.mock.calls[0]!
-    const body = JSON.parse(init.body as string) as { input: { type?: string; role?: string; output?: string; content?: unknown }[] }
+    const body = JSON.parse(init.body as string)
     expect(body.input).toEqual([
       { role: "user", content: "hi" },
       { type: "function_call", call_id: "call_1", name: "read", arguments: "{}" },
-      { type: "function_call_output", call_id: "call_1", output: "saw this:" },
-      { role: "user", content: [{ type: "input_image", image_url: `data:image/png;base64,${PNG}` }] },
+      { type: "function_call", call_id: "call_2", name: "read", arguments: "{}" },
+      { type: "function_call_output", call_id: "call_1", output: [
+        { type: "input_image", image_url: `data:image/png;base64,${PNG}` },
+        { type: "input_text", text: "caption after image" },
+      ] },
+      { type: "function_call_output", call_id: "call_2", output: [
+        { type: "input_text", text: "Tool returned an error.\n" },
+        { type: "input_text", text: "decode failed" },
+        { type: "input_image", image_url: `data:image/gif;base64,${gif}` },
+      ] },
+      { role: "user", content: "continue" },
     ])
   })
 })

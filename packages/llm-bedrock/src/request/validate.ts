@@ -7,7 +7,7 @@ import { validateConverseMessages } from './validate-content.ts'
 import { validateConverseNative } from './validate-native.ts'
 import type { LLMMessage } from '@i-harness/llm-seam'
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
-export function bedrockValidator(config: BedrockConfig, official: boolean, source: readonly LLMMessage[] = [], nativeEndpoint = official): FinalValidator<ConverseStreamCommandInput> {
+export function bedrockValidator(config: BedrockConfig, official: boolean, source: readonly LLMMessage[] = []): FinalValidator<ConverseStreamCommandInput> {
   return input => {
     const body = input as unknown as Record<string, unknown>, check = validationCollector('bedrock')
     if (!record(body)) { check.issue('shape', 'request'); return check.finish() }
@@ -19,7 +19,7 @@ export function bedrockValidator(config: BedrockConfig, official: boolean, sourc
     validateConverseMessages(body.messages, check, capabilities.status)
     if (body.system !== undefined && (!Array.isArray(body.system) || body.system.some(block => !record(block) || typeof block.text !== 'string'))) check.issue('shape', 'input')
     const inference = body.inferenceConfig
-    const thinking = bedrockThinkingBudget(input, nativeEndpoint)
+    const thinking = bedrockThinkingBudget(input, official)
     if (thinking && (thinking.kind === 'invalid' || input.inferenceConfig?.maxTokens !== undefined && input.inferenceConfig.maxTokens < thinking.minimumCap)) {
       check.issue('output-range', 'generation', 'output-limit')
     }

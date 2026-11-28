@@ -42,7 +42,7 @@ export function validateAnthropicNative(body: Record<string, unknown>, config: A
     }
     if (continuation && !canReplayContinuation(continuation, config)) { check.issue('native-replay', 'native', 'native-replay'); incompatible = true; continue }
     const tools = (original.toolCalls ?? []).map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.args }))
-    const ordered = replayBlockOrder<unknown>(continuation?.contentOrder, original.content, original.thinkingBlocks, tools, text => ({ type: 'text', text }))
+    const ordered = replayBlockOrder<unknown>(continuation?.contentOrder, original.content, original.thinkingBlocks, tools, text => ({ type: 'text', text }), original.toolCalls)
     const expected = ordered ?? [...original.thinkingBlocks, ...(original.content.trim() ? [{ type: 'text', text: original.content }] : []), ...tools]
     if (encodeSdkCommandData(wire.content) !== encodeSdkCommandData(expected)) { check.issue('native-replay', 'native', 'native-replay'); incompatible = true; continue }
     const witness = continuation?.producerWitness

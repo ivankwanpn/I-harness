@@ -123,7 +123,7 @@ export function chatValidator(config: Pick<OpenAICompatibleConfig, 'model' | 'ma
       if (message.content === null || message.content === undefined) {
         if (message.role !== 'assistant' && !(message.role === 'function' && message.content === null)) check.issue('shape', 'messages')
       } else if (typeof message.content !== 'string') {
-        if (!Array.isArray(message.content)) check.issue('shape', 'messages')
+        if (!Array.isArray(message.content) || (message.role === 'tool' && !message.content.length)) check.issue('shape', 'messages')
         else for (const part of message.content) {
           if (!record(part) || !text(part.type)) { check.issue('shape', 'messages'); continue }
           extensions(part, ['type', 'text', 'image_url', 'refusal'])

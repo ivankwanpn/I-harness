@@ -22,6 +22,21 @@ Chat Completions 的助手訊息以 `content` 和 `tool_calls` 兩個欄位呈�
 
 另一組測試從真正的 Responses 串流取得沒有推理或 `phase` 的交錯區塊，逐一檢查同一會話及重讀 JSONL 後四種目標的請求。修改助手正文後，只送出新的文字及參數。[區塊順序回歸](../../packages/provider/test/interleaved-replay.test.ts)
 
+### 多個工具與圖片
+
+同一回覆可能先列出讀檔 A、B，卻依 B、A 完成。執行器仍按實際完成順序取得呼叫。記錄提供者的區塊位置時，IH 同時保存已確認的呼叫 ID。重播時用 ID 和位置比對現有工具，才可重建與完成順序不同的排列。舊紀錄只有位置且無法確認身分時，跨協議回放沿用可確認的工具順序。[反序完成與簽章回歸](../../packages/provider/test/reversed-tool-completion.test.ts)
+
+工具回傳的圖片屬於該筆工具結果。舊分支如果另外儲存了圖片所在訊息與區塊的位置，讀取時依這些位置還原。一般使用者圖片始終保有自己的訊息身分。測試使用同一份存檔，依序發出兩個同名呼叫，反序回傳各自的圖片及成功／失敗狀態，最後再附一張獨立的使用者圖片。
+
+| 目標 | 如何保留圖與結果的關係 |
+| --- | --- |
+| Responses、Anthropic Messages | 圖片直接隨對應呼叫的工具結果送出。 |
+| Chat Completions | 先送完整批工具文字結果，再將各呼叫的圖片與其 ID 排在一起。真正的下一則使用者訊息另外傳送。 |
+| Gemini | 支援多模態函式結果的官方 Gemini 3 及後續模型使用 `functionResponse.parts`。舊模型及未確認的相容端點使用附有呼叫 ID 的圖片訊息。Gemini 2.x 的結果依該請求實際送出的呼叫位置排列。 |
+| Bedrock | 已核實的官方 Claude 或 Nova 視覺模型使用 `toolResult` 內的圖片與錯誤狀態。相容端點依實際 SDK 路由選擇替代表示，各圖片組標上原呼叫 ID。 |
+
+同份 JSONL 在上述五種協議、11 條路徑都通過檢查。各路徑的三張工具圖片與一張使用者圖片都只傳一次。這些 HTTP 測試用本機服務接收；AWS 案例使用真正的 SDK 簽署和序列化流程。[Google 函式結果多媒體規格](https://ai.google.dev/gemini-api/docs/function-calling#multimodal) · [AWS 工具結果格式](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolResultContentBlock.html) · [AWS 端點選擇](https://docs.aws.amazon.com/sdkref/latest/guide/feature-ss-endpoints.html)
+
 ## 在已開啟的會話切換協議
 
 公開 Gateway 測試保留一個會話 ID，透過 `session/model/set` 把 Responses 換成 Chat，之後重開再繼續。舊版在設定回報成功後遇到 `Managed facts require reconciliation`，第三筆模型請求無法送出。當時寫回相同的模型選擇，也會使執行中的 JSONL 寫入者失效。

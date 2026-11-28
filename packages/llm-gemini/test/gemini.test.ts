@@ -444,6 +444,26 @@ describe("llm-gemini protocol", () => {
     await iterator.return?.()
   })
 
+  it.each(["call-a", "unknown-id"])("matches an explicitly addressed args fragment to its pending call: %s", async fragmentId => {
+    const parts = [
+      { functionCall: { id: "call-a", name: "read", args: {} } },
+      { functionCall: { id: "call-b", name: "read", args: { path: "b" } } },
+      { functionCall: { id: fragmentId, args: { path: "a" } }, thoughtSignature: "signature-a" },
+    ]
+    vi.stubGlobal("fetch", async () => sseResponse(parts.map(part => ({ candidates: [{ content: { parts: [part] } }] }))))
+    const events: LLMStreamEvent[] = []
+    for await (const event of createGeminiClient({ model: "m", apiKey: "fixture" }).stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
+    if (fragmentId === "unknown-id") {
+      expect(events).toEqual([{ type: "error", error: expect.any(Error) }])
+    } else {
+      expect(events).toMatchObject([
+        { type: "tool_call", call: { id: "call-a", name: "read", args: { path: "a" } } },
+        { type: "tool_call", call: { id: "call-b", name: "read", args: { path: "b" } } },
+        { type: "end", providerContinuation: { callSignatures: ["signature-a", null] } },
+      ])
+    }
+  })
+
   it("keeps args-only chunks on the last pending call across several named calls", async () => {
     const fetchMock = vi.fn(async () => sseResponse([
       { candidates: [{ content: { parts: [{ functionCall: { name: "alpha", args: { x: 1 } } }] } }] },

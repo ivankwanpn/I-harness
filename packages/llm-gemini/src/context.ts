@@ -12,6 +12,14 @@ export function describeContext(body: Record<string, unknown>, config: GeminiCon
     if (typeof field(value, 'mimeType') === 'string' && (field(value, 'mimeType') as string).startsWith('image/')) counter.image(value.data)
     else { counter.structured('otherInput', value); counter.uncertainties.add('inline-media-unpriced') }
   }
+  const remoteMedia = (value: Record<string, unknown>) => {
+    counter.uncertainties.add("server-referenced-context-unavailable")
+    const mimeType = field(value, 'mimeType')
+    if (typeof mimeType === 'string' && mimeType.startsWith('image/')) {
+      counter.image(undefined)
+      counter.uncertainties.add("external-image-token-cost")
+    }
+  }
   if (Array.isArray(contents))
     for (const item of contents)
       counter.unit(item, item.role === "model" ? "assistant" : Array.isArray(item.parts) && item.parts.every((part: Record<string, unknown>) => field(part, 'functionResponse') !== undefined) ? "tool" : "user", () => {
@@ -24,17 +32,19 @@ export function describeContext(body: Record<string, unknown>, config: GeminiCon
           const inline = field(part, 'inlineData'), file = field(part, 'fileData'), call = field(part, 'functionCall'), result = field(part, 'functionResponse')
           if (record(inline))
             inlineMedia(inline)
-          else if (file) {
-            counter.image(undefined)
-            counter.uncertainties.add("external-image-token-cost")
-          }
+          else if (record(file))
+            remoteMedia(file)
           else if (call)
             counter.structured("toolArguments", call)
           else if (record(result)) {
             const { parts: _media, ...response } = result
             counter.structured("toolResults", response)
             const media = field(result, 'parts')
-            if (Array.isArray(media)) for (const part of media) { const inline = field(part, 'inlineData'); if (record(inline)) inlineMedia(inline) }
+            if (Array.isArray(media)) for (const part of media) {
+              const inline = field(part, 'inlineData'), file = field(part, 'fileData')
+              if (record(inline)) inlineMedia(inline)
+              else if (record(file)) remoteMedia(file)
+            }
           }
           else if (part.text !== undefined)
             counter.text(part.thought ? "replayedReasoning" : "visibleText", part.text)
@@ -56,7 +66,7 @@ export function describeContext(body: Record<string, unknown>, config: GeminiCon
   const overrides: ("model" | "system" | "messages" | "tools")[] = []
   for (const [wire, alias, neutral] of [["model", 'model', "model"], ["systemInstruction", 'system_instruction', "system"], ["contents", 'contents', "messages"], ["tools", 'tools', "tools"]] as const)
     if (Object.hasOwn(config.options ?? {}, wire) || Object.hasOwn(config.options ?? {}, alias)) overrides.push(neutral)
-  const input = counter.finish({ protocol: "gemini", providerId: config.providerId, modelId: config.model, expectedModelId: config.model }, { system, tools, contents, cachedContent: cached, other }, { system, tools, other }, overrides, referenced || counter.uncertainties.has("external-image-token-cost") || counter.uncertainties.has('inline-media-unpriced') ? "incomplete" : "complete")
+  const input = counter.finish({ protocol: "gemini", providerId: config.providerId, modelId: config.model, expectedModelId: config.model }, { system, tools, contents, cachedContent: cached, other }, { system, tools, other }, overrides, referenced || counter.uncertainties.has("server-referenced-context-unavailable") || counter.uncertainties.has('inline-media-unpriced') ? "incomplete" : "complete")
   return { input, packet: { sizeKind: "http-json-body" as const, inlineBinaryBytes: counter.inlineBinaryBytes, cacheMetadataBytes: counter.cacheMetadataBytes, signatureBytes: counter.signatureBytes } }
 }
 export function outputFacts(body: Record<string, unknown>, request: LLMRequest, config: GeminiConfig) {

@@ -11,8 +11,24 @@ import { iterateConverseStream } from './stream/iterate.ts'
  * handler. A legacy injected send-only runtime remains standalone-only. */
 export function createBedrockSdkTerminal(config: BedrockConfig, runtime?: BedrockRuntimeFace) {
   const region = runtime === undefined ? resolveBedrockRegion(config.region, process.env) : undefined
-  const client = runtime ?? new BedrockRuntimeClient({ ...config.runtimeOptions, region, maxAttempts: 1, extensions: [generationHandlerExtension()], ...(config.profile !== undefined ? { profile: config.profile } : {}) })
+  const options = runtime === undefined ? { ...config.runtimeOptions, region, maxAttempts: 1, extensions: [generationHandlerExtension()], ...(config.profile !== undefined ? { profile: config.profile } : {}) } : undefined
+  const sdk = options && new BedrockRuntimeClient(options)
+  const client = sdk ?? runtime!
   return { region,
+    async usesNativeEndpoint(): Promise<boolean> {
+      const settings = sdk?.config
+      if (!settings || settings.isCustomEndpoint || options && "endpointProvider" in options && options.endpointProvider != null) return false
+      if (settings.ignoreConfiguredEndpointUrls) return true
+      if (!settings.serviceConfiguredEndpoint) return false
+      try {
+        // The SDK's endpoint middleware awaits this same memoized provider.
+        // It resolves global/service overrides and the selected shared profile.
+        return !await settings.serviceConfiguredEndpoint()
+      } catch {
+        // An invalid configuration remains the SDK's original send error.
+        return false
+      }
+    },
     prepare(options: Omit<BedrockTerminalPayloadOptions<ConverseStreamCommandInput>, 'execute'>, capturedConfig: BedrockConfig) {
       const payload = { ...options, async *execute(actualBody: ConverseStreamCommandInput, _serialized: string, control: import('@i-harness/llm-seam').PreparedStreamControl, execution: import('@i-harness/llm-seam').PreparedExecutionContext): AsyncIterable<LLMStreamEvent> {
         const request = { ...options.request, ...control }

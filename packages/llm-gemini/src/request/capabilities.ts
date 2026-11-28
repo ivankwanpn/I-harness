@@ -7,11 +7,17 @@ const rows: Record<string, { signature: boolean; minimal?: boolean; exclusiveBud
   'gemini-4-argon': { signature: true, minimal: false, exclusiveBudgetLevel: true },
   'gemini-2.5-flash': { signature: false },
 }
-export function geminiCapabilities(config: Pick<GeminiConfig, 'baseUrl' | 'model'>) {
+function officialModel(config: Pick<GeminiConfig, 'baseUrl' | 'model'>): string | undefined {
   try {
-    const url = new URL(geminiModelsURL(config.baseUrl))
-    if (url.href !== geminiModelsURL()) return
-    const model = geminiModelId(config.model)
-    return Object.hasOwn(rows, model) ? rows[model] : undefined
-  } catch { return }
+    if (new URL(geminiModelsURL(config.baseUrl)).href === geminiModelsURL()) return geminiModelId(config.model)
+  } catch { /* A custom route cannot establish Google's model capabilities. */ }
+}
+export function officialGeminiGeneration(config: Pick<GeminiConfig, 'baseUrl' | 'model'>): number | undefined {
+  const generation = /^gemini-(\d+)(?:[.-]|$)/.exec(officialModel(config) ?? '')
+  return generation ? Number(generation[1]) : undefined
+}
+export const supportsFunctionResponseImage = (mime: unknown): boolean => mime === 'image/png' || mime === 'image/jpeg' || mime === 'image/webp'
+export function geminiCapabilities(config: Pick<GeminiConfig, 'baseUrl' | 'model'>) {
+  const model = officialModel(config)
+  return model && Object.hasOwn(rows, model) ? rows[model] : undefined
 }

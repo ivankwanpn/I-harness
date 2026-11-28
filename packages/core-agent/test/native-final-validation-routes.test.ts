@@ -35,7 +35,7 @@ it.each(['anthropic', 'gemini', 'bedrock'] as const)('%s actual main/summary rej
   expect(sends).toBe(0); expect(effects).toBe(0); expect(compacts).toBe(0)
   expect(session.events.find(event => event.type === 'user/message')).toMatchObject({ text: 'original human' })
 })
-it.each(['anthropic', 'gemini', 'bedrock'] as const)('%s consumes one existing main-projected image companion after complete sibling outcomes', async route => {
+it.each(['anthropic', 'gemini', 'bedrock'] as const)('%s includes the tool-owned image once when preparing a complete sibling group', async route => {
   const image = { mediaType: 'image/png' as const, dataBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==' }
   const session = createSession()
   for (const event of [{ type: 'step/start' }, { type: 'tool/call', callId: 'a', name: 'read', args: {} }, { type: 'tool/call', callId: 'b', name: 'read', args: {} }, { type: 'tool/result', callId: 'a', name: 'read', output: { text: 'A', images: [image] } }, { type: 'tool/result', callId: 'b', name: 'read', output: 'B' }, { type: 'assistant/message', text: 'narration' }, { type: 'step/end' }, { type: 'user/message', text: 'continue' }] as const) append(session, event)

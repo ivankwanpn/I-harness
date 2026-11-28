@@ -1,12 +1,13 @@
 import { validationCollector } from '@i-harness/llm-seam'
 import { field, record, protocolKeys } from './protojson.ts'
+import { supportsFunctionResponseImage } from './capabilities.ts'
 type Checks = ReturnType<typeof validationCollector>
 const name = (v: unknown): v is string => typeof v === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(v)
 const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0
 function extras(v: Record<string, unknown>, names: readonly string[], check: Checks) { if (!protocolKeys(v, names)) check.gap('extension-unchecked') }
 const data = ['text', 'inlineData', 'fileData', 'functionCall', 'functionResponse', 'executableCode', 'codeExecutionResult', 'toolCall', 'toolResponse']
 /** Generic Content/Part grammar; thought/signature are metadata, not data arms. */
-export function validateGeminiContents(value: unknown, check: Checks, signatureRequired: boolean): void {
+export function validateGeminiContents(value: unknown, check: Checks, signatureRequired: boolean, nativeToolMedia?: boolean): void {
   if (!Array.isArray(value)) { check.issue('shape', 'messages'); return }
   if (!value.length) check.gap('protocol-contract-unavailable')
   const pending: { id?: string; name: string }[] = []
@@ -30,6 +31,7 @@ export function validateGeminiContents(value: unknown, check: Checks, signatureR
       else if (kind === 'inlineData' || kind === 'fileData') {
         if (!record(item) || (kind === 'inlineData' ? !text(field(item, 'mimeType')) : field(item, 'mimeType') !== undefined && typeof field(item, 'mimeType') !== 'string') || !text(field(item, kind === 'inlineData' ? 'data' : 'fileUri'))) check.issue('shape', 'media')
         if (kind === 'fileData') check.gap('remote-input-unavailable')
+        if (nativeToolMedia !== undefined && field(item, 'mimeType') === 'image/gif') check.issue('unsupported-parameter', 'media', 'unsupported-parameter')
       } else if (kind === 'functionCall' || kind === 'functionResponse') {
         const identifier = field(item, 'id')
         if (!record(item) || !name(item.name) || identifier !== undefined && !text(identifier)) { check.issue('shape', 'messages'); continue }
@@ -50,9 +52,15 @@ export function validateGeminiContents(value: unknown, check: Checks, signatureR
           if (media !== undefined) {
             if (!Array.isArray(media)) check.issue('shape', 'media')
             else for (const part of media) {
-              const inline = field(part, 'inlineData')
-              if (!record(part) || !record(inline) || !text(field(inline, 'mimeType')) || !text(inline.data)) check.issue('shape', 'media')
-              else { extras(part, ['inlineData'], check); extras(inline, ['mimeType', 'data', 'displayName'], check) }
+              const inline = field(part, 'inlineData'), file = field(part, 'fileData'), source = inline ?? file
+              if (!record(part) || (inline !== undefined && file !== undefined) || !record(source) || !text(field(source, 'mimeType')) || !text(field(source, inline === undefined ? 'fileUri' : 'data'))) {
+                check.issue('shape', 'media'); continue
+              }
+              const mime = field(source, 'mimeType')
+              if (nativeToolMedia === false || nativeToolMedia && typeof mime === 'string' && mime.startsWith('image/') && !supportsFunctionResponseImage(mime)) check.issue('unsupported-parameter', 'media', 'unsupported-parameter')
+              if (file !== undefined) check.gap('remote-input-unavailable')
+              extras(part, ['inlineData', 'fileData'], check)
+              extras(source, ['mimeType', inline === undefined ? 'fileUri' : 'data', 'displayName'], check)
             }
           }
           const continuing = field(item, 'willContinue'), scheduling = field(item, 'scheduling')

@@ -1,14 +1,18 @@
 import type { ConverseStreamCommandInput } from '@aws-sdk/client-bedrock-runtime'
 
-/** ToolResultBlock's documented Claude3/4 status support and literal ID examples
- * checked 2026-10-16. Profile aliases and injected transports are unknown. */
-const statusModels = new Set(['anthropic.claude-sonnet-4-5-20250929-v1:0', 'anthropic.claude-sonnet-4-6', 'anthropic.claude-opus-4-6-v1', 'anthropic.claude-opus-4-7', 'anthropic.claude-opus-4-8'])
+/** Documented vision models supporting both ToolResultBlock.status and tool images. */
+const toolImageModels = new Set([
+  'amazon.nova-lite-v1:0', 'amazon.nova-pro-v1:0', 'amazon.nova-premier-v1:0', 'amazon.nova-2-lite-v1:0',
+  'anthropic.claude-3-7-sonnet-20250219-v1:0', 'anthropic.claude-sonnet-4-5-20250929-v1:0', 'anthropic.claude-sonnet-4-6',
+  'anthropic.claude-opus-4-6-v1', 'anthropic.claude-opus-4-7', 'anthropic.claude-opus-4-8',
+])
 export function bedrockCapabilities(model: string, official: boolean) {
   // ToolResultBlock.status and ToolResultContentBlock.image have separate
   // documented restrictions to Nova/Claude3/4; these exact evidenced IDs
   // establish both facts. Generic user images remain declaration-controlled.
-  const supported = official && statusModels.has(model) ? true : undefined
-  return { status: supported, toolImage: supported, genericReasoningSignatureRequired: false as const }
+  const toolImage = official && toolImageModels.has(model) ? true : undefined
+  const status = toolImage || official && model === 'amazon.nova-micro-v1:0' ? true : undefined
+  return { status, toolImage, genericReasoningSignatureRequired: false as const }
 }
 // AWS Bedrock's extended-thinking model table specifies these exact foundation
 // model IDs. Inference-profile aliases and custom endpoints stay unqualified.

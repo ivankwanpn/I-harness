@@ -114,6 +114,11 @@ export function textProtocolToolResult(message: Extract<LLMMessage, { role: "too
   return typeof message.content === "string" ? status + message.content : [{ type: "text", text: status }, ...message.content]
 }
 
+/** Used when a protocol can carry the image only in a separate user message. */
+export function toolResultImageLabel(callId: string): string {
+  return `Images from tool call ${JSON.stringify(callId)}:`
+}
+
 /** Native replay metadata belongs to the route that produced it. Older logs
  * without provenance remain readable; new records reject a different model or
  * provider profile before protocol serialization. */
@@ -134,6 +139,7 @@ export function replayBlockOrder<T>(
   reasoning: readonly T[],
   tools: readonly T[],
   textBlock: (text: string, phase?: string | null, thoughtSignature?: string) => T,
+  calls?: readonly { id?: string }[],
 ): T[] | undefined {
   if (!order) return undefined
   const result: T[] = []
@@ -149,7 +155,8 @@ export function replayBlockOrder<T>(
       seenReasoning.add(entry.index)
       result.push(reasoning[entry.index]!)
     } else {
-      if (!Number.isSafeInteger(entry.index) || entry.index < 0 || seenTools.has(entry.index) || tools[entry.index] === undefined) return undefined
+      if (!Number.isSafeInteger(entry.index) || entry.index < 0 || seenTools.has(entry.index) || tools[entry.index] === undefined
+        || entry.id !== undefined && calls?.[entry.index]?.id !== entry.id) return undefined
       seenTools.add(entry.index)
       result.push(tools[entry.index]!)
     }
@@ -163,15 +170,39 @@ export function hasTextAfterTool(order: readonly import("@i-harness/core-session
   return firstTool >= 0 && order.some((entry, i) => i > firstTool && entry.kind === "text" && entry.text.length > 0)
 }
 
+export function hasReorderedTools(order: readonly import("@i-harness/core-session").ProviderBlockOrderEntry[]): boolean {
+  let next = 0
+  for (const entry of order) {
+    if (entry.kind !== "tool") continue
+    if (entry.index !== next) return true
+    next++
+  }
+  return false
+}
+
+/** The provider's block positions can differ from the order in which calls
+ * completed. Bind a permutation to its original, identifiable tool calls. */
+export function bindVisibleToolIds(order: import("@i-harness/core-session").ProviderBlockOrderEntry[], calls: readonly { id?: string }[]) {
+  if (!hasReorderedTools(order)) return order
+  const ids = calls.map(call => call.id)
+  const positions = order.flatMap(entry => entry.kind === "tool" ? [entry.index] : [])
+  if (ids.some(id => !id) || new Set(ids).size !== calls.length || positions.length !== calls.length
+    || new Set(positions).size !== calls.length || positions.some(index => !Number.isSafeInteger(index) || !ids[index])) return order
+  return order.map(entry => entry.kind === "tool" ? { ...entry, id: ids[entry.index] } : entry)
+}
+
 /** Preserve public text/tool ordering across block-based protocols. The
  * destination uses current tool arguments and receives no native metadata. */
 export function replayVisibleToolOrder<T>(message: Extract<LLMMessage, {role: "assistant"}>, tools: readonly T[], textBlock: (text: string) => T): T[] | undefined {
   const native = message.providerContinuation
   const order = native?.kind === "openai-responses" ? native.outputOrder : native?.kind === "gemini" ? native.partOrder
     : native?.kind === "anthropic" || native?.kind === "bedrock" ? native.contentOrder : undefined
-  if (!order || !hasTextAfterTool(order)) return undefined
+  if (!order) return undefined
+  const permuted = hasReorderedTools(order)
+  if (!permuted && !hasTextAfterTool(order)) return undefined
+  if (permuted && order.some(entry => entry.kind === "tool" && entry.id === undefined)) return undefined
   const visible = order.filter(entry => entry.kind === "tool" || entry.kind === "text" && entry.text !== "")
-  return replayBlockOrder(visible, message.content, [], tools, text => textBlock(text))
+  return replayBlockOrder(visible, message.content, [], tools, text => textBlock(text), message.toolCalls)
 }
 
 export { resolveRetryPolicy, backoffDelay } from './retry/policy.ts'

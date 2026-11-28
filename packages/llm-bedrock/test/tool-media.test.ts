@@ -4,7 +4,7 @@ import type { LLMRequest } from '@i-harness/llm-seam'
 const sdk = vi.hoisted(() => ({ commands: [] as any[] }))
 vi.mock('@aws-sdk/client-bedrock-runtime', async importOriginal => {
   const actual = await importOriginal<typeof import('@aws-sdk/client-bedrock-runtime')>()
-  return { ...actual, BedrockRuntimeClient: class { async send(command: any) { sdk.commands.push(command.input); return { $metadata: {} } } destroy() {} } }
+  return { ...actual, BedrockRuntimeClient: class { config = { isCustomEndpoint: false, serviceConfiguredEndpoint: async () => undefined }; async send(command: any) { sdk.commands.push(command.input); return { $metadata: {} } } destroy() {} } }
 })
 beforeEach(() => { sdk.commands.length = 0 })
 const image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
@@ -28,7 +28,7 @@ it.each([20, 21])('keeps the same message limit on unknown-capability user image
   else {
     const prepared = await client.prepare!(request)
     for await (const _ of prepared.stream()) {}
-    expect(sent.messages[2].content).toHaveLength(20)
+    expect(sent.messages[2].content.filter((block: {image?: unknown}) => block.image)).toHaveLength(20)
     expect(prepared.measurement.input.components.images.imageCount).toBe(20)
   }
   expect(sends).toBe(count === 20 ? 1 : 0)
@@ -47,7 +47,7 @@ it.each([false, true])('uses unknown-capability companions after complete same-n
   const prepared = await client.prepare!({ systemPrompt: '', tools: [], messages: [{ role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'read', args: {} }, { id: 'b', name: 'read', args: {} }] }, { role: 'tool', toolCallId: 'a', content: [{ type: 'image', image: { mediaType: 'image/png', dataBase64: image } }], ...(isError ? { isError: true } : {}) }, { role: 'tool', toolCallId: 'b', content: 'B' }, { role: 'user', content: 'human' }] })
   for await (const _ of prepared.stream()) {}
   expect(sent.messages[1].content).toEqual([{ toolResult: { toolUseId: 'a', content: [...(isError ? [{ json: { isError: true } }] : []), { text: '[Adapter representation: image content from this tool result is supplied in the following user image companion.]' }] } }, { toolResult: { toolUseId: 'b', content: [{ text: 'B' }] } }])
-  expect(sent.messages[2]).toEqual({ role: 'user', content: [{ image: { format: 'png', source: { bytes: Buffer.from(image, 'base64') } } }] })
+  expect(sent.messages[2]).toEqual({ role: 'user', content: [{ text: 'Images from tool call "a":' }, { image: { format: 'png', source: { bytes: Buffer.from(image, 'base64') } } }] })
   expect(sent.messages[3]).toEqual({ role: 'user', content: [{ text: 'human' }] })
   expect(prepared.measurement.input.components.images).toMatchObject({ imageCount: 1, binaryBytes: 70 })
 })

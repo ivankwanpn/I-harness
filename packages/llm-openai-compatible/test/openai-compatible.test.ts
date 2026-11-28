@@ -333,7 +333,7 @@ describe("M14 openai-compatible wire", () => {
       { role: "system", content: "s" },
       { role: "assistant", content: "planned", tool_calls: [{ id: "call_1", type: "function", function: { name: "read", arguments: '{"path":"a.txt"}' } }] },
       { role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: "tool says hi" }] },
-      { role: 'user', content: [{ type: "image_url", image_url: { url: `data:image/png;base64,${PNG}` } }] },
+      { role: 'user', content: [{type: 'text', text: 'Images from tool call "call_1":'}, { type: "image_url", image_url: { url: `data:image/png;base64,${PNG}` } }] },
     ])
   })
 

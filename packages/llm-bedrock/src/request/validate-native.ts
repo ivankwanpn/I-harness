@@ -39,11 +39,11 @@ export function validateConverseNative(body: ConverseStreamCommandInput, config:
       continue
     }
     const calls = original.toolCalls ?? []
-    const ordered = replayBlockOrder<unknown>(continuation.contentOrder, original.content, continuation.reasoningBlocks, calls, text => ({ text }))
+    const ordered = replayBlockOrder<unknown>(continuation.contentOrder, original.content, continuation.reasoningBlocks, calls, text => ({ text }), calls)
     if (signed && continuation.contentOrder && ordered === undefined) { check.issue('native-replay', 'native', 'native-replay'); incompatible = true; continue }
     const reasoning = continuation.reasoningBlocks.map(block => 'reasoningText' in block ? { reasoningContent: { reasoningText: block.reasoningText } } : { reasoningContent: { redactedContent: Buffer.from(block.redactedContentBase64, 'base64') } })
     const toolBlocks = calls.map(call => ({ toolUse: { toolUseId: call.id, name: call.name, input: call.args } }))
-    const replay = replayBlockOrder<unknown>(continuation.contentOrder, original.content, reasoning, toolBlocks, text => ({ text }))
+    const replay = replayBlockOrder<unknown>(continuation.contentOrder, original.content, reasoning, toolBlocks, text => ({ text }), calls)
       ?? [...reasoning, ...(original.content.trim() ? [{ text: original.content }] : []), ...toolBlocks]
     if (encodeSdkCommandData(wire.content) !== encodeSdkCommandData(replay)) { check.issue('native-replay', 'native', 'native-replay'); incompatible = true; continue }
     const witness = continuation.producerWitness

@@ -1,4 +1,4 @@
-import { canReplayContinuation, replayBlockOrder, replayVisibleToolOrder, type LLMContentPart, type LLMRequest } from "@i-harness/llm-seam"
+import { canReplayContinuation, replayBlockOrder, replayVisibleToolOrder, toolResultImageLabel, type LLMContentPart, type LLMRequest } from "@i-harness/llm-seam"
 import type { BedrockConfig } from "../types.ts"
 import { bedrockCapabilities } from './capabilities.ts'
 
@@ -55,7 +55,10 @@ export function toConverseMessages(config: BedrockConfig, messages: LLMRequest["
       const relocatedOnly = Array.isArray(m.content) && m.content.some(part => part.type === 'image') && Array.isArray(content) && content.length === 0
       const representation = relocatedOnly ? [{ text: '[Adapter representation: image content from this tool result is supplied in the following user image companion.]' }] : []
       toolResults.push({ toolResult: { toolUseId: m.toolCallId, content: [...annotation, ...representation, ...toolResultContent(content)], ...(m.isError === true && capability.status ? { status: "error" } : {}) } })
-      if (Array.isArray(m.content) && !capability.toolImage) toolImages.push(...toConverseContent(m.content.filter(part => part.type === 'image')))
+      if (Array.isArray(m.content) && !capability.toolImage) {
+        const images = m.content.filter(part => part.type === 'image')
+        if (images.length) toolImages.push({ text: toolResultImageLabel(m.toolCallId) }, ...toConverseContent(images))
+      }
       continue
     }
     flushImages()
@@ -66,7 +69,7 @@ export function toConverseMessages(config: BedrockConfig, messages: LLMRequest["
       const blocks = continuation
         ? continuation.reasoningBlocks.map((block) => "reasoningText" in block ? { reasoningContent: { reasoningText: block.reasoningText } } : { reasoningContent: { redactedContent: Buffer.from(block.redactedContentBase64, "base64") } }) : []
       const tools = (m.toolCalls ?? []).map((c) => ({ toolUse: { toolUseId: c.id, name: c.name, input: c.args as Record<string, unknown> } }))
-      const content: unknown[] = replayBlockOrder<unknown>(continuation?.contentOrder, m.content, blocks, tools, (text) => ({ text }))
+      const content: unknown[] = replayBlockOrder<unknown>(continuation?.contentOrder, m.content, blocks, tools, (text) => ({ text }), m.toolCalls)
         ?? (!continuation ? replayVisibleToolOrder<unknown>(m, tools, text => ({ text })) : undefined)
         ?? [...blocks, ...(m.content.trim() !== "" ? [{ text: m.content }] : []), ...tools]
       wireMessages.push({ role: "assistant", content })

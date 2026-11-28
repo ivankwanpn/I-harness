@@ -5,6 +5,7 @@ const calls = { role: 'assistant', content: 'narration', tool_calls: ['a', 'b'].
 const out = (id: string) => ({ role: 'tool', tool_call_id: id, content: 'result' })
 afterEach(() => vi.unstubAllGlobals())
 it.each([
+  { messages: [calls, { ...out('a'), content: [] }, out('b')] },
   { messages: [{ role: 'assistant', content: 'x', audio: 42 }] },
   { messages: [{ role: 'assistant', content: 'x', audio: {} }] },
   { messages: [{ role: 'assistant', content: 'x', audio: { id: 42 } }] },
@@ -104,17 +105,21 @@ it.each([
 })
 it('encodes direct tool images as user companions after the whole sibling group', async () => {
   const image = { mediaType: 'image/png' as const, dataBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==' }
+  const gif = { mediaType: 'image/gif' as const, dataBase64: 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7' }
   let body: any
   vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => { body = JSON.parse(String(init.body)); return new Response('') })
   const client = createOpenAICompatibleClient({ apiKey: '', model: 'm', inputModalities: ['text', 'image'] })
   const prepared = await client.prepare!({ ...request, messages: [
     { role: 'assistant', content: 'original narration', toolCalls: [{ id: 'a', name: 'old', args: {} }, { id: 'b', name: 'old', args: {} }] },
-    { role: 'tool', toolCallId: 'a', content: [{ type: 'text', text: 'real a' }, { type: 'image', image }] },
-    { role: 'tool', toolCallId: 'b', content: 'real b' }, { role: 'user', content: 'real human steer' },
+    { role: 'tool', toolCallId: 'a', content: [{ type: 'image', image }] },
+    { role: 'tool', toolCallId: 'b', isError: true, content: [{ type: 'text', text: 'real b' }, { type: 'image', image: gif }] },
+    { role: 'user', content: 'real human steer' },
   ] })
   for await (const _ of prepared.stream()) {}
-  expect(body.messages.map((m: any) => m.role)).toEqual(['assistant', 'tool', 'tool', 'user', 'user'])
-  expect(body.messages[1].content).toEqual([{ type: 'text', text: 'real a' }])
-  expect(body.messages[3].content).toEqual([{ type: 'image_url', image_url: { url: `data:image/png;base64,${image.dataBase64}` } }])
-  expect(body.messages[4].content).toBe('real human steer')
+  expect(body.messages.map((m: any) => m.role)).toEqual(['assistant', 'tool', 'tool', 'user', 'user', 'user'])
+  expect(body.messages[1]).toMatchObject({ tool_call_id: 'a', content: 'See attached tool images.' })
+  expect(body.messages[2]).toMatchObject({ tool_call_id: 'b', content: [{type:'text',text:'Tool returned an error.\n'}, {type:'text',text:'real b'}] })
+  expect(body.messages[3].content).toEqual([{ type:'text',text:'Images from tool call "a":' }, { type: 'image_url', image_url: { url: `data:image/png;base64,${image.dataBase64}` } }])
+  expect(body.messages[4].content).toEqual([{ type:'text',text:'Images from tool call "b":' }, { type: 'image_url', image_url: { url: `data:image/gif;base64,${gif.dataBase64}` } }])
+  expect(body.messages[5].content).toBe('real human steer')
 })
