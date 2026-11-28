@@ -46,7 +46,9 @@ export function createRequestBody(
   const cacheMode = resolvePromptCacheMode(config.promptCache, request.promptCache)
   const firstPartyResponses = codexSubscription || isOfficialOpenAIResponses(config.baseUrl)
   const instructions = firstPartyResponses && cacheMode !== "off" ? splitDeveloperInstructions(config.model, config.options, request) : undefined
-  const input = mapMessages(messages, config, codexSubscription)
+  let reasoningOwners: number[] | undefined
+  const ownedInput = (codexSubscription || !Object.hasOwn(config.options ?? {}, "input")) && typeof config.options?.toJSON !== "function"
+  const input = mapMessages(messages, config, codexSubscription, ownedInput ? ordinal => { (reasoningOwners ??= []).push(ordinal) } : undefined)
   if (instructions) input.unshift({ role: "developer", content: [{ type: "input_text", text: instructions.base }] })
   const body: Record<string, unknown> = {
     ...(codexSubscription ? config.options ?? {} : {}),
@@ -99,5 +101,5 @@ export function createRequestBody(
       tools: request.tools.map(t => ({ type: "function", name: t.name, description: t.description, parameters: t.inputSchema })),
     }] : []
   }
-  return { body, cacheMode, generatedAffinity }
+  return { body, cacheMode, generatedAffinity, ...(reasoningOwners && { reasoningOwners }) }
 }

@@ -14,6 +14,7 @@ export function createCompactionHarness(input: {
   summaryBudgetBinding?: import('@i-harness/llm-seam').ModelBudgetBinding
   telemetry?: Telemetry; signal?: AbortSignal; flush?: () => Promise<void>
   requestShape?: () => { systemPrompt: string; tools: ToolSchema[] }
+  summaryFactory?: typeof createSummaryPort
   provider?: string; modelId?: string
   facts?: () => import('../../../core-session/src/managed/ports.ts').LegacyCompactionFacts<ProducerFactOutcome>
   contextTokens?: () => number; overheadTokens?: () => number; summaryInputGuard?: (inherited: boolean) => () => void
@@ -23,7 +24,7 @@ export function createCompactionHarness(input: {
     const action: ManagedAction<ProducerFactOutcome> | undefined = owner?.beginAction(options?.signal ?? input.signal)
     const config = { ...input.config, summaryMetadata: input.config.summaryMetadata ?? input.summaryMetadata, summaryReasoningEffort: input.config.summaryReasoningEffort ?? input.summaryReasoningEffort }
     const context = createAgentContext({ session, model: input.model, tools: { schemas: () => input.requestShape?.().tools ?? [] } as never,
-      systemPrompt: () => input.requestShape?.().systemPrompt ?? '', compact: config, summaryFactory: createSummaryPort,
+      systemPrompt: () => input.requestShape?.().systemPrompt ?? '', compact: config, summaryFactory: input.summaryFactory ?? createSummaryPort,
       contextMetadata: input.contextMetadata, budgetBinding: input.budgetBinding, maxOutputTokens: input.maxOutputTokens, reasoningEffort: input.reasoningEffort,
       telemetry: input.telemetry, flush: input.flush, signal: options?.signal ?? input.signal,
       captureContextReduction: action?.captureContextReduction?.bind(action), assertFactOpen: action?.assertOpen,

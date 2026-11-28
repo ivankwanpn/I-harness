@@ -55,6 +55,8 @@ export interface SummarySelection {
 export type SummaryPort = (source: SummarySelection) => Promise<
   { kind: 'complete'; text: string; groupIds: readonly string[] } | { kind: 'blocked'; reason: ReductionBlockedReason } | { kind: 'failed'; reason: ReductionBlockedReason }>
 export interface ReductionAssessment {
+  /** Actual priced reasoning from the original request, by captured conversation item. */
+  readonly replayTokensByItem?: ReadonlyMap<string, number>
   readonly kind: 'assessed'
   readonly capacityFit: 'yes' | 'no' | 'unavailable'
   readonly target: 'ready' | 'over-target' | 'unavailable'

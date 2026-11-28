@@ -37,14 +37,14 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
     // M14 negative capability: text-only routes never see image bytes.
     const vision = capturedConfig.inputModalities?.includes("image") ?? false
     const messages = await projectImagesForProvider(request.messages, vision, request.signal)
-    const { body, cacheMode, generatedAffinity } = createRequestBody(capturedConfig, request, messages, codexSubscription,
+    const { body, cacheMode, generatedAffinity, reasoningOwners } = createRequestBody(capturedConfig, request, messages, codexSubscription,
       affinity && scopeIdentity ? () => affinity.cacheKey(scopeIdentity) : undefined)
     request.signal?.throwIfAborted()
     const capturedRequest = request
     return createPreparedHttpPayload({
       textOutput: observeTextOutput,
       validate: responsesValidator(capturedConfig, codexSubscription),
-      body: body, request, describe: body => describeContext(body, capturedConfig, codexSubscription, generatedAffinity),
+      body: body, request, describe: body => describeContext(body, capturedConfig, codexSubscription, generatedAffinity, reasoningOwners),
       output: (body, request) => outputFacts(body, request, capturedConfig, codexSubscription),
       cap: (body, cap) => {
         if (codexSubscription) return body

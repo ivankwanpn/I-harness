@@ -10,6 +10,7 @@ import type { createOwnedBudget } from '../budget.ts'
 import { createReductionPublication } from './publication.ts'
 import { softWorkFacts } from './automatic.ts'
 import { assertCurrentRepresentable } from '../current-representability.ts'
+import { retainedReplayCosts } from './replay-cost.ts'
 
 interface Proof { source: ContextSnapshot; groups: readonly ReductionGroup[]; rewrites: readonly ReductionRewrite[]; rewriteIdentity: string; current: RequestEvidence; assessmentRevision: string; afterKey: string; targetReady: boolean }
 type BridgeDeps=Pick<AgentDeps,'sessionId'|'captureContextReduction'|'assertFactOpen'|'registerFactSource'> & {signal?:AbortSignal;session?:AgentDeps['session'];requestContext?:Pick<NonNullable<AgentDeps['requestContext']>,'retain'|'current'>;previewReduction?:(rewrites:readonly ReductionRewrite[],options:{candidateId:string;ownerSessionId:string;capturePayload:(value:unknown)=>unknown})=>Promise<{projection:ContextSnapshot['conversation'];assertCurrent():void}>;reductionCommitted?:Parameters<typeof createReductionPublication>[5]}
@@ -68,7 +69,11 @@ export function createReductionBridge(deps: BridgeDeps, captureCandidate: () => 
         ? Math.min(pressure.inputBudget + releasableOutput, now.snapshot.surface.budgetBinding?.limits.inputTokens?.value ?? Infinity) : undefined
       const oversizedFixedSurface = !assessed.calibrated && maximumBudget !== undefined && fixedTokens > maximumBudget
       const overridesMessages = input.overriddenInputFields.includes('messages')
+      const replay = !rewrites.length && (policy.retainTokens ?? 0) > 0 &&
+        source.coordinates.semanticRevision === now.snapshot.coordinates.semanticRevision
+        ? retainedReplayCosts(conversation, input) : undefined
       return { kind: 'assessed', capacityFit, target: capacityFit === 'unavailable' ? 'unavailable' : targetReady ? 'ready' : 'over-target',
+        ...(replay ? { replayTokensByItem: replay } : {}),
         currentView: projectionFingerprint([now.snapshot.coordinates.semanticRevision, now.snapshot.coordinates.protectionRevision, now.snapshot.surfaceRevision, assessmentRevision]),
         inputTokens: budget.admissionInputTokens, inputBytes: bytes, inputByteKind: packet.sizeKind, inputFingerprint: input.inputFingerprint,
         shape: projectionFingerprint([input.bindingFingerprint, input.shapeFingerprint, now.snapshot.surface.binding]),

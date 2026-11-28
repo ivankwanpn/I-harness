@@ -31,7 +31,8 @@ export function reductionGroups(snapshot: ContextSnapshot, protectedSeqs: readon
   return Object.freeze(groups)
 }
 /** Open/protected inputs never pay the complete exchange tail budget. */
-export function selectReductionRuns(snapshot: ContextSnapshot, policy: ReductionPolicy, protectedSeqs?: readonly number[], retainedTailOnly = false): readonly ReductionRun[] {
+export function selectReductionRuns(snapshot: ContextSnapshot, policy: ReductionPolicy, protectedSeqs?: readonly number[], retainedTailOnly = false,
+  replayTokensByItem?: ReadonlyMap<string, number>): readonly ReductionRun[] {
   const groups = reductionGroups(snapshot, protectedSeqs), tail = new Set<string>()
   let retained = 0, exchanges = 0
   for (let i = groups.length - 1; i >= 0; i--) {
@@ -39,6 +40,7 @@ export function selectReductionRuns(snapshot: ContextSnapshot, policy: Reduction
     if (!group.complete || group.protected || !group.items.some(item => item.kind === 'exchange')) continue
     if (exchanges && retained >= (policy.retainTokens ?? 0)) break
     tail.add(group.id); retained += group.tokens; exchanges++
+    if (replayTokensByItem) for (const item of group.items) retained += replayTokensByItem.get(item.id) ?? 0
   }
   const runs: ReductionRun[] = [], pending: ReductionGroup[] = []
   const close = () => { if (pending.some(group => group.items.some(item => item.kind !== 'summary'))) {

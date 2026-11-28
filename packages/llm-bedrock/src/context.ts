@@ -5,7 +5,7 @@ import type { BedrockConfig } from "./types.ts"
 import { translateReasoning } from "./request/reasoning.ts"
 import { bedrockThinkingBudget } from "./request/capabilities.ts"
 export function describeContext(body: ConverseStreamCommandInput, config: BedrockConfig) {
-  const counter = new ProjectionCounter("projected-pricing-v2")
+  const counter = new ProjectionCounter("projected-pricing-v2", "one-unit-per-assistant")
   counter.structured("system", body.system)
   counter.structured("toolSchemas", body.toolConfig)
   for (const item of body.messages ?? [])

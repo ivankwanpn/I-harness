@@ -6,7 +6,7 @@ import { describeCachedBody, type CacheEvidence } from "./request/cache-evidence
 import { anthropicCapabilities, hasInterleavedBeta } from "./request/capabilities.ts"
 export function describeContext(actualBody: Record<string, unknown>, config: AnthropicConfig, cacheEvidence: CacheEvidence) {
   const { semantic: body, metadataBytes } = describeCachedBody(actualBody, cacheEvidence)
-  const counter = new ProjectionCounter("projected-pricing-v2")
+  const counter = new ProjectionCounter("projected-pricing-v2", typeof config.options?.toJSON === "function" ? undefined : "one-unit-per-assistant")
   counter.cacheMetadataBytes += metadataBytes
   counter.metadata(body)
   const block = (value: unknown, category: "system" | "visibleText" | "toolResults"): void => {

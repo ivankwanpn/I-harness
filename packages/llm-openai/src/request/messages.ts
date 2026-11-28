@@ -32,8 +32,12 @@ export function withoutCacheBreakpoints(input: unknown): unknown {
 }
 
 /** Map projected history, preserving native continuation ordering and tool images. */
-export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenAIConfig, "model" | "providerId" | "baseUrl">, codexSubscription: boolean): unknown[] {
+export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenAIConfig, "model" | "providerId" | "baseUrl">, codexSubscription: boolean, reasoningOwner?: (ordinal: number) => void): unknown[] {
   const deepSeek = !codexSubscription && isOfficialDeepSeekApi(config.baseUrl)
+  let assistantOrdinal = -1
+  const recordReasoning = (items: Record<string, unknown>[]) => {
+    if (reasoningOwner) for (const item of items) if (item.type === "reasoning") reasoningOwner(assistantOrdinal)
+  }
   let targetFingerprint: string | null | undefined
   const matchesEndpoint = (source: string | null) => {
     if (source === null) return false
@@ -52,6 +56,7 @@ export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenA
         return { type: "function_call_output", call_id: m.toolCallId, output }
       }
       // assistant
+      assistantOrdinal++
       const previous = m.providerContinuation
       const continuation = previous?.kind === "openai-responses" && canReplayContinuation(previous, config)
         && (previous.replayEndpointFingerprint === undefined || previous.providerId === config.providerId && previous.model === config.model && matchesEndpoint(previous.replayEndpointFingerprint))
@@ -71,7 +76,10 @@ export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenA
       })) ?? []
       const ordered = replayBlockOrder<unknown>(continuation?.outputOrder, m.content, originalReasoningItems, calls,
         (content, phase) => ({ role: "assistant", content, ...(phase !== undefined ? { phase } : {}) }), m.toolCalls)
-      if (ordered !== undefined) return ordered
+      if (ordered !== undefined) {
+        if (originalReasoningItems.length) recordReasoning(originalReasoningItems)
+        return ordered
+      }
       if (!continuation && !originalReasoningItems.length) {
         const visible = replayVisibleToolOrder<unknown>(m, calls, text => ({ role: "assistant", content: text }))
         if (visible) return visible
@@ -80,6 +88,7 @@ export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenA
       // stale. Its native reasoning belongs to that old assistant text.
       // Old logs without an order envelope keep their historical replay.
       const reasoningItems = continuation?.outputOrder ? [] : originalReasoningItems
+      if (reasoningItems.length) recordReasoning(reasoningItems)
       if (m.toolCalls && m.toolCalls.length > 0) {
         // M51/B2: a folded step message carries the step's text AND its
         // tool calls — emit the assistant text item before the

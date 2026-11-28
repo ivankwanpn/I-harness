@@ -2,7 +2,7 @@ import { ProjectionCounter } from "@i-harness/token-meter"
 import type { LLMRequest } from "@i-harness/llm-seam"
 import type { OpenAICompatibleConfig } from "./types.ts"
 export function describeContext(body: Record<string, unknown>, config: OpenAICompatibleConfig) {
-  const counter = new ProjectionCounter("projected-pricing-v2")
+  const counter = new ProjectionCounter("projected-pricing-v2", Object.hasOwn(config.options ?? {}, "messages") || typeof config.options?.toJSON === "function" ? undefined : "one-unit-per-assistant")
   counter.metadata(body)
   let unknownInput = false
   counter.structured("toolSchemas", body.tools)

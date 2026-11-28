@@ -24,6 +24,9 @@ export interface ProjectedInputFacts {
     fingerprint: string
     role?: 'user' | 'assistant' | 'tool'
     heuristicTokens: number
+    /** Present together only for replay priced on this concrete wire unit. */
+    readonly sourceAssistantOrdinal?: number
+    readonly replayedReasoningTokens?: number
     readonly semanticId?: string
   }[]
   components: Readonly<Record<InputComponent, ComponentFacts>>

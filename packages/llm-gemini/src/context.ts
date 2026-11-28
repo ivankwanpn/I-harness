@@ -4,7 +4,7 @@ import type { GeminiConfig } from "./types.ts"
 import { field, int32, record } from './request/protojson.ts'
 export function describeContext(body: Record<string, unknown>, config: GeminiConfig) {
   const contents = field(body, 'contents'), system = field(body, 'systemInstruction'), tools = field(body, 'tools'), cached = field(body, 'cachedContent')
-  const counter = new ProjectionCounter("projected-pricing-v2")
+  const counter = new ProjectionCounter("projected-pricing-v2", Object.hasOwn(config.options ?? {}, "contents") || typeof config.options?.toJSON === "function" ? undefined : "one-unit-per-assistant")
   counter.metadata(body)
   counter.structured("system", system)
   counter.structured("toolSchemas", tools)

@@ -2,7 +2,7 @@ import { ProjectionCounter } from "@i-harness/token-meter"
 import { isOfficialOpenAIResponses, type LLMRequest } from "@i-harness/llm-seam"
 import type { OpenAIConfig } from "./types.ts"
 import type { GeneratedAffinity } from "./request/cache-evidence.ts"
-export function describeContext(actualBody: Record<string, unknown>, config: OpenAIConfig, subscription: boolean, generatedAffinity?: GeneratedAffinity) {
+export function describeContext(actualBody: Record<string, unknown>, config: OpenAIConfig, subscription: boolean, generatedAffinity?: GeneratedAffinity, reasoningOwners?: readonly number[]) {
   const body = { ...actualBody }
   // Only the affinity producer's exact insertion is cache metadata. Caller,
   // config and request keys stay model-input evidence even at this same path.
@@ -73,9 +73,11 @@ export function describeContext(actualBody: Record<string, unknown>, config: Ope
       counter.structured("otherInput", item)
   }
   const fixedInput: unknown[] = []
+  let nextReasoning = 0
   if (Array.isArray(body.input))
     for (const item of body.input) {
       const node = item as Record<string, unknown>
+      const sourceAssistantOrdinal = node.type === "reasoning" ? reasoningOwners?.[nextReasoning++] : undefined
       if (node.role === "system" || node.role === "developer") {
         fixedInput.push(item)
         counter.structured("framing", { role: node.role })
@@ -83,7 +85,7 @@ export function describeContext(actualBody: Record<string, unknown>, config: Ope
         continue
       }
       const role = node.role === "assistant" || node.type === "reasoning" || node.type === "function_call" ? "assistant" : node.type === "function_call_output" ? "tool" : "user"
-      counter.unit(item, role, () => block(item))
+      counter.unit(item, role, () => block(item), sourceAssistantOrdinal)
     }
   // The public Responses API also accepts one user message as a string.
   // Keep it in the measured prefix when later requests use a different input.
