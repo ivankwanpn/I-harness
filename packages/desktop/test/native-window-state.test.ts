@@ -37,7 +37,7 @@ function fixture(initialMaximized = false) {
     setBounds: () => { controls.push("setBounds") },
     webContents: { send: (channel: string, event: DesktopEvent) => { deliveries.push({ channel, event }) } },
   } as unknown as BrowserWindow
-  const prefs = { get: () => preferences, update: (patch: unknown) => { updates.push(patch) } } as unknown as ReturnType<typeof createLocalPreferences>
+  const prefs = { get: () => preferences, update: async (patch: unknown) => { updates.push(patch) } } as unknown as ReturnType<typeof createLocalPreferences>
   const native = attachNativeWindow(window, prefs)
   const catalogGet = vi.fn()
   const runtimeGet = vi.fn()

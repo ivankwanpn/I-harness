@@ -81,12 +81,16 @@ app.whenReady().then(() => {
   const globalProviders = createGlobalProviderSettings(async () => {const runtime=await manager.get({ id: DESKTOP_CONFIGURATION_ID, path: app.getPath("userData"), label: "本機設定" });return {request:runtime.client.request.bind(runtime.client),capabilities:runtime.info.capabilities}}, { openExternal: url => shell.openExternal(url), usageWarnings: usageWarnings.read })
   const notifications = createNotificationHistory(join(app.getPath("userData"), "notifications-v1.json"))
   const drafts = new AttachmentDraftStore(join(app.getPath("userData"), "unsent-drafts-v1"))
+  let captureWindowBounds: (() => void) | undefined
   drainNativeSettings = async () => {
+    // Explicit Quit may happen while the window is still visible. Capture
+    // its geometry now and join its queued write before the final app.quit().
+    captureWindowBounds?.()
     let retrySurfaces=false
     try {await closeDesktopSurfaceWindows()} catch(error) {retrySurfaces=true;diagnostics.recordRequestFailure('desktop',undefined,error,'runtime/error')}
     await closeDesktopProjectContentSearches(); await globalProviders.close(); await worktrees.close(); await manager.close(); await sessionCatalog.close()
     if(retrySurfaces){try{await closeDesktopSurfaceWindows()}catch(error){diagnostics.recordRequestFailure('desktop',undefined,error,'runtime/error');await diagnostics.flush();throw error}}
-    stopDiagnostics(); await diagnostics.flush(); stopUsageWarnings(); await usageWarnings.flush(); await notifications.flush(); await drafts.flush()
+    stopDiagnostics(); await diagnostics.flush(); stopUsageWarnings(); await usageWarnings.flush(); await notifications.flush(); await drafts.flush(); await localPreferences.flush()
   }
   const applicationInfo = () => ({ version: app.getVersion(), electron: process.versions.electron, node: process.versions.node, platform: process.platform, arch: process.arch, packaged: app.isPackaged, updateSupported: false })
   let mainWindow: BrowserWindow | undefined
@@ -96,7 +100,8 @@ app.whenReady().then(() => {
     const window = createDesktopWindow(localPreferences.get())
     mainWindow = window
     // Capture the user's window bounds before the close handler hides or minimizes it.
-    const native = attachNativeWindow(window, localPreferences, { notifications })
+    const native = attachNativeWindow(window, localPreferences, { notifications, quitInProgress: () => quitState !== "running" })
+    captureWindowBounds = native.captureBounds
     cancelPendingClose = attachCloseLifecycle(window, {
       hasActiveWork: async () => worktrees.hasActiveWork() || await manager.hasActiveWork(),
       trayAvailable: () => tray !== undefined,
@@ -130,7 +135,14 @@ app.whenReady().then(() => {
         return result.canceled ? undefined : result.filePaths[0]
       },
     }, ipcMain)
-    window.on("closed", () => { void unregister().catch(error=>diagnostics.recordRequestFailure('desktop',undefined,error,'runtime/error')); if (mainWindow === window) mainWindow = undefined })
+    window.on("closed", () => {
+      void unregister().catch(error=>diagnostics.recordRequestFailure('desktop',undefined,error,'runtime/error'))
+      if (mainWindow === window) {
+        mainWindow = undefined
+        captureWindowBounds = undefined
+        cancelPendingClose = undefined
+      }
+    })
   }
   const showWindow = (): void => {
     if (quitState !== "running") return

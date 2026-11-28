@@ -32,17 +32,17 @@ it("notifies only opted-in background requests, deduplicates, and excludes reque
   expect(emitted.values).toEqual([{ title: "I-harness", body: "A conversation needs your attention." }])
 })
 
-it("returns the accepted follow-up delivery in native state and restores it after restart", () => {
+it("returns the accepted follow-up delivery in native state and restores it after restart", async () => {
   const root = mkdtempSync(join(tmpdir(), "ih-native-followup-"))
   try {
     const file = join(root, "prefs.json")
     const window = { on: vi.fn() } as unknown as BrowserWindow
     const native = attachNativeWindow(window, createLocalPreferences(file))
     expect(native.state().followupDelivery).toBe("queue")
-    expect(native.configure({ followupDelivery: "steer" }).followupDelivery).toBe("steer")
+    expect((await native.configure({ followupDelivery: "steer" })).followupDelivery).toBe("steer")
     const restored = attachNativeWindow(window, createLocalPreferences(file))
     expect(restored.state().followupDelivery).toBe("steer")
-    expect(() => restored.configure({ followupDelivery: "other" } as never)).toThrow(/follow.*delivery/i)
+    await expect(restored.configure({ followupDelivery: "other" } as never)).rejects.toThrow(/follow.*delivery/i)
     expect(restored.state().followupDelivery).toBe("steer")
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

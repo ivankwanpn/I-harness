@@ -1,4 +1,6 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { readFileSync } from "node:fs"
+import { mkdir, open, rename, rm } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
 import { dirname } from "node:path"
 import type { TerminalShellChoice } from "../shared/bridge.ts"
 export interface WindowBounds { x: number; y: number; width: number; height: number }
@@ -30,16 +32,35 @@ export function createLocalPreferences(file: string) {
       followupDelivery: saved?.followupDelivery === "steer" ? "steer" : "queue",
       ...(validBounds(saved?.bounds) ? { bounds: saved.bounds } : {}), maximized: saved?.maximized === true }
   } catch { /* A missing or damaged UI preference file uses defaults. */ }
+  const get = (): LocalPreferences => ({ ...state, ...(state.bounds ? { bounds: { ...state.bounds } } : {}) })
+  let tail = Promise.resolve()
   return {
-    get: (): LocalPreferences => ({ ...state, ...(state.bounds ? { bounds: { ...state.bounds } } : {}) }),
-    update(patch: Partial<LocalPreferences>): LocalPreferences {
+    get,
+    update(patch: Partial<LocalPreferences>): Promise<LocalPreferences> {
       if (patch.followupDelivery !== undefined && patch.followupDelivery !== "queue" && patch.followupDelivery !== "steer") throw new Error("Invalid follow-up delivery preference")
-      const next = { ...state, ...patch, followupDelivery: patch.followupDelivery ?? state.followupDelivery }
-      mkdirSync(dirname(file), { recursive: true })
-      writeFileSync(`${file}.tmp`, JSON.stringify(next), "utf8")
-      renameSync(`${file}.tmp`, file)
-      state = next
-      return { ...state }
+      const change = { ...patch, ...(patch.bounds ? { bounds: { ...patch.bounds } } : {}) }
+      const write = tail.then(async () => {
+        const next = { ...state, ...change, followupDelivery: change.followupDelivery ?? state.followupDelivery }
+        await mkdir(dirname(file), { recursive: true })
+        const temp = `${file}.${randomUUID()}.tmp`
+        const handle = await open(temp, "wx")
+        try {
+          try { await handle.writeFile(JSON.stringify(next), "utf8") }
+          finally { await handle.close() }
+          await rename(temp, file)
+        } catch (error) {
+          await rm(temp, { force: true }).catch(() => {})
+          throw error
+        }
+        state = next
+        return get()
+      })
+      tail = write.then(() => {}, () => {})
+      return write
+    },
+    async flush() {
+      let current
+      do { current = tail; await current } while (current !== tail)
     },
   }
 }

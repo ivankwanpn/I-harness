@@ -4,14 +4,17 @@ import { createLocalPreferences, restoreBounds, type FollowupDelivery } from "./
 import type { TerminalShellChoice } from "../shared/bridge.ts"
 import type { createNotificationHistory } from "./notification-history.ts"
 
-export function attachNativeWindow(window: BrowserWindow, preferences: ReturnType<typeof createLocalPreferences>, options: { notifications?: ReturnType<typeof createNotificationHistory> } = {}) {
+export function attachNativeWindow(window: BrowserWindow, preferences: ReturnType<typeof createLocalPreferences>, options: { notifications?: ReturnType<typeof createNotificationHistory>; quitInProgress?: () => boolean } = {}) {
   function windowState() { return { maximized: window.isMaximized(), visible: window.isVisible() && !window.isMinimized() } }
   let savedOnClose = false
   const reopened = () => { savedOnClose = false }
   window.on("restore", reopened)
   window.on("show", reopened)
-  window.on("close", () => {
-    if (savedOnClose && (!window.isVisible() || window.isMinimized())) return
+  function logBoundsFailure(error: unknown) {
+    console.warn("Unable to save window preferences", error instanceof Error ? error.message : String(error))
+  }
+  function captureBounds() {
+    if (window.isDestroyed() || (savedOnClose && (!window.isVisible() || window.isMinimized()))) return
     try {
       const bounds = window.getNormalBounds()
       const maximized = window.isMaximized()
@@ -19,14 +22,16 @@ export function attachNativeWindow(window: BrowserWindow, preferences: ReturnTyp
       if (saved.maximized !== maximized || !saved.bounds
         || saved.bounds.x !== bounds.x || saved.bounds.y !== bounds.y
         || saved.bounds.width !== bounds.width || saved.bounds.height !== bounds.height) {
-        preferences.update({ bounds, maximized })
+        void preferences.update({ bounds, maximized }).catch(logBoundsFailure)
       }
       savedOnClose = true
     }
-    catch (error) { console.warn("Unable to save window preferences", error instanceof Error ? error.message : String(error)) }
-  })
+    catch (error) { logBoundsFailure(error) }
+  }
+  window.on("close", () => { if (!options.quitInProgress?.()) captureBounds() })
   const seen = new Set<string>()
   return {
+    captureBounds,
     windowState,
     onWindowStateChanged(listener: (state: ReturnType<typeof windowState>) => void) {
       let active = true
@@ -49,17 +54,17 @@ export function attachNativeWindow(window: BrowserWindow, preferences: ReturnTyp
       }
     },
     state() { const value = preferences.get(); return { notifications: value.notifications, notificationsSupported: Notification.isSupported(), locale: value.locale, terminalShell: value.terminalShell, terminalFontFamily: value.terminalFontFamily, followupDelivery: value.followupDelivery } },
-    configure(patch: { notifications?: boolean; locale?: "zh-TW" | "en"; terminalShell?: TerminalShellChoice; terminalFontFamily?: string; followupDelivery?: FollowupDelivery }) { preferences.update(patch); return this.state() },
+    async configure(patch: { notifications?: boolean; locale?: "zh-TW" | "en"; terminalShell?: TerminalShellChoice; terminalFontFamily?: string; followupDelivery?: FollowupDelivery }) { await preferences.update(patch); return this.state() },
     control(action: "minimize" | "toggle-maximize" | "close") {
       if (action === "minimize") window.minimize()
       else if (action === "toggle-maximize") { if (window.isMaximized()) window.unmaximize(); else window.maximize() }
       else setTimeout(() => { if (!window.isDestroyed()) window.close() }, 0)
       return windowState()
     },
-    resetBounds() {
+    async resetBounds() {
       if (window.isMaximized()) window.unmaximize()
       const bounds = restoreBounds(undefined, [screen.getPrimaryDisplay().workArea])
-      window.setBounds(bounds); preferences.update({ bounds, maximized: false })
+      window.setBounds(bounds); await preferences.update({ bounds, maximized: false })
       return { reset: true }
     },
     onEvent(event: DesktopEvent) {
