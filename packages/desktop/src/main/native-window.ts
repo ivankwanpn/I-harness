@@ -1,10 +1,16 @@
-import { Notification, screen, type BrowserWindow } from "electron"
-import type { DesktopEvent } from "../shared/bridge.ts"
+import { Notification, screen, shell, type BrowserWindow } from "electron"
+import { DESKTOP_EVENT_CHANNEL, type DesktopEvent } from "../shared/bridge.ts"
+import type { NotificationRuleChange } from "../shared/notification-preferences.ts"
+import { notificationSummary, notificationTarget } from "./notification-event.ts"
 import { createLocalPreferences, restoreBounds, type FollowupDelivery } from "./local-preferences.ts"
 import type { TerminalShellChoice } from "../shared/bridge.ts"
 import type { createNotificationHistory } from "./notification-history.ts"
 
-export function attachNativeWindow(window: BrowserWindow, preferences: ReturnType<typeof createLocalPreferences>, options: { notifications?: ReturnType<typeof createNotificationHistory>; quitInProgress?: () => boolean } = {}) {
+export function attachNativeWindow(window: BrowserWindow, preferences: ReturnType<typeof createLocalPreferences>, options: {
+  notifications?: ReturnType<typeof createNotificationHistory>
+  executionBusy?: (workspaceId: string, sessionId: string) => boolean
+  quitInProgress?: () => boolean
+} = {}) {
   function windowState() { return { maximized: window.isMaximized(), visible: window.isVisible() && !window.isMinimized() } }
   let savedOnClose = false
   const reopened = () => { savedOnClose = false }
@@ -30,6 +36,9 @@ export function attachNativeWindow(window: BrowserWindow, preferences: ReturnTyp
   }
   window.on("close", () => { if (!options.quitInProgress?.()) captureBounds() })
   const seen = new Set<string>()
+  function send(event: DesktopEvent) {
+    if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send(DESKTOP_EVENT_CHANNEL, event)
+  }
   return {
     captureBounds,
     windowState,
@@ -53,8 +62,8 @@ export function attachNativeWindow(window: BrowserWindow, preferences: ReturnTyp
         window.removeListener("hide", publish)
       }
     },
-    state() { const value = preferences.get(); return { notifications: value.notifications, notificationsSupported: Notification.isSupported(), locale: value.locale, terminalShell: value.terminalShell, terminalFontFamily: value.terminalFontFamily, followupDelivery: value.followupDelivery } },
-    async configure(patch: { notifications?: boolean; locale?: "zh-TW" | "en"; terminalShell?: TerminalShellChoice; terminalFontFamily?: string; followupDelivery?: FollowupDelivery }) { await preferences.update(patch); return this.state() },
+    state() { const value = preferences.get(); return { notifications: value.notifications, notificationRules: value.notificationRules, notificationsSupported: Notification.isSupported(), locale: value.locale, terminalShell: value.terminalShell, terminalFontFamily: value.terminalFontFamily, followupDelivery: value.followupDelivery } },
+    async configure(patch: { notifications?: boolean; notificationRule?: NotificationRuleChange; locale?: "zh-TW" | "en"; terminalShell?: TerminalShellChoice; terminalFontFamily?: string; followupDelivery?: FollowupDelivery }) { await preferences.update(patch); return this.state() },
     control(action: "minimize" | "toggle-maximize" | "close") {
       if (action === "minimize") window.minimize()
       else if (action === "toggle-maximize") { if (window.isMaximized()) window.unmaximize(); else window.maximize() }
@@ -69,17 +78,29 @@ export function attachNativeWindow(window: BrowserWindow, preferences: ReturnTyp
     },
     onEvent(event: DesktopEvent) {
       if (window.isDestroyed()) return
-      if (event.kind !== "sdk/notification" || event.method !== "desktop/interaction/request") return
-      const request = event.params as { requestId?: unknown; sessionId?: unknown; kind?: unknown }
-      if (!request || typeof request.requestId !== "string") return
-      const key = `${event.workspaceId}:${request.requestId}`
-      if (seen.has(key)) return
-      if (typeof request.sessionId === "string") void options.notifications?.record({ id: key, workspaceId: event.workspaceId, sessionId: request.sessionId, kind: request.kind === "question" ? "question" : "approval", summary: preferences.get().locale === "en" ? "A conversation needs your attention." : "有會話等待你的確認或回答。" }).catch(error => console.warn("Unable to save notification history", error instanceof Error ? error.message : String(error)))
-      if (window.isFocused() || !preferences.get().notifications || !Notification.isSupported()) return
-      seen.add(key)
+      const target = notificationTarget(event, options.executionBusy)
+      if (!target || seen.has(target.id)) return
+      const { id, workspaceId, sessionId, kind } = target
+      const saved = preferences.get()
+      const rule = saved.notificationRules[kind]
+      const alert = saved.notifications && (rule.enabled || rule.sound === "system")
+      const summary = notificationSummary(kind, saved.locale)
+      if (sessionId && (kind === "question" || kind === "approval" || alert)) {
+        void options.notifications?.record({ id, workspaceId, sessionId, kind, summary })
+          .then(() => send({ kind: "notifications/changed" }))
+          .catch(error => console.warn("Unable to save notification history", error instanceof Error ? error.message : String(error)))
+      }
+      if (!alert || window.isFocused() || !Notification.isSupported()) return
+      seen.add(id)
       if (seen.size > 512) seen.delete(seen.values().next().value!)
-      const notification = new Notification({ title: "I-harness", body: preferences.get().locale === "en" ? "A conversation needs your attention." : "有會話等待你的確認或回答。" })
-      notification.on("click", () => { if (!window.isDestroyed()) { if (window.isMinimized()) window.restore(); window.show(); window.focus() } })
+      if (!rule.enabled) { shell.beep(); return }
+      const notification = new Notification({ title: "I-harness", body: summary, ...(rule.sound === "off" ? { silent: true } : {}) })
+      notification.on("click", () => {
+        if (window.isDestroyed() || options.quitInProgress?.()) return
+        if (window.isMinimized()) window.restore()
+        window.show(); window.focus()
+        if (sessionId) send({ kind: "notifications/open", id, workspaceId, sessionId })
+      })
       notification.show()
     },
   }

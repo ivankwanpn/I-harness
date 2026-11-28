@@ -9,7 +9,7 @@ import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 import { classifyNotification } from "../src/renderer/session/notifications.ts"
 import { applyHistory, applyNotification, emptyEventWindow, historyViewport, pageHistoryViewport } from "../src/renderer/session/event-window.ts"
 
-afterEach(() => { cleanup(); vi.useRealTimers(); localStorage.clear(); useUiStore.setState({ surface: "conversation", settingsLogRevision: 0 }) })
+afterEach(() => { cleanup(); vi.useRealTimers(); localStorage.clear(); useUiStore.setState({ surface: "conversation", settingsDestination: undefined }) })
 it("keeps transient activity out of durable notification and replay windows", () => {
   const event = { type: "model/activity", version: 1, activity: { requestId: "physical", phase: "quiet", startedAt: 1000, waitingFor: "progress" } }
   expect(classifyNotification("session/event", { sessionId: "a", event })).toEqual({ kind: "ignore" })

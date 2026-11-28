@@ -168,6 +168,7 @@ function connect(child: ChildProcessWithoutNullStreams) {
   return {
     exited: ended.promise,
     get stopping() { return stopping },
+    get pid() { return child.pid },
     get empty() { return channels.size === 0 },
     get supportsActivity() { return supportsActivity },
     async inspectActivity(ids?: string[]) {
@@ -263,6 +264,10 @@ export function createSharedDesktopHost(sessionsRoot: string, resourcesPath?: st
   }
   return {
     get supportsActivity() { return host?.supportsActivity ?? true },
+    status() {
+      const process = !host ? "standby" : host.stopping ? "stopping" : "running"
+      return { process, pid: host?.pid } as const
+    },
     async inspectActivity(ids?: string[]) {
       if (!host) return { idle: new Set<string>(), scopeCount: 0, profileActive: false }
       return host.inspectActivity(ids)

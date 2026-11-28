@@ -36,7 +36,7 @@ export const useUiStore = create<Preferences & {
   reset(): void
   surface: Surface
   setSurface(surface: Surface): void
-  settingsLogRevision: number
+  settingsDestination?: { section: "projects" | "extensions" | "log" }
   openRuntimeLog(): void
   draftSubmissionScope?: { workspaceId: string; sessionId: string }
   setDraftSubmissionScope(scope: { workspaceId: string; sessionId: string } | undefined): void
@@ -70,9 +70,11 @@ export const useUiStore = create<Preferences & {
   reset: () => get().update(defaults),
   surface: "conversation",
   providerRevision: 0,
-  setSurface: (surface) => set({ surface }),
-  settingsLogRevision: 0,
-  openRuntimeLog: () => set(state => ({ surface: "settings", settingsLogRevision: state.settingsLogRevision + 1 })),
+  setSurface: (surface) => {
+    if (surface === "projects" || surface === "plugins") set({ surface: "settings", settingsDestination: { section: surface === "projects" ? "projects" : "extensions" } })
+    else set({ surface })
+  },
+  openRuntimeLog: () => set({ surface: "settings", settingsDestination: { section: "log" } }),
   setDraftSubmissionScope: (draftSubmissionScope) => set({ draftSubmissionScope }),
   reviewOpen: false,
   setSidebarWidth: (sidebarWidth) => get().update({ sidebarWidth }),

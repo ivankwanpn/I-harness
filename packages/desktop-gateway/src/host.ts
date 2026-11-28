@@ -711,7 +711,8 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
     }
     return read
   }
-  const resources = createDesktopResources(options.workspace, () => plugins.inputs(), { configDir: dirname(settingsPath), refresh: () => service.refreshExtensions() })
+  const resources = createDesktopResources(options.workspace, () => plugins.inputs(), { configDir: dirname(settingsPath),
+    refresh: source => source === "global" && options.profile ? options.profile.refreshResources() : service.refreshExtensions() })
   const createDraft = createDraftSession(coordinator)
   const handlers: DesktopHandlers = {
     hasActiveWork: (): boolean => applyingMcp || base.hasActiveWork() || interaction.hasPending() || input.hasActiveWork()
@@ -965,6 +966,8 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
     try { await plugins.refresh() } finally { applyingMcp = false }
   })
   defer(offMcpRefresh)
+  const offResourceChange = options.profile?.onResourceChange(() => plugins.refresh())
+  if (offResourceChange) defer(offResourceChange)
   return {
     hasActiveWork: () => shutdownRequested || router.hasActiveWork(),
     handleLine: (line) => shutdownRequested ? Promise.reject(new Error("Desktop host is closing")) : router.handleLine(line),
@@ -977,6 +980,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
       shutdownRequested = true
       clearPolicyTimer()
       offMcpRefresh()
+      offResourceChange?.()
       workspaceMemory.stop()
       let pluginFenceFailure: { cause: unknown } | undefined
       try { stopPluginObserver.dispose() } catch (cause) { pluginFenceFailure = { cause } }

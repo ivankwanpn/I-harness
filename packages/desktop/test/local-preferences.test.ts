@@ -69,3 +69,19 @@ it("a failed write does not commit its patch or block later writes", async () =>
   await prefs.update({ locale: "en" })
   expect(createLocalPreferences(file).get()).toMatchObject({ notifications: false, locale: "en" })
 })
+
+it("keeps legacy opt-in limited to approvals and questions and merges simultaneous event preference changes", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ih-pref-notification-")); directories.push(dir)
+  const file = join(dir, "prefs.json")
+  writeFileSync(file, JSON.stringify({ notifications: true }))
+  const prefs = createLocalPreferences(file)
+  expect(prefs.get().notificationRules).toEqual({
+    approval: { enabled: true, sound: "system" }, question: { enabled: true, sound: "system" },
+    completed: { enabled: false, sound: "off" }, attention: { enabled: false, sound: "off" }, error: { enabled: false, sound: "off" },
+  })
+  await Promise.all([prefs.update({ notificationRule: { event: "completed", enabled: true } }),
+    prefs.update({ notificationRule: { event: "completed", sound: "system" } }), prefs.update({ notificationRule: { event: "error", enabled: true } })])
+  const restored = createLocalPreferences(file)
+  expect(restored.get().notificationRules).toMatchObject({ completed: { enabled: true, sound: "system" }, error: { enabled: true, sound: "off" } })
+  expect(() => restored.update({ notificationRule: { event: "other", sound: "off" } } as never)).toThrow("Invalid notification preference")
+})

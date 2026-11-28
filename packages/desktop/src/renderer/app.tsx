@@ -142,6 +142,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   workStateSupported.current = capabilities["desktop-work-state"]?.includes("1") === true
   const [sandbox, setSandbox] = useState<SandboxState>()
   const [error, setError] = useState<string>()
+  const [notificationUnavailable, setNotificationUnavailable] = useState(false)
   const [eventWindow, setEventWindow] = useState<EventWindow>(() => emptyEventWindow())
   const [windowKey, setWindowKey] = useState<string>()
   const [historyLoading, setHistoryLoading] = useState(false)
@@ -201,6 +202,33 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     })
     return () => { historySurfaceRevision.current++; unsubscribe() }
   }, [])
+  const selectSessionInWorkspace = useCallback((workspaceId: string, sessionId: string, projectId?: string) => {
+    navigationVersion.current++
+    setHistoryTarget(undefined)
+    if (workspaceId !== selection.current.workspaceId) setDashboard(undefined)
+    setSelectedProjectId(projectId)
+    setSelectedWorkspaceId(workspaceId); setSelectedSessionId(sessionId)
+  }, [setSelectedWorkspaceId, setSelectedSessionId])
+  useEffect(() => {
+    let mounted = true
+    const off = bridge.onEvent(event => {
+      if (event.kind !== "notifications/open") return
+      const { workspaceId, sessionId, id } = event
+      setNotificationUnavailable(false)
+      const version = ++navigationVersion.current
+      const surface = historySurfaceRevision.current
+      const current = () => mounted && version === navigationVersion.current && historySurfaceRevision.current === surface
+      void bridge.request({ kind: "desktop/notifications/target", workspaceId, sessionId }).then(value => {
+        if (!current()) return
+        const target = value as { workspaceId: string; sessionId: string; projectId?: string } | undefined
+        if (target?.workspaceId !== workspaceId || target.sessionId !== sessionId) throw new Error("Invalid notification target")
+        selectSessionInWorkspace(workspaceId, sessionId, target.projectId)
+        useUiStore.getState().setSurface("conversation")
+        void bridge.request({ kind: "desktop/notifications/read", id }).catch(() => {})
+      }).catch(() => { if (current()) setNotificationUnavailable(true) })
+    })
+    return () => { mounted = false; off() }
+  }, [bridge, selectSessionInWorkspace])
   const modelRequest = useRef(0)
   const dashboardRequest = useRef(0)
   const dashboardApplied = useRef(0)
@@ -539,7 +567,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       if (runtimeAvailable()) await refreshQueue(selectedWorkspaceId, selectedSessionId)
     }) : undefined
     const handle = (event: DesktopEvent) => {
-      if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity") return
+      if (event.kind !== "sdk/disconnected" && !("method" in event)) return
       // Notifications for all workspaces arrive on this bridge. Keep unfinished
       // prefixes between selections, and discard previews when their owner retires.
       let preview: AssistantPreview | undefined
@@ -1064,13 +1092,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         setSelectedWorkspaceId(workspaceId); setSelectedSessionId(undefined)
         useUiStore.getState().setSurface(workspaceId ? "conversation" : "projects")
       }}
-      onSelectSessionInWorkspace={(workspaceId, sessionId, projectId) => {
-        navigationVersion.current++
-        setHistoryTarget(undefined)
-        if (workspaceId !== selection.current.workspaceId) setDashboard(undefined)
-        setSelectedProjectId(projectId)
-        setSelectedWorkspaceId(workspaceId); setSelectedSessionId(sessionId)
-      }}
+      onSelectSessionInWorkspace={selectSessionInWorkspace}
       onManageSessionInWorkspace={async (workspaceId, sessionId, action, title) => {
         if (action === 'fork' || action === 'fork-fresh') {
           await forkCallbacks.current!.inWorkspace(workspaceId, sessionId, action); return
@@ -1217,6 +1239,10 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         if (selectedWorkspaceId !== undefined) void forkOperations.current!.refresh(selectedWorkspaceId)
       }}
     />
+    {notificationUnavailable ? <div role="alert" className="notification-target-error">
+      <span>{locale === "en" ? "This conversation could not be opened. Check whether it was archived or its workspace was removed." : "無法開啟通知中的會話。請確認會話是否已封存，或工作區是否已移除。"}</span>
+      <button type="button" className="link-button" onClick={() => setNotificationUnavailable(false)}>{locale === "en" ? "Dismiss" : "關閉"}</button>
+    </div> : null}
     <RuntimeFeedback bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} onOpenLog={useUiStore.getState().openRuntimeLog} />
     </>
   )

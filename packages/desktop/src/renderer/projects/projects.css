@@ -1,9 +1,3 @@
-.settings-pane.project-manager { display: block; width: 100%; height: 100%; overflow: auto; padding: clamp(1.5rem, 4vw, 3rem) max(1.5rem, calc((100% - 64rem) / 2)); scrollbar-gutter: stable; }
-.projects-header, .projects-title { display: flex; align-items: center; gap: .75rem; }
-.projects-header { justify-content: space-between; flex-wrap: wrap; }
-.projects-header h1 { margin: 0; font-size: 1.6rem; font-weight: 650; }
-.projects-search { width: min(100%, 24rem); margin-bottom: 1rem; }
-.project-description { color: var(--ih-muted); font-size: .93rem; line-height: 1.6; margin-block: .6rem 1.45rem; }
 .projects-list { display: grid; gap: .6rem; }
 .project-list-row { display: flex; align-items: center; min-width: 0; gap: .65rem; padding: .42rem .65rem; border: 1px solid var(--ih-divider); border-radius: var(--ih-radius-panel); background: var(--ih-panel); }
 .project-open { flex: 1; min-width: 0; display: flex; gap: .85rem; align-items: center; padding: .55rem; border-radius: var(--ih-radius-control); background: transparent; border: 0; text-align: left; cursor: pointer; }
@@ -11,7 +5,6 @@
 .project-list-icon { flex: none; display: grid; place-items: center; width: 2.35rem; height: 2.35rem; border-radius: var(--ih-radius-control); background: var(--ih-selected); color: var(--ih-accent); }
 .project-list-name { display: grid; gap: .22rem; min-width: 0; overflow-wrap: anywhere; }
 .project-list-name small { color: var(--ih-muted); }
-.project-list-row time { font-size: 12px; }
 .project-empty { display: grid; justify-items: start; gap: .45rem; }
 .project-empty p { margin: 0; }
 .project-editor { display: grid; gap: 14px; }
@@ -25,4 +18,43 @@
 .project-badge[aria-pressed="true"] { color: var(--ih-accent); background: var(--ih-selected); border-color: var(--ih-selected-border); }
 .project-add-folder { display: flex; align-items: center; gap: 9px; width: 100%; padding: 12px; background: transparent; border: 0; cursor: pointer; text-align: left; }
 .project-add-folder:hover:not(:disabled) { background: var(--ih-hover); }
-@media (max-width: 700px) { .settings-pane.project-manager { padding-inline: 1rem; } .project-list-row time { display: none; } }
+
+.settings-catalog-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  margin-block-end: 1rem;
+}
+.settings-catalog-search { flex: 1 1 12rem; max-width: 23rem; }
+.settings-project-catalog .projects-list, .workspace-inventory-list {
+  display: grid;
+  gap: 0;
+  padding: 0;
+  margin: 0;
+  background: var(--ih-panel);
+  border: 1px solid var(--ih-divider);
+  border-radius: var(--ih-radius-panel);
+  overflow: hidden;
+}
+.settings-project-catalog .project-list-row { border: none; border-radius: 0; }
+.settings-project-catalog .project-list-row + .project-list-row, .workspace-inventory-row + .workspace-inventory-row { border-top: 1px solid var(--ih-divider); }
+.project-list-chevron { flex-shrink: 0; color: var(--ih-muted); margin-inline-start: auto; }
+[data-project-color="blue"] { color: light-dark(#2167b8, #87b9ff); }
+[data-project-color="green"] { color: var(--ih-success); }
+[data-project-color="amber"] { color: var(--ih-warning); }
+[data-project-color="violet"] { color: light-dark(#7840af, #c7a3ef); }
+[data-project-color="rose"] { color: light-dark(#a23969, #efa5c2); }
+.settings-project-catalog .ih-empty-state { padding: 1.25rem; }
+.project-open-actions { display: flex; justify-content: flex-end; margin-block-end: .75rem; }
+.settings-workspace-inventory { container-type: inline-size; }
+.workspace-inventory-row { display: flex; align-items: center; gap: .75rem; padding: .85rem 1rem; }
+.workspace-inventory-description { flex: 1; display: grid; min-width: 0; gap: .18rem; overflow-wrap: anywhere; }
+.workspace-inventory-description small, .project-membership-note { color: var(--ih-muted); font-size: 12px; }
+.project-membership-note { margin: 0; }
+.workspace-inventory-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .25rem; }
+@container (max-width: 520px) {
+  .workspace-inventory-row { flex-wrap: wrap; }
+  .workspace-inventory-actions { margin-inline-start: auto; }
+}

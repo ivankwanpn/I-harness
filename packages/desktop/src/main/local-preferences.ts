@@ -3,9 +3,10 @@ import { mkdir, open, rename, rm } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { dirname } from "node:path"
 import type { TerminalShellChoice } from "../shared/bridge.ts"
+import { parseNotificationRuleChange, readNotificationRules, type NotificationRuleChange, type NotificationRules } from "../shared/notification-preferences.ts"
 export interface WindowBounds { x: number; y: number; width: number; height: number }
 export type FollowupDelivery = "queue" | "steer"
-export interface LocalPreferences { notifications: boolean; locale: "zh-TW" | "en"; terminalShell: TerminalShellChoice; terminalFontFamily: string; followupDelivery: FollowupDelivery; bounds?: WindowBounds; maximized?: boolean }
+export interface LocalPreferences { notifications: boolean; notificationRules: NotificationRules; locale: "zh-TW" | "en"; terminalShell: TerminalShellChoice; terminalFontFamily: string; followupDelivery: FollowupDelivery; bounds?: WindowBounds; maximized?: boolean }
 const SHELL_CHOICES = new Set<TerminalShellChoice>(["auto", "git-bash", "pwsh", "powershell", "cmd", "bash", "zsh", "sh"])
 function validBounds(value: unknown): value is WindowBounds {
   if (!value || typeof value !== "object") return false
@@ -23,24 +24,29 @@ export function restoreBounds(saved: WindowBounds | undefined, displays: WindowB
     y: Math.round(Math.min(target.y + target.height - height, Math.max(target.y, saved?.y ?? target.y + (target.height - height) / 2))) }
 }
 export function createLocalPreferences(file: string) {
-  let state: LocalPreferences = { notifications: false, locale: "zh-TW", terminalShell: "auto", terminalFontFamily: "", followupDelivery: "queue" }
+  let state: LocalPreferences = { notifications: false, notificationRules: readNotificationRules(), locale: "zh-TW", terminalShell: "auto", terminalFontFamily: "", followupDelivery: "queue" }
   try {
     const saved = JSON.parse(readFileSync(file, "utf8"))
-    state = { notifications: saved?.notifications === true, locale: saved?.locale === "en" ? "en" : "zh-TW",
+    state = { notifications: saved?.notifications === true, notificationRules: readNotificationRules(saved?.notificationRules), locale: saved?.locale === "en" ? "en" : "zh-TW",
       terminalShell: SHELL_CHOICES.has(saved?.terminalShell) ? saved.terminalShell : "auto",
       terminalFontFamily: typeof saved?.terminalFontFamily === "string" && saved.terminalFontFamily.length <= 128 && !/[\u0000-\u001f\u007f]/.test(saved.terminalFontFamily) ? saved.terminalFontFamily.trim() : "",
       followupDelivery: saved?.followupDelivery === "steer" ? "steer" : "queue",
       ...(validBounds(saved?.bounds) ? { bounds: saved.bounds } : {}), maximized: saved?.maximized === true }
   } catch { /* A missing or damaged UI preference file uses defaults. */ }
-  const get = (): LocalPreferences => ({ ...state, ...(state.bounds ? { bounds: { ...state.bounds } } : {}) })
+  const get = (): LocalPreferences => ({ ...state, notificationRules: readNotificationRules(state.notificationRules), ...(state.bounds ? { bounds: { ...state.bounds } } : {}) })
   let tail = Promise.resolve()
   return {
     get,
-    update(patch: Partial<LocalPreferences>): Promise<LocalPreferences> {
+    update({ notificationRule, ...patch }: Partial<Omit<LocalPreferences, "notificationRules">> & { notificationRule?: NotificationRuleChange }): Promise<LocalPreferences> {
+      const rule = notificationRule === undefined ? undefined : parseNotificationRuleChange(notificationRule)
       if (patch.followupDelivery !== undefined && patch.followupDelivery !== "queue" && patch.followupDelivery !== "steer") throw new Error("Invalid follow-up delivery preference")
       const change = { ...patch, ...(patch.bounds ? { bounds: { ...patch.bounds } } : {}) }
       const write = tail.then(async () => {
         const next = { ...state, ...change, followupDelivery: change.followupDelivery ?? state.followupDelivery }
+        if (rule) {
+          const { event, ...fields } = rule
+          next.notificationRules = { ...state.notificationRules, [event]: { ...state.notificationRules[event], ...fields } }
+        }
         await mkdir(dirname(file), { recursive: true })
         const temp = `${file}.${randomUUID()}.tmp`
         const handle = await open(temp, "wx")

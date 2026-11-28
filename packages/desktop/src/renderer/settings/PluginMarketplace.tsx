@@ -1,24 +1,25 @@
 import { useEffect, useRef, useState } from "react"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import type { PluginCommand } from "@i-harness/desktop-gateway/src/plugins.ts"
-import { useText } from "../design/i18n.ts"
+import { useAuthoringText } from "./resource-authoring-text.ts"
 import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
 import { SearchInput } from "../vendor/zcode/SearchInput.tsx"
 import { Puzzle } from "lucide-react"
+import { notifyResourceChange } from "./resource-catalog-changes.ts"
 interface Plugin { id: string; name: string; description?: string; installed: boolean; enabled: boolean; capabilities?: Record<string, boolean>; conflicts?: { name: string; reason: string }[] }
 interface State { sources: { name: string; source: string; error?: string }[]; plugins: Plugin[]; diagnostics?: Record<string, string[]>; refreshError?: string }
 function descriptionPreview(value: string): string {
   const characters = Array.from(value.trim())
   return characters.length > 120 ? `${characters.slice(0, 120).join("").trimEnd()}…` : value
 }
-export function PluginMarketplace({ bridge, workspaceId, embedded = false, initialQuery = "", queryRequest }: { bridge: DesktopBridge; workspaceId: string; embedded?: boolean; initialQuery?: string; queryRequest?: { value: string; nonce: number } }) {
-  const t = useText()
+export function PluginMarketplace({ bridge, workspaceId, embedded = false, active = true, initialQuery = "", initialInstalledOnly = false, queryRequest }: { bridge: DesktopBridge; workspaceId: string; embedded?: boolean; active?: boolean; initialQuery?: string; initialInstalledOnly?: boolean; queryRequest?: { value: string; nonce: number } }) {
+  const t = useAuthoringText()
   const [state, setState] = useState<State>()
   const [error, setError] = useState<string>()
   const [loadError, setLoadError] = useState<string>()
   const [source, setSource] = useState("")
   const [query, setQuery] = useState(initialQuery)
-  const [installed, setInstalled] = useState(false)
+  const [installed, setInstalled] = useState(initialInstalledOnly)
   const [busy, setBusy] = useState(false)
   const [confirm, setConfirm] = useState<string>()
   const [expanded, setExpanded] = useState<string>()
@@ -28,12 +29,13 @@ export function PluginMarketplace({ bridge, workspaceId, embedded = false, initi
   useEffect(() => {
     if (!queryRequest) return
     setQuery(queryRequest.value); setPage(0)
-  }, [queryRequest?.nonce])
+  }, [queryRequest?.nonce, queryRequest?.value])
   useEffect(() => {
-    let active = true
-    void bridge.request({ kind: "desktop/plugins/state", workspaceId }).then((value) => { if (active) { setState(value as State); setLoadError(undefined) } }).catch((reason: unknown) => { if (active) setLoadError(String(reason)) })
-    return () => { active = false }
-  }, [bridge, workspaceId, reload])
+    if (!active) return
+    let current = true
+    void bridge.request({ kind: "desktop/plugins/state", workspaceId }).then((value) => { if (current) { setState(value as State); setLoadError(undefined) } }).catch((reason: unknown) => { if (current) setLoadError(String(reason)) })
+    return () => { current = false }
+  }, [active, bridge, workspaceId, reload])
   async function run(command: PluginCommand) {
     if (lock.current) return
     lock.current = true; setBusy(true); setError(undefined)
@@ -42,13 +44,16 @@ export function PluginMarketplace({ bridge, workspaceId, embedded = false, initi
       setConfirm(undefined); if (command.action === "source/add") setSource("")
       setReload((value) => value + 1)
     } catch (reason) { setError(String(reason)); setReload((value) => value + 1) }
-    finally { lock.current = false; setBusy(false) }
+    finally {
+      if (["install", "uninstall", "enable", "disable"].includes(command.action)) notifyResourceChange(bridge, {})
+      lock.current = false; setBusy(false)
+    }
   }
   const remove = (command: PluginCommand, key: string) => confirm === key ? void run(command) : setConfirm(key)
   const rows = state?.plugins.filter((row) => (!installed || row.installed) && `${row.id} ${row.name} ${row.description ?? ""}`.toLowerCase().includes(query.toLowerCase())) ?? []
   return <section className={embedded ? "marketplace-pane settings-embedded" : "marketplace-pane ih-control-scope"} aria-label={t("插件市場")}>
     {embedded ? null : <h1>{t("插件市場")}</h1>}
-    <p className="muted">{t("插件變更會即時套用到現有 Agent；已開始的操作會依原機制收尾。")}</p>
+    <p className="settings-description">{t("插件安裝和啟用設定由本機工作區共用。")}</p>
     {state?.refreshError ? <p role="alert">{state.refreshError}<button disabled={busy} onClick={() => {
       if (lock.current) return
       lock.current = true; setBusy(true); setError(undefined)

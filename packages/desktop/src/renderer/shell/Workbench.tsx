@@ -16,7 +16,6 @@ import { SessionHistoryView, type SessionHistoryViewProps } from "../session/Ses
 import { ConversationBranches } from "../session/ConversationBranches.tsx"
 import type { HistorySelection } from "../session/SessionSearch.tsx"
 import { SettingsPane } from "../settings/SettingsPane.tsx"
-import { PluginMarketplace } from "../settings/PluginMarketplace.tsx"
 const TerminalPane = lazy(() => import("../terminal/TerminalPane.tsx").then((module) => ({ default: module.TerminalPane })))
 import { useAppearance, usePreferences } from "../design/preferences.ts"
 import type { SessionOperation } from "../session/use-session-operation.ts"
@@ -27,7 +26,6 @@ import type { SandboxState } from "../../main/sdk-runtime.ts"
 import type { WorkspaceEntry } from "../../main/workspaces.ts"
 import type { ProjectEntry } from "../../main/projects.ts"
 import { ProjectSidebar, type ProjectSidebarProps } from "./ProjectSidebar.tsx"
-import { ProjectManager } from "../projects/ProjectManager.tsx"
 import { SettingsDialog } from "../settings/SettingsDialog.tsx"
 import type { DesktopBridge, WorkspaceConnection } from "../../shared/bridge.ts"
 import { Composer, NewTaskComposer, captureSessionSubmission, readDraft, writeDraft, boundedDraft, useComposerSending, type ComposerProps } from "../session/Composer.tsx"
@@ -432,7 +430,8 @@ export function Workbench({
 
   const settingsVisited = useRef(surface === "settings")
   if (surface === "settings") settingsVisited.current = true
-  const settingsPane = settingsVisited.current ? <SettingsPane active={surface === "settings"} sessionId={selectedSessionId} onOpenConversation={openNotification} capabilitiesReady={capabilitiesReady} onSandboxChange={onSandboxChange} onUseResource={selectedWorkspaceId && selectedSessionId ? (prefix) => {
+  const settingsPane = settingsVisited.current ? <SettingsPane catalog={projects && onProjectsChanged ? { projects, workspaces, onChanged: onProjectsChanged } : undefined}
+    onOpenProject={onSelectProject ? project => { onSelectProject(project.id); setSurface("conversation"); drawer.openProject() } : undefined} active={surface === "settings"} sessionId={selectedSessionId} onOpenConversation={openNotification} capabilitiesReady={capabilitiesReady} onSandboxChange={onSandboxChange} onUseResource={selectedWorkspaceId && selectedSessionId ? (prefix) => {
     const draft = readDraft(selectedWorkspaceId, selectedSessionId)
     const next = draft.startsWith(prefix) ? draft : prefix + draft
     if (boundedDraft(next) !== next) throw new Error(t("草稿已達上限，請先整理內容。"))
@@ -440,9 +439,7 @@ export function Workbench({
     setSurface("conversation")
   } : undefined} capabilities={capabilities} bridge={bridge} workspace={workspaces.find((row) => row.id === selectedWorkspaceId)} onClose={() => setSurface("conversation")} /> : null
 
-  const projectsPane = surface === "projects" && onProjectsChanged ? <ProjectManager bridge={bridge} projects={projects ?? []} workspaces={workspaces} onChanged={onProjectsChanged} onOpen={(project) => { onSelectProject?.(project.id); drawer.openProject() }} onClose={() => setSurface("conversation")} /> : null
-
-  const pageOpen = surface === "settings" || projectsPane !== null
+  const pageOpen = surface === "settings"
   const workScope = JSON.stringify([selectedWorkspaceId, selectedSessionId])
   const visitedWork = useRef({ scope: workScope, tabs: new Set<string>() })
   const visitedWorkspacePanes = useRef({ scope: selectedWorkspaceId, tabs: new Set<string>() })
@@ -482,7 +479,7 @@ export function Workbench({
       <NavigationRail surface={surface} homeOpen={sidebarVisible} homeButtonRef={drawer.homeButton} onHome={drawer.homeClick} onHomePointerEnter={drawer.enterHome} onHomePointerLeave={drawer.leaveRegion}
         onCreate={() => createSession(newSessionWorkspaceId, selectedProject?.id)} canCreate={canCreate && newSessionWorkspaceId !== undefined}
         onProjects={onProjectsChanged ? () => navigate("projects") : undefined}
-        onPlugins={selectedWorkspaceId && capabilities["desktop-plugins"]?.includes("1") ? () => navigate("plugins") : undefined}
+        onPlugins={() => navigate("plugins")}
         onSearch={selectedWorkspaceId && capabilities["desktop-session-search"]?.includes("1") ? () => navigate("search") : undefined}
         onSettings={() => navigate("settings")} />
       {drawer.narrow && drawer.open && !pageOpen ? <button type="button" className="sidebar-scrim" tabIndex={-1} aria-label={t("關閉側欄")} onClick={drawer.closeTemporary} /> : null}
@@ -504,9 +501,9 @@ export function Workbench({
         {!drawer.temporary ? <PaneResizeHandle side="left" label={t("調整側欄寬度")} width={sidebarWidth} min={200} max={sidebarMax} defaultWidth={240} onResize={setSidebarWidth} /> : null}
       </div>
       {settingsPane ? <div className="settings-retained-host" hidden={surface !== "settings"}>{settingsPane}</div> : null}
-      {surface === "settings" ? null : projectsPane ?? <>
+      {surface === "settings" ? null : <>
       <main className="center-pane">
-        <TitleBar bridge={bridge} title={surface === "plugins" ? t("插件市場") : surface === "memory" ? t("工作區記憶") : surface === "search" ? t("搜尋會話") : selectedSessionId === undefined ? displayProject?.name ?? workspaceTitle : sessionTitle}
+        <TitleBar bridge={bridge} title={surface === "memory" ? t("工作區記憶") : surface === "search" ? t("搜尋會話") : selectedSessionId === undefined ? displayProject?.name ?? workspaceTitle : sessionTitle}
           leading={<button type="button" className="icon-button" aria-label={t("顯示側欄")} aria-expanded={drawer.narrow ? drawer.open : !sidebarCollapsed} onClick={toggleSidebar}><PanelLeft size={18} /></button>}>
           <button type="button" className="icon-button review-toggle" aria-label={t("成果檢查")} aria-expanded={workVisible} onClick={() => {
             if (contextPageOpen) { openPane("context"); return }
@@ -546,7 +543,7 @@ export function Workbench({
             setSurface("conversation")
             requestAnimationFrame(() => { if (workspaceScope.current === owner) document.querySelector<HTMLElement>("[data-context-open-page]")?.focus() })
           }}>{contextRecords}</ContextUsagePage>}</WithSessionContext> : null}
-        {surface === "plugins" && selectedWorkspaceId ? <PluginMarketplace key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : surface === "search" && selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <SessionSearch key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} titles={Object.fromEntries((dashboard?.sessions ?? []).filter((row) => row.title).map((row) => [row.id, row.title!]))} onSelect={(target) => { if (onSelectHistory) onSelectHistory(target); else { setSurface("conversation"); onSelectSession(target.sessionId) } }} /> : memoryOpen && selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <MemoryPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} onAuthoringRequest={capabilities["desktop-memory-authoring"]?.includes("1") ? authoringRequest : undefined} /> : historicalView && !contextPageOpen ? <SessionHistoryView {...historicalView} resultReader={historyResultReader} navigation={fileNavigation} /> : <section className="session-body" hidden={contextPageOpen} aria-label={t("會話")}>
+        {surface === "search" && selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <SessionSearch key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} titles={Object.fromEntries((dashboard?.sessions ?? []).filter((row) => row.title).map((row) => [row.id, row.title!]))} onSelect={(target) => { if (onSelectHistory) onSelectHistory(target); else { setSurface("conversation"); onSelectSession(target.sessionId) } }} /> : memoryOpen && selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <MemoryPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} onAuthoringRequest={capabilities["desktop-memory-authoring"]?.includes("1") ? authoringRequest : undefined} /> : historicalView && !contextPageOpen ? <SessionHistoryView {...historicalView} resultReader={historyResultReader} navigation={fileNavigation} /> : <section className="session-body" hidden={contextPageOpen} aria-label={t("會話")}>
           {selectedSessionId !== undefined && selectedWorkspaceId !== undefined && conversation !== undefined
             ? (
               <>

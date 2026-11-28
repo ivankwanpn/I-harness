@@ -3,10 +3,29 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { TitleBar } from "../src/renderer/shell/TitleBar.tsx"
 import { NativeSettings } from "../src/renderer/settings/NativeSettings.tsx"
+import { readNotificationRules } from "../src/shared/notification-preferences.ts"
 import { useLocale } from "../src/renderer/design/i18n.ts"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 import { Composer } from "../src/renderer/session/Composer.tsx"
 beforeEach(() => useLocale.getState().setLocale("zh-TW"))
+it("saves event sounds independently from their desktop alerts and omits shell discovery on the notifications page", async () => {
+  const notificationRules = readNotificationRules()
+  const request = vi.fn(async (input: import("../src/shared/bridge.ts").DesktopRequest) => {
+    if (input.kind === "desktop/local/configure" && input.notificationRule) {
+      const { event, ...changes } = input.notificationRule
+      Object.assign(notificationRules[event], changes)
+    }
+    return { notifications: true, notificationsSupported: true, notificationRules }
+  })
+  render(<NativeSettings bridge={{ request, onEvent: () => () => {} }} section="notifications" />)
+  const sound = await screen.findByRole("combobox", { name: "工作完成 · 提示音" })
+  await waitFor(() => expect((sound as HTMLSelectElement).disabled).toBe(false))
+  fireEvent.change(sound, { target: { value: "system" } })
+  await waitFor(() => expect((sound as HTMLSelectElement).value).toBe("system"))
+  expect((screen.getByRole("checkbox", { name: "工作完成 · 桌面提示" }) as HTMLInputElement).checked).toBe(false)
+  expect(request).toHaveBeenCalledWith({ kind: "desktop/local/configure", notificationRule: { event: "completed", sound: "system" } })
+  expect(request).not.toHaveBeenCalledWith({ kind: "desktop/terminal/options" })
+})
 afterEach(() => { cleanup(); useUiStore.setState({ followupDelivery: "queue" } as never) })
 it("sends only the selected native window action", () => {
   const request = vi.fn(async () => ({}))
@@ -19,8 +38,8 @@ it("reads and updates notification preferences and can reset window bounds", asy
     ? [{ id: "auto", label: "自動選擇", command: "C:\\Git\\bash.exe" }]
     : { notifications: false, notificationsSupported: true })
   render(<NativeSettings bridge={{ request, onEvent: () => () => {} }} />)
-  await waitFor(() => expect((screen.getByRole("checkbox") as HTMLInputElement).disabled).toBe(false))
-  fireEvent.click(screen.getByRole("checkbox"))
+  await waitFor(() => expect((screen.getByRole("checkbox", { name: "背景通知" }) as HTMLInputElement).disabled).toBe(false))
+  fireEvent.click(screen.getByRole("checkbox", { name: "背景通知" }))
   await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/local/configure", notifications: true, locale: "zh-TW" }))
   await waitFor(() => expect((screen.getByRole("button", { name: "重設視窗" }) as HTMLButtonElement).disabled).toBe(false))
   fireEvent.click(screen.getByRole("button", { name: "重設視窗" }))
@@ -30,7 +49,7 @@ it("lists detected terminal shells and saves the selection for new terminals", a
   const request = vi.fn(async (value: { kind: string; terminalShell?: string }) => value.kind === "desktop/terminal/options"
     ? [{ id: "auto", label: "自動選擇", command: "C:\\Program Files\\Git\\bin\\bash.exe" }, { id: "git-bash", label: "Git Bash", command: "C:\\Program Files\\Git\\bin\\bash.exe" }, { id: "cmd", label: "CMD", command: "C:\\Windows\\System32\\cmd.exe" }]
     : { notifications: false, notificationsSupported: true, terminalShell: value.terminalShell ?? "auto" })
-  render(<NativeSettings bridge={{ request, onEvent: () => () => {} }} section="window" />)
+  render(<NativeSettings bridge={{ request, onEvent: () => () => {} }} section="terminal" />)
   const select = await screen.findByRole("combobox", { name: "整合終端 Shell" })
   expect(request).toHaveBeenCalledWith({ kind: "desktop/terminal/options" })
   expect(screen.getByText(/Windows 自動優先 Git Bash/)).toBeTruthy()
@@ -44,7 +63,7 @@ it("saves a terminal font override and allows clearing it back to the default", 
   const request = vi.fn(async (value: { kind: string; terminalFontFamily?: string }) => value.kind === "desktop/terminal/options"
     ? [{ id: "auto", label: "自動選擇", command: "C:\\Program Files\\Git\\bin\\bash.exe" }]
     : { notifications: false, notificationsSupported: true, terminalShell: "auto", terminalFontFamily: value.terminalFontFamily ?? "" })
-  render(<NativeSettings bridge={{ request, onEvent: () => () => {} }} section="window" />)
+  render(<NativeSettings bridge={{ request, onEvent: () => () => {} }} section="terminal" />)
   const field = await screen.findByRole("textbox", { name: "終端字體" })
   fireEvent.change(field, { target: { value: "Cascadia Code, monospace" } })
   fireEvent.click(screen.getByRole("button", { name: "儲存終端字體" }))
@@ -57,7 +76,7 @@ it("keeps shell and font settings available before a workspace is opened", async
   const request = vi.fn(async (value: { kind: string; terminalShell?: string }) => value.kind === "desktop/terminal/options"
     ? [{ id: "auto", label: "自動選擇", command: "C:\\Program Files\\Git\\bin\\bash.exe" }, { id: "git-bash", label: "Git Bash", command: "C:\\Program Files\\Git\\bin\\bash.exe" }]
     : { notifications: false, notificationsSupported: true, terminalShell: value.terminalShell ?? "auto", terminalFontFamily: "" })
-  render(<NativeSettings bridge={{ request, onEvent: () => () => {} }} section="window" />)
+  render(<NativeSettings bridge={{ request, onEvent: () => () => {} }} section="terminal" />)
   expect(await screen.findByRole("textbox", { name: "終端字體" })).toBeTruthy()
   const select = await screen.findByRole("combobox", { name: "整合終端 Shell" })
   expect(request).toHaveBeenCalledWith({ kind: "desktop/terminal/options" })

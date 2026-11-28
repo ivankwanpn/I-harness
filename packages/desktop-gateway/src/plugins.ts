@@ -11,9 +11,9 @@ function text(value: unknown): string {
   if (typeof value !== "string" || !value.trim() || value.length > 4096 || value.includes("\0")) throw new Error("Invalid plugin parameter")
   return value
 }
-export function createDesktopPlugins(root: string, options: { watch: FsWatchService; workspace?: string }) {
+export function createDesktopPlugins(root: string, options?: { watch: FsWatchService; workspace?: string }) {
   let watchError: string | undefined
-  const managed = createManagedPluginRegistry({ root, workspace: options.workspace }, { acquireStateWatch(path) {
+  const managed = createManagedPluginRegistry({ root, workspace: options?.workspace }, options ? { acquireStateWatch(path) {
     const lease = options.watch.acquire({ roots: [path], persistent: false })
     const normalize = (value: string) => { const absolute = resolve(value); return process.platform === "win32" ? absolute.toLowerCase() : absolute }
     const selected = normalize(path)
@@ -22,7 +22,7 @@ export function createDesktopPlugins(root: string, options: { watch: FsWatchServ
       else if (event.kind === "reset") { watchError = undefined; listener({ kind: "reset" }) }
       else if (event.changes.some(change => normalize(change.path) === selected)) listener({ kind: "changed" })
     }) }
-  } })
+  } } : {})
   const diagnostics = new Map<string, string[]>()
   let refresh: (() => Promise<void>) | undefined
   let refreshError: string | undefined

@@ -5,10 +5,17 @@ import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
 import type { TerminalShellChoice } from "../../shared/bridge.ts"
 import type { FollowupDelivery } from "../../main/local-preferences.ts"
 import { useUiStore } from "../shell/ui-store.ts"
-type NativeState = { notifications: boolean; notificationsSupported: boolean; terminalShell?: TerminalShellChoice; terminalFontFamily?: string; followupDelivery?: FollowupDelivery }
+import { notificationKinds, readNotificationRules, type NotificationRules, type NotificationRuleChange } from "../../shared/notification-preferences.ts"
+import { notificationLabels, useNotificationText } from "./notification-text.ts"
+import "./notifications.css"
+type NativeState = { notifications: boolean; notificationsSupported: boolean; notificationRules?: NotificationRules; terminalShell?: TerminalShellChoice; terminalFontFamily?: string; followupDelivery?: FollowupDelivery }
 type ShellOption = { id: TerminalShellChoice; label: string; command?: string }
-export function NativeSettings({ bridge, section = "all" }: { bridge: DesktopBridge; section?: "all" | "window" | "notifications" }) {
+export function NativeSettings({ bridge, section = "all" }: { bridge: DesktopBridge; section?: "all" | "window" | "notifications" | "terminal" }) {
   const t = useText()
+  const nt = useNotificationText()
+  const showWindow = section === "all" || section === "window"
+  const showTerminal = section === "all" || section === "terminal"
+  const showNotifications = section === "all" || section === "notifications"
   const locale = useLocale((state) => state.locale)
   const [value, setValue] = useState<NativeState>()
   const [shells, setShells] = useState<ShellOption[]>([])
@@ -27,14 +34,14 @@ export function NativeSettings({ bridge, section = "all" }: { bridge: DesktopBri
     return () => { active = false }
   }, [bridge])
   useEffect(() => {
-    if (section === "notifications") return
+    if (!showTerminal) return
     let active = true
     void bridge.request({ kind: "desktop/terminal/options" }).then((result) => {
       if (!Array.isArray(result)) throw new Error("Terminal shell options unavailable")
       if (active) setShells(result as ShellOption[])
     }).catch((reason: unknown) => { if (active) setError(String(reason)) })
     return () => { active = false }
-  }, [bridge, section])
+  }, [bridge, showTerminal])
   const selectedShell = value?.terminalShell ?? "auto"
   const visibleShells = shells.some((option) => option.id === selectedShell)
     ? shells
@@ -42,15 +49,21 @@ export function NativeSettings({ bridge, section = "all" }: { bridge: DesktopBri
   const selectedCommand = visibleShells.find((option) => option.id === selectedShell)?.command
   const normalizedFont = fontDraft.trim()
   const fontDirty = value !== undefined && normalizedFont !== (value.terminalFontFamily ?? "")
-  return <>{section === "all" ? <h2>{t("視窗與通知")}</h2> : null}<SettingsGroup>
-    {section !== "window" ? <SettingsRow label={t("背景待處理通知")} description={t(value?.notificationsSupported === false ? "此系統不支援桌面通知。" : "視窗不在前景時，有審批或問題需要處理便通知。")}
-      control={<input type="checkbox" aria-label={t("背景待處理通知")} checked={value?.notifications === true} disabled={busy || !value?.notificationsSupported} onChange={(event) => {
+  function saveRule(notificationRule: NotificationRuleChange) {
+    setBusy(true); setError(undefined)
+    void bridge.request({ kind: "desktop/local/configure", notificationRule }).then(result => setValue(result as NativeState))
+      .catch((reason: unknown) => setError(String(reason))).finally(() => setBusy(false))
+  }
+  const rules = value?.notificationRules ?? readNotificationRules()
+  return <>{section === "all" ? <h2>{t("視窗與通知")}</h2> : null}{showWindow || showNotifications ? <SettingsGroup>
+    {showNotifications ? <SettingsRow label={nt("背景通知")} description={value?.notificationsSupported === false ? t("此系統不支援桌面通知。") : nt("視窗在背景時，依下方事件設定顯示通知或播放提示音。")}
+      control={<input className="notification-switch" type="checkbox" aria-label={nt("背景通知")} checked={value?.notifications === true} disabled={busy || !value?.notificationsSupported} onChange={(event) => {
         setBusy(true); setError(undefined)
         void bridge.request({ kind: "desktop/local/configure", notifications: event.target.checked, locale }).then((result) => setValue(result as typeof value)).catch((reason: unknown) => setError(String(reason))).finally(() => setBusy(false))
       }} />} /> : null}
-    {section !== "notifications" ? <SettingsRow label={t("視窗位置與大小")} description={t("關閉時保存，下次啟動恢復。")}
+    {showWindow ? <SettingsRow label={t("視窗位置與大小")} description={t("關閉時保存，下次啟動恢復。")}
       control={<button className="primary-button" disabled={busy} onClick={() => { setBusy(true); setError(undefined); void bridge.request({ kind: "window/reset-bounds" }).catch((reason: unknown) => setError(String(reason))).finally(() => setBusy(false)) }}>{t("重設視窗")}</button>} /> : null}
-    {section !== "notifications" ? <SettingsRow label={t("後續訊息處理方式")} description={t("執行期間送出新訊息時，預設加入佇列或引導目前執行。")}
+    {showWindow ? <SettingsRow label={t("後續訊息處理方式")} description={t("執行期間送出新訊息時，預設加入佇列或引導目前執行。")}
       control={<select aria-label={t("後續訊息處理方式")} value={value?.followupDelivery ?? "queue"} disabled={busy || !value} onChange={(event) => {
         const followupDelivery = event.target.value as FollowupDelivery
         setBusy(true); setError(undefined)
@@ -61,7 +74,16 @@ export function NativeSettings({ bridge, section = "all" }: { bridge: DesktopBri
         }).catch((reason: unknown) => setError(String(reason))).finally(() => setBusy(false))
       }}><option value="queue">{t("加入佇列")}</option><option value="steer">{t("引導目前執行")}</option></select>}
       detail={<p className="muted">{t("執行期間按 Ctrl+Enter 使用相反的處理方式；Shift+Enter 換行。")}</p>} /> : null}
-  </SettingsGroup>{section !== "notifications" ? <><h2>{t("終端")}</h2><SettingsGroup><SettingsRow label={t("整合終端 Shell")} description={t("只影響新開的內建終端；Windows 自動優先 Git Bash，找不到則使用 CMD。既有終端保持目前 Shell；Agent 的 bash、pwsh 工具各自使用同名 Shell。")}
+  </SettingsGroup> : null}
+    {showNotifications ? <><h2>{nt("事件通知")}</h2><SettingsGroup>{notificationKinds.map(event => {
+      const label = nt(notificationLabels[event])
+      return <SettingsRow key={event} label={label} control={<div className="notification-preference-controls">
+        <label><input className="notification-switch" type="checkbox" checked={rules[event].enabled} disabled={busy || !value?.notificationsSupported || !value.notifications} aria-label={`${label} · ${nt("桌面提示")}`} onChange={e => saveRule({ event, enabled: e.target.checked })} />{nt("桌面提示")}</label>
+        <select value={rules[event].sound} disabled={busy || !value?.notificationsSupported || !value.notifications} aria-label={`${label} · ${nt("提示音")}`} onChange={e => saveRule({ event, sound: e.target.value === "system" ? "system" : "off" })}>
+          <option value="off">{nt("靜音")}</option><option value="system">{nt("系統提示音")}</option>
+        </select></div>} />
+    })}</SettingsGroup></> : null}
+    {showTerminal ? <><h2>{t("終端")}</h2><SettingsGroup><SettingsRow label={t("整合終端 Shell")} description={t("只影響新開的內建終端；Windows 自動優先 Git Bash，找不到則使用 CMD。既有終端保持目前 Shell；Agent 的 bash、pwsh 工具各自使用同名 Shell。")}
       control={<select aria-label={t("整合終端 Shell")} value={selectedShell} disabled={busy || !value || shells.length === 0} onChange={(event) => {
         const terminalShell = event.target.value as TerminalShellChoice
         setBusy(true); setError(undefined)

@@ -1,17 +1,24 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { afterEach, expect, it, vi } from "vitest"
-import { ProjectManager } from "../src/renderer/projects/ProjectManager.tsx"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import { SettingsPane } from "../src/renderer/settings/SettingsPane.tsx"
+import type { ProjectCatalogProps } from "../src/renderer/projects/ProjectManager.tsx"
 import { useLocale } from "../src/renderer/design/i18n.ts"
-afterEach(() => { cleanup(); useLocale.getState().setLocale("zh-TW") })
+function ProjectsPage({ bridge, ...catalog }: ProjectCatalogProps) {
+  return <SettingsPane bridge={bridge} catalog={catalog} onClose={() => {}} />
+}
+beforeEach(() => localStorage.setItem("ih:settings-section", "projects"))
+afterEach(() => { cleanup(); localStorage.removeItem("ih:settings-section"); useLocale.getState().setLocale("zh-TW") })
 
 it("edits project folders and primary workspace without recreating folder identities", async () => {
   useLocale.getState().setLocale("zh-TW")
   const request = vi.fn(async () => ({ id: "p" }))
   const changed = vi.fn(async () => {})
   const project = { id: "p", name: "App", workspaceIds: ["a", "b"], primaryWorkspaceId: "a", pinned: false, createdAt: "2026-10-01", updatedAt: "2026-10-01" }
-  render(<ProjectManager bridge={{ request, onEvent: () => () => {} }} projects={[project]} workspaces={[{ id: "a", label: "app", path: "D:/app" }, { id: "b", label: "test", path: "D:/test" }]} onChanged={changed} onOpen={() => {}} onClose={() => {}} />)
-  fireEvent.click(screen.getByRole("button", { name: "編輯專案 App" }))
+  render(<ProjectsPage bridge={{ request, onEvent: () => () => {} }} projects={[project]} workspaces={[{ id: "a", label: "app", path: "D:/app" }, { id: "b", label: "test", path: "D:/test" }]} onChanged={changed} />)
+  request.mockClear()
+  fireEvent.click(screen.getByRole("button", { name: /App/ }))
+  fireEvent.click(screen.getByRole("button", { name: "編輯專案" }))
   fireEvent.click(screen.getByRole("button", { name: "設為主要資料夾 test" }))
   fireEvent.change(screen.getByRole("textbox", { name: "專案名稱" }), { target: { value: "My App" } })
   fireEvent.click(screen.getByRole("button", { name: "儲存" }))
@@ -21,7 +28,8 @@ it("edits project folders and primary workspace without recreating folder identi
 
 it("keeps the edit form and shows a failed mutation without dismissing it", async () => {
   const request = vi.fn(async () => { throw new Error("disk unavailable") })
-  render(<ProjectManager bridge={{ request, onEvent: () => () => {} }} projects={[]} workspaces={[]} onChanged={async () => {}} onOpen={() => {}} onClose={() => {}} />)
+  render(<ProjectsPage bridge={{ request, onEvent: () => () => {} }} projects={[]} workspaces={[]} onChanged={async () => {}} />)
+  request.mockClear()
   fireEvent.click(screen.getByRole("button", { name: "新增專案" }))
   fireEvent.change(screen.getByRole("textbox", { name: "專案名稱" }), { target: { value: "Draft" } })
   fireEvent.click(screen.getByRole("button", { name: "儲存" }))
@@ -33,7 +41,8 @@ it("keeps the saved identity when refresh fails so retry cannot create a second 
   const saved = { id: "saved-id", name: "Draft", workspaceIds: [], pinned: false, createdAt: "2026-10-01", updatedAt: "2026-10-01T00:00:00.000Z" }
   const request = vi.fn(async (_input: unknown) => saved)
   const changed = vi.fn().mockRejectedValueOnce(new Error("refresh failed")).mockResolvedValueOnce(undefined)
-  render(<ProjectManager bridge={{ request, onEvent: () => () => {} }} projects={[]} workspaces={[]} onChanged={changed} onOpen={() => {}} onClose={() => {}} />)
+  render(<ProjectsPage bridge={{ request, onEvent: () => () => {} }} projects={[]} workspaces={[]} onChanged={changed} />)
+  request.mockClear()
   fireEvent.click(screen.getByRole("button", { name: "新增專案" }))
   fireEvent.change(screen.getByRole("textbox", { name: "專案名稱" }), { target: { value: "Draft" } })
   fireEvent.click(screen.getByRole("button", { name: "儲存" }))
@@ -46,7 +55,8 @@ it("keeps the saved identity when refresh fails so retry cannot create a second 
 it("picks a folder only in the editor and creates a project only after explicit Save", async () => {
   const folder = { id: "owned-folder", label: "Owned folder", path: "D:/owned-fixture" }
   const request = vi.fn(async (input: { kind: string }) => input.kind === "workspace/pick" ? folder : { id: "saved-project" })
-  render(<ProjectManager bridge={{ request, onEvent: () => () => {} }} projects={[]} workspaces={[]} onChanged={async () => {}} onOpen={() => {}} onClose={() => {}} />)
+  render(<ProjectsPage bridge={{ request, onEvent: () => () => {} }} projects={[]} workspaces={[]} onChanged={async () => {}} />)
+  request.mockClear()
   expect(request).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole("button", { name: "新增專案" }))
   fireEvent.change(screen.getByRole("textbox", { name: "專案名稱" }), { target: { value: "Explicit project" } })

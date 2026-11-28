@@ -96,6 +96,16 @@ describe("Desktop local project catalog", () => {
     expect(JSON.parse(readFileSync(setup.projectsFile, "utf8"))).toEqual({ version: 1, projects: saved })
   })
 
+  it("retains the project color when an older client edits membership and after restart", async () => {
+    const setup = await fixture()
+    const catalog = createProjectCatalog(setup.projectsFile, setup.workspaces)
+    const saved = await catalog.save({ name: "Studio", workspaceIds: [], color: "violet" })
+    await catalog.save({ id: saved.id, name: "Studio", workspaceIds: [setup.folders[0]!.id] })
+    const reopened = createProjectCatalog(setup.projectsFile, setup.workspaces)
+    expect((await reopened.list()).find(row => row.id === saved.id)).toMatchObject({ color: "violet", workspaceIds: [setup.folders[0]!.id] })
+    await expect(reopened.save({ ...saved, color: "not-a-color" as never })).rejects.toThrow("Unknown project color")
+  })
+
   it("removes only project metadata and exposes unassigned folders without recreating projects", async () => {
     const setup = await fixture(1)
     const folder = setup.folders[0]!

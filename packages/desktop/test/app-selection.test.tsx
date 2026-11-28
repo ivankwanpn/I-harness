@@ -21,6 +21,34 @@ import type { ForkOperation } from '@i-harness/sdk/fork'
 afterEach(() => { cleanup(); captured.props = undefined; captured.onLayout = undefined; localStorage.removeItem("ih:last-workspace"); useUiStore.setState({ selectedWorkspaceId: undefined, selectedSessionId: undefined, providerRevision: 0, surface: "conversation" }) })
 
 function defer() { let resolve!: (value: unknown) => void; const promise = new Promise<unknown>((done) => { resolve = done }); return { promise, resolve } }
+it("validates native notification clicks, preserves later navigation and rejects missing targets", async () => {
+  const listeners = new Set<Parameters<DesktopBridge["onEvent"]>[0]>()
+  const pending = defer()
+  const request = fixture(input => {
+    if (input.kind === "workspace/list") return Promise.resolve([{ id: "w1", label: "One", path: "D:/one" }, { id: "w2", label: "Two", path: "D:/two" }])
+    if (input.kind === "desktop/notifications/target") {
+      if (input.sessionId === "slow") return pending.promise
+      if (input.sessionId === "gone") return Promise.reject(new Error("Archived conversation"))
+      return Promise.resolve({ workspaceId: input.workspaceId, sessionId: input.sessionId, projectId: "moved" })
+    }
+    if (input.kind === "session/dashboard") return Promise.resolve({ sessions: [{ id: "origin", live: false }] })
+    return undefined
+  }, listener => { listeners.add(listener); return () => { listeners.delete(listener) } })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  const click = (sessionId: string) => act(() => {
+    for (const listener of listeners) listener({ kind: "notifications/open", workspaceId: "w2", sessionId, id: sessionId })
+  })
+  click("slow")
+  click("origin")
+  await waitFor(() => expect(captured.props).toMatchObject({ selectedWorkspaceId: "w2", selectedSessionId: "origin" }))
+  expect(request).toHaveBeenCalledWith({ kind: "desktop/notifications/read", id: "origin" })
+  await act(async () => { pending.resolve({ workspaceId: "w2", sessionId: "slow" }); await pending.promise })
+  expect(captured.props?.selectedSessionId).toBe("origin")
+  click("gone")
+  await screen.findByRole("alert")
+  expect(captured.props?.selectedSessionId).toBe("origin")
+  expect(request).not.toHaveBeenCalledWith({ kind: "desktop/notifications/read", id: "gone" })
+})
 it.each(['sidebar', 'conversation'] as const)('only rereads dashboard data changed by the actual %s management callback', async entry => {
   useUiStore.setState({ selectedWorkspaceId: 'w1', selectedSessionId: 'a' })
   let title = 'Original conversation'
@@ -598,6 +626,27 @@ function fixture(override: (request: DesktopRequest) => Promise<unknown> | undef
   render(strict ? <StrictMode><App bridge={bridge} /></StrictMode> : <App bridge={bridge} />)
   return request
 }
+
+it("refreshes the settings catalogs without activating a workspace until the project is explicitly opened", async () => {
+  let registered = false
+  const folder = { id: "fresh", path: "D:/fresh", label: "Fresh" }
+  const project = { id: "new-project", name: "Fresh project", workspaceIds: [folder.id], primaryWorkspaceId: folder.id }
+  const request = fixture(input => {
+    if (input.kind === "workspace/list") return Promise.resolve(registered ? [folder] : [])
+    if (input.kind === "projects/list") return Promise.resolve(registered ? [project] : [])
+  })
+  await waitFor(() => expect(captured.props?.projects).toEqual([]))
+  request.mockClear()
+  registered = true
+  await act(async () => { await captured.props!.onProjectsChanged!() })
+  expect(captured.props?.workspaces).toEqual([folder])
+  expect(captured.props?.projects).toEqual([project])
+  expect(captured.props?.selectedWorkspaceId).toBeUndefined()
+  expect(request.mock.calls.map(([input]) => input.kind).sort()).toEqual(["projects/list", "workspace/list"])
+  act(() => captured.props!.onSelectProject!(project.id))
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe(folder.id))
+  expect(captured.props?.selectedProjectId).toBe(project.id)
+})
 
 it("refreshes the selected queue and task list only from events that can change their rows", async () => {
   let emit!: Parameters<DesktopBridge["onEvent"]>[0]

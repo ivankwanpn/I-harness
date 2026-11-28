@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { Bell, CheckCheck, RefreshCw, Trash2 } from "lucide-react"
 import type { NotificationHistoryRequest, NotificationHistoryView } from "../../main/notification-history.ts"
-import { useNotificationText } from "./notification-text.ts"
+import { notificationLabels, useNotificationText } from "./notification-text.ts"
 import "./notifications.css"
 
 export function NotificationsPane({ request, onOpenTarget, subscribe }: {
@@ -48,9 +48,9 @@ export function NotificationsPane({ request, onOpenTarget, subscribe }: {
     </header>
     {error ? <p role="alert" className="notice">{error}</p> : null}
     {confirmClear ? <div className="notifications-confirm" role="alertdialog" aria-label={t("清除所有通知記錄？")}><p>{t("清除所有通知記錄？")}</p><div className="provider-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirmClear(false)}>{t("取消")}</button><button type="button" className="danger-button" disabled={busy} onClick={() => { void act({ kind: "desktop/notifications/clear", confirmed: true }) }}>{t("確認清除")}</button></div></div> : null}
-    {view?.items.length === 0 ? <div className="notifications-empty ih-empty-state"><Bell size={22} aria-hidden="true" /><strong>{t("尚無通知記錄")}</strong><p>{t("需要確認或回答的通知會保留在這裡。")}</p></div> : null}
+    {view?.items.length === 0 ? <div className="notifications-empty ih-empty-state"><Bell size={22} aria-hidden="true" /><strong>{t("尚無通知記錄")}</strong></div> : null}
     <ul className="notifications-list">{view?.items.map(row => <li key={row.id} className={row.read ? "notification-read" : "notification-unread"}>
-      <div className="notification-copy"><span className="notification-kind">{t(row.kind === "approval" ? "需要核准" : "等待回答")}</span><p>{row.summary}</p><time dateTime={row.createdAt}>{new Date(row.createdAt).toLocaleString()}</time></div>
+      <div className="notification-copy"><span className="notification-kind">{t(notificationLabels[row.kind])}</span><p>{row.summary}</p><time dateTime={row.createdAt}>{new Date(row.createdAt).toLocaleString()}</time></div>
       <div className="notification-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => { void onOpenTarget({ workspaceId: row.workspaceId, sessionId: row.sessionId }).catch(reason => { if (mounted.current) setError(reason instanceof Error ? reason.message : String(reason)) }) }}>{t("開啟會話")}</button>
         {!row.read ? <button type="button" className="link-button" disabled={busy} onClick={() => { void act({ kind: "desktop/notifications/read", id: row.id }) }}>{t("標為已讀")}</button> : null}</div>
     </li>)}</ul>

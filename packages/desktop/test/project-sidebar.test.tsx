@@ -142,8 +142,10 @@ describe("project conversation sidebar", () => {
 
   it("orders pinned projects first and collects all member conversations directly under an expanded project", async () => {
     const { props, bridge } = fixture()
-    const view = render(<ProjectSidebar {...props} />)
+    const view = render(<ProjectSidebar {...props} projects={props.projects.map(project =>
+      project.id === "p1" ? { ...project, color: "violet" } : project)} />)
     expect(Array.from(view.container.querySelectorAll(".project-sidebar-project-name")).map((row) => row.textContent)).toEqual(["Pinned", "Product"])
+    expect(screen.getByRole("button", { name: "Product" }).querySelector("[data-project-color=violet]")).toBeTruthy()
     expect(screen.getByText("未分類會話")).toBeTruthy()
     expect(await screen.findByText("Current chat")).toBeTruthy()
     expect(await screen.findByText("Chat w2")).toBeTruthy()

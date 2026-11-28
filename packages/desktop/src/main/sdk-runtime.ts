@@ -59,6 +59,7 @@ export function captureChildStream(stream: NodeJS.ReadableStream | null | undefi
 }
 
 export interface WorkspaceRuntimeManager {
+  hostStatus?(): import("../shared/bridge.ts").DesktopHostStatus
   peek?(workspaceId: string): WorkspaceRuntime | undefined
   pendingRuntime?(workspaceId: string): Promise<WorkspaceRuntime> | undefined
   invalidate?(workspaceId: string): Promise<void>
@@ -289,6 +290,18 @@ export function createWorkspaceRuntimeManager(options: {
     }, state.retryAt - now)
   }
   const manager: WorkspaceRuntimeManager = {
+    hostStatus() {
+      const ids = new Set([...runtimes.keys(), ...pending.keys(), ...restartWindow.keys()])
+      const scopes: import("../shared/bridge.ts").DesktopHostStatus["scopes"] = []
+      for (const workspaceId of ids) {
+        const runtime = runtimes.get(workspaceId)
+        const recovery = restartWindow.get(workspaceId)
+        if (runtime && !retiredClients.has(runtime.client)) scopes.push({ workspaceId, connection: "online" })
+        else if (pending.has(workspaceId) || recovery?.timer) scopes.push({ workspaceId, connection: recovery ? "reconnecting" : "connecting" })
+        else if ((recovery && recovery.count >= 4) || runtime) scopes.push({ workspaceId, connection: "offline" })
+      }
+      return { ...(shared?.status() ?? { process: workspaceOwners.size ? "running" : "standby" }), scopes }
+    },
     async recover(workspace) {
       await manager.invalidate!(workspace.id)
       return manager.get(workspace)

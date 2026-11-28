@@ -14,7 +14,7 @@ const bridge = { request: async () => undefined, onEvent: () => () => {} }
 
 it("keeps callable navigation and one Settings entry while the project pane is collapsed", () => {
   const onSelectWorkspace = vi.fn(), onProjectsChanged = vi.fn(async () => {})
-  render(<Workbench bridge={bridge} workspaces={[{ id: "w", path: "D:/fixture", label: "fixture" }]} selectedWorkspaceId="w" capabilities={{ "session-create": ["1"], "desktop-plugins": ["1"], "desktop-session-search": ["1"] }} onSelectSession={() => {}} onSelectWorkspace={onSelectWorkspace} onProjectsChanged={onProjectsChanged} />)
+  render(<Workbench bridge={bridge} projects={[]} workspaces={[{ id: "w", path: "D:/fixture", label: "fixture" }]} selectedWorkspaceId="w" capabilities={{ "session-create": ["1"], "desktop-plugins": ["1"], "desktop-session-search": ["1"] }} onSelectSession={() => {}} onSelectWorkspace={onSelectWorkspace} onProjectsChanged={onProjectsChanged} />)
   const rail = screen.getByRole("navigation", { name: "主導覽" })
   fireEvent.click(screen.getByRole("button", { name: "顯示側欄" }))
   expect(screen.queryByRole("navigation", { name: "專案" })).toBeNull()
@@ -28,7 +28,8 @@ it("keeps callable navigation and one Settings entry while the project pane is c
   expect(screen.getAllByRole("button", { name: "設定" })).toHaveLength(1)
   expect(screen.queryByText(/登入|帳戶|Login|Account/)).toBeNull()
   fireEvent.click(within(rail).getByRole("button", { name: "插件市場" }))
-  expect(useUiStore.getState().surface).toBe("plugins")
+  expect(useUiStore.getState().surface).toBe("settings")
+  expect(screen.getByRole("tab", { name: "插件", selected: true })).toBeTruthy()
   fireEvent.click(within(rail).getByRole("button", { name: "搜尋會話" }))
   expect(useUiStore.getState().surface).toBe("search")
 })
@@ -36,13 +37,19 @@ it("keeps callable navigation and one Settings entry while the project pane is c
 it("retains project expansion, selection and tree position across collapsing and Settings navigation", () => {
   const request = vi.fn(async (input: { kind: string }) => input.kind === "desktop/session/project/state" ? {} : undefined)
   const props = { bridge: { request, onEvent: () => () => {} }, projects: [{ id: "p", name: "Project fixture", workspaceIds: ["w"], createdAt: "2026-10-04", updatedAt: "2026-10-04" }], workspaces: [{ id: "w", path: "D:/fixture", label: "fixture" }], selectedProjectId: "p", selectedWorkspaceId: "w", onSelectSession: () => {}, onSelectWorkspace: () => {}, onManageSessionInWorkspace: async () => {}, onProjectsChanged: async () => {}, capabilities: {} }
-  const view = render(<Workbench {...props} />)
-  fireEvent.click(within(screen.getByRole("navigation", { name: "主導覽" })).getByRole("button", { name: "專案" }))
-  fireEvent.click(within(screen.getByRole("region", { name: "專案" })).getByText("Project fixture").closest("button")!)
-  const expander = screen.getByRole("button", { name: "收合專案 Project fixture" })
-  const project = screen.getByRole("button", { name: "Project fixture" })
+  const onSelectProject = vi.fn()
+  const view = render(<Workbench {...props} onSelectProject={onSelectProject} />)
   const tree = view.container.querySelector<HTMLElement>(".sidebar-scroll")!
   tree.scrollTop = 140
+  fireEvent.click(within(screen.getByRole("navigation", { name: "主導覽" })).getByRole("button", { name: "專案" }))
+  fireEvent.click(within(screen.getByRole("region", { name: "專案" })).getByText("Project fixture").closest("button")!)
+  expect(screen.getByRole("navigation", { name: "專案設定頁面" })).toBeTruthy()
+  expect(onSelectProject).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole("button", { name: "開啟專案" }))
+  expect(onSelectProject).toHaveBeenCalledWith("p")
+  expect(useUiStore.getState().surface).toBe("conversation")
+  const expander = screen.getByRole("button", { name: "收合專案 Project fixture" })
+  const project = screen.getByRole("button", { name: "Project fixture" })
   fireEvent.click(screen.getByRole("button", { name: "顯示側欄" }))
   fireEvent.click(within(screen.getByRole("navigation", { name: "主導覽" })).getByRole("button", { name: "設定" }))
   fireEvent.click(screen.getByRole("button", { name: "返回會話" }))
@@ -53,14 +60,16 @@ it("retains project expansion, selection and tree position across collapsing and
   expect(tree.scrollTop).toBe(140)
 })
 
-it("omits rail actions without their callback or capability", () => {
+it("opens shared plugins from the rail before selecting a workspace and omits unavailable workspace actions", () => {
   render(<Workbench bridge={bridge} workspaces={[]} capabilities={{}} onSelectSession={() => {}} onSelectWorkspace={() => {}} />)
   const rail = within(screen.getByRole("navigation", { name: "主導覽" }))
   expect(rail.queryByRole("button", { name: "開啟專案" })).toBeNull()
   expect(rail.queryByRole("button", { name: "管理專案" })).toBeNull()
-  expect(rail.queryByRole("button", { name: "插件市場" })).toBeNull()
   expect(rail.queryByRole("button", { name: "搜尋會話" })).toBeNull()
   expect((rail.getByRole("button", { name: "新增會話" }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.click(rail.getByRole("button", { name: "插件市場" }))
+  expect(useUiStore.getState().surface).toBe("settings")
+  expect(screen.getByRole("tab", { name: "插件", selected: true })).toBeTruthy()
 })
 
 it.each(["cross-workspace", "current-workspace"])("marks Home selections read at their original source without waiting for a successful update (%s)", async mode => {

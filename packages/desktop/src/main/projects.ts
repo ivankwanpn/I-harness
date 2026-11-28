@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto"
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises"
 import { dirname } from "node:path"
 import type { WorkspaceCatalog, WorkspaceEntry } from "./workspaces.ts"
+import { isProjectColor, type ProjectColor } from "../shared/project-colors.ts"
 
 export interface ProjectEntry {
+  color?: ProjectColor
   id: string
   name: string
   workspaceIds: string[]
@@ -14,6 +16,7 @@ export interface ProjectEntry {
 }
 export type Project = ProjectEntry
 export interface ProjectInput {
+  color?: ProjectColor
   id?: string
   name: string
   workspaceIds: string[]
@@ -68,11 +71,15 @@ function checkedInput(value: unknown, workspaces: WorkspaceCatalog): ProjectInpu
   if (value.expectedUpdatedAt !== undefined && !isTimestamp(value.expectedUpdatedAt)) {
     throw new ProjectCatalogError("Project revision must be an ISO timestamp", "invalid-project-input")
   }
+  if (value.color !== undefined && !isProjectColor(value.color)) {
+    throw new ProjectCatalogError("Unknown project color", "invalid-project-input")
+  }
   return {
     name, workspaceIds: [...workspaceIds],
     ...(value.id === undefined ? {} : { id: value.id as string }),
     ...(value.primaryWorkspaceId === undefined ? {} : { primaryWorkspaceId: value.primaryWorkspaceId as string }),
     ...(value.pinned === undefined ? {} : { pinned: value.pinned as boolean }),
+    ...(value.color === undefined ? {} : { color: value.color }),
     ...(value.expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt: value.expectedUpdatedAt as string }),
   }
 }
@@ -171,7 +178,8 @@ export function createProjectCatalog(filePath: string, workspaces: WorkspaceCata
         }
         const at = new Date(Math.max(Date.now(), existing ? Date.parse(existing.updatedAt) + 1 : 0)).toISOString()
         const { expectedUpdatedAt: _expected, ...fields } = checked
-        const saved: ProjectEntry = { ...fields, id: existing?.id ?? randomUUID(), pinned: checked.pinned ?? existing?.pinned ?? false,
+        const color = checked.color ?? existing?.color
+        const saved: ProjectEntry = { ...fields, ...(color === undefined ? {} : { color }), id: existing?.id ?? randomUUID(), pinned: checked.pinned ?? existing?.pinned ?? false,
           createdAt: existing?.createdAt ?? at, updatedAt: at }
         const next = existing ? current.map((row) => row.id === existing.id ? saved : row) : [...current, saved]
         await writeRows(next)

@@ -23,16 +23,20 @@ const bodyPreview = (body: string) => ({ body: body.slice(0, 131072), truncated:
 
 /** Adapts the same effective registries the engine consumes. Does not execute
  * resources or read arbitrary renderer-provided paths. */
-export function createDesktopResources(workspace: string, inputs: () => Promise<RuntimeInputs>, options?: { configDir?: string; pluginRoot?: string; refresh?(): Promise<void> }) {
+export function createDesktopResources(workspace: string | undefined, inputs: () => Promise<RuntimeInputs>, options?: { configDir?: string; pluginRoot?: string; refresh?(source: LocalResourceSource): Promise<void> }) {
   const configDir = options?.configDir ?? dirname(resolveHooksConfigPath())
-  const rootFor = (source: LocalResourceSource) => source === "workspace" ? workspace : configDir
+  const rootFor = (source: LocalResourceSource) => {
+    if (source === "global") return configDir
+    if (source === "workspace" && workspace) return workspace
+    throw new Error("Workspace resource requires a workspace")
+  }
   const effectiveInputs = async () => createEffectiveLocalInputs(workspace, configDir, await inputs())
   async function localPath(kind: ResourceKind, source: LocalResourceSource, name: string) {
     if (source !== "workspace" && source !== "global") throw new Error("Resource source must be workspace or global; copy plugin content locally")
     validateResourceName(name)
     const root = rootFor(source)
     if (kind === "skills") {
-      const rows = createSkillRegistry({ ...(source === "workspace" ? { workspace } : {}), globalDir: source === "global" ? join(configDir, "skills") : join(workspace, ".i-harness", ".no-global-skills") }).list()
+      const rows = createSkillRegistry({ ...(source === "workspace" ? { workspace } : {}), globalDir: join(configDir, "skills") }).list()
       return rows.find(row => row.name === name && row.source === source)?.path ?? join(root, "skills", name, "SKILL.md")
     }
     if (kind !== "commands") throw new Error("Invalid resource kind")
@@ -55,7 +59,7 @@ export function createDesktopResources(workspace: string, inputs: () => Promise<
     const skillLayers = () => {
       const global = createSkillRegistry({ globalDir: join(configDir, "skills"), onWarn: () => {} }).list()
       const plugins = input.skillDirs.flatMap(root => createSkillRegistry({ globalDir: join(configDir, "skills"), extraDirs: [root], onWarn: () => {} }).list().filter(row => row.source === "plugin").map(row => ({ ...row, pluginId: basename(root) })))
-      const local = createSkillRegistry({ workspace, globalDir: join(configDir, "skills"), onWarn: () => {} }).list().filter(row => row.source === "workspace")
+      const local = workspace ? createSkillRegistry({ workspace, globalDir: join(configDir, "skills"), onWarn: () => {} }).list().filter(row => row.source === "workspace") : []
       const effective = new Map(skillRows().map(row => [row.name, row.path]))
       return [...global, ...plugins, ...local].map(row => ({ ...row, effective: effective.get(row.name) === row.path }))
     }
@@ -122,8 +126,8 @@ export function createDesktopResources(workspace: string, inputs: () => Promise<
       }
       if (kind !== "skills") throw new Error("Invalid resource kind")
       const input = await inputs()
-      const registry = source ? createSkillRegistry({ ...(source === "workspace" ? { workspace } : {}), globalDir: source === "global" ? join(configDir, "skills") : join(workspace, ".i-harness", ".no-global-skills"), extraDirs: source === "plugin" ? input.skillDirs.filter(root => !pluginId || basename(root) === pluginId) : [] }) : data.skills
-      const summary = registry.list().find((row) => row.name === name)
+      const registry = source ? createSkillRegistry({ ...(source === "workspace" ? { workspace: rootFor(source) } : {}), globalDir: join(configDir, "skills"), extraDirs: source === "plugin" ? input.skillDirs.filter(root => !pluginId || basename(root) === pluginId) : [] }) : data.skills
+      const summary = registry.list().find((row) => row.name === name && (!source || row.source === source))
       if (!summary) return undefined
       const skill = await registry.getSkill(name)
       if (!skill) return undefined
@@ -141,17 +145,18 @@ export function createDesktopResources(workspace: string, inputs: () => Promise<
           if (!parsed?.meta.description || (parsed.meta.name ?? command.name) !== command.name) throw new Error("SKILL.md requires valid scalar frontmatter with matching name and description")
         } else if (!body.trim()) throw new Error("Command body cannot be empty")
       })
-      if (result.kind === "saved") try { await options?.refresh?.() } catch { throw new Error("Resource saved, but live refresh failed. Reload the saved revision and retry refresh.") }
+      if (result.kind === "saved") try { await options?.refresh?.(command.source) } catch { throw new Error("Resource saved, but live refresh failed. Reload the saved revision and retry refresh.") }
       return result
     },
     async remove(command: ResourceRemove) {
       const path = await localPath(command.resourceKind, command.source, command.name)
       const result = await mutateResourceFile(rootFor(command.source), path, command.expectedRevision)
-      if (result.kind === "removed") try { await options?.refresh?.() } catch { throw new Error("Resource removed, but live refresh failed. Retry refresh.") }
+      if (result.kind === "removed") try { await options?.refresh?.(command.source) } catch { throw new Error("Resource removed, but live refresh failed. Retry refresh.") }
       return result
     },
     /** Native main-process dialog supplies this path; never forward a renderer path here. */
     async importSkill(source: LocalResourceSource, selectedPath: string) {
+      rootFor(source)
       if (basename(selectedPath).toLowerCase() !== "skill.md") throw new Error("Choose a local SKILL.md")
       const raw = readResourceFile(dirname(selectedPath), selectedPath)
       if (!raw) throw new Error("Selected SKILL.md no longer exists")

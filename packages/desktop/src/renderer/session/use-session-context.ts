@@ -72,7 +72,7 @@ export function useSessionContext(bridge: DesktopBridge, workspaceId?: string, s
     refresh.current = control
     const mountRevision = revision
     const unsubscribe = bridge.onEvent(message => {
-      if (!active || message.kind === "window/state" || message.kind === "runtime/diagnostic" || message.kind === "runtime/activity" || message.workspaceId !== workspaceId) return
+      if (!active || (message.kind !== "sdk/disconnected" && message.kind !== "sdk/notification") || message.workspaceId !== workspaceId) return
       if (message.kind === "sdk/disconnected") {
         disconnected = { message: message.message }
         revision++; dirty = false; immediate = false

@@ -45,7 +45,8 @@ export type DesktopRequest =
   | { kind: "desktop/context/search"; workspaceId: string; sessionId?: string; projectId?: string; query: string; contextKind: "files" | "sessions"; offset: number }
   | { kind: "desktop/context/read"; workspaceId: string; sessionId?: string; projectId?: string; reference: import("@i-harness/desktop-gateway/src/context-picker.ts").ContextReference }
   | { kind: "projects/list" }
-  | { kind: "projects/save"; input: { id?: string; name: string; workspaceIds: string[]; primaryWorkspaceId?: string; pinned?: boolean; expectedUpdatedAt?: string } }
+  | { kind: "projects/save"; input: import("../main/projects.ts").ProjectInput }
+  | { kind: "projects/appearance"; id: string; expectedUpdatedAt: string; pinned?: boolean; color?: import("./project-colors.ts").ProjectColor }
   | { kind: "projects/remove"; id: string }
   | { kind: "workspace/reveal"; workspaceId: string }
   | { kind: "desktop/session/navigation/state"; workspaceId: string; includeCoverage?: true }
@@ -122,7 +123,7 @@ export type DesktopRequest =
   | { kind: "window/control"; action: "minimize" | "toggle-maximize" | "close" }
   | { kind: "window/state" }
   | { kind: "window/reset-bounds" | "desktop/local/state" }
-  | { kind: "desktop/local/configure"; notifications?: boolean; locale?: "zh-TW" | "en"; terminalShell?: TerminalShellChoice; terminalFontFamily?: string; followupDelivery?: "queue" | "steer" }
+  | { kind: "desktop/local/configure"; notifications?: boolean; notificationRule?: import("./notification-preferences.ts").NotificationRuleChange; locale?: "zh-TW" | "en"; terminalShell?: TerminalShellChoice; terminalFontFamily?: string; followupDelivery?: "queue" | "steer" }
   | { kind: "desktop/session/search"; workspaceId: string; query: string; sessionId?: string; limit?: number }
   | { kind: "desktop/session/compact"; workspaceId: string; sessionId: string; instructions?: string; operationId?: string }
   | { kind: "desktop/session/compact/cancel"; workspaceId: string; sessionId: string; operationId: string }
@@ -138,6 +139,7 @@ export type DesktopRequest =
   | { kind: "workspace/sandbox/state"; workspaceId: string }
   | { kind: "desktop/capabilities"; workspaceId: string }
   | { kind: "desktop/runtime/status"; workspaceId: string }
+  | { kind: "desktop/runtime/host-status" }
   | { kind: "desktop/runtime/recover"; workspaceId: string }
   | { kind: "session/list"; workspaceId: string }
   | { kind: "session/dashboard"; workspaceId: string; opening?: true }
@@ -221,12 +223,20 @@ void _everyNotificationIsForwarded
 
 export type WorkspaceConnection = "online" | "offline" | "connecting" | "reconnecting" | "idle"
 
+export interface DesktopHostStatus {
+  process: "standby" | "running" | "stopping"
+  pid?: number
+  scopes: { workspaceId: string; connection: WorkspaceConnection }[]
+}
+
 export type DesktopEvent =
   | {kind:"sdk/ready";workspaceId:string;runtimeGeneration:number;method:"sdk/ready";params?:never}
   | {kind:"sdk/idle";workspaceId:string;runtimeGeneration:number;method:"sdk/idle";params?:never}
   | { kind: "runtime/diagnostic"; entry: import("./runtime-diagnostics.ts").RuntimeDiagnosticEntry }
   | ({ kind: "runtime/activity" } & import("./runtime-diagnostics.ts").RuntimeActivity)
   | { kind: "window/state"; maximized: boolean; visible?: boolean }
+  | { kind: "notifications/open"; workspaceId: string; sessionId: string; id: string }
+  | { kind: "notifications/changed" }
   | {
       kind: "sdk/notification"
       workspaceId: string

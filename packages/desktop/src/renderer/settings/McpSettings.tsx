@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { Plus, RotateCw } from "lucide-react"
 import type { McpSettingsCommand } from "@i-harness/desktop-gateway/src/mcp-settings.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
-import { useText } from "../design/i18n.ts"
+import { useAuthoringText } from "./resource-authoring-text.ts"
 import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
 import { Button } from "../vendor/opencode/Button.tsx"
 import { SettingsDialog } from "./SettingsDialog.tsx"
@@ -13,7 +13,7 @@ export function McpSettings(props: McpSettingsProps) {
   return <SettingsDraftScope owner={props.bridge}><McpSettingsContent key={props.workspaceId} {...props} /></SettingsDraftScope>
 }
 function McpSettingsContent({ bridge, workspaceId, active = true }: McpSettingsProps) {
-  const t = useText()
+  const t = useAuthoringText()
   const [state, setState] = useState<McpState>()
   const [editing, setEditing] = useSettingsDraft<string | null | undefined>(["mcp", workspaceId, "editing"], undefined)
   const [confirm, setConfirm] = useState<string>()
@@ -22,10 +22,17 @@ function McpSettingsContent({ bridge, workspaceId, active = true }: McpSettingsP
   const lock = useRef(false)
   const generation = useRef(0)
   useEffect(() => {
-    let active = true; ++generation.current; lock.current = true
-    void bridge.request({ kind: "desktop/mcp/state", workspaceId }).then((value) => { if (active) setState(value as McpState) }).catch((reason: unknown) => { if (active) setError(String(reason)) }).finally(() => { lock.current = false; if (active) setBusy(false) })
-    return () => { active = false; ++generation.current }
+    return () => { ++generation.current; lock.current = false }
   }, [bridge, workspaceId])
+  useEffect(() => {
+    if (!active || lock.current) return
+    const token = generation.current
+    lock.current = true; setBusy(true); setError(undefined)
+    void bridge.request({ kind: "desktop/mcp/state", workspaceId }).then(value => {
+      if (token === generation.current) setState(value as McpState)
+    }).catch((reason: unknown) => { if (token === generation.current) setError(String(reason)) })
+      .finally(() => { if (token === generation.current) { lock.current = false; setBusy(false) } })
+  }, [active, bridge, workspaceId])
   async function run(command: McpSettingsCommand | "state" | "refresh", propagateError = false) {
     if (lock.current) return
     const token = generation.current
@@ -48,7 +55,7 @@ function McpSettingsContent({ bridge, workspaceId, active = true }: McpSettingsP
     } finally { if (token === generation.current) { lock.current = false; setBusy(false) } }
   }
   return <section hidden={!active} aria-label={t("MCP 伺服器")}>
-    <p className="settings-description">{t("這些 MCP 設定由本機工作區共用。啟用與停用會套用到現有 Agent；插件提供的 MCP 由插件頁管理。")}</p>
+    <p className="settings-description">{t("這些 MCP 設定由本機工作區共用。啟用與停用會套用到現有 Agent；插件提供的 MCP 由插件頁管理。")} {t("此頁顯示已儲存的 MCP 設定。連線狀態依使用中的工作階段而定。")}</p>
     <div className="provider-actions"><Button variant="primary" icon={<Plus size={15} />} disabled={busy || !state} onClick={() => setEditing(null)}>{t("新增 MCP 伺服器")}</Button><Button icon={<RotateCw size={15} />} disabled={busy} onClick={() => { void run("refresh") }}>{t("重新套用")}</Button></div>
     {error ? <div role="alert" className="error-text">{error}{!state ? <Button size="small" disabled={busy} onClick={() => { void run("state") }}>{t("重試")}</Button> : null}</div> : null}
     {state?.applyError ? <div role="alert" className="error-text">{state.applyError}<Button size="small" disabled={busy} onClick={() => { void run("refresh") }}>{t("重試套用")}</Button></div> : null}

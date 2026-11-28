@@ -193,13 +193,14 @@ describe("Desktop workbench shell", () => {
   it("inserts a settings command into the existing draft without sending", async () => {
     const bridge = fakeBridge()
     bridge.request = vi.fn(async (request) => request.kind === "session/dashboard" ? { sessions: [] } : request.kind === "desktop/session/navigation/state" ? {} : request.kind === "desktop/resources/list" ? { items: [{ name: "hello", source: "plugin" }], total: 1, diagnostics: [] }
-      : request.kind === "desktop/resources/read" ? { name: "hello", source: "plugin", body: "A prompt", truncated: false } : { notifications: false, notificationsSupported: false })
+      : request.kind === "desktop/mcp/state" ? { servers: [] } : request.kind === "desktop/resources/read" ? { name: "hello", source: "plugin", body: "A prompt", truncated: false } : { notifications: false, notificationsSupported: false })
     const onPrompt = vi.fn(async () => {})
     writeDraft(ENTRY.id, "resource-test", "existing prompt")
     useUiStore.setState({ surface: "settings" })
     render(<Workbench bridge={bridge} workspaces={[ENTRY]} selectedWorkspaceId={ENTRY.id} selectedSessionId="resource-test" capabilities={{ "desktop-resources": ["1"] }} onSelectWorkspace={() => {}} onSelectSession={() => {}}
       conversation={{ rows: [], canSend: true, running: false, pending: [], onPrompt, onCancel() {}, onCancelTask() {}, onCancelQueue() {}, onReply: async () => {} }} />)
-    fireEvent.click(screen.getByRole("button", { name: "資源" }))
+    fireEvent.click(screen.getByRole("button", { name: "擴充功能" }))
+    fireEvent.change(screen.getByRole("combobox", { name: "設定範圍" }), { target: { value: "workspace" } })
     fireEvent.click(screen.getByRole("tab", { name: "命令" }))
     fireEvent.click(await screen.findByRole("button", { name: "hello" }))
     fireEvent.click(await screen.findByRole("button", { name: "帶入此命令" }))
@@ -209,10 +210,12 @@ describe("Desktop workbench shell", () => {
   })
   it("retains a resource draft after leaving and reopening Settings", async () => {
     const bridge = fakeBridge()
-    bridge.request = vi.fn(async request => request.kind === "session/dashboard" ? { sessions: [] } : request.kind === "desktop/session/navigation/state" ? {} : request.kind === "desktop/resources/list" ? { items: [], total: 0, diagnostics: [] } : { notifications: false, notificationsSupported: false })
+    bridge.request = vi.fn(async request => request.kind === "session/dashboard" ? { sessions: [] } : request.kind === "desktop/session/navigation/state" ? {} : request.kind === "desktop/mcp/state" ? { servers: [] } : request.kind === "desktop/resources/list" ? { items: [], total: 0, diagnostics: [] } : { notifications: false, notificationsSupported: false })
     useUiStore.setState({ surface: "settings" })
     render(<Workbench bridge={bridge} workspaces={[ENTRY]} selectedWorkspaceId={ENTRY.id} capabilities={{ "desktop-resources": ["1"], "desktop-resource-authoring": ["1"] }} onSelectWorkspace={() => {}} onSelectSession={() => {}} />)
-    fireEvent.click(screen.getByRole("button", { name: "資源" }))
+    fireEvent.click(screen.getByRole("button", { name: "擴充功能" }))
+    fireEvent.change(screen.getByRole("combobox", { name: "設定範圍" }), { target: { value: "workspace" } })
+    fireEvent.click(screen.getByRole("tab", { name: "技能" }))
     fireEvent.click(await screen.findByRole("button", { name: "建立資源" }))
     fireEvent.change(screen.getByRole("textbox", { name: "名稱" }), { target: { value: "kept-draft" } })
     fireEvent.click(screen.getByRole("button", { name: "保留草稿並關閉" }))

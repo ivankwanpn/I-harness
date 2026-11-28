@@ -8,6 +8,8 @@ import { createAutoTitleSettings } from "./auto-title.ts"
 import { createCodingPlans } from "./coding-plans.ts"
 import type { DesktopHost } from "./host.ts"
 import { createDesktopMcp } from "./mcp-settings.ts"
+import { createDesktopPlugins } from "./plugins.ts"
+import { createDesktopResources } from "./resources.ts"
 import { createModelRetrySettings } from "./model-retry-settings.ts"
 import { createModelWaitSettings } from "./model-wait-settings.ts"
 import { createDesktopRouter, createGatewayWrite } from "./router.ts"
@@ -23,9 +25,27 @@ export function createDesktopProfileServices(settingsPath = resolveSettingsPath(
   const codingPlans = createCodingPlans(accounts, provider)
   const usageStore = createUsageStore(join(dirname(settingsPath), "usage-stats"))
   const mcp = createDesktopMcp(join(dirname(settingsPath), "mcp-servers.json"))
-  return { settingsPath, credentialsPath, accounts, provider, codingPlans, usageStore, mcp, async close() {
-    try { await mcp.close() } finally { await codingPlans.close() }
-  } }
+  const configDir = dirname(settingsPath)
+  const plugins = createDesktopPlugins(join(configDir, "plugins"))
+  const resourceListeners = new Set<() => Promise<void>>()
+  const refreshResources = async () => {
+    const results = await Promise.allSettled(Array.from(resourceListeners, refresh => Promise.resolve().then(refresh)))
+    const errors = results.flatMap(result => result.status === "rejected" ? [result.reason] : [])
+    if (errors.length) throw new AggregateError(errors, "Unable to refresh resources in active workspaces")
+  }
+  const resources = createDesktopResources(undefined, () => plugins.inputs(), { configDir, refresh: refreshResources })
+  return {
+    settingsPath, credentialsPath, accounts, provider, codingPlans, usageStore, mcp, plugins, resources, refreshResources,
+    onResourceChange(refresh: () => Promise<void>) {
+      resourceListeners.add(refresh)
+      return () => { resourceListeners.delete(refresh) }
+    },
+    async close() {
+      const results = await Promise.allSettled([plugins.close(), mcp.close(), codingPlans.close()])
+      const errors = results.flatMap(result => result.status === "rejected" ? [result.reason] : [])
+      if (errors.length) throw new AggregateError(errors, "Unable to close profile services")
+    },
+  }
 }
 
 export type DesktopProfileServices = ReturnType<typeof createDesktopProfileServices>
@@ -37,7 +57,7 @@ export async function createConfigurationHost(profile: DesktopProfileServices, s
   const handlers: DesktopHandlers = {
     hasActiveWork: () => false,
     hasActiveProfileWork: () => profile.accounts.hasActiveLogin(),
-    provider: profile.provider, codingPlans: profile.codingPlans, mcp: profile.mcp,
+    provider: profile.provider, codingPlans: profile.codingPlans, mcp: profile.mcp, plugins: profile.plugins, resources: profile.resources,
     autoTitle: createAutoTitleSettings(profile.settingsPath),
     modelRetry: createModelRetrySettings(profile.settingsPath),
     modelWait: createModelWaitSettings(profile.settingsPath),

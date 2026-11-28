@@ -128,7 +128,7 @@ function SubagentSession({ bridge, workspaceId, sessionId, parentTitle, instruct
     }
     let refresh = createRefreshScheduler(refreshReads)
     const unsubscribe = bridge.onEvent((event) => {
-      if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity") return
+      if (event.kind !== "sdk/disconnected" && event.kind !== "sdk/notification") return
       if (event.workspaceId !== workspaceId) return
       if (event.kind === "sdk/disconnected") {
         epoch.current++; catalogTicket.current++; historyTicket.current++

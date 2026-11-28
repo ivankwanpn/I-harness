@@ -36,8 +36,15 @@ it("uses one shared-host probe per decision, requires complete results, and reta
   const events: DesktopEvent[] = []
   const unsubscribe = manager.onEvent(event => events.push(event))
   try {
+    expect(manager.hostStatus!()).toMatchObject({ process: "standby", scopes: [] })
     const [a, b] = await Promise.all([manager.get(f.workspace("a")), manager.get(f.workspace("b"))])
     expect(a.hostPid).toBe(b.hostPid)
+    const status = manager.hostStatus!()
+    expect(status).toMatchObject({ process: "running", pid: a.hostPid })
+    expect(status.scopes.sort((a, b) => a.workspaceId.localeCompare(b.workspaceId))).toEqual([
+      { workspaceId: "a", connection: "online" }, { workspaceId: "b", connection: "online" },
+    ])
+    expect(await a.client.request("stats")).toMatchObject({ probes: 0, inner: 0 })
     expect(await manager.hasActiveWork()).toBe(false)
     expect(await a.client.request("stats")).toMatchObject({ probes: 1, inner: 0 })
     for (const value of ["missing", "duplicate", "foreign", "unknown"]) {
@@ -49,6 +56,7 @@ it("uses one shared-host probe per decision, requires complete results, and reta
     expect(await manager.hasActiveWork()).toBe(true)
     await new Promise(resolve => setTimeout(resolve, 5))
     expect(await manager.evictIdle!(1)).toBe(2)
+    expect(manager.hostStatus!()).toMatchObject({ process: "running", pid: a.hostPid, scopes: [] })
     expect(events.filter(event => event.kind === "sdk/idle")).toEqual(expect.arrayContaining([
       { kind: "sdk/idle", method: "sdk/idle", workspaceId: "a", runtimeGeneration: a.generation },
       { kind: "sdk/idle", method: "sdk/idle", workspaceId: "b", runtimeGeneration: b.generation },

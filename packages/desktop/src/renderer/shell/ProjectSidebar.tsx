@@ -75,7 +75,7 @@ function ProjectTree(props: ProjectSidebarProps) {
   useEffect(() => {
     const connections = createWorkspaceConnections()
     const unsubscribe = bridge.onEvent(event => {
-      if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity") return
+      if (event.kind !== "sdk/disconnected" && !("method" in event)) return
       if (!connections.observe(event)) return
       const reader = readers.current.get(event.workspaceId)
       if (!reader) return
@@ -187,7 +187,7 @@ function ProjectTree(props: ProjectSidebarProps) {
               onClick={() => toggleProject(key)}><ChevronRight size={14} aria-hidden="true" /></button>
             <button type="button" className="project-sidebar-project-select" aria-current={project.id === effectiveProjectId ? "true" : undefined}
               onClick={() => { setExpandedProjects((current) => new Set(current).add(key)); props.onSelectProject(project.id) }}>
-              <FolderOpen size={15} aria-hidden="true" /><span className="project-sidebar-project-name">{project.name}</span>
+              <FolderOpen size={15} aria-hidden="true" data-project-color={project.color} /><span className="project-sidebar-project-name">{project.name}</span>
             </button>
             {project.pinned ? <Pin size={12} className="project-sidebar-pin" aria-label={t("已釘選")} /> : null}
             {createControl(creationFolder, project)}

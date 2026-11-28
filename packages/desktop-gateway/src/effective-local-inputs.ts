@@ -9,12 +9,14 @@ export interface EffectiveRuntimeInputs extends RuntimeInputs { commandDescripto
 export const authoredHookPath = (workspace: string, configDir: string, source: LocalResourceSource) => source === "workspace" ? join(workspace, ".i-harness", "hooks", "hooks.json") : join(configDir, "hooks", "authored", "hooks.json")
 
 /** Feed this result to pluginExtensions and the resource/slash catalogues on every build/refresh. */
-export function createEffectiveLocalInputs(workspace: string, configDir: string, input: RuntimeInputs): EffectiveRuntimeInputs {
+export function createEffectiveLocalInputs(workspace: string | undefined, configDir: string, input: RuntimeInputs): EffectiveRuntimeInputs {
   const diagnostics: string[] = []
   const commands = new Map<string, EffectiveCommandDescriptor>()
   const commandLayers: EffectiveCommandDescriptor[] = []
   const scan = (source: LocalResourceSource) => {
-    const root = source === "workspace" ? workspace : configDir, dir = join(root, "commands")
+    const root = source === "workspace" ? workspace : configDir
+    if (!root) return
+    const dir = join(root, "commands")
     if (!existsSync(dir)) return
     try {
       assertResourcePath(root, dir)
@@ -35,7 +37,9 @@ export function createEffectiveLocalInputs(workspace: string, configDir: string,
   scan("workspace")
   const hookConfigs = [...input.hookConfigs]
   for (const source of ["global", "workspace"] as const) {
-    const path = authoredHookPath(workspace, configDir, source), root = source === "workspace" ? workspace : configDir
+    const root = source === "workspace" ? workspace : configDir
+    if (!root) continue
+    const path = authoredHookPath(root, configDir, source)
     if (!existsSync(path)) continue
     try { if (readResourceFile(root, path)) hookConfigs.push(path) } catch (error) { diagnostics.push(String(error)) }
   }

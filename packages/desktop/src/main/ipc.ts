@@ -6,6 +6,7 @@ import type { WorkspaceRuntime, WorkspaceRuntimeManager } from "./sdk-runtime.ts
 import { validateSandboxState } from "./sdk-runtime.ts"
 import type { WorkspaceCatalog } from "./workspaces.ts"
 import type { ProjectCatalog } from "./projects.ts"
+import { isProjectColor } from "../shared/project-colors.ts"
 import type { createDesktopWorktrees } from "./worktrees.ts"
 import { readPickedAttachments } from "./file-attachments.ts"
 import { projectRuntimeContexts, syncLiveProjectContexts } from "./project-runtime.ts"
@@ -15,8 +16,10 @@ import { contextQuery, contextReference, type ContextItem } from "../../../deskt
 import { resolveCurrentProjectMembers, runtimeForProjectMember } from "./project-membership.ts"
 import { dispatchProjectFilesRequest } from "./project-files.ts"
 import { createDesktopProjectContentSearch, notifyDesktopProjectContentScopesChanged } from "./project-content-search.ts"
-import type { createGlobalProviderSettings } from "./global-provider-settings.ts"
+import { type createGlobalProviderSettings, pluginMutationParams } from "./global-provider-settings.ts"
+import { DESKTOP_CONFIGURATION_ID } from "@i-harness/desktop-gateway/src/host-protocol.ts"
 import type { createNotificationHistory } from "./notification-history.ts"
+import { parseNotificationRuleChange } from "../shared/notification-preferences.ts"
 import type { createRuntimeDiagnostics } from "./runtime-diagnostics.ts"
 import type { RuntimeDiagnosticFilter } from "../shared/runtime-diagnostics.ts"
 import type { AttachmentDraftStore } from "./attachment-draft-store.ts"
@@ -89,6 +92,10 @@ export async function dispatchDesktopRequest(
     if (!dependencies.catalog.get(workspaceId)) throw new Error(`unknown workspace id: ${workspaceId}`)
     const runtime = dependencies.runtimes.peek?.(workspaceId)
     return { ready: runtime !== undefined, ...(runtime?.generation === undefined ? {} : { generation: runtime.generation }) }
+  }
+  if (value.kind === "desktop/runtime/host-status") {
+    if (!dependencies.runtimes.hostStatus) throw new Error("Local server status is unavailable")
+    return dependencies.runtimes.hostStatus()
   }
   if (value.kind === 'desktop/runtime/recover') {
     if (Object.keys(value).some(key => !['kind', 'workspaceId'].includes(key))) throw Error('Invalid runtime recovery request')
@@ -238,6 +245,11 @@ export async function dispatchDesktopRequest(
   if (value.kind === "desktop/resources/import") {
     const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
     if (value.source !== "workspace" && value.source !== "global") throw new Error("Invalid skill import source")
+    if (workspaceId === DESKTOP_CONFIGURATION_ID) {
+      if (value.source !== "global" || !dependencies.pickSkill || !dependencies.globalProviders) throw new Error("Shared skill import unavailable")
+      const selectedPath = await dependencies.pickSkill()
+      return selectedPath === undefined ? undefined : dependencies.globalProviders.request({ kind: value.kind, source: "global", selectedPath })
+    }
     const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
     if (!dependencies.pickSkill || !runtime.info.capabilities["desktop-resource-authoring"]?.includes("1")) throw new Error("Skill import unavailable")
     const selectedPath = await dependencies.pickSkill()
@@ -248,6 +260,14 @@ export async function dispatchDesktopRequest(
     if (!dependencies.catalog.get(workspaceId)) throw new Error("Unknown browser workspace")
     if (!dependencies.browser) throw new Error("Browser surface unavailable")
     return dependencies.browser.request(workspaceId, value)
+  }
+  if (value.workspaceId === DESKTOP_CONFIGURATION_ID && [
+    "desktop/resources/list", "desktop/resources/read", "desktop/resources/write", "desktop/resources/remove",
+    "desktop/plugins/state", "desktop/plugins/refresh", "desktop/plugins/mutate",
+    "desktop/mcp/state", "desktop/mcp/refresh", "desktop/mcp/mutate",
+  ].includes(value.kind)) {
+    if (!dependencies.globalProviders) throw new Error("Profile configuration unavailable")
+    return dependencies.globalProviders.request(value)
   }
   if (dependencies.globalProviders && ["desktop/mcp/state", "desktop/mcp/refresh", "desktop/mcp/mutate"].includes(value.kind)) {
     const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
@@ -322,6 +342,21 @@ export async function dispatchDesktopRequest(
       if (!dependencies.projects) throw new Error("Project catalog unavailable")
       return await dependencies.projects.list()
     }
+    case "projects/appearance": {
+      if (!dependencies.projects) throw new Error("Project catalog unavailable")
+      const id = requireNonEmpty(value.id, "project id")
+      const expectedUpdatedAt = requireNonEmpty(value.expectedUpdatedAt, "project revision")
+      if (value.pinned === undefined && value.color === undefined
+        || value.pinned !== undefined && typeof value.pinned !== "boolean"
+        || value.color !== undefined && !isProjectColor(value.color)) throw new Error("Invalid project appearance")
+      const current = (await dependencies.projects.list()).find(project => project.id === id)
+      if (!current) throw new Error("Project no longer exists")
+      // Appearance is Desktop-local. Runtime roots and active searches do not change.
+      return await dependencies.projects.save({ ...current, expectedUpdatedAt,
+        ...(typeof value.pinned === "boolean" ? { pinned: value.pinned } : {}),
+        ...(isProjectColor(value.color) ? { color: value.color } : {}),
+      })
+    }
     case "projects/save": {
       if (!dependencies.projects) throw new Error("Project catalog unavailable")
       const input = requireRecord(value.input)
@@ -329,8 +364,16 @@ export async function dispatchDesktopRequest(
       if (input.id !== undefined && (typeof input.id !== "string" || !input.id)) throw new Error("Invalid project id")
       if (input.primaryWorkspaceId !== undefined && typeof input.primaryWorkspaceId !== "string") throw new Error("Invalid primary workspace")
       if (input.pinned !== undefined && typeof input.pinned !== "boolean") throw new Error("Invalid project pin")
+      if (input.color !== undefined && !isProjectColor(input.color)) throw new Error("Invalid project color")
       if (input.expectedUpdatedAt !== undefined && (typeof input.expectedUpdatedAt !== "string" || !input.expectedUpdatedAt || input.expectedUpdatedAt.length > 64)) throw new Error("Invalid project revision")
-      const saved = await dependencies.projects.save({ name: input.name, workspaceIds: input.workspaceIds as string[], ...(typeof input.id === "string" ? { id: input.id } : {}), ...(typeof input.primaryWorkspaceId === "string" ? { primaryWorkspaceId: input.primaryWorkspaceId } : {}), ...(typeof input.pinned === "boolean" ? { pinned: input.pinned } : {}), ...(typeof input.expectedUpdatedAt === "string" ? { expectedUpdatedAt: input.expectedUpdatedAt } : {}) })
+      const saved = await dependencies.projects.save({
+        name: input.name, workspaceIds: input.workspaceIds as string[],
+        ...(typeof input.id === "string" ? { id: input.id } : {}),
+        ...(typeof input.primaryWorkspaceId === "string" ? { primaryWorkspaceId: input.primaryWorkspaceId } : {}),
+        ...(typeof input.pinned === "boolean" ? { pinned: input.pinned } : {}),
+        ...(input.color !== undefined ? { color: input.color } : {}),
+        ...(typeof input.expectedUpdatedAt === "string" ? { expectedUpdatedAt: input.expectedUpdatedAt } : {}),
+      })
       await notifyDesktopProjectContentScopesChanged()
       try { await syncLiveProjectContexts(dependencies.projects, dependencies.catalog, dependencies.runtimes); return saved }
       catch (error) { return { ...saved, runtimeSyncError: error instanceof Error ? error.message : String(error) } }
@@ -411,11 +454,12 @@ export async function dispatchDesktopRequest(
     case "desktop/local/configure":
       if (value.followupDelivery !== undefined && value.followupDelivery !== "queue" && value.followupDelivery !== "steer") throw new Error("invalid follow-up delivery")
       if (value.notifications !== undefined && typeof value.notifications !== "boolean") throw new Error("invalid notifications preference")
+      const notificationRule = value.notificationRule === undefined ? undefined : parseNotificationRuleChange(value.notificationRule)
       if (value.locale !== undefined && value.locale !== "zh-TW" && value.locale !== "en") throw new Error("invalid locale")
       if (value.terminalShell !== undefined && (typeof value.terminalShell !== "string" || !["auto", "git-bash", "pwsh", "powershell", "cmd", "bash", "zsh", "sh"].includes(value.terminalShell))) throw new Error("invalid terminal shell")
       if (value.terminalFontFamily !== undefined && (typeof value.terminalFontFamily !== "string" || value.terminalFontFamily.length > 128 || /[\u0000-\u001f\u007f]/.test(value.terminalFontFamily))) throw new Error("invalid terminal font")
       if (!dependencies.native) throw new Error("native preferences unavailable")
-      return dependencies.native.configure({ ...(typeof value.notifications === "boolean" ? { notifications: value.notifications } : {}), ...(value.locale === "en" || value.locale === "zh-TW" ? { locale: value.locale } : {}), ...(typeof value.terminalShell === "string" ? { terminalShell: value.terminalShell as TerminalShellChoice } : {}), ...(typeof value.terminalFontFamily === "string" ? { terminalFontFamily: value.terminalFontFamily.trim() } : {}), ...(value.followupDelivery === "queue" || value.followupDelivery === "steer" ? { followupDelivery: value.followupDelivery } : {}) })
+      return dependencies.native.configure({ ...(notificationRule ? { notificationRule } : {}), ...(typeof value.notifications === "boolean" ? { notifications: value.notifications } : {}), ...(value.locale === "en" || value.locale === "zh-TW" ? { locale: value.locale } : {}), ...(typeof value.terminalShell === "string" ? { terminalShell: value.terminalShell as TerminalShellChoice } : {}), ...(typeof value.terminalFontFamily === "string" ? { terminalFontFamily: value.terminalFontFamily.trim() } : {}), ...(value.followupDelivery === "queue" || value.followupDelivery === "steer" ? { followupDelivery: value.followupDelivery } : {}) })
     case "workspace/list":
       return await dependencies.catalog.list()
     case "desktop/worktrees/list":
@@ -830,12 +874,8 @@ export async function dispatchDesktopRequest(
     }
     case "desktop/plugins/mutate": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
-      const command = requireRecord(value.command)
-      if (!["source/add", "source/refresh", "source/remove", "install", "uninstall", "enable", "disable"].includes(String(command.action))) throw new Error("invalid plugin action")
-      const field = command.action === "source/add" ? "source" : String(command.action).startsWith("source/") ? "name" : "id"
-      const valueText = requireNonEmpty(command[field], field)
-      if (valueText.length > 4096) throw new Error("plugin parameter too long")
-      return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request(value.kind, { action: command.action, [field]: valueText }, 300000)
+      const params = pluginMutationParams(value.command)
+      return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request(value.kind, params, 300000)
     }
     case "desktop/provider/probe":
     case "desktop/provider/probe/cancel": {

@@ -17,6 +17,14 @@ const id = (value: unknown): value is string => typeof value === "string" && val
 const token = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value)
 const waitSeconds = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && (value === 0 || value >= 30 && value <= 3600)
 
+export function pluginMutationParams(input: unknown) {
+  if (!record(input) || !["source/add", "source/refresh", "source/remove", "install", "uninstall", "enable", "disable"].includes(String(input.action))) throw new Error("invalid plugin action")
+  const field = input.action === "source/add" ? "source" : String(input.action).startsWith("source/") ? "name" : "id"
+  const value = input[field]
+  if (typeof value !== "string" || !value.trim() || value.length > 4096 || value.includes("\0")) throw new Error("Invalid plugin parameter")
+  return { action: input.action, [field]: value }
+}
+
 /** The shared host exposes profile settings on a separate SDK channel.
  * This channel has no session store or workspace execution authority. */
 export function createGlobalProviderSettings(client: () => Promise<ConfigurationClient>, options: { openExternal?(url: string): Promise<void>; usageWarnings?(): Promise<string[]> } = {}) {
@@ -29,6 +37,20 @@ export function createGlobalProviderSettings(client: () => Promise<Configuration
       let params: Record<string, unknown>
       let timeoutMs: number | undefined
       switch (input.kind) {
+        case "desktop/plugins/state":
+        case "desktop/plugins/refresh":
+          method = input.kind; params = {}; timeoutMs = 120000; break
+        case "desktop/plugins/mutate":
+          method = input.kind; params = pluginMutationParams(input.command); timeoutMs = 300000; break
+        case "desktop/resources/list":
+        case "desktop/resources/read":
+        case "desktop/resources/write":
+        case "desktop/resources/remove":
+          if (input.source === "workspace") throw new Error("Workspace resource requires a workspace")
+          method = input.kind; params = contextRequestParams(input)!; break
+        case "desktop/resources/import":
+          if (input.source !== "global" || typeof input.selectedPath !== "string") throw new Error("Shared skills require a global destination and a selected file")
+          method = input.kind; params = { source: input.source, selectedPath: input.selectedPath }; break
         case "desktop/mcp/state":
         case "desktop/mcp/refresh":
         case "desktop/mcp/mutate":

@@ -3,11 +3,13 @@ import type { ResourceAuthoringRequestHandler, ResourceDetail, ResourceKind } fr
 import type { LocalResourceSource } from "@i-harness/desktop-gateway/src/effective-local-inputs.ts"
 import { useAuthoringText } from "./resource-authoring-text.ts"
 import { Button } from "../vendor/opencode/Button.tsx"
+import { DESKTOP_CONFIGURATION_ID } from "@i-harness/desktop-gateway/src/host-protocol.ts"
 
 export interface ResourceDraft { name: string; source: LocalResourceSource; body: string; revision: string | null; existing: boolean }
 export function ResourceAuthoringEditor({ workspaceId, resourceKind, detail, request, reload, draft, onDraft, onSaved, onClose, onBusyChange }: { workspaceId: string; resourceKind: ResourceKind; detail?: ResourceDetail; request: ResourceAuthoringRequestHandler; reload?(source: LocalResourceSource, name: string): Promise<ResourceDetail | undefined>; draft?: ResourceDraft; onDraft(draft: ResourceDraft): void; onSaved(): void; onClose(): void; onBusyChange?(busy: boolean): void }) {
   const t = useAuthoringText()
-  const [value, setValue] = useState<ResourceDraft>(() => draft ?? { name: detail?.name ?? "", source: detail?.source === "global" ? "global" : "workspace", body: detail?.rawBody ?? detail?.body ?? (resourceKind === "skills" ? "---\nname: new-skill\ndescription: Describe this skill\n---\n" : ""), revision: detail && detail.source !== "plugin" ? detail.revision ?? null : null, existing: Boolean(detail && detail.source !== "plugin") })
+  const shared = workspaceId === DESKTOP_CONFIGURATION_ID
+  const [value, setValue] = useState<ResourceDraft>(() => draft ?? { name: detail?.name ?? "", source: shared || detail?.source === "global" ? "global" : "workspace", body: detail?.rawBody ?? detail?.body ?? (resourceKind === "skills" ? "---\nname: new-skill\ndescription: Describe this skill\n---\n" : ""), revision: detail && detail.source !== "plugin" ? detail.revision ?? null : null, existing: Boolean(detail && detail.source !== "plugin") })
   const [busy, setBusy] = useState(false), [error, setError] = useState<string>(), [remove, setRemove] = useState(false)
   const [comparison, setComparison] = useState<ResourceDetail>()
   const alive = useRef(true), lock = useRef(false)
@@ -30,7 +32,7 @@ export function ResourceAuthoringEditor({ workspaceId, resourceKind, detail, req
     <h2>{t(detail?.source === "plugin" ? "複製插件到本機" : value.existing ? "編輯本機內容" : "建立資源")}</h2>
     {detail?.source === "plugin" ? <p className="notice">{t("此內容會建立本機版本，來源插件仍可辨識。")}</p> : null}
     <label>{t("名稱")}<input maxLength={64} required pattern="[a-z0-9]+(-[a-z0-9]+)*" disabled={busy || value.existing} value={value.name} onChange={event => change({ name: event.target.value })} /></label>
-    <label>{t("保存位置")}<select disabled={busy || value.existing} value={value.source} onChange={event => change({ source: event.target.value as LocalResourceSource })}><option value="workspace">{t("工作區")}</option><option value="global">{t("全域")}</option></select></label>
+    <label>{t("保存位置")}<select disabled={busy || value.existing || shared} value={value.source} onChange={event => change({ source: event.target.value as LocalResourceSource })}>{!shared && <option value="workspace">{t("工作區")}</option>}<option value="global">{t("全域")}</option></select></label>
     <label>{t("完整 Markdown（含 frontmatter）")}<textarea rows={15} maxLength={131072} disabled={busy} value={value.body} onChange={event => change({ body: event.target.value })} /></label>
     <p className="muted">{t("最多 128 KiB；技能需含相符名稱及描述的 frontmatter。")}</p>
     {error ? <p role="alert" className="error-text">{error}</p> : null}

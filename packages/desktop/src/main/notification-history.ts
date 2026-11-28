@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
+import { isNotificationKind, type NotificationKind } from "../shared/notification-preferences.ts"
 
 export interface NotificationEntry {
   id: string
   workspaceId: string
   sessionId: string
-  kind: "question" | "approval"
+  kind: NotificationKind
   summary: string
   createdAt: string
   read: boolean
@@ -45,7 +46,7 @@ export function createNotificationHistory(file: string, options: { maxItems?: nu
     const ids = new Set<string>()
     const items = document.items.map((item): NotificationEntry => {
       if (!record(item) || !identifier(item.id) || ids.has(item.id) || !identifier(item.workspaceId) || !identifier(item.sessionId)
-        || !["question", "approval"].includes(item.kind as string) || typeof item.summary !== "string" || item.summary.length > 512
+        || !isNotificationKind(item.kind) || typeof item.summary !== "string" || item.summary.length > 512
         || typeof item.createdAt !== "string" || !Number.isFinite(Date.parse(item.createdAt)) || typeof item.read !== "boolean") throw new Error("Notification history entry is invalid")
       ids.add(item.id)
       return { id: item.id, workspaceId: item.workspaceId, sessionId: item.sessionId, kind: item.kind as NotificationEntry["kind"], summary: item.summary, createdAt: item.createdAt, read: item.read }
@@ -71,7 +72,7 @@ export function createNotificationHistory(file: string, options: { maxItems?: nu
     list(): Promise<NotificationHistoryView> { return serial(async () => copyView(await load())) },
     record(input: NotificationInput): Promise<NotificationHistoryView> {
       if (!record(input) || !identifier(input.id) || !identifier(input.workspaceId) || !identifier(input.sessionId)
-        || !["question", "approval"].includes(input.kind) || typeof input.summary !== "string") return Promise.reject(new Error("Invalid notification input"))
+        || !isNotificationKind(input.kind) || typeof input.summary !== "string") return Promise.reject(new Error("Invalid notification input"))
       const row: NotificationEntry = { id: input.id, workspaceId: input.workspaceId, sessionId: input.sessionId, kind: input.kind,
         summary: input.summary.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 512), createdAt: new Date().toISOString(), read: false }
       return serial(async () => {

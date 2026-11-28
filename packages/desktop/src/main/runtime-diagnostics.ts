@@ -244,6 +244,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
     if (admissionId === undefined && !uncorrelated && sessionId && kind === "session/error") closeAttempt(JSON.stringify([workspaceId, sessionId]))
   }
   const service = {
+    executionBusy,
     createAdmissionFailureRecorder(workspaceId: string, sessionId: string, clientToken?: string) {
       const identity = clientToken ?? randomUUID()
       return (error: unknown) => { failure(workspaceId, sessionId, error, "runtime/error", identity) }

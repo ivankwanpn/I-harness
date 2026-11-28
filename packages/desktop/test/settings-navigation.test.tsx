@@ -47,7 +47,7 @@ it("opens local language, theme and font preferences together in General", () =>
   expect(screen.getByRole("combobox", { name: "文字大小" })).toBeTruthy()
   const navigation = within(screen.getByRole("navigation", { name: "設定分類" }))
   expect(navigation.queryByRole("button", { name: "外觀" })).toBeNull()
-  expect(navigation.queryByRole("button", { name: "工作區" })).toBeNull()
+  expect(navigation.getByRole("button", { name: "工作區" })).toBeTruthy()
   expect(screen.queryByRole("checkbox", { name: "顯示側欄" })).toBeNull()
   expect(screen.queryByRole("checkbox", { name: "成果檢查" })).toBeNull()
 })
@@ -85,18 +85,18 @@ it.each(["skills", "commands"] as const)("migrates the old %s section to its nam
   localStorage.setItem("ih:settings-resource-kind", kind === "skills" ? "commands" : "skills")
   const bridge = resourceBridge()
   render(<SettingsPane workspace={workspace} bridge={bridge} capabilities={capabilities} onClose={() => {}} />)
-  expect(screen.getByRole("heading", { name: "資源", level: 1 })).toBeTruthy()
+  expect(screen.getByRole("heading", { name: "擴充功能", level: 1 })).toBeTruthy()
   expect(screen.getByRole("tab", { name: kind === "skills" ? "技能" : "命令" }).getAttribute("aria-selected")).toBe("true")
   await screen.findByRole("button", { name: kind === "skills" ? "local-skill" : "local-command" })
   expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/resources/list", workspaceId: workspace.id, resourceKind: kind, query: "", offset: 0, includeShadowed: true })
-  expect(localStorage.getItem("ih:settings-section")).toBe("resources")
-  expect(localStorage.getItem("ih:settings-resource-kind")).toBe(kind)
+  expect(localStorage.getItem("ih:settings-section")).toBe("extensions")
+  expect(localStorage.getItem("ih:settings-extension-tab")).toBe(kind)
 })
 
 it.each([
   ["WSL", "執行與權限"], ["sandbox", "執行與權限"], ["approval", "執行與權限"],
-  ["embedding", "執行與權限"], ["context-mode", "執行與權限"], ["claude-context", "執行與權限"], ["API key", "模型與提供商"], ["終端字體", "一般"],
-  ["shell", "執行與權限"], ["技能", "資源"], ["commands", "資源"],
+  ["embedding", "執行與權限"], ["context-mode", "執行與權限"], ["claude-context", "執行與權限"], ["API key", "模型與提供商"], ["終端字體", "伺服器"],
+  ["shell", "執行與權限"], ["技能", "擴充功能"], ["commands", "擴充功能"],
 ])("finds %s through field and function aliases", (query, destination) => {
   render(<SettingsPane onClose={() => {}} />)
   fireEvent.change(screen.getByRole("searchbox", { name: "搜尋設定" }), { target: { value: query } })
@@ -110,7 +110,7 @@ it("opens the matching command tab from search and keeps localized search useful
   const bridge = resourceBridge()
   render(<SettingsPane workspace={workspace} bridge={bridge} capabilities={capabilities} onClose={() => {}} />)
   fireEvent.change(screen.getByRole("searchbox", { name: "Search settings" }), { target: { value: "commands" } })
-  fireEvent.click(screen.getByRole("button", { name: "Resources" }))
+  fireEvent.click(screen.getByRole("button", { name: "Extensions" }))
   expect(screen.getByRole("tab", { name: "Commands" }).getAttribute("aria-selected")).toBe("true")
   await screen.findByRole("button", { name: "local-command" })
   fireEvent.change(screen.getByRole("searchbox", { name: "Search settings" }), { target: { value: "文字大小" } })
@@ -119,7 +119,7 @@ it("opens the matching command tab from search and keeps localized search useful
 
 it.each([
   ["Text size", "General"], ["Interface language", "General"], ["Follow-up message delivery", "General"],
-  ["Integrated terminal shell", "General"], ["Enable Code Context", "Execution and permissions"],
+  ["Integrated terminal shell", "Servers"], ["Enable Code Context", "Execution and permissions"],
   ["Automatic conversation titles", "General"], ["Open conversation", "Notifications"],
 ])("finds the visible English field label %s", (query, destination) => {
   useLocale.getState().setLocale("en")
@@ -142,7 +142,7 @@ it("shows a recoverable empty search without losing the selected page", () => {
   expect(screen.getByRole("status").textContent).toContain("沒有符合的設定")
   expect(screen.getByRole("heading", { name: "一般", level: 1 })).toBeTruthy()
   fireEvent.click(screen.getByRole("button", { name: "清除搜尋" }))
-  expect(screen.getByRole("button", { name: "資源" })).toBeTruthy()
+  expect(screen.getByRole("button", { name: "擴充功能" })).toBeTruthy()
 })
 
 it("keeps capability explanations on the selected page and leaves navigation operable", async () => {
@@ -164,7 +164,9 @@ it("loads resource tabs on first visit and keeps independent editor drafts acros
   const bridge = resourceBridge()
   render(<SettingsPane workspace={workspace} bridge={bridge} capabilities={capabilities} onClose={() => {}} />)
   expect(bridge.request).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "desktop/resources/list" }))
-  fireEvent.click(screen.getByRole("button", { name: "資源" }))
+  fireEvent.click(screen.getByRole("button", { name: "擴充功能" }))
+  fireEvent.change(screen.getByRole("combobox", { name: "設定範圍" }), { target: { value: "workspace" } })
+  fireEvent.click(screen.getByRole("tab", { name: "技能" }))
   await screen.findByRole("button", { name: "local-skill" })
   expect(bridge.request).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "desktop/resources/list", resourceKind: "commands" }))
   fireEvent.click(screen.getByRole("button", { name: "local-skill" }))
@@ -177,7 +179,7 @@ it("loads resource tabs on first visit and keeps independent editor drafts acros
   fireEvent.change(screen.getByLabelText("完整 Markdown（含 frontmatter）"), { target: { value: "Command draft" } })
   fireEvent.click(screen.getByRole("button", { name: "關閉資源編輯器" }))
   fireEvent.click(screen.getByRole("button", { name: "一般" }))
-  fireEvent.click(screen.getByRole("button", { name: "資源" }))
+  fireEvent.click(screen.getByRole("button", { name: "擴充功能" }))
   expect(screen.getByRole("tab", { name: "命令" }).getAttribute("aria-selected")).toBe("true")
   fireEvent.click(screen.getByRole("button", { name: "建立資源" }))
   expect((screen.getByLabelText("完整 Markdown（含 frontmatter）") as HTMLTextAreaElement).value).toBe("Command draft")
@@ -202,9 +204,9 @@ it("links resource tab controls to named panels and supports keyboard selection"
   const panel = screen.getByRole("tabpanel", { name: "命令" })
   expect(commands.getAttribute("aria-controls")).toBe(panel.id)
   expect(panel.getAttribute("aria-labelledby")).toBe(commands.id)
-  expect(localStorage.getItem("ih:settings-resource-kind")).toBe("commands")
+  expect(localStorage.getItem("ih:settings-extension-tab")).toBe("commands")
   await screen.findByRole("button", { name: "local-command" })
-  fireEvent.keyDown(commands, { key: "Home" })
+  fireEvent.keyDown(commands, { key: "ArrowLeft" })
   expect(document.activeElement).toBe(skills)
   expect(skills.getAttribute("aria-selected")).toBe("true")
 })
@@ -212,13 +214,15 @@ it("links resource tab controls to named panels and supports keyboard selection"
 it("waits for a resource visit before loading resources in a newly selected workspace", async () => {
   const bridge = resourceBridge()
   const view = render(<SettingsPane workspace={workspace} bridge={bridge} capabilities={capabilities} onClose={() => {}} />)
-  fireEvent.click(screen.getByRole("button", { name: "資源" }))
+  fireEvent.click(screen.getByRole("button", { name: "擴充功能" }))
+  fireEvent.change(screen.getByRole("combobox", { name: "設定範圍" }), { target: { value: "workspace" } })
+  fireEvent.click(screen.getByRole("tab", { name: "技能" }))
   await screen.findByRole("button", { name: "local-skill" })
   fireEvent.click(screen.getByRole("button", { name: "一般" }))
   const other = { ...workspace, id: "other-owned-workspace" }
   view.rerender(<SettingsPane workspace={other} bridge={bridge} capabilities={capabilities} onClose={() => {}} />)
   expect(bridge.request).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "desktop/resources/list", workspaceId: other.id }))
-  fireEvent.click(screen.getByRole("button", { name: "資源" }))
+  fireEvent.click(screen.getByRole("button", { name: "擴充功能" }))
   await screen.findByRole("button", { name: "local-skill" })
   expect(bridge.request).toHaveBeenCalledWith(expect.objectContaining({ kind: "desktop/resources/list", workspaceId: other.id }))
 })

@@ -1,6 +1,13 @@
 import { useCallback } from "react"
 import { useLocale, useText, type Message } from "../design/i18n.ts"
 const english = {
+  "共用設定目前採用其他來源的同名項目。": "The shared configuration currently uses another source with the same name.",
+  "此工作區的 Gateway 不支援{feature}。": "This workspace gateway does not support {feature}.",
+  "擴充功能分類": "Extension categories", "只顯示生效的版本": "Show effective versions only",
+  "列出本機共用設定與插件提供的資源。工作區可以提供同名版本。": "Lists shared and plugin resources. A workspace can provide its own version of the same name.",
+  "顯示此資料夾可用的資源及其來源。": "Resources available to this folder, with their sources.",
+  "插件安裝和啟用設定由本機工作區共用。": "Installed plugins and their enablement settings are shared across local workspaces.",
+  "此頁顯示已儲存的 MCP 設定。連線狀態依使用中的工作階段而定。": "These are saved MCP settings. Connection status depends on the active session.",
   "專案": "Project", "開啟專案": "Open project", "未分類會話": "Ungrouped conversations", "尚未開啟專案": "No project open", "選擇來源資料夾": "Choose source folder",
   "不支援的 Hook 格式": "Unsupported hook format", "Hook 設定無效": "Invalid hook configuration", "Claude 插件格式": "Claude plugin format",
   "來源：{source}": "Source: {source}", "格式：{format}": "Format: {format}", "事件：{event}": "Event: {event}", "處理器：{id}": "Handler: {id}",

@@ -10,6 +10,17 @@ import { createDesktopProjectContentSearch } from "../src/main/project-content-s
 const fixtures: Awaited<ReturnType<typeof projectFilesFixture>>[] = []
 afterEach(async () => { for (const f of fixtures.splice(0)) { await f.dispose(); await rm(f.home, { recursive: true, force: true }) } })
 
+it("updates project appearance locally and rejects a concurrent edit without replacing folder membership", async () => {
+  const f = await projectFilesFixture(); fixtures.push(f)
+  const dependencies = { ...f.dependencies, runtimes: { ...f.dependencies.runtimes,
+    refreshProjectContexts: async () => { throw Error("Unexpected project scope synchronization") },
+  } }
+  const edit = { kind: "projects/appearance", id: f.project.id, expectedUpdatedAt: f.project.updatedAt, color: "green" }
+  expect(await dispatchDesktopRequest(edit, dependencies)).toMatchObject({ color: "green", workspaceIds: f.project.workspaceIds })
+  await expect(dispatchDesktopRequest({ ...edit, color: "rose" }, dependencies)).rejects.toThrow(/changed/)
+  expect((await f.projects.list()).find(row => row.id === f.project.id)?.color).toBe("green")
+})
+
 it("searches two actual current roots and preserves exact second-root file and line identity", async () => {
   const f = await projectFilesFixture(); fixtures.push(f)
   await writeFile(join(f.first.path, "same.txt"), "first\nneedle\n")

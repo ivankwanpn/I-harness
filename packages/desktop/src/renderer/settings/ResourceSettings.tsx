@@ -10,6 +10,8 @@ import { SearchInput } from "../vendor/zcode/SearchInput.tsx"
 import { SettingsDialog } from "./SettingsDialog.tsx"
 import { ResourceAuthoringEditor, type ResourceDraft } from "./ResourceAuthoringEditor.tsx"
 import { SettingsDraftScope, useSettingsDraft, useSettingsDraftMap } from "./settings-drafts.tsx"
+import { DESKTOP_CONFIGURATION_ID } from "@i-harness/desktop-gateway/src/host-protocol.ts"
+import { notifyResourceChange, onResourceChange } from "./resource-catalog-changes.ts"
 import "./resources.css"
 
 interface ResourceSettingsProps { bridge: DesktopBridge; workspaceId: string; resourceKind: ResourceKind; onUse?(prefix: string): void; onManagePlugins?(id?: string): void; onAuthoringRequest?: ResourceAuthoringRequestHandler; active?: boolean }
@@ -18,6 +20,8 @@ export function ResourceSettings(props: ResourceSettingsProps) {
 }
 function ResourceSettingsContent({ bridge, workspaceId, resourceKind, onUse, onManagePlugins, onAuthoringRequest, active = true }: ResourceSettingsProps) {
   const t = useAuthoringText()
+  const shared = workspaceId === DESKTOP_CONFIGURATION_ID
+  const [effectiveOnly, setEffectiveOnly] = useSettingsDraft(["resources", workspaceId, resourceKind, "effective-only"], false)
   const [query, setQuery] = useSettingsDraft(["resources", workspaceId, resourceKind, "query"], "")
   const [search, setSearch] = useSettingsDraft(["resources", workspaceId, resourceKind, "search"], { query: "", offset: 0, revision: 0 })
   const [list, setList] = useState<ResourceList>()
@@ -27,6 +31,12 @@ function ResourceSettingsContent({ bridge, workspaceId, resourceKind, onUse, onM
   const [loading, setLoading] = useState(false)
   const [editor, setEditor] = useSettingsDraft<{ key: string; detail?: ResourceDetail } | undefined>(["resources", workspaceId, resourceKind, "editor"], undefined)
   const [editorBusy, setEditorBusy] = useState(false)
+  const [catalogRevision, setCatalogRevision] = useState(0)
+  useEffect(() => onResourceChange(bridge, change => {
+    if ((!change.workspaceId || change.workspaceId === workspaceId) && (!change.kind || change.kind === resourceKind)) {
+      setCatalogRevision(previous => previous + 1)
+    }
+  }), [bridge, workspaceId, resourceKind])
   const drafts = useSettingsDraftMap<ResourceDraft>(["resources", workspaceId, resourceKind, "drafts"])
   const scope = `${workspaceId}:${resourceKind}`
   const scopeRef = useRef(scope), epoch = useRef(0)
@@ -34,18 +44,30 @@ function ResourceSettingsContent({ bridge, workspaceId, resourceKind, onUse, onM
   const selectedIdentity = useRef<ResourceSummary | undefined>(undefined)
   const readVersion = useRef(0)
   const returnFocus = useRef<HTMLButtonElement | null>(null)
+  const completed = useRef<{ search: typeof search; revision: number; effectiveOnly: boolean } | undefined>(undefined)
   useEffect(() => {
-    let active = true
-    ++readVersion.current; setList(undefined); setDetail(undefined); setSelected(undefined); setError(undefined); setLoading(false)
-    const command = { kind: "desktop/resources/list" as const, workspaceId, resourceKind, query: search.query, offset: search.offset, includeShadowed: true }
+    if (!active) return
+    if (completed.current?.search === search && completed.current.revision === catalogRevision && completed.current.effectiveOnly === effectiveOnly) return
+    let current = true
+    if (completed.current?.search !== search) setList(undefined)
+    ++readVersion.current; setDetail(undefined); setSelected(undefined); setError(undefined); setLoading(false)
+    const command = { kind: "desktop/resources/list" as const, workspaceId, resourceKind, query: search.query, offset: search.offset, includeShadowed: !effectiveOnly }
     void bridge.request(command).then((value) => {
-      if (!active) return
+      if (!current) return
       const result = value as ResourceList
       if (search.offset > 0 && search.offset >= result.total) { setSearch({ ...search, offset: Math.max(0, Math.floor((result.total - 1) / 50) * 50) }); return }
-      setList(result)
-    }).catch((reason: unknown) => { if (active) setError(String(reason)) })
-    return () => { active = false; ++readVersion.current }
-  }, [bridge, workspaceId, resourceKind, search])
+      completed.current = { search, revision: catalogRevision, effectiveOnly }; setList(result)
+    }).catch((reason: unknown) => { if (current) setError(String(reason)) })
+    return () => { current = false; ++readVersion.current }
+  }, [active, bridge, workspaceId, resourceKind, catalogRevision, effectiveOnly, search])
+  const author: ResourceAuthoringRequestHandler | undefined = onAuthoringRequest && (async command => {
+    try { return await onAuthoringRequest(command) }
+    finally {
+      if (command.kind !== "desktop/resources/import") notifyResourceChange(bridge, {
+        workspaceId: command.source === "workspace" ? workspaceId : undefined, kind: command.resourceKind,
+      })
+    }
+  })
   function closeDetail() {
     ++readVersion.current; setSelected(undefined); setDetail(undefined); setLoading(false); setError(undefined)
     setTimeout(() => { if (returnFocus.current?.isConnected) returnFocus.current.focus() }, 0)
@@ -74,7 +96,7 @@ function ResourceSettingsContent({ bridge, workspaceId, resourceKind, onUse, onM
       </form>
       {onAuthoringRequest ? <div className="resource-authoring-actions"><Button variant="primary" size="small" icon={<Plus size={15} />} onClick={() => { setSelected(undefined); setEditor({ key: `${scope}:new` }) }}>{t("建立資源")}</Button>{resourceKind === "skills" ? <Button size="small" variant="secondary" icon={<Upload size={15} />} onClick={() => {
         const captured = epoch.current
-        void onAuthoringRequest({ kind: "desktop/resources/import", workspaceId, source: "workspace" }).then(value => {
+        void onAuthoringRequest({ kind: "desktop/resources/import", workspaceId, source: shared ? "global" : "workspace" }).then(value => {
           if (captured !== epoch.current || !value) return
           const imported = value as { name: string; body: string; source: "workspace" | "global" }
           const key = `${scope}:import`
@@ -82,6 +104,7 @@ function ResourceSettingsContent({ bridge, workspaceId, resourceKind, onUse, onM
         }).catch(reason => { if (captured === epoch.current) setError(String(reason)) })
       }}>{t("匯入 SKILL.md")}</Button> : null}</div> : null}
     </div>
+    <label className="marketplace-installed-filter"><input type="checkbox" checked={effectiveOnly} onChange={event => { setEffectiveOnly(event.target.checked); setSearch({ ...search, offset: 0 }) }} />{t("只顯示生效的版本")}</label>
     <div className="resource-list-heading">
       <div className="resource-list-title"><h2>{t(resourceKind === "skills" ? "技能列表" : "命令列表")}</h2>{list ? <span className="muted">{t("共 {count} 項", { count: list.total })}</span> : null}</div>
       <div className="resource-secondary-actions">
@@ -102,7 +125,7 @@ function ResourceSettingsContent({ bridge, workspaceId, resourceKind, onUse, onM
       </ul>}
       {list.total > 50 ? <div className="resource-pagination"><Button size="small" disabled={search.offset === 0} onClick={() => setSearch({ ...search, offset: search.offset - 50 })}>{t("上一頁")}</Button><span>{Math.floor(search.offset / 50) + 1} / {Math.ceil(list.total / 50)}</span><Button size="small" disabled={search.offset + 50 >= list.total} onClick={() => setSearch({ ...search, offset: search.offset + 50 })}>{t("下一頁")}</Button></div> : null}
     </> : null}
-    {editor && onAuthoringRequest ? <SettingsDialog active={active} busy={editorBusy} title={t("資源編輯器")} closeLabel={t("關閉資源編輯器")} onClose={() => { if (!editorBusy) setEditor(undefined) }} initialFocusSelector="textarea"><ResourceAuthoringEditor key={`${scope}:${editor.key}`} workspaceId={workspaceId} resourceKind={resourceKind} detail={editor.detail} request={onAuthoringRequest} reload={async (source, name) => { const command = { kind: "desktop/resources/read" as const, workspaceId, resourceKind, source, name }; return await bridge.request(command) as ResourceDetail | undefined }} draft={drafts.get(editor.key)} onDraft={draft => drafts.set(editor.key, draft)} onBusyChange={setEditorBusy} onClose={() => { if (!editorBusy) setEditor(undefined) }} onSaved={() => { drafts.delete(editor.key); setEditor(undefined); setSearch({ ...search, revision: search.revision + 1 }) }} /></SettingsDialog> : null}
+    {editor && author ? <SettingsDialog active={active} busy={editorBusy} title={t("資源編輯器")} closeLabel={t("關閉資源編輯器")} onClose={() => { if (!editorBusy) setEditor(undefined) }} initialFocusSelector="textarea"><ResourceAuthoringEditor key={`${scope}:${editor.key}`} workspaceId={workspaceId} resourceKind={resourceKind} detail={editor.detail} request={author} reload={async (source, name) => { const command = { kind: "desktop/resources/read" as const, workspaceId, resourceKind, source, name }; return await bridge.request(command) as ResourceDetail | undefined }} draft={drafts.get(editor.key)} onDraft={draft => drafts.set(editor.key, draft)} onBusyChange={setEditorBusy} onClose={() => { if (!editorBusy) setEditor(undefined) }} onSaved={() => { drafts.delete(editor.key); setEditor(undefined) }} /></SettingsDialog> : null}
     {selected ? <SettingsDialog active={active} title={selected} closeLabel={t("關閉內容預覽")} onClose={closeDetail} initialFocusSelector=".resource-detail button:not(:disabled)">
       <div className="resource-detail">
         {loading ? <p role="status">{t("正在讀取…")}</p> : error ? <p role="alert" className="error-text">{error}<Button variant="ghost" size="small" onClick={() => { if (selectedIdentity.current) void select(selectedIdentity.current) }}>{t("重試")}</Button></p> : detail ? <>
@@ -111,10 +134,10 @@ function ResourceSettingsContent({ bridge, workspaceId, resourceKind, onUse, onM
           {detail.path ? <details className="resource-path"><summary>{t("來源檔案")}</summary><code>{detail.path}</code></details> : null}
           {detail.argumentHints ? <p><code>{detail.argumentHints}</code></p> : null}
           {detail.unsupported?.length ? <p className="notice">{t("後端尚未執行的宣告：{fields}", { fields: detail.unsupported.join(", ") })}</p> : null}
-          <div className="provider-actions"><Button variant="primary" size="small" disabled={!onUse || detail.effective === false} onClick={() => { try { onUse?.(`${resourceKind === "skills" ? "$" : "/"}${detail.name} `) } catch (reason) { setError(String(reason)) } }}>{t(resourceKind === "skills" ? "使用此技能" : "帶入此命令")}</Button>{detail.pluginId && onManagePlugins ? <Button variant="secondary" size="small" onClick={() => onManagePlugins(detail.pluginId)}>{t("管理來源插件")}</Button> : null}</div>
-          {detail.effective === false ? <p className="notice">{t("目前執行使用其他來源的同名項目。此版本仍可編輯或複製。")}</p> : null}
+          <div className="provider-actions">{!shared && <Button variant="primary" size="small" disabled={!onUse || detail.effective === false} onClick={() => { try { onUse?.(`${resourceKind === "skills" ? "$" : "/"}${detail.name} `) } catch (reason) { setError(String(reason)) } }}>{t(resourceKind === "skills" ? "使用此技能" : "帶入此命令")}</Button>}{detail.pluginId && onManagePlugins ? <Button variant="secondary" size="small" onClick={() => onManagePlugins(detail.pluginId)}>{t("管理來源插件")}</Button> : null}</div>
+          {detail.effective === false ? <p className="notice">{t(shared ? "共用設定目前採用其他來源的同名項目。" : "目前執行使用其他來源的同名項目。此版本仍可編輯或複製。")}</p> : null}
           {onAuthoringRequest && !detail.truncated && detail.rawBody !== undefined ? <Button onClick={() => { const key = `${scope}:${detail.source}:${detail.pluginId ?? ""}:${detail.name}`; setEditor({ key, detail }); setSelected(undefined) }}>{t(detail.source === "plugin" ? "複製插件到本機" : "編輯本機內容")}</Button> : null}
-          {!onUse ? <p className="muted">{t("先選擇會話，再帶入輸入框。")}</p> : null}
+          {!onUse && !shared ? <p className="muted">{t("先選擇會話，再帶入輸入框。")}</p> : null}
           {detail.truncated ? <p className="notice">{t("內容過長，預覽已截斷。")}</p> : null}
           <div className="resource-body"><Markdown remarkPlugins={[remarkGfm]} components={{ img: ({ alt }) => <span>[{alt}]</span>, a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer">{children}</a> }}>{detail.body}</Markdown></div>
         </> : null}

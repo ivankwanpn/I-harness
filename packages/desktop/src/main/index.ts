@@ -22,6 +22,7 @@ import { createUsageWarnings } from "./usage-warnings.ts"
 import { createRuntimeDiagnostics } from "./runtime-diagnostics.ts"
 import { createDesktopSessionCatalog } from './session-catalog.ts'
 
+if (process.platform === "win32") app.setAppUserModelId(app.isPackaged ? "I-harness.Desktop" : "I-harness.Desktop.Dev")
 app.setPath("userData", resolveDesktopProfilePath(app.getPath("appData"), app.getPath("userData"), undefined, app.commandLine.hasSwitch("user-data-dir")))
 
 let catalog: WorkspaceCatalog | undefined
@@ -100,7 +101,7 @@ app.whenReady().then(() => {
     const window = createDesktopWindow(localPreferences.get())
     mainWindow = window
     // Capture the user's window bounds before the close handler hides or minimizes it.
-    const native = attachNativeWindow(window, localPreferences, { notifications, quitInProgress: () => quitState !== "running" })
+    const native = attachNativeWindow(window, localPreferences, { notifications, executionBusy: diagnostics.executionBusy, quitInProgress: () => quitState !== "running" })
     captureWindowBounds = native.captureBounds
     cancelPendingClose = attachCloseLifecycle(window, {
       hasActiveWork: async () => worktrees.hasActiveWork() || await manager.hasActiveWork(),
