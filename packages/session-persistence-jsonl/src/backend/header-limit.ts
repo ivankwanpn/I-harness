@@ -1,6 +1,6 @@
 /**
- * The session header is line 0 and is read through a single 64 KiB window
- * (profile/cold reads never touch the event body). The write side must enforce
+ * The session header is line 0. A profile reads a prefix and, when necessary,
+ * extends it up to 64 KiB to find the newline. The write side must enforce
  * the same bound: a header that can be written but not read back would make the
  * session unloadable after a metadata update.
  */

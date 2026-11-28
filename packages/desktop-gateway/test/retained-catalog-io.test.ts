@@ -59,8 +59,8 @@ it('a fresh retained catalog uses bounded real header windows independent of mar
     expect(result.agents.every(row => row.status === 'completed' && row.fullResult?.resultRevision)).toBe(true)
     for (const path of measured.paths) {
       const windows = measured.windows.filter(row => row.path === path)
-      expect(windows.map(row => row.requested)).toEqual([65536])
-      expect(windows[0]!.returned).toBe(65536)
+      expect(windows.map(row => row.requested)).toEqual([1024, 3072])
+      expect(windows.map(row => row.returned)).toEqual([1024, 3072])
       expect(snapshots.mock.calls.some(([id]) => path === join(root, `${id}.jsonl`))).toBe(false)
     }
     expect(measured.fullReads).toEqual([]); expect(measured.artifactReads).toBe(0)

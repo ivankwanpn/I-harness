@@ -836,13 +836,23 @@ export function createJsonlBackend(root: string, options?: {
 async function readHeader(path: string): Promise<SessionMeta> {
   const handle = await open(path, "r")
   try {
-    const buffer = Buffer.alloc(HEADER_READ_MAX_BYTES)
-    await handle.read(buffer, 0, HEADER_READ_MAX_BYTES, 0)
-    // Unread tail is zeros, so a newline found anywhere was inside the window.
-    const end = buffer.indexOf(0x0a, 0) // "\n"
-    if (end === -1) throw Object.assign(new Error(`Session header is not terminated within ${HEADER_READ_MAX_BYTES} bytes`), { code: 'SESSION_HEADER_TOO_LARGE', limit: HEADER_READ_MAX_BYTES })
-    const line = buffer.subarray(0, end).toString("utf8")
-    return parseHeader(line)
+    // Most headers fit in the first KiB. Grow only for longer metadata,
+    // without transferring a full 64 KiB of every conversation in a listing.
+    let buffer = Buffer.allocUnsafe(1024)
+    let offset = 0
+    while (offset < HEADER_READ_MAX_BYTES) {
+      if (offset === buffer.length) {
+        const expanded = Buffer.allocUnsafe(Math.min(buffer.length * 4, HEADER_READ_MAX_BYTES))
+        buffer.copy(expanded)
+        buffer = expanded
+      }
+      const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset)
+      if (bytesRead === 0) break
+      const end = buffer.subarray(offset, offset + bytesRead).indexOf(0x0a)
+      if (end !== -1) return parseHeader(buffer.toString("utf8", 0, offset + end))
+      offset += bytesRead
+    }
+    throw Object.assign(new Error(`Session header is not terminated within ${HEADER_READ_MAX_BYTES} bytes`), { code: 'SESSION_HEADER_TOO_LARGE', limit: HEADER_READ_MAX_BYTES })
   } finally {
     await handle.close()
   }
