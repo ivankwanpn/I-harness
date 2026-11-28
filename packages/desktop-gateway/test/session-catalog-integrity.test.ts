@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { expect, it, vi } from "vitest"
@@ -9,6 +9,114 @@ import { createDesktopHost } from "../src/host.ts"
 import { createCommittedSessionCatalog } from "../src/session-catalog.ts"
 import { readListedSessions } from "../src/catalog-rows.ts"
 import { createJsonlDashboardSummaryCache, describeSavedSession, loadCatalogSession } from "../src/session-dashboard-summary.ts"
+import { createCommitDashboardSummaryCache } from '../src/commit-dashboard-summary.ts'
+import { asSessionCoordinator } from '@i-harness/session-persistence/internal/commit-facade'
+import { createDurableSessionLoader, createSessionService } from '@i-harness/session-executor'
+import { createSessionManagement } from '../src/session-management.ts'
+
+it('rechecks a navigation generation after pending writes and calls the original visibility and project checks', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ih-commit-nav-')), writer = createJsonlCommitCoordinator(dir)
+  const coordinator = asSessionCoordinator(writer), cache = createCommitDashboardSummaryCache()
+  const service = createSessionService({ workspace: dir, coordinator, sessionFor: createDurableSessionLoader(coordinator), modelPolicy: 'test-mock' })
+  const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), enumerated = Promise.withResolvers<void>()
+  const put = coordinator.putDocument.bind(coordinator)
+  vi.spyOn(coordinator, 'putDocument').mockImplementation(async (key, value) => { started.resolve(); await release.promise; return put(key, value) })
+  const visible = vi.fn(async (_id: string, meta: Awaited<ReturnType<typeof coordinator.profile>>['meta']) =>
+    meta.workspaceId === 'workspace' && meta.title !== 'Hidden')
+  const projectFor = vi.fn(async (_id: string) => 'confirmed-project')
+  const list: typeof writer.list = async (...args) => { const ids = await writer.list(...args); enumerated.resolve(); return ids }
+  const manager = createSessionManagement(coordinator, service, visible, { projectFor,
+    navigationCatalog: () => cache.forListing(dir, { list, profile: writer.profile.bind(writer) }, () => false),
+  })
+  let mutation: Promise<unknown> | undefined, navigation: ReturnType<typeof manager.navigationSnapshot> | undefined
+  try {
+    await coordinator.create({ sessionId: 'saved', title: 'Original', workspaceId: 'workspace' })
+    mutation = manager.mutate('saved', 'pin')
+    await started.promise
+    navigation = manager.navigationSnapshot('saved')
+    await enumerated.promise
+    await writer.updateMeta('saved', { title: 'Updated' })
+    release.resolve()
+    await mutation
+    expect(await navigation).toEqual({ partial: false, entries: { saved: { pinned: true, unread: false, archived: false, projectId: 'confirmed-project' } } })
+    expect(visible.mock.calls.at(-1)?.[1]).toMatchObject({ title: 'Updated', workspaceId: 'workspace' })
+    expect(projectFor).toHaveBeenCalledExactlyOnceWith('saved')
+    projectFor.mockRejectedValueOnce(new Error('Owner cannot be confirmed'))
+    expect(await manager.navigationSnapshot()).toEqual({ partial: true, entries: {} })
+    await writer.updateMeta('saved', { title: 'Hidden' })
+    expect(await manager.navigationSnapshot()).toEqual({ partial: false, entries: {} })
+    expect(projectFor).toHaveBeenCalledTimes(2)
+  } finally {
+    release.resolve()
+    await Promise.allSettled([mutation, navigation])
+    cache.clear(); await service.close(); await writer.close(); await rm(dir, { recursive: true, force: true })
+  }
+})
+
+it('reuses the verified commit listing for display, follows changed generations, and rejects same-size corrupt bytes', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ih-commit-display-'))
+  const writer = createJsonlCommitCoordinator(dir), cache = createCommitDashboardSummaryCache()
+  const profile = vi.fn(writer.profile.bind(writer)), snapshot = vi.fn(writer.snapshot.bind(writer))
+  let projections = 0
+  const nativeList: typeof writer.list = (partial, onlyId, visit) => writer.list(partial, onlyId, row => visit?.({
+    ...row, snapshot() { projections++; return row.snapshot() },
+  }))
+  const source = { list: nativeList, profile, snapshot }
+  async function list(afterProfile?: () => Promise<void>) {
+    const catalog = cache.forListing(dir, source)
+    return readListedSessions(catalog, () => async (id, meta) => {
+      const change = afterProfile
+      afterProfile = undefined
+      await change?.()
+      return catalog.summary(id, async () => describeSavedSession(await loadCatalogSession(source, id, meta), meta.title))
+    })
+  }
+  try {
+    await writer.create({ sessionId: 'saved', title: 'Alpha' })
+    for (let i = 0; i < 2; i++) expect((await list()).sessions).toEqual([expect.objectContaining({ title: 'Alpha', turnCount: 0 })])
+    expect(profile).not.toHaveBeenCalled()
+    expect(snapshot).not.toHaveBeenCalled()
+    expect(projections).toBe(1)
+    const folder = join(dir, 'saved'), file = (await readdir(folder)).find(name => /^session\.v\d+\.jsonl$/.test(name))!
+    const path = join(folder, file), original = await readFile(path)
+    const other = join(dir, 'replacement'), replacement = createJsonlCommitCoordinator(other)
+    try { await replacement.create({ sessionId: 'saved', title: 'Omega' }) } finally { await replacement.close() }
+    const bytes = await readFile(join(other, 'saved', file))
+    expect(bytes.length).toBe(original.length)
+    const replaced = await list(async () => {
+      await writeFile(path + '.replacement', bytes)
+      await rename(path + '.replacement', path)
+    })
+    expect(replaced.sessions).toEqual([expect.objectContaining({ title: 'Omega', turnCount: 0 })])
+    const changed = await list(async () => {
+      await writer.updateMeta('saved', { title: 'Bravo' })
+      await writer.append('saved', [{ type: 'turn/start' }, { type: 'user/message', text: 'one' }, { type: 'turn/end' }])
+    })
+    expect(changed.sessions).toEqual([expect.objectContaining({ title: 'Bravo', turnCount: 1 })])
+    expect(profile).toHaveBeenCalled()
+    expect(snapshot).toHaveBeenCalled()
+    expect((await list(async () => { await writer.updateMeta('saved', { archived: true }) })).sessions).toEqual([])
+    await writer.updateMeta('saved', { archived: false })
+    expect((await list()).sessions[0]?.title).toBe('Bravo')
+    const text = await readFile(path, 'utf8')
+    expect(text).toContain('Omega')
+    await writeFile(path, text.replace('Omega', 'Bogus'))
+    expect(await list()).toEqual({ sessions: [], listingPartial: true })
+    const legacy = createSessionCoordinator(createJsonlBackend(dir))
+    try { await legacy.create({ sessionId: 'older', title: 'Legacy' }) } finally { await legacy.close() }
+    expect(await list()).toMatchObject({ sessions: [{ id: 'older', title: 'Legacy', turnCount: 0 }], listingPartial: true })
+    // A valid native chain copied into another session's path has no confirmed
+    // summary there, even if its own digest and every event are valid.
+    const misplaced = join(dir, 'misplaced')
+    await mkdir(misplaced)
+    await writeFile(join(misplaced, file), bytes)
+    const degraded = await list()
+    expect(degraded.listingPartial).toBe(true)
+    const misplacedRow = degraded.sessions.find(row => row.id === 'misplaced')
+    expect(misplacedRow).toMatchObject({ id: 'misplaced', title: 'Omega' })
+    expect(misplacedRow).not.toHaveProperty('turnCount')
+  } finally { cache.clear(); await writer.close(); await rm(dir, { recursive: true, force: true }) }
+})
 
 it.each(['rename', 'archive', 'churn'] as const)('rechecks the public catalog row when its journal changes during %s', async change => {
   const dir = await mkdtemp(join(tmpdir(), 'ih-catalog-change-'))

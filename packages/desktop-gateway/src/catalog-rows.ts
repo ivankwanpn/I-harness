@@ -1,6 +1,8 @@
 import type { SessionListResult } from "@i-harness/sdk"
 import { isConversationMetadata } from "./session-visibility.ts"
-import type { SessionCatalogHeader, SessionCoordinator } from "@i-harness/session-persistence"
+import type { SessionCatalogHeader, SessionCoordinator, SessionMeta } from "@i-harness/session-persistence"
+
+export type DisplayCatalogSource = Pick<SessionCoordinator, "list"> & { profile(id: string): Promise<{ meta: SessionMeta; updatedAt?: number }> }
 
 /** A failed directory read rejects the entire request. Once enumerated, each
  * row is observed independently; only confirmed rows cross the boundary. */
@@ -42,7 +44,7 @@ export async function readCatalogRows<T>(
 /** Cold catalog and live server use the same membership, visibility and
  * incomplete-read policy. Only their available summary sources differ. */
 export async function readListedSessions(
-  source: Pick<SessionCoordinator, "list" | "profile">,
+  source: DisplayCatalogSource,
   summaries: (ids: readonly string[]) => (id: string, header: SessionCatalogHeader) => Promise<{ title?: string; turnCount: number } | undefined>,
   sequential = false,
   signal?: AbortSignal,

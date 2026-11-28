@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import type { BigIntStats } from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
 import type { SessionEvent } from '@i-harness/core-session'
 import { CommitFormatError } from './errors.ts'
@@ -11,6 +12,7 @@ import { CommitLogCleanupError, CommitLogResources } from './resources.ts'
 import { generationPath, sessionDirectory, sidecarDirectory, sidecarPath, temporaryPath } from './paths.ts'
 import { isAlreadyExists, isNotFound, nodeIo, type CommitLogIo } from './io.ts'
 import { scanCommitLog } from './scanner.ts'
+import { sameCommitGenerationVersion } from './generation-version.ts'
 
 /** The on-disk generation number this store writes. */
 export const COMMIT_LOG_GENERATION = COMMIT_FORMAT_VERSION
@@ -162,6 +164,18 @@ async function readGeneration(io: CommitLogIo, path: string): Promise<Buffer | u
   try { return await io.readFile(path) } catch (error) { if (isNotFound(error)) return undefined; throw error }
 }
 
+async function readObservedGeneration(io: CommitLogIo, path: string, resources: CommitLogResources, observe: (revision: BigIntStats) => void) {
+  const file = await io.open(path, 'r').catch(error => { if (!isNotFound(error)) throw error })
+  if (!file) return
+  return resources.withFile(file, async () => {
+    const before = await file.stat({ bigint: true }).catch(() => undefined)
+    const bytes = await file.readFile()
+    const after = before && await file.stat({ bigint: true }).catch(() => undefined)
+    if (before && after && sameCommitGenerationVersion(before, after)) observe(before)
+    return bytes
+  })
+}
+
 function openState(records: readonly CommitRecord[], view: CommitView, size: number): State {
   return { records: [...records], view, size, closed: false }
 }
@@ -239,7 +253,7 @@ function cacheScan(key: string, fingerprint: string, records: readonly CommitRec
   while (scanCache.size > SCAN_CACHE_LIMIT) scanCache.delete(scanCache.keys().next().value as string)
 }
 
-export async function openCommitLog(options: CommitLogOptions, mode: CommitLogMode): Promise<CommitLog> {
+export async function openCommitLog(options: CommitLogOptions, mode: CommitLogMode, observeRevision?: (revision: BigIntStats) => void): Promise<CommitLog> {
   const io = options.io ?? nodeIo
   const { root, sessionId } = options
   const location = { root, sessionId, io }, lockRoot = options.lockRoot ?? root, compactDocuments = options.compactDocuments
@@ -256,7 +270,7 @@ export async function openCommitLog(options: CommitLogOptions, mode: CommitLogMo
       await resources.release(resources.file(handle)); handle = undefined
       resources.retain(await acquireCommitSnapshotLease(sessionId, { lockRoot, retryMs: options.lease?.retryMs, deadlineMs: options.lease?.deadlineMs }, 'shared'))
     }
-    let bytes = await readGeneration(io, path)
+    let bytes = mode === 'read' && observeRevision ? await readObservedGeneration(io, path, resources, observeRevision) : await readGeneration(io, path)
     if (!bytes) throw new CommitLogNotFoundError(sessionId)
     // Content identity also detects replacement with an equal-length generation.
     const cacheKey = root + '|' + sessionId

@@ -1,4 +1,4 @@
-import { readCatalogRows } from "./catalog-rows.ts"
+import { readCatalogRows, type DisplayCatalogSource } from "./catalog-rows.ts"
 import { isConversationMetadata } from "./session-visibility.ts"
 import { ForkAdmissionError, type SessionCoordinator, type SessionMeta } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
@@ -15,6 +15,7 @@ export interface SessionBatchCommand { action: "archive" | "restore" | "delete" 
 export interface SessionBatchResult { results: ({ sessionId: string; ok: true; projectId?: string; executionWorkspace?: string } | { sessionId: string; ok: false; error: string })[] }
 
 export interface SessionManagementOptions {
+  navigationCatalog?(): DisplayCatalogSource
   /** Original metadata owner calls this after committed visibility withdrawal. */
   onVisibilityWithdrawn?(sessionId: string): void
   projectFor?(sessionId: string): Promise<string | undefined>
@@ -121,9 +122,10 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
     if (latestQueue.running || (!allowPending && latestQueue.queued)) throw new Error("Session is busy")
   }
   async function navigationSnapshot(onlyId?: string) {
-    const { rows, partial } = await readCatalogRows(coordinator, () => async id => {
+    const catalog = options.navigationCatalog?.() ?? coordinator
+    const { rows, partial } = await readCatalogRows(catalog, () => async id => {
       await writes.get(id)
-      const profile = await coordinator.profile(id)
+      const profile = await catalog.profile(id)
       if (!await visible(id, profile.meta)) return undefined
       const projectId = await options.projectFor?.(id)
       return [id, { ...await navigationFor(id), ...(projectId ? { projectId } : {}), ...(onlyId === undefined ? {} : { archived: profile.meta.archived === true }) }] as const

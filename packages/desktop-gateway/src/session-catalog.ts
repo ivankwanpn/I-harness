@@ -6,6 +6,7 @@ import { SettingsStore, resolveSettingsPath } from '@i-harness/settings'
 import { stat } from 'node:fs/promises'
 import type { SessionDashboardResult } from '@i-harness/sdk'
 import { createJsonlDashboardSummaryCache, describeSavedSession, loadCatalogSession } from './session-dashboard-summary.ts'
+import { createCommitDashboardSummaryCache } from './commit-dashboard-summary.ts'
 import { isConversationMetadata } from './session-visibility.ts'
 import { navigationDocumentKey, projectBindingDocumentKey, parseSessionNavigation, parseSessionProjectBinding, type SessionNavigation } from './session-navigation.ts'
 
@@ -18,6 +19,7 @@ export function createCommittedSessionCatalog() {
   const reads = new Set<Promise<unknown>>()
   const owners = new Set<CatalogRead>()
   const savedSummary = createJsonlDashboardSummaryCache()
+  const commitSummary = createCommitDashboardSummaryCache()
   function read<T>(root: string, empty: T, work: (coordinator: CatalogRead, store: 'commit-log' | 'jsonl') => Promise<T>, signal?: AbortSignal): Promise<T> {
     if (closing) return Promise.reject(Error('Session catalog is closed'))
     const job = (async () => {
@@ -57,9 +59,10 @@ export function createCommittedSessionCatalog() {
     return job
   }
   async function navigationSnapshot(root: string, onlyId?: string) {
-    return read(root, { entries: {} as Record<string, SessionNavigation>, partial: false }, async coordinator => {
-      const { rows, partial } = await readCatalogRows(coordinator, () => async id => {
-        const { meta } = await coordinator.profile(id)
+    return read(root, { entries: {} as Record<string, SessionNavigation>, partial: false }, async (coordinator, store) => {
+      const catalog = store === 'commit-log' ? commitSummary.forListing(root, coordinator, () => false) : coordinator
+      const { rows, partial } = await readCatalogRows(catalog, () => async id => {
+        const { meta } = await catalog.profile(id)
         if (!isConversationMetadata(meta)) return undefined
         const navigation = parseSessionNavigation(await coordinator.getDocument(navigationDocumentKey(id)))
         const binding = parseSessionProjectBinding(await coordinator.getDocument(projectBindingDocumentKey(id)))
@@ -75,11 +78,12 @@ export function createCommittedSessionCatalog() {
     },
     dashboard(root: string, signal?: AbortSignal): Promise<SessionDashboardResult> {
       return read<SessionDashboardResult>(root, { sessions: [] }, async (coordinator, store) => {
-        const listed = await readListedSessions(coordinator, ids => {
+        const committed = store === 'commit-log' ? commitSummary.forListing(root, coordinator) : undefined
+        const listed = await readListedSessions(committed ?? coordinator, ids => {
           const saved = savedSummary.forListing(root, ids)
           return async (id, header) => {
             const load = () => loadCatalogSession(coordinator, id, header)
-            return store === 'jsonl' ? saved(id, header, load) : describeSavedSession(await load(), header.title)
+            return committed ? committed.summary(id, async () => describeSavedSession(await load(), header.title)) : saved(id, header, load)
           }
         }, true, signal)
         return { ...listed, sessions: listed.sessions.map(row => ({ ...row, live: false })) }
@@ -90,6 +94,7 @@ export function createCommittedSessionCatalog() {
       return closeFlight ??= Promise.resolve().then(async () => {
         await Promise.allSettled([...reads])
         savedSummary.clear()
+        commitSummary.clear()
         const results = await Promise.allSettled([...owners].map(async owner => { await owner.close(); owners.delete(owner) }))
         const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
         if (errors.length) throw new AggregateError(errors, 'Session catalog read cleanup incomplete')

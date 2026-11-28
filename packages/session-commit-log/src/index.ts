@@ -7,4 +7,5 @@ export { COMMIT_LOG_GENERATION, CommitLogConflictError, CommitLogNotFoundError, 
 export type { CommitLog, CommitLogMode } from './store.ts'
 export { CommitLogCleanupError } from './resources.ts'
 export { createCommitHistoryReader } from './history-pages.ts'
+export { sameCommitGenerationVersion } from './generation-version.ts'
 export type { CommitLogCleanup } from './resources.ts'

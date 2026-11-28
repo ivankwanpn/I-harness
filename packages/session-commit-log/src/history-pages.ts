@@ -12,6 +12,7 @@ import { CommitLogCleanupError, CommitLogResources } from './resources.ts'
 import { scanCommitLog } from './scanner.ts'
 import { CommitFormatError } from './errors.ts'
 import type { CommitLogOptions } from './store.ts'
+import { usableGeneration as usable, sameCommitGenerationVersion as sameVersion } from './generation-version.ts'
 
 // Retain a bounded viewport even in a much longer conversation, plus the
 // earlier admission coordinates referenced by images inside that viewport.
@@ -20,10 +21,6 @@ type Span = { offset: number; bytes: number; digest: string }
 type Window = Pick<SessionHistoryPagePlan, 'range' | 'admissions' | 'turns'>
 type HistoryIndex = { version: BigIntStats; window: Window; spans: Map<number, Span> }
 const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
-const usable = (stat: BigIntStats) => stat.isFile() && stat.ino > 0n && stat.mtimeNs > 0n && stat.ctimeNs > 0n
-  && (stat.mtimeNs % 1_000_000n !== 0n || stat.ctimeNs % 1_000_000n !== 0n)
-const sameVersion = (a: BigIntStats, b: BigIntStats) => usable(a) && usable(b) && a.dev === b.dev && a.ino === b.ino
-  && a.size === b.size && a.birthtimeNs === b.birthtimeNs && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs
 
 function indexGeneration(bytes: Buffer, records: readonly CommitRecord[], entries: readonly SessionEvent[], version: BigIntStats, plan: SessionHistoryPagePlan): HistoryIndex | undefined {
   const selected = new Set(plan.ordinals)

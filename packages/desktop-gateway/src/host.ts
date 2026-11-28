@@ -39,6 +39,7 @@ import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsPr
 import { commitModelSwitch, switchJsonlModel } from "./model-switch.ts"
 import { createSessionManagement } from "./session-management.ts"
 import { readListedSessions } from "./catalog-rows.ts"
+import { createCommitDashboardSummaryCache } from './commit-dashboard-summary.ts'
 import { createJsonlDashboardSummaryCache, describeSavedSession, describeSession, loadCatalogSession } from "./session-dashboard-summary.ts"
 import { createGatewayForkHost } from './fork-session.ts'
 import { assertOutsideForkController } from '../../session-persistence/src/fork-controller.ts'
@@ -230,6 +231,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
   const isConversation = createConversationVisibility(coordinator)
   const fence = createSessionManagementFence()
   const savedDashboardSummary = createJsonlDashboardSummaryCache()
+  const commitDashboardSummary = commitLogStore ? createCommitDashboardSummaryCache() : undefined
   let management: ReturnType<typeof createSessionManagement>
   const drainSession = async (id: string) => { await service.closeSession(id); await approvals.flush() }
   const projects = createProjectScopeBroker(coordinator, options.workspace, createSessionRuntimeVisibility(coordinator), { fence, assertIdle: id => management.assertIdle(id), drainSession,
@@ -679,6 +681,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
     onRunningChanged: (sessionId, running, error) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "error" : "completed", ...(error ? { error } : {}) })) })
   const workflow = { ...rawWorkflow, mutate: (id: string, command: unknown) => fence.run(id, () => rawWorkflow.mutate(id, command)) }
   management = createSessionManagement(coordinator, service, isConversation, { workspace: options.workspace, sessionDir: options.sessionDir, fence,
+    ...(commitDashboardSummary ? { navigationCatalog: () => commitDashboardSummary.forListing(options.sessionDir, coordinator, () => false) } : {}),
     projectFor: projects.projectFor, onVisibilityWithdrawn: id => instructions.revokeSession(id), moveProject: projects.move, pendingInteractions: async id => interaction.pending(id),
     activeWork: async id => (await workflow.read(id)).goalRun?.running === true, drainSession })
   const schedules = createDesktopSchedules(coordinator, service)
@@ -856,27 +859,33 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
       })
     },
     createSession: async () => ({ sessionId: (await coordinator.create()).id }),
-    listSessions: () => readListedSessions(coordinator, ids => {
-      const saved = savedDashboardSummary.forListing(options.sessionDir, ids)
-      return async (id, header) => {
-        let title = header.title
-        const execution = originalManagedExecutionFor(service, id)
-        if (execution) {
-          const observation = execution.observe()
-          const turnCount = observation.turnCount
-          const projection = observation.metadata.title
-          if (projection.kind === 'available' && isOwnedTitleSnapshot(projection.snapshot)) {
-            const committed = projection.snapshot.title
-            if (committed && (committed.source === 'user' || title === undefined)) title = committed.title
+    listSessions: () => {
+      const committed = commitDashboardSummary?.forListing(options.sessionDir, coordinator,
+        id => !originalManagedExecutionFor(service, id) && !service.liveSession(id))
+      return readListedSessions(committed ?? coordinator, ids => {
+        const saved = savedDashboardSummary.forListing(options.sessionDir, ids)
+        return async (id, header) => {
+          let title = header.title
+          const execution = originalManagedExecutionFor(service, id)
+          if (execution) {
+            const observation = execution.observe()
+            const turnCount = observation.turnCount
+            const projection = observation.metadata.title
+            if (projection.kind === 'available' && isOwnedTitleSnapshot(projection.snapshot)) {
+              const currentTitle = projection.snapshot.title
+              if (currentTitle && (currentTitle.source === 'user' || title === undefined)) title = currentTitle.title
+            }
+            observation.assertCurrent()
+            return { title, turnCount }
           }
-          observation.assertCurrent()
-          return { title, turnCount }
+          const live = service.liveSession(id)
+          const load = () => loadCatalogSession(coordinator, id, header)
+          return live ? describeSession(live, title) : committed
+            ? committed.summary(id, async () => describeSavedSession(await load(), title))
+            : saved(id, header, load)
         }
-        const live = service.liveSession(id)
-        const load = () => loadCatalogSession(coordinator, id, header)
-        return live ? describeSession(live, title) : commitLogStore ? describeSavedSession(await load(), title) : saved(id, header, load)
-      }
-    }),
+      })
+    },
     onWrite: createGatewayWrite(options.onWrite, handlers, internalIds),
   })
   defer(() => base.close())
@@ -1024,6 +1033,7 @@ async function startDesktopHost(options: DesktopHostOptions, defer: (cleanup: St
         if (forksJoined&&cleaned.has("session service")&&cleaned.has('native context')) await once("coordinator", () => closeCoordinatorWithRetainedCleanupOperation(coordinator, cleanupOperation))
         if (failures.length) throw new AggregateError(failures.map(item => item.cause),
           `Desktop host cleanup incomplete: ${failures.map(item => item.name).join(", ")}`)
+        commitDashboardSummary?.clear()
         shutdownComplete = true
       })().finally(() => finishRetainedCleanupOperation(cleanupOperation))
       closing = attempt

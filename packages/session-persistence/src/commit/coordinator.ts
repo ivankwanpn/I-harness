@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto'
 import { CURRENT_FORMAT_VERSION, FactRecoveryRequiredError, validateSemanticBootstrapHistory, canonicalJsonData, decodeFactBatch, encodeFactBatch, legacyPrefixDigest, readInbox, stringifyJsonData, type FactReceipt, type Session, type SessionEvent, type SessionView } from '@i-harness/core-session'
 import { captureCatalogHeader, pendingInputSummary, type PendingInputSummary, type SavedContextBinding, type SavedContextFacts, type SessionCatalogHeader } from '../coordinator/types.ts'
 import { captureSavedContextBinding, savedContextFromObservation, savedContextFromSession } from '../coordinator/saved-context.ts'
-import { COMMIT_LOG_GENERATION, CommitLogConflictError, CommitLogClosedError, CommitLogCleanupError, createCommitHistoryReader, createCommitLog as createStoredCommitLog, openCommitLog, CommitLogNotFoundError, type CommitLog, type CommitLogMode, type CommitLogCleanup } from '@i-harness/session-commit-log'
+import { COMMIT_LOG_GENERATION, CommitLogConflictError, CommitLogClosedError, CommitLogCleanupError, createCommitHistoryReader, createCommitLog as createStoredCommitLog, openCommitLog, sameCommitGenerationVersion, CommitLogNotFoundError, type CommitLog, type CommitLogMode, type CommitLogCleanup } from '@i-harness/session-commit-log'
+import type { BigIntStats } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { buildSession, migrate, preflightSessionFormat } from '../format/validation.ts'
@@ -88,7 +89,7 @@ export type CommitCoordinator = {
   withProcessReadObservation<T, U>(id: string, options: import('../coordinator/process-read-owner.ts').ProcessReadOptions, work: (observation: import('../coordinator/process-read-owner.ts').ProcessReadObservation) => Promise<T>, publish: (candidate: T, observation: import('../coordinator/process-read-owner.ts').ProcessReadObservation, last: import('../coordinator/process-read-owner.ts').ProcessReadUpdate) => Promise<U>): Promise<U>
   closeManagedDocument(sessionId: string): Promise<void>
   revokeManagedDocumentNewWork(sessionId: string): void
-  list(onUnreadable?: () => void, onlyId?: string): Promise<string[]>
+  list(onUnreadable?: () => void, onlyId?: string, visit?: CommitCatalogVisit): Promise<string[]>
   profile(sessionId: string): Promise<{ meta: SessionMeta; blank: boolean; updatedAt?: number }>
   profileVerifyingTask(sessionId: string, validateTask: (value: unknown) => void): ReturnType<CommitCoordinator['profile']>
   updateMeta(sessionId: string, patch: Partial<SessionMeta>): Promise<SessionMeta>
@@ -111,6 +112,14 @@ export type CommitCoordinator = {
 }
 
 type Header = SessionMeta & { readonly commitFormatVersion?: number }
+
+/** Read-only catalog projection during the original verified generation's lease. */
+type CommitCatalogVisit = (row: { id: string; meta: SessionMeta; updatedAt: number; digest: string; current(): Promise<boolean>; snapshot(): Session }) => void
+
+function catalogRevisionGuard(path: string, revision: BigIntStats) {
+  // A returned display row must not retain the log or its event history.
+  return () => stat(path, { bigint: true }).then(value => sameCommitGenerationVersion(revision, value), () => false)
+}
 
 const DOCUMENT_SESSION = '__documents__'
 
@@ -190,9 +199,9 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     if (error instanceof CommitLogCleanupError) openResources.add(error.cleanup)
     throw error
   }
-  const open = (sessionId: string, mode: CommitLogMode): Promise<CommitLog> => {
+  const open = (sessionId: string, mode: CommitLogMode, observeRevision?: (revision: BigIntStats) => void): Promise<CommitLog> => {
     assertContinuation()
-    return openCommitLog(logOptions(sessionId), mode).then(retainLog, retainOpenFailure)
+    return openCommitLog(logOptions(sessionId), mode, observeRevision).then(retainLog, retainOpenFailure)
   }
   const createCommitLog = (...args: Parameters<typeof createStoredCommitLog>): Promise<CommitLog> => {
     assertContinuation()
@@ -782,7 +791,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       return cleanup ? serializeOwnership(sessionId, () => settleFailedMount(sessionId, cleanup)) : Promise.resolve()
     },
     revokeManagedDocumentNewWork(sessionId) { const entry = managed.get(sessionId); if (entry) revokeManaged(entry) },
-    async list(onUnreadable, onlyId) {
+    async list(onUnreadable, onlyId, visit) {
       const ids = new Set<string>()
       const entries = await readdir(root, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT') return []
@@ -808,7 +817,26 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       }
       const visible: string[] = []
       for (const id of ids) {
-        try { const log = await open(id, 'read'); try { if (!log.view().deleted) visible.push(id) } finally { await log.close() } }
+        try {
+          let revision: BigIntStats | undefined
+          const log = await open(id, 'read', visit ? observed => { revision = observed } : undefined)
+          try {
+            if (log.view().deleted) continue
+            if (visit && revision) {
+              const path = join(root, id, `session.v${COMMIT_LOG_GENERATION}.jsonl`)
+              const current = catalogRevisionGuard(path, revision)
+              const meta = metaOf(log), last = log.records().at(-1)!
+              if (meta.sessionId === id && await current()) visit({
+                id, meta, updatedAt: Date.parse(last.at), digest: last.digest, current,
+                snapshot() {
+                  if (!log.open) throw new Error('Catalog generation read has ended')
+                  return checkedSession(meta, log.view().entries.map(event => ({ ...event })))
+                },
+              })
+            }
+            visible.push(id)
+          } finally { await log.close() }
+        }
         catch (error) {
           if (error instanceof CommitLogNotFoundError) {
             try { if (!await getDocumentOf('deletion:' + id)) visible.push(id) }
