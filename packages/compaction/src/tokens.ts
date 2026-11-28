@@ -7,9 +7,7 @@ export { IMAGE_TOKEN_ESTIMATE }
 
 // Content-only single-blob estimate — string → estimateTextTokens; parts →
 // Σ (text: estimateTextTokens, image: IMAGE_TOKEN_ESTIMATE). NO block/role
-// overhead. A-02: it must use the same density as every other estimate (ASCII
-// /4, non-ASCII by UTF-8 bytes); the old ceil(length/4) counted UTF-16 units
-// and undercounted CJK content by ~3x.
+// overhead. Group sizing and model-neutral message estimates share text prices.
 export function approxTokens(content: string | LLMContentPart[]): number {
   if (typeof content === "string") return estimateTextTokens(content)
   let total = 0

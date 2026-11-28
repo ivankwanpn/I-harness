@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createSession, append } from "@i-harness/core-session"
+import { captureContextSnapshot, selectReductionRuns } from "@i-harness/context-engine"
 import { IMAGE_TOKEN_ESTIMATE, approxTokens, activeTokens, resolveConfig,  } from "../src/index.ts"
 
 describe("compaction config", () => {
@@ -31,12 +32,28 @@ describe("compaction config", () => {
 })
 
 describe("token estimation", () => {
-  it("approxTokens uses the shared density (ASCII /4, non-ASCII by UTF-8 bytes)", () => {
+  it("approxTokens prices model-neutral content with the shared text estimator", () => {
     expect(approxTokens("abcd")).toBe(1)
     expect(approxTokens("abcde")).toBe(2)
     expect(approxTokens("")).toBe(0)
-    // A-02: two CJK characters are 6 UTF-8 bytes, not 2 UTF-16 units.
-    expect(approxTokens("角色")).toBe(6)
+    expect(approxTokens("角色")).toBe(2)
+  })
+
+  it("retains two recent CJK exchanges under a 250-token tail budget", () => {
+    const session = createSession()
+    append(session, { type: "turn/start" })
+    append(session, { type: "user/message", text: "H" })
+    const answers = [1, 2, 3, 4].map(index => index + "漢".repeat(120))
+    for (const text of answers) {
+      append(session, { type: "step/start" })
+      append(session, { type: "assistant/message", text })
+      append(session, { type: "step/end" })
+    }
+    const capture = captureContextSnapshot(session, { ownerSessionId: "owner", surface: { systemPrompt: "policy", tools: [] } })
+    if (capture.kind !== "captured") throw Error("Expected a usable conversation")
+    const runs = selectReductionRuns(capture.snapshot, { retainTokens: 250 })
+    const selected = runs.flatMap(run => run.groups.flatMap(group => group.items.flatMap(item => item.messages)))
+    expect(selected.filter(message => message.role === "assistant").map(message => message.content)).toEqual(answers.slice(0, 2))
   })
 
   it("estimates an image part at the fixed token count", () => {

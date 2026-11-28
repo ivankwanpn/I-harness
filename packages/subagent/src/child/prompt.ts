@@ -45,9 +45,6 @@ Parent history is context supplied by the parent, not work you performed. Parent
  * not re-export this one).
  */
 export function estimateChildOverhead(systemPrompt: string, schemas: unknown): number {
-  // A-02: the child overhead must use the same density as every other estimate.
-  // `.length / 4` counted UTF-16 code units, so a CJK system prompt was
-  // undercounted ~3x and a child could be clamped with an unrealistically
-  // small input; estimateTextTokens counts non-ASCII by UTF-8 bytes.
+  // Use the same model-neutral text estimate for the child's instructions and tool schemas.
   return estimateTextTokens(systemPrompt) + estimateTextTokens(JSON.stringify(schemas))
 }

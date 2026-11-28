@@ -1,5 +1,6 @@
 import { stringifyJsonData } from "@i-harness/core-session"
 import type { LLMMessage } from "@i-harness/core-session"
+import { estimateUtf8Text } from "./text-density.ts"
 
 // M15: dsh-style fixed-density heuristics. `estimateMessage` prices one
 // message (block/role overhead included); `estimateContent` sums them.
@@ -10,18 +11,9 @@ export const ROLE_OVERHEAD = 4
 // from compaction so the meter is the single source of truth.
 export const IMAGE_TOKEN_ESTIMATE = 1024
 
-/** UTF-16 length is the wrong unit: one CJK character is one code unit but
- * ~1-3 BPE tokens. ASCII keeps the 4-chars-per-token rule; non-ASCII counts
- * its UTF-8 bytes, matching the conservative admission projection instead of
- * undercounting CJK text by an order of magnitude. */
+/** Model-neutral conversation estimate; ASCII uses the M15 density. */
 export function estimateTextTokens(text: string): number {
-  const bytes = Buffer.byteLength(text)
-  if (bytes === text.length) return Math.ceil(bytes / CHARS_PER_TOKEN)
-  let ascii = 0
-  for (let index = 0; index < text.length; index++) {
-    if (text.charCodeAt(index) < 128) ascii++
-  }
-  return Math.ceil(ascii / CHARS_PER_TOKEN) + bytes - ascii
+  return estimateUtf8Text(text, CHARS_PER_TOKEN)
 }
 export function estimateMessage(m: LLMMessage): number {
   if (m.role === "assistant") {
