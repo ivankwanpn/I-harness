@@ -110,13 +110,14 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
     const compaction = safeCompactionDiagnostic(value.compaction)
     const close = record(value.close) && integer(value.close.generation, 0, Number.MAX_SAFE_INTEGER) && typeof value.close.reason === "string" && ["scope-changed", "subprocess-exited", "manager-closed", "unhealthy", "initialization-failed"].includes(value.close.reason)
       ? { generation: value.close.generation, reason: value.close.reason as NonNullable<RuntimeDiagnosticEntry["close"]>["reason"] } : undefined
+    const plannedClose = kind === "gateway/disconnected" && (close?.reason === "manager-closed" || close?.reason === "scope-changed")
     const contextBudget = safeContextBudget(value.contextBudget)
     const contextAdmission = validAdmissionObservation(value.contextAdmission) ? structuredClone(value.contextAdmission) : undefined
     const projectionIssues = Array.isArray(value.projectionIssues)
       && value.projectionIssues.length > 0 && value.projectionIssues.length <= 32
       && value.projectionIssues.every(issue => projectionKinds.has(issue))
       ? [...value.projectionIssues] as NonNullable<RuntimeDiagnosticEntry["projectionIssues"]> : undefined
-    const code = typeof value.code === "string" && codes.has(value.code) ? value.code : undefined
+    const code = !plannedClose && typeof value.code === "string" && codes.has(value.code) ? value.code : undefined
     const waitingFor = kind.startsWith("model/") && ["first-response", "progress"].includes(String(value.waitingFor)) ? value.waitingFor as ModelActivityInfo["waitingFor"] : undefined
     const outcome = kind === "model/settled" && ["completed", "failed", "cancelled"].includes(String(value.outcome)) ? value.outcome as ModelActivityInfo["outcome"] : undefined
     const message = kind === "model/retry" ? `${retry?.code === "CAPACITY" ? "Model temporarily at capacity. " : ""}Model connection retry ${retry?.attempt ?? 1} (${retry?.phase ?? "waiting"}).`
@@ -125,6 +126,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
       : kind === "model/quiet" ? "Model request is waiting for a response or progress."
       : kind === "model/settled" ? "Model request attempt settled."
       : kind === "session/cancelled" ? "User work cancelled."
+      : plannedClose ? (close.reason === "manager-closed" ? "Local gateway closed." : "Local gateway execution scope changed.")
       : kind === "gateway/disconnected" ? "Local gateway disconnected. Reconnect to continue."
       : kind === "runtime/error" ? "Runtime request could not start."
       : kind === "context/request" ? "Prepared physical request facts."
@@ -134,7 +136,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
       : modelFailure && modelFailure.reason !== "unknown" ? `${modelFailure.message}${httpStatus ? ` (HTTP ${httpStatus})` : ""}`
       : code === "FACT_RECOVERY_REQUIRED" ? "Session storage requires recovery before execution can continue."
       : `${code === "CAPACITY" ? "Model temporarily at capacity. " : ""}Model request failed${httpStatus ? ` (HTTP ${httpStatus})` : code ? ` (${code})` : ""}.`
-    return { id: safeId(value.id)!, timestamp: value.timestamp, kind, level: kind === "model/retry" || kind === "task/projection" ? "warning" : kind === "session/cancelled" || kind === "model/recovered" || kind.startsWith("model/") || kind.startsWith("context/") ? "info" : "error", message,
+    return { id: safeId(value.id)!, timestamp: value.timestamp, kind, level: kind === "model/retry" || kind === "task/projection" ? "warning" : plannedClose || kind === "session/cancelled" || kind === "model/recovered" || kind.startsWith("model/") || kind.startsWith("context/") ? "info" : "error", message,
       ...(safeId(value.workspaceId) ? { workspaceId: safeId(value.workspaceId) } : {}), ...(safeId(value.sessionId) ? { sessionId: safeId(value.sessionId) } : {}),
       ...(safeId(value.projectId) ? { projectId: safeId(value.projectId) } : {}), ...(safeId(value.providerId) ? { providerId: safeId(value.providerId) } : {}), ...(safeId(value.modelId) ? { modelId: safeId(value.modelId) } : {}),
       ...(integer(value.runtimeGeneration, 0, Number.MAX_SAFE_INTEGER) ? { runtimeGeneration: value.runtimeGeneration } : {}),
@@ -260,7 +262,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
         for (const key of activeAttempts.keys()) if (JSON.parse(key)[0] === event.workspaceId) closeAttempt(key)
         for (const key of executionStates.keys()) if (JSON.parse(key)[0] === event.workspaceId) executionStates.delete(key)
         const state = scope(event.workspaceId)
-        add({ kind: "gateway/disconnected", workspaceId: event.workspaceId, code: "gateway_disconnected", ...(event.close ? { close: event.close } : {}) }, JSON.stringify([event.workspaceId, state.turn, "disconnect"]))
+        add({ kind: "gateway/disconnected", workspaceId: event.workspaceId, code: "gateway_disconnected", ...(event.close ? { close: event.close } : {}) }, JSON.stringify([event.workspaceId, state.turn, "disconnect", event.close?.generation, event.close?.reason]))
         return
       }
       if (event.kind === "sdk/notification" && event.method === "desktop/tasks/projection" && record(event.params)

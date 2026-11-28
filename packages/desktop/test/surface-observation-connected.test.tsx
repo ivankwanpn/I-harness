@@ -129,7 +129,7 @@ it.each(['healthy','lost-ACK'] as const)('mounts actual source/router/SDK/runtim
             await new Promise(resolve => setImmediate(resolve)); })()); });
         electron.listeners.delete(fail);
         expect(runtimes.peek!('w')).toBeUndefined();
-        expect(mounted.container.textContent).toContain('Project execution scope changed');
+        expect(mounted.container.textContent).toContain('Local gateway connection failed');
         mounted.unmount();
         await finite(Promise.resolve());
         expect(requests.mock.calls.some(([method]) => method === 'desktop/surface/unsubscribe')).toBe(true);

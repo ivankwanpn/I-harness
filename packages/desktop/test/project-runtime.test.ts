@@ -17,7 +17,7 @@ it("syncs only existing runtimes and closes a runtime that cannot accept the cha
   await expect(syncLiveProjectContexts(projects(), catalog, runtimes)).rejects.toThrow("Project scope update failed")
   expect(get).not.toHaveBeenCalled()
   expect(request).toHaveBeenCalledWith("desktop/project/sync", { projects: expect.arrayContaining([{ id: "empty", name: "Empty", roots: [] }]) })
-  expect(invalidate).toHaveBeenCalledWith("a")
+  expect(invalidate).toHaveBeenCalledWith("a", "unhealthy")
 })
 it("uses the manager publication fence so pending gateways cannot be skipped", async () => {
   const refreshProjectContexts = vi.fn(async () => {})

@@ -77,7 +77,7 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
         const entry = event.entry
         // Diagnostic bookkeeping belongs in the Log. Only explicit feedback
         // events may change retries or create a request-failure notification.
-        if (!feedbackKinds.has(entry.kind)) return
+        if (!feedbackKinds.has(entry.kind) || (entry.kind === "gateway/disconnected" && entry.level === "info")) return
         if (seen.current.has(entry.id)) return
         seen.current.add(entry.id)
         if (seen.current.size > 1000) seen.current.delete(seen.current.values().next().value!)

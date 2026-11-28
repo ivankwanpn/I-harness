@@ -62,7 +62,7 @@ export interface WorkspaceRuntimeManager {
   hostStatus?(): import("../shared/bridge.ts").DesktopHostStatus
   peek?(workspaceId: string): WorkspaceRuntime | undefined
   pendingRuntime?(workspaceId: string): Promise<WorkspaceRuntime> | undefined
-  invalidate?(workspaceId: string): Promise<void>
+  invalidate?(workspaceId: string, reason?: "scope-changed" | "unhealthy" | "initialization-failed"): Promise<void>
   /** Publish current native folder authority to ready and starting gateways. */
   refreshProjectContexts?(): Promise<void>
   get(workspace: WorkspaceEntry): Promise<WorkspaceRuntime>
@@ -251,7 +251,7 @@ export function createWorkspaceRuntimeManager(options: {
         const params = frame.method === "desktop/context/diagnostic" && frame.params && typeof frame.params === "object" && !Array.isArray(frame.params)
           ? { ...frame.params, runtimeGeneration: generation } : frame.params
         emit({ kind: "sdk/notification", workspaceId: workspace.id, method: frame.method, params })
-      },()=>{void manager.invalidate!(workspace.id).catch(()=>{})})
+      },()=>{void manager.invalidate!(workspace.id, "unhealthy").catch(()=>{})})
       return { client: launched.client, info, sandbox, generation, assistantPreview: previews.get, hostPid: launched.hostPid, whenClosed: () => {
         const closing=closingClients.get(launched.client)
         return closing ? closing.then(()=>launched.exited,()=>launched.exited) : children.get(workspace.id)!==launched ? launched.exited : undefined
@@ -311,7 +311,7 @@ export function createWorkspaceRuntimeManager(options: {
       return runtime && !retiredClients.has(runtime.client) ? runtime : undefined
     },
     pendingRuntime: (id) => pending.get(id),
-    async invalidate(id) {
+    async invalidate(id, reason = "scope-changed") {
       const runtime = runtimes.get(id)
       const starting = pending.get(id)
       const child = workspaceOwners.get(id)
@@ -328,7 +328,8 @@ export function createWorkspaceRuntimeManager(options: {
       runtimes.delete(id)
       pending.delete(id)
       children.delete(id)
-      try {emit({ kind: "sdk/disconnected", workspaceId: id, message: "Project execution scope changed; reconnect to continue.", close: { generation, reason: "scope-changed" } })} catch { /* The original generation is fenced; failed forwarding cannot skip child cleanup. */ }
+      const message = reason === "scope-changed" ? "Project execution scope changed." : "Local gateway connection failed."
+      try {emit({ kind: "sdk/disconnected", workspaceId: id, message, close: { generation, reason } })} catch { /* The original generation is fenced; failed forwarding cannot skip child cleanup. */ }
       try {
         if (child) await stopWorkspace(child)
         else if (runtime) await closeClient(runtime.client)
@@ -357,7 +358,7 @@ export function createWorkspaceRuntimeManager(options: {
           }
           catch (error) {
             // A concurrent replacement owns its own lifecycle.
-            if (runtimes.get(id) === runtime) await manager.invalidate!(id)
+            if (runtimes.get(id) === runtime) await manager.invalidate!(id, "unhealthy")
             throw error
           }
         }))
@@ -422,7 +423,7 @@ export function createWorkspaceRuntimeManager(options: {
             health.unref()
             healthTimers.set(workspace.id, health)
           }
-          try {emit({kind:'sdk/ready',method:'sdk/ready',workspaceId:workspace.id,runtimeGeneration:generation})} catch(error) {void manager.invalidate!(workspace.id).catch(()=>{});throw error}
+          try {emit({kind:'sdk/ready',method:'sdk/ready',workspaceId:workspace.id,runtimeGeneration:generation})} catch(error) {void manager.invalidate!(workspace.id, "initialization-failed").catch(()=>{});throw error}
           activityVersion += 1
           const launched = children.get(workspace.id)
           if (launched !== undefined) {

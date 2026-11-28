@@ -159,6 +159,7 @@ it("does not use raw SDK error or disconnect text as diagnostic content", () => 
   const f = fixture(); render(<RuntimeFeedback bridge={f.bridge} workspaceId="w" sessionId="a" onOpenLog={() => {}} />)
   for (const status of ["failed", "error"]) f.emit({ kind: "sdk/notification", workspaceId: "w", method: "session/status", params: { sessionId: "a", status, error: "private provider body" } })
   f.emit({ kind: "sdk/disconnected", workspaceId: "w", message: "private stderr" })
+  f.entry({ id: "shutdown", kind: "gateway/disconnected", sessionId: undefined, level: "info", close: { reason: "manager-closed", generation: 1 }, retry: undefined, message: "Local gateway closed." })
   expect(screen.queryByRole("alert")).toBeNull()
   f.entry({ id: "disconnect", kind: "gateway/disconnected", sessionId: undefined, level: "error", retry: undefined, message: "Local gateway disconnected." })
   expect(screen.getByRole("alert").textContent).toContain("Local gateway disconnected.")

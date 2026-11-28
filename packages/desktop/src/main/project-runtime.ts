@@ -34,7 +34,7 @@ export async function syncLiveProjectContexts(projects: ProjectCatalog, catalog:
     const runtime = runtimes.peek?.(workspace.id)
     if (!runtime) return
     try { await runtime.client.request("desktop/project/sync", { projects: scopes.map(project => scopedProject(project, workspace)) }) }
-    catch (error) { await runtimes.invalidate?.(workspace.id); throw error }
+    catch (error) { await runtimes.invalidate?.(workspace.id, "unhealthy"); throw error }
   }))
   const failures = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected")
   if (failures.length) throw new AggregateError(failures.map((failure) => failure.reason), "Project scope update failed; affected Agent runtimes were closed. Retry to apply the current folder settings.")

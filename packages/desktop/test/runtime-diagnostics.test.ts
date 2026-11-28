@@ -95,6 +95,22 @@ describe("native runtime diagnostics", () => {
     ]))
     expect(JSON.stringify(rows)).not.toMatch(/private|sk-secret|body|uncertainties/)
   })
+  it("shows planned gateway retirements as information, without hiding a later failure or repeating a close receipt", async () => {
+    const dir = await root()
+    await writeFile(join(dir, "runtime-diagnostics.0.jsonl"), JSON.stringify({ id: "legacy", timestamp: Date.now(), workspaceId: "w",
+      kind: "gateway/disconnected", level: "error", code: "gateway_disconnected", message: "Reconnect to continue.", close: { generation: 1, reason: "manager-closed" } }) + "\n")
+    const service = createRuntimeDiagnostics(dir)
+    const close = (generation: number, reason: "scope-changed" | "subprocess-exited") => service.observe({
+      kind: "sdk/disconnected", workspaceId: "w", message: "private raw text", close: { generation, reason },
+    })
+    close(2, "scope-changed"); close(2, "scope-changed"); close(3, "subprocess-exited")
+    const planned = (await service.list({ level: "info" })).entries
+    expect(planned.map(row => row.close?.reason).sort()).toEqual(["manager-closed", "scope-changed"])
+    expect(planned.every(row => !row.code && !row.message.includes("Reconnect"))).toBe(true)
+    const errors = (await service.list({ level: "error" })).entries
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toMatchObject({ kind: "gateway/disconnected", code: "gateway_disconnected", close: { generation: 3, reason: "subprocess-exited" } })
+  })
   it("retains safe model facts from status and SDK rejection through disk, copy and export", async () => {
     const dir = await root(), output = join(dir, "safe.json")
     let copied = ""
