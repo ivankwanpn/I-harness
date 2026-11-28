@@ -3,6 +3,15 @@ import { createGeminiClient } from '../src/index.ts'
 import type { LLMRequest } from '@i-harness/llm-seam'
 afterEach(() => vi.unstubAllGlobals())
 const request: LLMRequest = { systemPrompt: '', tools: [], messages: [{ role: 'user', content: 'go' }] }
+it("applies Google's evidenced parameter restrictions to the actual endpoint and model resource", async () => {
+  const options = { generationConfig: { thinkingConfig: { thinkingLevel: "minimal" } } }
+  const google = createGeminiClient({ apiKey: "test", baseUrl: "https://generativelanguage.googleapis.com/v1beta/", model: "models/gemini-3.8-flash", options })
+  await expect(google.prepare!(request)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+  const custom = { apiKey: "test", baseUrl: "https://proxy.invalid", model: "gemini-3.8-flash", options }
+  const proxy = createGeminiClient(custom)
+  custom.baseUrl = "https://generativelanguage.googleapis.com"
+  await expect(proxy.prepare!(request)).resolves.toMatchObject({ measurement: { input: { modelId: "gemini-3.8-flash" } } })
+})
 const contents = [{ role: 'model', parts: [{ functionCall: { id: 'a', name: 'read', args: {} } }, { functionCall: { id: 'b', name: 'read', args: {} } }] }, { role: 'user', parts: [{ functionResponse: { id: 'b', name: 'read', response: {} } }, { functionResponse: { id: 'a', name: 'read', response: {} } }] }]
 it('validates actual raw sibling closure without historical authority', async () => {
   const client = createGeminiClient({ apiKey: 'controlled', model: 'fixture', options: { contents } })

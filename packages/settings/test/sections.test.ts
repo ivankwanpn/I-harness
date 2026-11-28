@@ -578,6 +578,7 @@ describe("provider protocol + models objects (Task 1)", () => {
       [{ op: "set", path: ["providers", "gateway", "models"], value: [{ id: "g1", contextWindow: -1 }] }],
       [{ op: "set", path: ["providers", "gateway", "models"], value: [{ id: "g1", contextWindow: 1.5 }] }],
       [{ op: "set", path: ["providers", "gateway", "models"], value: [{ id: "g1", maxTokens: 0 }] }],
+      [{ op: "set", path: ["providers", "gateway", "models"], value: [{ id: "g1", inputTokenLimit: Number.MAX_SAFE_INTEGER + 1 }] }],
       [{ op: "set", path: ["providers", "gateway", "models"], value: [{ id: "g1", junk: "x" }] }],
       [{ op: "set", path: ["providers", "gateway", "models"], value: ["old-format-string"] }],
     ]
@@ -596,7 +597,7 @@ describe("provider protocol + models objects (Task 1)", () => {
           p: {
             models: [
               { id: "m1", name: "M1", contextWindow: 128000, maxTokens: 4096 },
-              { id: "m2", contextWindow: 1000 },
+              { id: "m2", contextWindow: 1000, outputTokenLimit: Number.MAX_SAFE_INTEGER + 1 },
               { id: "" }, // no addressable id → dropped
               { junk: "x" }, // no id → dropped
               "legacy-string", // soft upgrade

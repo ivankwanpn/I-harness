@@ -57,7 +57,7 @@ export function createProviderRegistry(): ProviderRegistry {
       // protocol-aware headers (req.protocol), both response shapes — with the
       // route's OWN registered profile (when it exists) as the omitted-field
       // fallback, never the openai-compatible route's profile.
-      if ((req.modelsURL !== undefined && req.modelsURL !== "")
+      if (req.protocol === "gemini" || (req.modelsURL !== undefined && req.modelsURL !== "")
         || (req.baseURL !== undefined && req.baseURL !== "")) {
         return createBuiltinProbe(() => profile)(req)
       }

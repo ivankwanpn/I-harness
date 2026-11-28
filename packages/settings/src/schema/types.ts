@@ -56,6 +56,9 @@ export interface SettingsModel {
   name?: string
   /** Context window in tokens. */
   contextWindow?: number
+  /** Independent model ceilings, separate from the requested output cap. */
+  inputTokenLimit?: number
+  outputTokenLimit?: number
   /** Maximum OUTPUT tokens — the model's output-length cap (M32 T1/FIX: same
    * semantics as the provider catalog's `maxOutputTokens` card field; the M31
    * G1 mapping of this value onto `maxContextWindow` is removed). A per-model

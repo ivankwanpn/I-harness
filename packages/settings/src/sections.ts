@@ -17,6 +17,7 @@
 
 import type { SettingsLlm, SettingsOnboarding, SettingsProviderConfig } from "./schema/types.ts"
 import type { SettingsStoreSurface } from "./storage/contracts.ts"
+import { isPositiveInteger } from "./normalize/primitives.ts"
 import { assertInstructionData, validateInstructions, validInstructionSources, type SettingsInstructions } from "./instructions.ts"
 
 /** The top-level section keys the section protocol knows about. */
@@ -114,11 +115,9 @@ export const PROVIDER_PROTOCOLS = ["openai-completions", "openai-responses", "an
 /** The wire protocol of one llm.providers.<route> entry. */
 export type SettingsProviderProtocol = (typeof PROVIDER_PROTOCOLS)[number]
 
-/** FieldSpec-level check: contextWindow/maxTokens must be positive integers. */
+/** Model limits must have the same integer precision as runtime token counts. */
 function positiveInteger(value: unknown): string | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value > 0
-    ? undefined
-    : "expected a positive integer"
+  return isPositiveInteger(value) ? undefined : "expected a positive integer"
 }
 
 /** One model row: `id` is required (the addressable key); the rest are optional
@@ -127,6 +126,8 @@ const MODEL_FIELDS: Record<string, FieldSpec> = {
   id: { type: "string" },
   name: { type: "string" },
   contextWindow: { type: "number", validate: positiveInteger },
+  inputTokenLimit: { type: "number", validate: positiveInteger },
+  outputTokenLimit: { type: "number", validate: positiveInteger },
   maxTokens: { type: "number", validate: positiveInteger },
   // The per-row wire protocol (absent = the route's).
   protocol: { type: "enum", enum: [...PROVIDER_PROTOCOLS] },

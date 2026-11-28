@@ -74,12 +74,32 @@ function normalizeMap(map: Record<string, unknown>): ModelDescriptor[] {
  * {id:row|name} record map. Returns undefined for an unsupported shape so the
  * probe can brand it.
  */
-export function normalizeModelList(body: unknown): ModelDescriptor[] | undefined {
+export function normalizeModelList(body: unknown, protocol?: string): ModelDescriptor[] | undefined {
   if (Array.isArray(body)) return normalizeRows(body)
   if (!isRecordLike(body)) return undefined
   for (const key of ["data", "models", "items"] as const) {
     if (!(key in body)) continue
     const container = body[key]
+    if (protocol === "gemini" && key === "models" && Array.isArray(container)) {
+      const rows: ModelDescriptor[] = []
+      for (const model of container) {
+        if (!isRecordLike(model) || typeof model.name !== "string" || !model.name.startsWith("models/")) {
+          rows.push(...normalizeRows([model]))
+          continue
+        }
+        const id = model.name.slice("models/".length)
+        if (!id || id.includes("/")) throw new ModelProbeFailedError("model probe failed: invalid Gemini model resource name")
+        if (Array.isArray(model.supportedGenerationMethods) && !model.supportedGenerationMethods.some(method => method === "generateContent" || method === "streamGenerateContent")) continue
+        // Google's inputTokenLimit is an input-only limit. It cannot stand
+        // in for a shared context window with an output reserve.
+        const inputTokenLimit = positiveInteger(model.inputTokenLimit)
+        const outputTokenLimit = positiveInteger(model.outputTokenLimit)
+        const name = nonEmptyString(model.displayName)
+        rows.push({ id, ...(name ? { name } : {}), ...capacityOf(model),
+          ...(inputTokenLimit ? { inputTokenLimit } : {}), ...(outputTokenLimit ? { outputTokenLimit } : {}) })
+      }
+      return rows
+    }
     if (Array.isArray(container)) return normalizeRows(container)
     if (isRecordLike(container)) return normalizeMap(container)
     return undefined // container present but scalar/null → unsupported shape

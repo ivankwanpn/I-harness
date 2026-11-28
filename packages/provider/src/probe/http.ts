@@ -1,4 +1,5 @@
 import { describeTransportError } from "@i-harness/llm-seam"
+import { geminiModelsURL } from "@i-harness/llm-gemini"
 import type { ModelDescriptor, Probe, ProbeRequest, ProviderProfile } from "../types.ts"
 import { ModelProbeFailedError } from "./errors.ts"
 import { normalizeModelList } from "./normalization.ts"
@@ -79,14 +80,14 @@ function probeAuthHeaders(protocol: string, apiKey: string | undefined): Record<
  * trying: HTTP status errors (4xx/5xx) may just be the wrong path; transport
  * and 2xx-shape failures are structural — the second candidate shares them. */
 type CandidateResult =
-  | { kind: "ok"; models: ModelDescriptor[] }
+  | { kind: "ok"; models: ModelDescriptor[]; next?: string }
   | { kind: "error"; text: string; tryNext: boolean }
 
-async function probeCandidate(url: string, headers: Record<string, string>, signal?: AbortSignal): Promise<CandidateResult> {
+async function probePage(url: string, headers: Record<string, string>, protocol: string, signal?: AbortSignal, continuation = false): Promise<CandidateResult> {
   let response: Response
   try {
     signal?.throwIfAborted()
-    response = await fetch(url, { headers, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(PROBE_TIMEOUT_MS)]) : AbortSignal.timeout(PROBE_TIMEOUT_MS) })
+    response = await fetch(url, { headers, ...(protocol === "gemini" ? { redirect: "error" as const } : {}), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(PROBE_TIMEOUT_MS)]) : AbortSignal.timeout(PROBE_TIMEOUT_MS) })
   } catch (error) {
     signal?.throwIfAborted()
     // A black-hole/unroutable baseURL rejects here — must never escape as an
@@ -108,7 +109,7 @@ async function probeCandidate(url: string, headers: Record<string, string>, sign
     const described = await describeTransportError("model probe", url, error)
     return { kind: "error", text: described.message, tryNext: false }
   }
-  if (!response.ok) return { kind: "error", text: `GET ${url} → ${response.status}`, tryNext: true }
+  if (!response.ok) return { kind: "error", text: `GET ${url} → ${response.status}`, tryNext: protocol !== "gemini" || response.status === 404 || response.status === 405 }
   // A 2xx with a non-JSON body (error-page HTML, proxy message) makes
   // response.json() throw a bare SyntaxError — brand it with the same code the
   // route maps to the probe family.
@@ -118,9 +119,13 @@ async function probeCandidate(url: string, headers: Record<string, string>, sign
   } catch {
     return { kind: "error", text: `GET ${url} body is not JSON — expected {data:[{id}]}`, tryNext: false }
   }
+  if (continuation && (!body || typeof body !== "object" || Array.isArray(body)
+    || Object.keys(body).length > 0 && !("models" in body && Array.isArray(body.models)))) {
+    return { kind: "error", text: "Invalid Gemini model-list continuation", tryNext: false }
+  }
   let models: ModelDescriptor[] | undefined
   try {
-    models = normalizeModelList(body)
+    models = normalizeModelList(body, protocol)
   } catch (error) {
     if (error instanceof ModelProbeFailedError) {
       return { kind: "error", text: `GET ${url} ${error.message.replace(/^model probe failed: /, "")}`, tryNext: false }
@@ -134,7 +139,30 @@ async function probeCandidate(url: string, headers: Record<string, string>, sign
       tryNext: false,
     }
   }
+  if (protocol === "gemini" && body && typeof body === "object" && "nextPageToken" in body) {
+    if (typeof body.nextPageToken !== "string" || !("models" in body) || !Array.isArray(body.models)) {
+      return { kind: "error", text: "Invalid Gemini model-list continuation", tryNext: false }
+    }
+    return { kind: "ok", models, next: body.nextPageToken }
+  }
   return { kind: "ok", models }
+}
+
+async function probeCandidate(url: string, headers: Record<string, string>, protocol: string, signal?: AbortSignal): Promise<CandidateResult> {
+  let page = await probePage(url, headers, protocol, signal)
+  if (page.kind === "error" || !page.next) return page
+  const models = new Map(page.models.map(row => [row.id, row]))
+  const seen = new Set<string>()
+  while (page.next) {
+    if (seen.has(page.next) || seen.size >= 99) return { kind: "error", text: "Gemini model list did not finish within its pagination limit", tryNext: false }
+    seen.add(page.next)
+    const next = new URL(url)
+    next.searchParams.set("pageToken", page.next)
+    page = await probePage(next.href, headers, protocol, signal, true)
+    if (page.kind === "error") return { ...page, text: page.text.replace(next.href, url), tryNext: false }
+    for (const row of page.models) models.set(row.id, row)
+  }
+  return { kind: "ok", models: [...models.values()] }
 }
 
 function validateProbeURL(value: string, label: "baseURL" | "modelsURL"): string {
@@ -205,22 +233,24 @@ export function createBuiltinProbe(resolveProfile: () => ProviderProfile | undef
     const profile = resolveProfile()
     const modelsURL = probeModelsURL(req)
     const baseURL = modelsURL === undefined ? probeBaseURL(req, profile) : undefined
-    if (modelsURL === undefined && baseURL === undefined) {
+    const protocol = req.protocol ?? "openai-completions"
+    if (modelsURL === undefined && baseURL === undefined && protocol !== "gemini") {
       throw new ModelProbeFailedError(
         'model probe failed: modelsURL or baseURL is required (or configure the route "baseURL")',
       )
     }
-    const protocol = req.protocol ?? "openai-completions"
     const apiKey = req.apiKey ?? profile?.apiKey
     // M60 E: the route's configured headers ride along; the adapter's own auth
     // keys (Authorization / x-api-key / x-goog-api-key / anthropic-version)
     // win on collision — the caller never overrides the wire's auth shape.
     const headers = mergeProbeHeaders(req.headers, probeAuthHeaders(protocol, apiKey))
     const failures: string[] = []
-    const candidates = modelsURL !== undefined ? [modelsURL] : probeCandidatePaths(baseURL!)
+    const candidates = modelsURL !== undefined ? [modelsURL] : protocol === "gemini"
+      ? [...new Set([geminiModelsURL(baseURL), ...(baseURL ? probeCandidatePaths(baseURL) : [])])]
+      : probeCandidatePaths(baseURL!)
     for (const url of candidates) {
       req.signal?.throwIfAborted()
-      const result = await probeCandidate(url, headers, req.signal)
+      const result = await probeCandidate(url, headers, protocol, req.signal)
       req.signal?.throwIfAborted()
       if (result.kind === "ok") return result.models
       failures.push(result.text)

@@ -23,7 +23,7 @@ it("fixes a Codex model's protocol while allowing metadata edits without rewriti
   expect(protocol.value).toBe("openai-responses")
   fireEvent.change(dialog.getByLabelText("顯示名稱"), { target: { value: "My Codex" } })
   fireEvent.change(dialog.getByLabelText("上下文大小"), { target: { value: "200000" } })
-  fireEvent.change(dialog.getByLabelText("最大輸出 Token"), { target: { value: "4096" } })
+  fireEvent.change(dialog.getByLabelText("請求輸出上限"), { target: { value: "4096" } })
   fireEvent.change(dialog.getByLabelText("輸入類型"), { target: { value: "text,image" } })
   fireEvent.click(dialog.getByRole("button", { name: "儲存" }))
   expect(save).toHaveBeenCalledWith({ action: "model/edit", id: codexRow.id, model: "codex-model", fields: { name: "My Codex", contextWindow: 200000, maxTokens: 4096, inputModalities: ["text", "image"] } })

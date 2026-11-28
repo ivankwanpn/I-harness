@@ -1,6 +1,6 @@
 import { reportStreamActivity, stringifyJsonData, type LLMRequest, type LLMStreamEvent, type ProviderBlockOrderEntry } from "@i-harness/llm-seam"
 import type { GeminiConfig } from "../types.ts"
-import { mapUsage } from "./usage.ts"
+import { createGeminiUsageMapper } from "./usage.ts"
 
 /**
  * M77 (fix wave): the candidate-side FinishReason values whose documented
@@ -37,9 +37,12 @@ const CONTENT_BLOCK_FINISH_REASONS: ReadonlySet<string> = new Set([
   "IMAGE_RECITATION",
 ])
 
+const INVALID_RESPONSE_REASONS = new Set(["MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL", "TOO_MANY_TOOL_CALLS", "MISSING_THOUGHT_SIGNATURE", "MALFORMED_RESPONSE"])
+
 /** Own one successful response's mutable Gemini parts, tools and finish flags.
  * Config/request references remain live for activity and terminal identity. */
 export function createGeminiFold(request: LLMRequest, config: GeminiConfig) {
+  const mapUsage = createGeminiUsageMapper()
   // M72 Ⅱ: the wire's own truncation literal (`finishReason: "MAX_TOKENS"`)
   // — set in `handleChunk` below, read once at the ending. Absent stays
   // absent: only `true` writes the field.
@@ -98,6 +101,10 @@ export function createGeminiFold(request: LLMRequest, config: GeminiConfig) {
     }
   }
   const finalizeCalls = function* (): Generator<LLMStreamEvent, boolean, unknown> {
+    if (!receivedTerminal) {
+      yield { type: "error", error: new Error("Gemini stream ended without a finishReason") }
+      return true
+    }
     for (const call of pendingCalls) {
       callSignatures.push(call.signature ?? null)
       let args: unknown = {}
@@ -117,10 +124,21 @@ export function createGeminiFold(request: LLMRequest, config: GeminiConfig) {
   }
   const handleChunk = (event: Record<string, unknown>): LLMStreamEvent[] => {
     const events: LLMStreamEvent[] = []
-    const candidates = event.candidates as { content?: { parts?: { text?: string; thought?: boolean; thoughtSignature?: string; functionCall?: { id?: string; name?: string; args?: unknown } }[] } }[] | undefined
-    const finishReason = (candidates?.[0] as { finishReason?: string } | undefined)?.finishReason
-    if (typeof finishReason === "string" && finishReason.length > 0) receivedTerminal = true
-    if (finishReason === "MAX_TOKENS") truncated = true
+    const candidates = event.candidates as { index?: number; finishReason?: string; content?: { parts?: { text?: string; thought?: boolean; thoughtSignature?: string; functionCall?: { id?: string; name?: string; args?: unknown } }[] } }[] | undefined
+    // A streaming frame can contain only an alternative candidate. The IH
+    // transcript and its tool calls follow candidate zero across frames.
+    const primary = candidates?.find(candidate => candidate.index === 0) ?? candidates?.find(candidate => candidate.index == null)
+    const finishReason = primary?.finishReason
+    if (finishReason && INVALID_RESPONSE_REASONS.has(finishReason)) {
+      // The provider rejected the tool exchange. Its usage is observable,
+      // but an earlier buffered call must not escape through finalizeCalls.
+      const usage = mapUsage(event.usageMetadata)
+      if (usage) events.push({type:"usage", usage})
+      events.push({type:"error", error:new Error(`Gemini response failed: ${finishReason}`)})
+      return events
+    }
+    if (typeof finishReason === "string" && finishReason.length > 0 && finishReason !== "FINISH_REASON_UNSPECIFIED") receivedTerminal = true
+    if (finishReason === "MAX_TOKENS" || finishReason === "CONTINUATION") truncated = true
     // M77 (fix wave): the candidate-side carrier, over the WHOLE set of
     // content-block reasons the vendor's enum documents (see
     // CONTENT_BLOCK_FINISH_REASONS above). The comment this replaces said
@@ -147,8 +165,8 @@ export function createGeminiFold(request: LLMRequest, config: GeminiConfig) {
     // is installed in this tree to type against, so the residual is the DOC
     // being right, not a measurement here.)
     const blockReason = (event.promptFeedback as { blockReason?: unknown } | undefined)?.blockReason
-    if (typeof blockReason === "string") { refused = true; receivedTerminal = true }
-    const parts = candidates?.[0]?.content?.parts ?? []
+    if (typeof blockReason === "string" && blockReason && blockReason !== "BLOCK_REASON_UNSPECIFIED") { refused = true; receivedTerminal = true }
+    const parts = primary?.content?.parts ?? []
     for (const [index, part] of parts.entries()) {
       if (part.thought === true) {
         activeText = undefined
@@ -193,18 +211,12 @@ export function createGeminiFold(request: LLMRequest, config: GeminiConfig) {
           : { type: "text/chunk", text: part.text })
       }
     }
-    // M72 Ⅲ: `usageMetadata` rides the LAST chunk — mapped here instead of
-    // only documented. (The sentence this replaces said THIS adapter does not
-    // map `usageMetadata` onto the seam's `usage` event; this maps it.) The
-    // wire's spelling is promptTokenCount → inputTokens, candidatesTokenCount
-    // → outputTokens, cachedContentTokenCount → cacheReadTokens; anything
-    // else the wire sends has no seam name and is not invented one.
+    // usageMetadata can arrive throughout a stream, including its final frame.
     const usage = mapUsage(event.usageMetadata)
     if (usage !== undefined) events.push({ type: "usage", usage })
     return events
   }
   const finish = (): LLMStreamEvent => {
-    if (!receivedTerminal) return { type: "error", error: new Error("Gemini stream ended without a finishReason") }
     // M77: each bit is written on its own (a response can be both), and both
     // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
     const visibleText = partOrder.filter((part): part is Extract<ProviderBlockOrderEntry, { kind: "text" }> => part.kind === "text").map((part) => part.text).join("")

@@ -1,6 +1,7 @@
 import { observeTextOutput } from './request/text-output.ts'
 import { preparedModelClient, snapshotModelData, createPreparedHttpPayload, projectImagesForProvider, type ModelClient } from "@i-harness/llm-seam"
 import type { GeminiConfig } from "./types.ts"
+import { geminiModelId, geminiModelsURL } from "./url.ts"
 import { toGeminiContents } from "./request/messages.ts"
 import { createRequestBody } from "./request/body.ts"
 import { mergeConfiguredHeaders } from "./request/headers.ts"
@@ -12,11 +13,13 @@ import { field } from './request/protojson.ts'
 import { assertNativeProducerWitnesses } from '@i-harness/llm-seam'
 
 export function createGeminiClient(config: GeminiConfig): ModelClient {
-  const baseUrl = config.baseUrl ?? "https://generativelanguage.googleapis.com"
+  const baseUrl = config.baseUrl
+  const modelsURL = geminiModelsURL(baseUrl)
   return preparedModelClient(async originalRequest => {
     assertNativeProducerWitnesses(originalRequest.messages, 'gemini')
     const request = snapshotModelData(originalRequest)
     const capturedConfig = snapshotModelData(config, ["baseUrl"])
+    capturedConfig.baseUrl = baseUrl
     request.signal?.throwIfAborted()
     // M14 negative capability: text-only routes never see image bytes.
     const vision = capturedConfig.inputModalities?.includes("image") ?? false
@@ -45,9 +48,10 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       },
       transport: { label: 'gemini',
         prepare(_actualBody, _serialized, control) {
-        const geminiUrl = `${baseUrl}/v1beta/models/${encodeURIComponent(capturedConfig.model)}:streamGenerateContent?alt=sse`
+        const geminiUrl = `${modelsURL}/${encodeURIComponent(geminiModelId(capturedConfig.model))}:streamGenerateContent?alt=sse`
         return { url: geminiUrl, identity: capturedConfig.executionIdentity, state: undefined, init: {
             headers: mergeConfiguredHeaders(capturedConfig.headers, { "Content-Type": "application/json", "x-goog-api-key": capturedConfig.apiKey }),
+            redirect: "error",
             signal: control.signal,
         } }
         },

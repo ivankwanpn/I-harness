@@ -57,7 +57,9 @@ function ProviderDiscoveryContent({ bridge, workspaceId, id, onSave, active = tr
         void (async () => {
           for (const row of rows.filter((item) => selected.includes(item.id))) {
             if (!mounted.current) break
-            const fields = { ...(row.name ? { name: row.name } : {}), ...(row.contextWindow ? { contextWindow: row.contextWindow } : {}), ...(row.maxTokens ? { maxTokens: row.maxTokens } : {}), ...(row.protocol ? { protocol: row.protocol } : {}), ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}) }
+            const fields = { ...(row.name ? { name: row.name } : {}), ...(row.contextWindow ? { contextWindow: row.contextWindow } : {}),
+              ...(row.inputTokenLimit ? { inputTokenLimit: row.inputTokenLimit } : {}), ...(row.outputTokenLimit ? { outputTokenLimit: row.outputTokenLimit } : {}),
+              ...(row.maxTokens ? { maxTokens: row.maxTokens } : {}), ...(row.protocol ? { protocol: row.protocol } : {}), ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}) }
             await onSave({ action: "model/add", id, model: row.id, fields })
             if (mounted.current) { setImported((value) => value + 1); setSelected((values) => values.filter((value) => value !== row.id)) }
           }

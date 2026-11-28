@@ -46,3 +46,16 @@ it("uses declared catalog aliases with bounded catalog revision evidence", () =>
 it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity])("rejects invalid evidence values %s", value => {
   expect(() => resolveEffectiveModelContextEvidence({ profile, modelId: "gemini-2.5-pro", userModel: { maxTokens: value } })).toThrow(/positive safe integer/)
 })
+it("retains independent model input and output ceilings without adding a shared window or choosing an output cap", () => {
+  const profile: ProviderProfile = { name: "studio", displayName: "API", protocol: "gemini" }
+  const userModel = { inputTokenLimit: 12000, outputTokenLimit: 1024 }
+  const independent = resolveEffectiveModelContextEvidence({ profile, modelId: "listed", userModel })
+  expect(independent?.limits).toEqual({
+    inputTokens: { value: 12000, origin: "configured-model-row", sourceId: "settings-model-row-v1" },
+    outputTokens: { value: 1024, origin: "configured-model-row", sourceId: "settings-model-row-v1" },
+  })
+  expect(independent?.generation).toEqual({ origin: "unspecified" })
+  const configured = resolveEffectiveModelContextEvidence({ profile, modelId: "listed", userModel: { ...userModel, contextWindow: 16000, maxTokens: 500 } })
+  expect(configured?.limits).toMatchObject({ contextTokens: { value: 16000 }, inputTokens: { value: 12000 }, outputTokens: { value: 1024 } })
+  expect(configured?.generation).toMatchObject({ origin: "configured", outputCap: { value: 500 } })
+})

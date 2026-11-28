@@ -351,8 +351,9 @@ describe("protocol-aware probe (task 2)", () => {
       protocol: "gemini",
     })
     expect(models).toEqual([{ id: "gemini-2.5-pro" }])
-    expect(geminiFetch).toHaveBeenCalledWith("https://g.example/v1/models", {
+    expect(geminiFetch).toHaveBeenCalledWith("https://g.example/v1beta/models", {
       headers: { "x-goog-api-key": "sk-g" },
+      redirect: "error",
       signal: expect.any(AbortSignal),
     })
   })
@@ -363,10 +364,49 @@ describe("protocol-aware probe (task 2)", () => {
     const reg = createProviderRegistry()
     reg.register({ name: "openai-compatible", displayName: "X", protocol: "openai-compatible" })
     await reg.probeModels("openai-compatible", { baseURL: "https://g.example", protocol: "gemini" })
-    expect(geminiFetch).toHaveBeenCalledWith("https://g.example/v1/models", {
+    expect(geminiFetch).toHaveBeenCalledWith("https://g.example/v1beta/models", {
       headers: {},
+      redirect: "error",
       signal: expect.any(AbortSignal),
     })
+  })
+
+  it("discovers Gemini Developer API chat models at its default endpoint across opaque pagination tokens", async () => {
+    const get = vi.fn().mockResolvedValueOnce(Response.json({ models: [
+      { name: "models/embedding-only", supportedGenerationMethods: ["embedContent"] },
+      { name: "models/flash-one", displayName: "Flash One", supportedGenerationMethods: ["generateContent"], inputTokenLimit: 12000, outputTokenLimit: 1000 },
+    ], nextPageToken: "https://other.invalid/q&a+b" })).mockResolvedValueOnce(Response.json({
+      models: [{ name: "models/flash-two", supportedGenerationMethods: ["streamGenerateContent"],
+        inputTokenLimit: Number.MAX_SAFE_INTEGER + 1, outputTokenLimit: "9".repeat(400) }],
+    }))
+    vi.stubGlobal("fetch", get)
+    const rows = await createProviderRegistry().probeModels("studio", { protocol: "gemini", apiKey: "test" })
+    expect(rows).toEqual([{ id: "flash-one", name: "Flash One", inputTokenLimit: 12000, outputTokenLimit: 1000 }, { id: "flash-two" }])
+    expect(get.mock.calls.map(([url]) => url)).toEqual([
+      "https://generativelanguage.googleapis.com/v1beta/models",
+      "https://generativelanguage.googleapis.com/v1beta/models?pageToken=https%3A%2F%2Fother.invalid%2Fq%26a%2Bb",
+    ])
+    expect(get.mock.calls.every(([, options]) => options.redirect === "error" && options.headers["x-goog-api-key"] === "test")).toBe(true)
+  })
+
+  it.each(["cycle", "later-error", "invalid-page", "unbounded"])("rejects a partial Gemini catalog on %s", async mode => {
+    let requests = 0
+    const get = vi.fn(async () => {
+      requests++
+      if (mode === "later-error" && requests === 2) return new Response(null, { status: 404 })
+      if (mode === "invalid-page" && requests === 2) return Response.json({ error: { status: "unavailable" } })
+      return Response.json({ models: [{ name: "models/flash" }], nextPageToken: mode === "unbounded" ? String(requests) : "same" })
+    })
+    vi.stubGlobal("fetch", get)
+    await expect(createProviderRegistry().probeModels("studio", { protocol: "gemini", baseURL: "https://example.test/v1beta/" })).rejects.toThrow(/model probe failed/)
+    expect(requests).toBe(mode === "unbounded" ? 100 : 2)
+  })
+
+  it("supports existing generic Gemini-compatible lists after a native path miss", async () => {
+    const get = vi.fn().mockResolvedValueOnce(new Response(null, { status: 404 })).mockResolvedValueOnce(Response.json({ data: [{ id: "collection/proxy-flash" }] }))
+    vi.stubGlobal("fetch", get)
+    await expect(createProviderRegistry().probeModels("custom", { protocol: "gemini", baseURL: "https://proxy.test" })).resolves.toEqual([{ id: "collection/proxy-flash" }])
+    expect(get.mock.calls.map(([url]) => url)).toEqual(["https://proxy.test/v1beta/models", "https://proxy.test/v1/models"])
   })
 
   it("bedrock falls back to the static catalog when registered (v0 backend has no live probe)", async () => {

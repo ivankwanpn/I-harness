@@ -1,4 +1,4 @@
-import { SSEParseError, parseSseFrames, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
+import { readSseBlocks, SSEParseError, parseSseFrames, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
 import type { GeminiConfig } from "../types.ts"
 import { createGeminiFold } from "./fold.ts"
 
@@ -26,24 +26,10 @@ const emit = function* (events: LLMStreamEvent[]): Generator<LLMStreamEvent, boo
 /** Own byte/SSE buffers and reader cleanup; release precedes the end event. */
 export async function* decodeGeminiStream(body: ReadableStream<Uint8Array>, request: LLMRequest, config: GeminiConfig): AsyncIterable<LLMStreamEvent> {
   const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
   const fold = createGeminiFold(request, config)
   try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true }).replace(/\r\n?/g, "\n")
-      const chunks = buffer.split("\n\n")
-      buffer = chunks.pop() ?? ""
-      for (const chunk of chunks) {
-        for (const event of parseSSE(chunk)) {
-          if (yield* emit(fold.handleChunk(event))) return
-        }
-      }
-    }
-    if (buffer.trim() !== "") {
-      for (const event of parseSSE(buffer)) {
+    for await (const chunk of readSseBlocks(reader)) {
+      for (const event of parseSSE(chunk)) {
         if (yield* emit(fold.handleChunk(event))) return
       }
     }

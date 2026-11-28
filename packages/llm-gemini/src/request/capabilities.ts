@@ -1,4 +1,5 @@
 import type { GeminiConfig } from '../types.ts'
+import { geminiModelId, geminiModelsURL } from '../url.ts'
 /** Literal developer generateContent thinking/signatures evidence, 2026-10-16.
  * These rows convey parameter facts, never catalog membership or authenticity. */
 const rows: Record<string, { signature: boolean; minimal?: boolean; exclusiveBudgetLevel?: boolean }> = {
@@ -8,8 +9,9 @@ const rows: Record<string, { signature: boolean; minimal?: boolean; exclusiveBud
 }
 export function geminiCapabilities(config: Pick<GeminiConfig, 'baseUrl' | 'model'>) {
   try {
-    const url = new URL(config.baseUrl ?? 'https://generativelanguage.googleapis.com')
-    if (url.origin !== 'https://generativelanguage.googleapis.com' || !/^\/?$/.test(url.pathname) || url.search || url.hash) return
-    return Object.hasOwn(rows, config.model) ? rows[config.model] : undefined
+    const url = new URL(geminiModelsURL(config.baseUrl))
+    if (url.href !== geminiModelsURL()) return
+    const model = geminiModelId(config.model)
+    return Object.hasOwn(rows, model) ? rows[model] : undefined
   } catch { return }
 }

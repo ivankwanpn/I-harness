@@ -86,6 +86,8 @@ function normalizeModels(raw: unknown): SettingsModel[] | undefined {
       const model: SettingsModel = { id }
       if (isNonEmptyString(entry.name)) model.name = entry.name
       if (isPositiveInteger(entry.contextWindow)) model.contextWindow = entry.contextWindow
+      if (isPositiveInteger(entry.inputTokenLimit)) model.inputTokenLimit = entry.inputTokenLimit
+      if (isPositiveInteger(entry.outputTokenLimit)) model.outputTokenLimit = entry.outputTokenLimit
       if (isPositiveInteger(entry.maxTokens)) model.maxTokens = entry.maxTokens
       if (isProviderProtocol(entry.protocol)) model.protocol = entry.protocol
       const modalities = normalizeInputModalities(entry.inputModalities)

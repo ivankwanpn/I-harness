@@ -20,6 +20,8 @@ export type ModelResolutionState =
 export interface ModelFields {
   protocol?: SettingsProviderProtocol | null
   contextWindow?: number | null
+  inputTokenLimit?: number | null
+  outputTokenLimit?: number | null
   maxTokens?: number | null
   name?: string | null
   inputModalities?: SettingsInputModality[] | null

@@ -3,10 +3,6 @@
  * non-positive values are dropped — including the integer-string "0", which
  * parses to 0 and violates the positive contract. */
 export function positiveInteger(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value
-  if (typeof value === "string" && /^\d+$/.test(value)) {
-    const n = Number(value)
-    return n > 0 ? n : undefined
-  }
-  return undefined
+  const number = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value
+  return typeof number === "number" && Number.isSafeInteger(number) && number > 0 ? number : undefined
 }

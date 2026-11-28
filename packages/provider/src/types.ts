@@ -81,6 +81,8 @@ export interface ModelDescriptor {
   name?: string
   /** Discovered context window (tokens) — probe-normalized, positive ints only. */
   contextWindow?: number
+  inputTokenLimit?: number
+  outputTokenLimit?: number
   /** Discovered response cap (maxTokens / the limit.output half of a pair). */
   maxTokens?: number
   /** The row's OWN wire protocol, when it declares one — a settings model row

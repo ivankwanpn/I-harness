@@ -15,6 +15,13 @@ function assess(value: ReturnType<typeof input> | any) {
   return (engine as any).assessCapacity(value)
 }
 describe('shared capacity policy independent literal oracles', () => {
+  it('retains a tighter input-only ceiling alongside a shared model window', () => {
+    const result = assess({ ...input(6001), limits: { contextTokens: numeric(10000), inputTokens: numeric(6000) } })
+    expect(result.pressure).toMatchObject({ inputBudget: 6000, input: 6001, hardFits: false })
+    expect(result.disposition).toBe('reduce')
+    expect(result.dimensions).toContainEqual(expect.objectContaining({ dimension: 'input', state: 'fail', limit: 6000 }))
+    expect(result.dimensions).toContainEqual(expect.objectContaining({ dimension: 'context', state: 'pass', limit: 10000 }))
+  })
   it('uses additive safety and bounded output with exact inclusive boundaries', () => {
     expect(assess(input()).pressure).toEqual({ kind: 'known', basis: 'shared-context', input: 8400, inputBudget: 8400, trigger: 6720, target: 5880, hardFits: true, softNeeded: true, targetReady: false })
     expect(assess(input(8401)).disposition).toBe('reduce')

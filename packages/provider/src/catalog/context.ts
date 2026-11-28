@@ -22,7 +22,7 @@ interface EffectiveContextInput {
   profile: ProviderProfile
   modelId: string
   /** Stored model row (llm.providers.<route>.models[i]), also written by refresh. */
-  userModel?: { contextWindow?: number; maxTokens?: number }
+  userModel?: { contextWindow?: number; inputTokenLimit?: number; outputTokenLimit?: number; maxTokens?: number }
 }
 
 /** The unified chain's resolution of one model. */
@@ -59,12 +59,15 @@ export function resolveEffectiveModelContextEvidence(input: EffectiveContextInpu
     : numeric(card?.contextWindow, "catalog", catalogSource)
   const contextCeilingTokens = override?.maxContextWindow !== undefined ? numeric(override.maxContextWindow, "profile-model", "profile-model-v1")
     : numeric(profile.maxContextWindow, "profile", "profile-v1")
-  const outputTokens = numeric(card?.maxOutputTokens, "catalog", catalogSource)
+  const inputTokens = numeric(userModel?.inputTokenLimit, "configured-model-row", "settings-model-row-v1")
+  const outputTokens = numeric(userModel?.outputTokenLimit, "configured-model-row", "settings-model-row-v1")
+    ?? numeric(card?.maxOutputTokens, "catalog", catalogSource)
   const configured = numeric(userModel?.maxTokens, "configured-model-row", "settings-model-row-v1")
   const outputCap = configured
-  const limits: ModelLimits = { ...(contextTokens ? { contextTokens } : {}), ...(contextCeilingTokens ? { contextCeilingTokens } : {}), ...(outputTokens ? { outputTokens } : {}) }
-  if (!contextTokens && !contextCeilingTokens && !outputCap && !outputTokens) return undefined
+  const limits: ModelLimits = { ...(contextTokens ? { contextTokens } : {}), ...(contextCeilingTokens ? { contextCeilingTokens } : {}),
+    ...(inputTokens ? { inputTokens } : {}), ...(outputTokens ? { outputTokens } : {}) }
+  if (!contextTokens && !contextCeilingTokens && !inputTokens && !outputCap && !outputTokens) return undefined
   return { contextWindow: contextTokens?.value, maxContextWindow: contextCeilingTokens?.value,
     ...(configured ? { maxOutputTokens: configured.value } : {}), limits,
-    generation: { origin: configured ? "configured" : outputTokens ? "legacy-catalog-default" : "unspecified", ...(outputCap ? { outputCap } : {}) } }
+    generation: { origin: configured ? "configured" : card?.maxOutputTokens ? "legacy-catalog-default" : "unspecified", ...(outputCap ? { outputCap } : {}) } }
 }

@@ -748,8 +748,8 @@ describe("M72 Ⅱ: the truncation bit (gemini)", () => {
     vi.unstubAllGlobals()
   })
 
-  it("M72 Ⅱ: finishReason MAX_TOKENS reaches the seam as truncated", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([{ candidates: [{ content: { parts: [{ text: "x" }] }, finishReason: "MAX_TOKENS" }] }])))
+  it.each(["MAX_TOKENS", "CONTINUATION"])("marks a response stopped at the %s limit as truncated", async finishReason => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([{ candidates: [{ content: { parts: [{ text: "x" }] }, finishReason }] }])))
     const client = createGeminiClient({ apiKey: "test-key", baseUrl: "https://api.example", model: "gemini-2.5-pro" })
     const events: LLMStreamEvent[] = []
     for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
@@ -892,21 +892,91 @@ describe("M72 Ⅲ: usageMetadata on the gemini wire", () => {
     expect(events.at(-1)).toEqual({ type: "end" })
   })
 
-  // Iron law ① — the mapper takes only `typeof v === "number" &&
-  // Number.isFinite(v)`. A STRING that merely spells a count ("2") is not a
-  // number the provider measured; coercing it would write an unvalidated value
-  // straight into `LLMUsage` — the "number nobody made" this phase exists to
-  // forbid. Every other fixture in this file hands the mapper either a real
-  // number or nothing at all, so this is the one that pins the guard: it is the
-  // fixture a coercion regression has to break.
-  it("M72 Ⅲ: a token count the wire sent as a string is not taken", async () => {
+  it("marks a malformed token count invalid without treating it as a number", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
       { candidates: [{ content: { parts: [{ text: "x" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: "2" } },
     ])))
     const client = createGeminiClient({ apiKey: "test-key", baseUrl: "https://api.example", model: "gemini-2.5-pro" })
     const events: LLMStreamEvent[] = []
     for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
-    expect(events.some((e) => e.type === "usage")).toBe(false)
+    expect(events.filter(e => e.type === "usage")).toEqual([{ type:"usage", usage:{measurementValidity:"invalid"} }])
     expect(events.at(-1)).toEqual({ type: "end" })
+  })
+
+  it("replaces cumulative candidate and thought counts independently while retaining the inclusive client prompt", async () => {
+    const parts = [
+      { promptTokenCount:100, cachedContentTokenCount:40, candidatesTokenCount:0, thoughtsTokenCount:10, totalTokenCount:110 },
+      { candidatesTokenCount:20 },
+      { thoughtsTokenCount:30 },
+      { promptTokenCount:100, candidatesTokenCount:20, thoughtsTokenCount:30, toolUsePromptTokenCount:7, totalTokenCount:157 },
+    ]
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse(parts.map((usageMetadata, index) => ({
+      usageMetadata, candidates:[{content:{parts:[{text:"x"}]}, ...(index === parts.length - 1 ? {finishReason:"STOP"} : {})}],
+    })))))
+    const client = createGeminiClient({ apiKey:"fixture", baseUrl:"https://api.example", model:"gemini-2.5-pro" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({messages:[],tools:[],systemPrompt:""} as LLMRequest)) events.push(ev)
+    expect(events.filter(e => e.type === "usage").map(e => e.usage)).toEqual([
+      {inputTokens:100,inputTokenSemantics:"includes-cache",cacheReadTokens:40,outputTokens:10},
+      {outputTokens:30},{outputTokens:50},{inputTokens:100,inputTokenSemantics:"includes-cache",outputTokens:50},
+    ])
+    expect(events.at(-1)).toEqual({type:"end"})
+  })
+
+  it.each(["MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL", "TOO_MANY_TOOL_CALLS", "MISSING_THOUGHT_SIGNATURE", "MALFORMED_RESPONSE"])("reports usage but never dispatches a pending call after %s", async finishReason => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      {candidates:[{content:{parts:[{functionCall:{id:"c", name:"read",args:{path:"fixture.txt"}}}]}}]},
+      {candidates:[{finishReason}],usageMetadata:{promptTokenCount:100,candidatesTokenCount:20,thoughtsTokenCount:30}},
+    ])))
+    const client = createGeminiClient({ apiKey:"fixture", baseUrl:"https://api.example", model:"gemini-2.5-pro" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({messages:[],tools:[],systemPrompt:""} as LLMRequest)) events.push(ev)
+    expect(events).toEqual([
+      {type:"usage",usage:{inputTokens:100,inputTokenSemantics:"includes-cache",outputTokens:50}},
+      {type:"error",error:expect.objectContaining({message:expect.stringContaining(finishReason)})},
+    ])
+  })
+
+  it("keeps an interleaved alternative out of the primary transcript and still counts request-wide usage", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      {candidates:[{index:1, content:{parts:[{text:"alternative"}, {functionCall:{name:"alternative_tool",args:{}}}]},finishReason:"MALFORMED_FUNCTION_CALL"}],
+        usageMetadata:{promptTokenCount:100,thoughtsTokenCount:4}},
+      {candidates:[{index:1,content:{parts:[{text:"ignored"}]}},{index:0,content:{parts:[{text:"primary"}]},finishReason:"STOP"}],
+        usageMetadata:{candidatesTokenCount:21}},
+    ])))
+    const client = createGeminiClient({ apiKey:"fixture", baseUrl:"https://api.example", model:"gemini-2.5-pro", options:{generationConfig:{candidateCount:2}} })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({messages:[],tools:[],systemPrompt:""} as LLMRequest)) events.push(ev)
+    expect(events).toEqual([
+      {type:"usage",usage:{inputTokens:100,inputTokenSemantics:"includes-cache"}},
+      {type:"text/chunk",text:"primary"},
+      {type:"usage",usage:{outputTokens:25}},
+      {type:"end"},
+    ])
+  })
+
+  it.each([{}, {finishReason:"FINISH_REASON_UNSPECIFIED"}])("never publishes buffered tool calls on premature EOF with %j", async terminal => {
+    const incomplete = {
+      candidates:[{index:0, content:{parts:[{functionCall:{name:"read",args:{path:"fixture.txt"}}}]}, ...terminal}],
+      promptFeedback:{blockReason:"BLOCK_REASON_UNSPECIFIED"}, usageMetadata:{promptTokenCount:123},
+    }
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("data: " + JSON.stringify(incomplete) + "\n\n", {headers:{"Content-Type":"text/event-stream"}})))
+    const client = createGeminiClient({apiKey:"fixture",baseUrl:"https://api.example",model:"gemini-2.5-pro"})
+    const events: LLMStreamEvent[] = []
+    for await (const event of client.stream({messages:[],tools:[],systemPrompt:""} as LLMRequest)) events.push(event)
+    expect(events).toEqual([{type:"usage",usage:{inputTokens:123,inputTokenSemantics:"includes-cache"}},
+      {type:"error",error:expect.objectContaining({message:expect.stringContaining("without a finishReason")})}])
+  })
+
+  it.each([
+    [{promptTokenCount:100,thoughtsTokenCount:30,totalTokenCount:130}, {inputTokens:100,inputTokenSemantics:"includes-cache",outputTokens:30}],
+    [{promptTokenCount:100,thoughtsTokenCount:30,totalTokenCount:140}, {inputTokens:100,inputTokenSemantics:"includes-cache"}],
+    [{promptTokenCount:100,candidatesTokenCount:10,thoughtsTokenCount:15,toolUsePromptTokenCount:5,totalTokenCount:110}, {inputTokens:100,inputTokenSemantics:"includes-cache",outputTokens:25,measurementValidity:"invalid"}],
+  ] as const)("accounts only for known components of %j", async (usageMetadata, expected) => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([{candidates:[{finishReason:"MAX_TOKENS"}],usageMetadata}])))
+    const client = createGeminiClient({apiKey:"fixture",baseUrl:"https://api.example",model:"gemini-2.5-pro"})
+    const events: LLMStreamEvent[] = []
+    for await (const event of client.stream({messages:[],tools:[],systemPrompt:""} as LLMRequest)) events.push(event)
+    expect(events).toEqual([{type:"usage",usage:expected},{type:"end",truncated:true}])
   })
 })

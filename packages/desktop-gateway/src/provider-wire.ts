@@ -2,7 +2,7 @@ import type { ProviderRuntime } from "@i-harness/provider-runtime"
 import { PROVIDER_PROTOCOLS, type SettingsInputModality, type SettingsProviderProtocol } from "@i-harness/settings"
 
 type ProviderFields = { displayName?: string | null; baseURL?: string | null; modelsURL?: string | null; catalog?: string | null; apiKeyEnv?: string | null; protocol?: SettingsProviderProtocol | null }
-type ModelFields = { name?: string | null; contextWindow?: number | null; maxTokens?: number | null; protocol?: SettingsProviderProtocol | null; inputModalities?: SettingsInputModality[] | null }
+type ModelFields = { name?: string | null; contextWindow?: number | null; inputTokenLimit?: number | null; outputTokenLimit?: number | null; maxTokens?: number | null; protocol?: SettingsProviderProtocol | null; inputModalities?: SettingsInputModality[] | null }
 export type ProviderCommand =
   | { action: "provider/create"; id: string; fields: ProviderFields }
   | { action: "provider/edit"; id: string; fields: ProviderFields }
@@ -22,14 +22,14 @@ function text(value: unknown, name: string, max = 256): string {
 }
 function fields(value: unknown, model: boolean, allowNull: boolean): ProviderFields & ModelFields {
   const input = record(value)
-  const allowed = model ? ["name", "contextWindow", "maxTokens", "protocol", "inputModalities"] : ["displayName", "baseURL", "modelsURL", "catalog", "apiKeyEnv", "protocol"]
+  const allowed = model ? ["name", "contextWindow", "inputTokenLimit", "outputTokenLimit", "maxTokens", "protocol", "inputModalities"] : ["displayName", "baseURL", "modelsURL", "catalog", "apiKeyEnv", "protocol"]
   const result: Record<string, unknown> = {}
   for (const [key, item] of Object.entries(input)) {
     if (!allowed.includes(key)) throw new Error("Unknown field")
     if (item === null && allowNull) { result[key] = null; continue }
     if (key === "inputModalities") {
       if (!Array.isArray(item) || (item.length !== 1 && item.length !== 2) || item[0] !== "text" || (item.length === 2 && item[1] !== "image")) throw new Error("Invalid input modalities")
-    } else if (key === "contextWindow" || key === "maxTokens") {
+    } else if (key === "contextWindow" || key === "inputTokenLimit" || key === "outputTokenLimit" || key === "maxTokens") {
       if (typeof item !== "number" || !Number.isSafeInteger(item) || item < 1) throw new Error("Expected a positive integer")
     } else if (key === "protocol") {
       if (!(PROVIDER_PROTOCOLS as readonly unknown[]).includes(item)) throw new Error("Invalid protocol")

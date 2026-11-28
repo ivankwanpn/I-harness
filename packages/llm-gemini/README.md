@@ -4,6 +4,26 @@ The package exports only `src/index.ts`: `GeminiConfig`, `translateReasoning`,
 `parseSSE` and `createGeminiClient`. Implementation paths below are private;
 consumers should import `@i-harness/llm-gemini`.
 
+### Google AI Studio API access
+
+IH connects to the Gemini Developer API with a project API key. Use the
+`gemini` protocol and the service root `https://generativelanguage.googleapis.com`.
+Store the key through IH's provider credential settings or configure the name
+of an environment variable such as `GEMINI_API_KEY`. IH sends the key in the
+`x-goog-api-key` header. Streaming uses `streamGenerateContent`.
+[Google API key documentation](https://aistudio.google.com/docs/api-key)
+
+The model picker reads the paginated `/v1beta/models` collection. Imported
+models retain Google's separate input and output token limits. The optional
+maximum output setting in IH controls the requested generation length.
+[Google model resource](https://ai.google.dev/api/models)
+
+Personal Google AI subscriptions belong to Google's own clients. Keep Gemini
+CLI and Antigravity consumer OAuth credentials outside this adapter. Google's
+terms identify suspension or termination of the associated services as a
+possible consequence of third-party use.
+[Google Antigravity terms](https://www.antigravity.google/terms) · [Gemini CLI access policy](https://github.com/google-gemini/gemini-cli/blob/main/docs/resources/tos-privacy.md)
+
 | Owner | Responsibility |
 | --- | --- |
 | `src/types.ts` | Public configuration contract. |
@@ -14,7 +34,7 @@ consumers should import `@i-harness/llm-gemini`.
 | `src/request/headers.ts` | Case-insensitive configured header collision policy; adapter-owned headers win. |
 | `src/stream/decode.ts` | SSE parsing, UTF-8/frame buffering, residual EOF flush, read errors and reader cleanup. |
 | `src/stream/fold.ts` | One response's thoughts, text/signatures, pending function calls, native order, safety/truncation flags and terminal continuation. |
-| `src/stream/usage.ts` | Finite Gemini counters and measured input usage that includes cached tokens. |
+| `src/stream/usage.ts` | Cumulative input, cache and generation counters. The prompt includes cache reads. Generation includes candidate and thought tokens when known. |
 
 `createGeminiClient` captures the base URL once and keeps the configuration
 reference live. Image capabilities, options, reasoning model, cache mode,
