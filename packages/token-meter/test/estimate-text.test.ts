@@ -13,5 +13,6 @@ describe("estimateTextTokens", () => {
   })
   it("mixes both scripts without dropping either", () => {
     expect(estimateTextTokens("ab漢")).toBe(1 + 3)
+    expect(estimateTextTokens("abc𠀀\ud800x\udc00🙂")).toBe(15)
   })
 })

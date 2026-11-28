@@ -16,6 +16,15 @@ it("keeps binary allowances and opaque uncertainty separate from ordinary text",
   expect(input.units).toEqual([{ fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/), role: "user", heuristicTokens: 17 }])
   expect(input.uncertainties).toEqual(["image-token-cost", "opaque-continuation-token-cost"])
 })
+it("accounts for supplementary CJK and lone surrogate replacement bytes alongside ASCII", () => {
+  const value = "abc𠀀\ud800x\udc00🙂"
+  const counter = new ProjectionCounter()
+  counter.text("visibleText", value)
+  counter.structured("toolArguments", { value })
+  expect(priceProjectedText(value)).toBe(13)
+  expect(counter.components.visibleText).toMatchObject({ textUtf8Bytes: 18, heuristicTokens: 17 })
+  expect(counter.components.toolArguments).toMatchObject({ structuredBytes: Buffer.byteLength(JSON.stringify({ value })), heuristicTokens: priceProjectedText(JSON.stringify({ value })) + 4 })
+})
 
 it("retains v1 fingerprint bytes including numeric key order and JSON omissions", () => {
   const value = { b: "é🙂", "10": 10, "2": 2, omitted: undefined }

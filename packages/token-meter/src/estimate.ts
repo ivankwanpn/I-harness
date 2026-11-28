@@ -15,12 +15,11 @@ export const IMAGE_TOKEN_ESTIMATE = 1024
  * its UTF-8 bytes, matching the conservative admission projection instead of
  * undercounting CJK text by an order of magnitude. */
 export function estimateTextTokens(text: string): number {
-  let ascii = 0, nonAscii = 0
-  for (const char of text) {
-    if (char.codePointAt(0)! < 128) ascii += 1
-    else nonAscii += Buffer.byteLength(char)
-  }
-  return Math.ceil(ascii / CHARS_PER_TOKEN + nonAscii)
+  const bytes = Buffer.byteLength(text)
+  if (bytes === text.length) return Math.ceil(bytes / CHARS_PER_TOKEN)
+  let ascii = text.length
+  for (const [run] of text.matchAll(/[^\x00-\x7f]+/g)) ascii -= run.length
+  return Math.ceil(ascii / CHARS_PER_TOKEN) + bytes - ascii
 }
 export function estimateMessage(m: LLMMessage): number {
   if (m.role === "assistant") {

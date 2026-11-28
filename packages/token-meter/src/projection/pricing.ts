@@ -11,12 +11,20 @@ const isCjk = (codePoint: number): boolean =>
   (codePoint >= 0x3040 && codePoint <= 0x30ff) || (codePoint >= 0xac00 && codePoint <= 0xd7af) ||
   (codePoint >= 0x20000 && codePoint <= 0x2fa1f)
 export function priceProjectedText(text: string): number {
-  let ascii = 0, cjk = 0, other = 0
-  for (const char of text) {
-    const codePoint = char.codePointAt(0)!
-    if (codePoint < 128) ascii++
-    else if (isCjk(codePoint)) cjk++
-    else other += Buffer.byteLength(char)
+  return priceProjectedBytes(text, Buffer.byteLength(text))
+}
+
+/** The projection records the UTF-8 length alongside its token estimate. */
+export function priceProjectedBytes(text: string, utf8Bytes: number): number {
+  if (utf8Bytes === text.length) return Math.ceil(utf8Bytes / 3)
+  let ascii = text.length, cjkDiscount = 0
+  for (const [run] of text.matchAll(/[^\x00-\x7f]+/g)) {
+    ascii -= run.length
+    for (const char of run) {
+      const codePoint = char.codePointAt(0)!
+      // A CJK code point costs one token instead of three or four UTF-8 bytes.
+      if (isCjk(codePoint)) cjkDiscount += codePoint > 0xffff ? 3 : 2
+    }
   }
-  return Math.ceil(ascii / 3 + cjk + other)
+  return Math.ceil(ascii / 3) + utf8Bytes - ascii - cjkDiscount
 }

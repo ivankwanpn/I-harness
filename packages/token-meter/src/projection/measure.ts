@@ -1,6 +1,6 @@
 import { stringifyJsonData } from "@i-harness/core-session"
 import { projectionFingerprint } from "./fingerprint.ts"
-import { priceProjectedText } from "./pricing.ts"
+import { priceProjectedBytes } from "./pricing.ts"
 import { semanticInputIdentity, semanticProjectionDigest } from "./identity.ts"
 import type { ComponentFacts, InputComponent, ProjectedInputFacts } from "./types.ts"
 const categories: InputComponent[] = ['system', 'toolSchemas', 'visibleText', 'toolArguments', 'toolResults', 'replayedReasoning', 'opaqueContinuation', 'images', 'otherInput', 'framing']
@@ -26,18 +26,20 @@ export class ProjectionCounter {
       return
     const text = typeof value === "string" ? value : stringifyJsonData(value) ?? ""
     const facts = this.components[category]
-    facts.textUtf8Bytes += Buffer.byteLength(text)
+    const bytes = Buffer.byteLength(text)
+    facts.textUtf8Bytes += bytes
     facts.blockCount++
-    facts.heuristicTokens += priceProjectedText(text) + 4
+    facts.heuristicTokens += priceProjectedBytes(text, bytes) + 4
   }
   structured(category: InputComponent, value: unknown): void {
     if (value === undefined)
       return
     const text = stringifyJsonData(value) ?? ""
     const facts = this.components[category]
-    facts.structuredBytes += Buffer.byteLength(text)
+    const bytes = Buffer.byteLength(text)
+    facts.structuredBytes += bytes
     facts.blockCount++
-    facts.heuristicTokens += priceProjectedText(text) + 4
+    facts.heuristicTokens += priceProjectedBytes(text, bytes) + 4
   }
   opaque(value: unknown): void {
     const bytes = value instanceof Uint8Array ? value.byteLength : Buffer.byteLength(typeof value === "string" ? value : stringifyJsonData(value) ?? "")
