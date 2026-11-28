@@ -72,6 +72,49 @@ it("shares the original workspace opening list with the expanded project tree", 
   ])
 })
 
+it("shares the workspace's saved and live listings while the clicked conversation's project is being confirmed", async () => {
+  vi.useFakeTimers()
+  useUiStore.setState({ surface: "conversation", sidebarCollapsed: false, reviewOpen: false })
+  const connected = Promise.withResolvers<Record<string, string[]>>()
+  const live = Promise.withResolvers<unknown>()
+  const binding = Promise.withResolvers<{ projectId: string }>()
+  const listeners = new Set<Parameters<DesktopBridge["onEvent"]>[0]>()
+  const request: DesktopBridge["request"] = vi.fn(async input => {
+    switch (input.kind) {
+      case "workspace/list": return [{ id: "w", path: "D:/fixture", label: "Folder" }]
+      case "projects/list": return [{ id: "p", name: "Product", workspaceIds: ["w"], primaryWorkspaceId: "w" }]
+      case "desktop/capabilities": return connected.promise
+      case "session/dashboard": return input.opening ? { sessions: [{ id: "s", title: "Saved row", live: false }], committedOnly: true } : live.promise
+      case "desktop/session/navigation/state": return { s: { projectId: "p", pinned: false, unread: false } }
+      case "desktop/session/project/state": return binding.promise
+      case "session/model/state": return { status: "unconfigured", reason: "fixture" }
+      case "session/history": return { events: [], nextSeq: 0 }
+      case "desktop/interaction/pending": case "session/queue": case "session/tasks": return []
+      default: return {}
+    }
+  })
+  const bridge: DesktopBridge = { request, onEvent(listener) { listeners.add(listener); return () => { listeners.delete(listener) } } }
+  await act(async () => { render(<App bridge={bridge} />) })
+  await act(async () => { await vi.advanceTimersByTimeAsync(50) })
+  await act(async () => { fireEvent.click(screen.getByText("Saved row").closest("button")!) })
+  const listings = () => vi.mocked(request).mock.calls.flatMap(([input]) => input.kind === "session/dashboard" ? [input] : [])
+  await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+  expect(listings()).toEqual([{ kind: "session/dashboard", workspaceId: "w", opening: true }])
+  await act(async () => {
+    for (const listener of listeners) listener({ kind: "sdk/ready", method: "sdk/ready", workspaceId: "w", runtimeGeneration: 1 })
+    connected.resolve({ "desktop-project-scope": ["1"] })
+  })
+  await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+  expect(listings()).toHaveLength(2)
+  await act(async () => {
+    live.resolve({ sessions: [{ id: "s", title: "Live row", live: true }] })
+    binding.resolve({ projectId: "p" })
+    await vi.advanceTimersByTimeAsync(300)
+  })
+  expect(screen.getAllByText("Live row").length).toBeGreaterThan(0)
+  expect(listings()).toHaveLength(2)
+})
+
 it("refreshes only the original folder when a sidebar selection clears its unread badge", async () => {
   vi.useFakeTimers()
   useUiStore.setState({ surface: "conversation", sidebarCollapsed: false, reviewOpen: false })

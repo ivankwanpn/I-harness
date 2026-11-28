@@ -312,6 +312,26 @@ it.each([undefined, "destination"])("settles async authoritative ownership %s de
   expect(captured.props!.projectContext).toMatchObject({ status: "ready", projectId: owner })
 })
 
+it("keeps a restored selection until the live workspace confirms it after a saved opening preview", async () => {
+  useUiStore.setState({ selectedWorkspaceId: "w1", selectedSessionId: "returning" })
+  const capabilities = defer()
+  const live = defer()
+  const request = fixture(input => {
+    if (input.kind === "desktop/capabilities") return capabilities.promise
+    if (input.kind === "session/dashboard") return input.opening
+      ? Promise.resolve({ sessions: [{ id: "saved", title: "Saved conversation", live: false }], committedOnly: true })
+      : live.promise
+    return undefined
+  })
+  await waitFor(() => expect(captured.props?.dashboard?.sessions[0]?.title).toBe("Saved conversation"))
+  expect(captured.props!.selectedSessionId).toBe("returning")
+  await act(async () => { capabilities.resolve({}); await capabilities.promise })
+  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "session/dashboard", workspaceId: "w1" }))
+  await act(async () => { live.resolve({ sessions: [{ id: "returning", title: "Original selection", live: true, running: true }] }); await live.promise })
+  expect(captured.props!.dashboard?.sessions).toEqual([{ id: "returning", title: "Original selection", live: true, running: true }])
+  expect(captured.props!.selectedSessionId).toBe("returning")
+})
+
 it("confirms the selected session's project while the workspace dashboard is still loading", async () => {
   const listing = Promise.withResolvers<unknown>()
   fixture(request => {
@@ -425,7 +445,7 @@ it("preserves a restored selection when a partial listing omits its session", as
     ? Promise.resolve({ sessions: [{ id: "healthy", live: false }], listingPartial: true }) : undefined)
   await waitFor(() => expect(captured.props?.dashboard?.listingPartial).toBe(true))
   expect(captured.props?.selectedSessionId).toBe("omitted")
-  expect(request).toHaveBeenCalledWith({ kind: "session/dashboard", workspaceId: "w1" })
+  expect(request).toHaveBeenCalledWith({ kind: "session/dashboard", workspaceId: "w1", opening: true })
 })
 
 it("does not reconcile a later user selection when retrying an unavailable initial listing", async () => {

@@ -1,7 +1,7 @@
 import type { ProviderCommand } from "@i-harness/desktop-gateway"
 import type { PluginCommand } from "@i-harness/desktop-gateway"
 import type { ModelReviewTarget } from "@i-harness/desktop-gateway/src/model-review-contract.ts"
-import type { ForkOperationV2, ForkPrepareRequestV2, ImageInput, SessionModelSelection } from "@i-harness/sdk"
+import type { ForkOperationV2, ForkPrepareRequestV2, ImageInput, SessionDashboardResult, SessionModelSelection } from "@i-harness/sdk"
 import type { AgentDefaults } from "@i-harness/desktop-gateway"
 import type { SubagentSettingsCommand } from "@i-harness/desktop-gateway"
 import type { HookSettingsCommand } from "@i-harness/desktop-gateway"
@@ -22,6 +22,8 @@ import type { ContextSubsystemRequest } from "@i-harness/desktop-gateway"
 export const DESKTOP_REQUEST_CHANNEL = "ih-desktop:request"
 export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 export type TerminalShellChoice = "auto" | "git-bash" | "pwsh" | "powershell" | "cmd" | "bash" | "zsh" | "sh"
+/** A saved opening snapshot verifies stored rows but has no live activity. */
+export type DesktopSessionDashboard = SessionDashboardResult & { committedOnly?: true }
 
 export type DesktopRequest =
   | import("./result-pages.ts").ResultReadRequest
@@ -138,7 +140,7 @@ export type DesktopRequest =
   | { kind: "desktop/runtime/status"; workspaceId: string }
   | { kind: "desktop/runtime/recover"; workspaceId: string }
   | { kind: "session/list"; workspaceId: string }
-  | { kind: "session/dashboard"; workspaceId: string }
+  | { kind: "session/dashboard"; workspaceId: string; opening?: true }
   | { kind: "session/create"; workspaceId: string; projectId?: string; clientToken?: string; worktree?: import("./worktrees.ts").WorktreeSelection }
   | { kind: "desktop/worktrees/list"; workspaceId: string; projectId: string }
   | { kind: "desktop/worktrees/state"; workspaceId: string }

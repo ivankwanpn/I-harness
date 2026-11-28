@@ -545,10 +545,19 @@ export async function dispatchDesktopRequest(
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const workspace = dependencies.catalog.get(workspaceId)
       if (!workspace) throw Error('Unknown workspace')
-      // An explicitly selected workspace may already be starting. Let its
-      // gateway list the histories so the app's main process stays responsive.
-      const ready = dependencies.runtimes.peek?.(workspaceId)
-        ?? await dependencies.runtimes.pendingRuntime?.(workspaceId)?.catch(() => undefined)
+      const live = dependencies.runtimes.peek?.(workspaceId)
+      if (live) return live.client.dashboard()
+      const starting = dependencies.runtimes.pendingRuntime?.(workspaceId)
+      if (value.opening === true && dependencies.sessionCatalog) {
+        const committed = dependencies.sessionCatalog.dashboard(workspace).then(result => ({ ...result, committedOnly: true as const }))
+        if (!starting) return committed
+        // A busy catalog must not hold up a ready Gateway. Choosing the live
+        // reader here also avoids issuing a live scan if saved rows won.
+        const first = await Promise.any([committed, starting]).catch(() => committed)
+        if ("committedOnly" in first) return first
+        return first.client.dashboard().catch(() => committed)
+      }
+      const ready = await starting?.catch(() => undefined)
       if (!ready && dependencies.sessionCatalog) return dependencies.sessionCatalog.dashboard(workspace)
       return await (ready ?? await runtimeForKnownWorkspace(workspaceId, dependencies)).client.dashboard()
     }

@@ -17,7 +17,7 @@ import type {
 import type { SandboxState } from "../main/sdk-runtime.ts"
 import type { WorkspaceEntry } from "../main/workspaces.ts"
 import type { ProjectEntry } from "../main/projects.ts"
-import type { DesktopBridge, DesktopEvent } from "../shared/bridge.ts"
+import type { DesktopBridge, DesktopEvent, DesktopSessionDashboard } from "../shared/bridge.ts"
 import type { DesktopWorkStateView } from "@i-harness/desktop-gateway/src/work-state.ts"
 import {
   applyHistory,
@@ -289,6 +289,16 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     return () => { active = false }
   }, [bridge, projectScopeSupported, selectedWorkspaceId, selectedSessionId, retryNonce])
 
+  const applyDashboard = useCallback((workspaceId: string, request: number, result: DesktopSessionDashboard) => {
+    if (request < dashboardApplied.current) return
+    dashboardApplied.current = request
+    setDashboard(result)
+    if (result.committedOnly || result.listingUnavailable || result.listingPartial || reconciledWorkspaces.current.has(workspaceId)) return
+    const restored = restoredSelections.current.get(workspaceId)
+    if (!restored) return
+    if (selection.current === restored && restored.sessionId && !result.sessions.some(row => row.id === restored.sessionId)) setSelectedSessionId(undefined)
+    reconciledWorkspaces.current.add(workspaceId)
+  }, [setSelectedSessionId])
   const refreshDashboard = useCallback(async (workspaceId: string): Promise<void> => {
     const scope = workspaceSelection.current
     if (scope.workspaceId !== workspaceId) return
@@ -299,10 +309,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     const result = await bridge.request({ kind: "session/dashboard", workspaceId }).catch(reason => {
       if (current()) throw reason
     })
-    if (!current() || request < dashboardApplied.current) return
-    dashboardApplied.current = request
-    setDashboard(result as SessionDashboardResult)
-  }, [bridge])
+    if (current()) applyDashboard(workspaceId, request, result as DesktopSessionDashboard)
+  }, [applyDashboard, bridge])
   const forkDependencies = useRef({ bridge, refreshDashboard })
   const forkOperations = useRef<ReturnType<typeof createForkOperationController> | undefined>(undefined)
   if (forkDependencies.current.bridge !== bridge) forkOperations.current?.retireNavigation()
@@ -453,48 +461,48 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     // newer selection made by the user after the original attempt started.
     const restoredSelection = restoredSelections.current.get(selectedWorkspaceId) ?? selection.current
     restoredSelections.current.set(selectedWorkspaceId, restoredSelection)
-    const dashboardVersion = ++dashboardRequest.current
     const reportFailure = (reason: unknown) => { if (current()) setError(reason instanceof Error ? reason.message : String(reason)) }
     // Capability negotiation enables the selected conversation's owner read.
     // The workspace listing can independently replay large saved histories.
-    void bridge.request({ kind: "desktop/capabilities", workspaceId: selectedWorkspaceId }).then(value => {
-      if (!current()) return
+    const connected = bridge.request({ kind: "desktop/capabilities", workspaceId: selectedWorkspaceId }).then(value => {
+      if (!current()) return false
       const confirmed = (value ?? {}) as Record<string, string[]>
       setCapabilitySnapshot({ workspaceId: selectedWorkspaceId, value: confirmed })
       if (workspaceConnections.get(selectedWorkspaceId)?.phase !== "online")
         workspaceConnections.set(selectedWorkspaceId, "online")
       if (confirmed["desktop-interaction"]?.includes("1")) void interactions.refresh().catch(reportFailure)
+      return true
     }).catch(reason => {
       if (current() && workspaceConnections.get(selectedWorkspaceId)?.phase !== "online")
         workspaceConnections.set(selectedWorkspaceId, "offline")
       reportFailure(reason)
+      return false
     })
     void bridge.request({ kind: "workspace/sandbox/state", workspaceId: selectedWorkspaceId }).then(value => {
       if (current()) setSandbox(value as SandboxState | undefined)
     }).catch(reportFailure)
-    const opening = {
-      bridge, workspace: capabilityScope, generation: lastDisconnect, request: dashboardVersion,
-      result: bridge.request({ kind: "session/dashboard", workspaceId: selectedWorkspaceId }),
+    let openingRead: typeof openingDashboard.current
+    const readDashboard = (opening: boolean) => {
+      const read = { bridge, workspace: capabilityScope, generation: lastDisconnect, request: ++dashboardRequest.current,
+        result: bridge.request({ kind: "session/dashboard", workspaceId: selectedWorkspaceId, ...(opening ? { opening: true as const } : {}) }) }
+      openingDashboard.current = openingRead = read
+      return read
     }
-    openingDashboard.current = opening
-    void opening.result.then(value => {
-      if (!current() || dashboardVersion < dashboardApplied.current) return
-      dashboardApplied.current = dashboardVersion
-      const initialDashboard = value as SessionDashboardResult
-      setDashboard(initialDashboard)
-      if (!reconciledWorkspaces.current.has(selectedWorkspaceId)
-        && selection.current === restoredSelection && restoredSelection.sessionId
-        && !initialDashboard.listingUnavailable && !initialDashboard.listingPartial
-        && !initialDashboard.sessions.some((row) => row.id === restoredSelection.sessionId)) {
-        setSelectedSessionId(undefined)
-      }
-      if (!initialDashboard.listingUnavailable && !initialDashboard.listingPartial) reconciledWorkspaces.current.add(selectedWorkspaceId)
-    }).catch(reportFailure)
+    void (async () => {
+      let read = readDashboard(true)
+      const result = await read.result as DesktopSessionDashboard
+      if (!current() || read.request < dashboardApplied.current) return
+      applyDashboard(selectedWorkspaceId, read.request, result)
+      if (!result.committedOnly || !await connected || !current() || read.request < dashboardApplied.current) return
+      read = readDashboard(false)
+      const liveDashboard = await read.result as DesktopSessionDashboard
+      if (current()) applyDashboard(selectedWorkspaceId, read.request, liveDashboard)
+    })().catch(reportFailure)
     return () => {
       active = false
-      if (openingDashboard.current === opening) openingDashboard.current = undefined
+      if (openingDashboard.current === openingRead) openingDashboard.current = undefined
     }
-  }, [bridge, interactions.refresh, retryNonce, selectedWorkspaceId, workspaceConnections])
+  }, [applyDashboard, bridge, interactions.refresh, retryNonce, selectedWorkspaceId, workspaceConnections])
 
   useEffect(() => {
     const previews = assistantPreviews.current

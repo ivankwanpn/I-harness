@@ -156,6 +156,38 @@ it('joins an already starting workspace dashboard and falls back to committed da
   expect(get).not.toHaveBeenCalled()
 })
 
+it('returns saved opening rows before startup and uses the live owner for the next request', async () => {
+  const startup = Promise.withResolvers<unknown>()
+  const disk = { sessions: [{ id: 'saved', live: false }] }
+  const live = { sessions: [{ id: 'saved', live: true, running: true }], active: true }
+  const dashboard = vi.fn(async () => live)
+  const readSaved = vi.fn(async () => disk)
+  const dependencies = {
+    catalog: { get: () => ({ id: 'one' }) },
+    runtimes: { peek: () => undefined, pendingRuntime: () => startup.promise },
+    sessionCatalog: { dashboard: readSaved },
+  } as unknown as DesktopIpcDependencies
+  const request = { kind: 'session/dashboard', workspaceId: 'one' } as const
+  await expect(dispatchDesktopRequest({ ...request, opening: true }, dependencies)).resolves.toEqual({ ...disk, committedOnly: true })
+  expect(dashboard).not.toHaveBeenCalled()
+  startup.resolve({ client: { dashboard } })
+  await expect(dispatchDesktopRequest(request, dependencies)).resolves.toEqual(live)
+  expect(dashboard).toHaveBeenCalledOnce()
+  expect(readSaved).toHaveBeenCalledOnce()
+})
+
+it('uses a ready Gateway if the saved opening scan is still pending', async () => {
+  const disk = Promise.withResolvers<unknown>()
+  const result = { sessions: [], active: true }
+  const dependencies = {
+    catalog: { get: () => ({ id: 'one' }) },
+    runtimes: { peek: () => undefined, pendingRuntime: () => Promise.resolve({ client: { dashboard: async () => result } }) },
+    sessionCatalog: { dashboard: () => disk.promise },
+  } as unknown as DesktopIpcDependencies
+  await expect(dispatchDesktopRequest({ kind: 'session/dashboard', workspaceId: 'one', opening: true }, dependencies)).resolves.toEqual(result)
+  disk.reject(Error('Late saved read failed'))
+})
+
 it('rejects interrupted queries, reopens a fresh reader and drains work admitted before close', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-desktop-catalog-')); roots.push(root)
   const entry = join(root, 'reader.mjs')

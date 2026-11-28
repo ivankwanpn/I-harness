@@ -51,6 +51,7 @@ export interface SidebarWorkspaceReader {
   mode: SidebarReadMode
   followsForeground(sessionId: unknown): boolean
   refresh(): void
+  ready(): void
   standby(): void
   disconnect(message: string): void
   reportError(reason: unknown): void
@@ -80,6 +81,7 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
     let active = true
     let generation = 0
     let initial = true
+    let joinOnReady = false
     let confirmedRows: WorkspaceSessionSnapshot["navigation"]
     paired.current = undefined
     if (mode === "owners") {
@@ -92,14 +94,15 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
       const current = () => active && generation === ticket
       const supplied = foreground.current
       const opening = initial && mode === "foreground" && !retiredOpening.current
+      const shareOpening = opening || joinOnReady
       initial = false
+      joinOnReady = false
       let dashboard: SessionDashboardResult | undefined
       let error: string | undefined
       if (mode !== "owners") {
         try {
-          const result = (opening ? supplied : undefined) ?? await (
-            (opening ? readOpeningDashboard?.(workspaceId) : undefined) ?? bridge.request({ kind: "session/dashboard", workspaceId })
-          )
+          const result = await ((shareOpening ? readOpeningDashboard?.(workspaceId) : undefined)
+            ?? (opening ? supplied : undefined) ?? bridge.request({ kind: "session/dashboard", workspaceId }))
           if (!confirmedDashboard(result)) throw new Error(en ? "Conversation list is unavailable" : "無法取得會話列表")
           dashboard = result
         } catch (reason) { error = reason instanceof Error ? reason.message : String(reason) }
@@ -132,6 +135,7 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
     const retireReads = () => {
       generation++
       initial = false
+      joinOnReady = false
       retiredOpening.current = { details: foreground.current }
       return refresh.retire()
     }
@@ -141,7 +145,11 @@ export function WorkspaceCatalogReader({ bridge, workspaceId, mode, revision, de
         return !!foreground.current && !foreground.current.listingUnavailable && typeof id === "string"
           && confirmedSessionNavigation(confirmedRows?.[id])
       },
-      refresh: refresh.schedule,
+      refresh() { joinOnReady = false; refresh.schedule() },
+      ready() {
+        joinOnReady = mode === "foreground" && !retiredOpening.current
+        refresh.schedule()
+      },
       standby() {
         if (!active || !retireReads()) return
         const last = latestSnapshot.current

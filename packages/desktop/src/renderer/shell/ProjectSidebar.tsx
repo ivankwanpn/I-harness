@@ -79,7 +79,7 @@ function ProjectTree(props: ProjectSidebarProps) {
       if (event.kind === "sdk/disconnected") { reader.disconnect(event.message); return }
       if (event.method === "desktop/session/navigation/changed") { reader.refresh(); return }
       if (reader.mode === "owners") return
-      if (event.kind === "sdk/ready") { reader.refresh(); return }
+      if (event.kind === "sdk/ready") { reader.ready(); return }
       // App refreshes the foreground dashboard for status/activity changes.
       // Newly listed or removed sessions trigger a paired read in the reader.
       if (affectsSessionDashboard(event.method, event.params) &&
@@ -124,8 +124,9 @@ function ProjectTree(props: ProjectSidebarProps) {
   function include(folders: WorkspaceEntry[], projectId?: string) {
     if (!expanded(projectId)) return
     for (const folder of folders) {
-      const selected = hasProjectSelection && projectId === effectiveProjectId && folder.id === selectedWorkspaceId
-      if (selected || !readModes.has(folder.id)) readModes.set(folder.id, selected ? "foreground" : "sessions")
+      // Project ownership determines grouping and selection, while the
+      // foreground dashboard belongs to the workspace throughout that check.
+      readModes.set(folder.id, folder.id === selectedWorkspaceId ? "foreground" : "sessions")
     }
   }
   for (const project of projects) include(members.get(project.id)!, project.id)
@@ -160,7 +161,7 @@ function ProjectTree(props: ProjectSidebarProps) {
     {workspaces.map(folder => <WorkspaceCatalogReader key={folder.id} bridge={bridge} workspaceId={folder.id}
       mode={readModes.get(folder.id) ?? "owners"} revision={props.sessionRevisionsByWorkspace?.get(folder.id)} readers={readers} setSnapshots={setSnapshots} snapshot={snapshots[folder.id]}
       readOpeningDashboard={props.readOpeningDashboard}
-      details={folder.id === selectedWorkspaceId && hasProjectSelection ? props.dashboard : undefined} />)}
+      details={folder.id === selectedWorkspaceId ? props.dashboard : undefined} />)}
     <div className="sidebar-header">
     <div className="brand">I-harness</div>
     <input className="project-sidebar-search" type="search" aria-label={t("搜尋會話")} placeholder={t("搜尋會話")} value={search} onChange={event => setSearch(event.target.value)} />
