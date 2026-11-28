@@ -37,13 +37,15 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
     hooks?.channel.assertCurrent(hooks.surface)
     const retained = beginRetainedDispatch(prepared)
     let dispatchOpen=true
+    const readOnly = prepared.tool.isReadOnly === true
+    let attempt: { deadline?: Error } = {}
     let retryFlight: Promise<{ kind: 'result'; value: unknown } | { kind: 'unavailable' }> | undefined
     let bodyReturned=false
     let retainedBody=retained?.body
     let bodyFlight: Promise<unknown> | undefined
     try {
     const cascade:PluginContext['cascade']=hooks?(event,input,final)=>hooks.channel.cascade(event as 'tools/execute',input,final,hooks.surface):ctx.cascade.bind(ctx)
-    const invokeAttempt = () => {
+    const invokeAttempt = (original: typeof attempt) => {
       const attemptBody = retainedBody
       const running = (async () => {
         // Hooks may await before next(). No await is allowed between this final
@@ -57,9 +59,12 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
           if (isInstructionReplan(error)) throw error
           throw Object.assign(new Error(error instanceof Error ? error.message : String(error), { cause: error }), { policyRefusal: true as const })
         }
+        if (original.deadline) throw original.deadline
+        if (!dispatchOpen || original !== attempt) throw new Error('Original dispatch attempt is closed')
+        prepared.exec.abortSignal?.throwIfAborted()
         dispatchResultStarted(prepared.exec)
         const result = await withToolResultProducer(prepared.exec, () => runInstructionBody(prepared.exec, () => invokePrepared(prepared)))
-        settleUndeclaredDispatch(prepared.exec, 'succeeded')
+        settleUndeclaredDispatch(prepared.exec, original.deadline ? 'unknown' : 'succeeded')
         bodyReturned=true
         attemptBody?.observed(); attemptBody?.ready(result)
         return result
@@ -69,6 +74,7 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
     }
     const retryAttempt = (): Promise<{ kind: 'result'; value: unknown } | { kind: 'unavailable' }> => {
       if (!dispatchOpen) return Promise.reject(new Error('Original dispatch is closed'))
+      if (!readOnly) return Promise.resolve({ kind: 'unavailable' })
       if (retryFlight) return retryFlight
       const flight = Promise.resolve().then(async () => {
         if (!dispatchOpen) throw new Error('Original dispatch is closed')
@@ -81,17 +87,22 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
           validatePrepared(prepared)
         })) return { kind: 'unavailable' } as const
         if (!dispatchOpen) throw new Error('Original dispatch is closed')
-        return { kind: 'result', value: await cascade('tools/execute', metadata, invokeAttempt) } as const
+        return { kind: 'result', value: await runAttempt() } as const
       })
       retryFlight = flight
       void flight.then(() => { if (retryFlight === flight) retryFlight = undefined }, () => { if (retryFlight === flight) retryFlight = undefined })
       return flight
     }
     const metadata = { name: prepared.call.name, args: prepared.call.args, exec: prepared.exec, tool: prepared.tool,
+        captureAttemptDeadline() { const original = attempt; return (reason: Error) => { original.deadline ??= reason } },
         retryAttempt, registry: getRegistry(), bindingGeneration: prepared.bindingGeneration, validateBinding: prepared.bindingValidation,
         ...(prepared.commandDialect !== undefined ? { commandDialect: prepared.commandDialect } : {}) } satisfies ToolDispatchMetadata
 
-    const output = await cascade('tools/execute', metadata, invokeAttempt)
+    const runAttempt = () => {
+      const original = attempt = {}
+      return cascade('tools/execute', metadata, () => invokeAttempt(original))
+    }
+    const output = await runAttempt()
     recordDispatchedToolResult(prepared,output)
     retained?.success()
     return output

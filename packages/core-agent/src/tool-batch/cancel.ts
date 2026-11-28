@@ -98,7 +98,8 @@ export async function finishCancelledBatch(_session: BatchSource, batch: BatchCa
     if (records.getSlot(i) !== undefined) continue
     const call = batch[i]!
     const message = cancellation.failureMessage(i, () => fallbackMessage)
-    records.setSlot(i, { name: call.name, callId: call.callId, synthetic: true, execution: { outcome: 'unknown', dispatch: 'unknown' }, output: { error: message, code: TOOL_ABORTED_MID_FLIGHT } })
+    const execution = records.interruptedExecution(i)
+    records.setSlot(i, { name: call.name, callId: call.callId, synthetic: true, execution, output: { error: message, code: execution.dispatch === 'not-dispatched' ? TOOL_ABORTED_BEFORE_DISPATCH : TOOL_ABORTED_MID_FLIGHT } })
   }
   for (let i = records.startedUpTo; i < batch.length; i += 1) {
     // A typed preparation failure may already fill a never-started slot.
@@ -118,7 +119,7 @@ export async function finishCheckpointFailure(_session: BatchSource, batch: Batc
     if (records.getSlot(i) !== undefined) continue
     const call = batch[i]!
     const message = cancellation.failureMessage(i, () => cancellation.firstError instanceof Error ? cancellation.firstError.message : String(cancellation.firstError))
-    records.setSlot(i, { name: call.name, callId: call.callId, synthetic: true, execution: { outcome: 'unknown', dispatch: 'unknown' }, output: { error: message, code: TOOL_FAILED } })
+    records.setSlot(i, { name: call.name, callId: call.callId, synthetic: true, execution: records.interruptedExecution(i), output: { error: message, code: TOOL_FAILED } })
   }
   // Record a commit failure without suppressing never-started fills. The
   // checkpoint failure keeps its original precedence, even when undefined.

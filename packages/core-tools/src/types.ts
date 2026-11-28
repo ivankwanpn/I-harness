@@ -221,6 +221,8 @@ export interface PreparedCall {
 }
 /** Trusted dispatch metadata. The registry and binding validator are never model JSON. */
 export interface ToolDispatchMetadata {
+  /** A host deadline can close only the attempt in which it was installed. */
+  captureAttemptDeadline?(): (reason: Error) => void
   retryAttempt?(): Promise<{ kind: 'result'; value: unknown } | { kind: 'unavailable' }>
   name: string; args: unknown; exec: ToolExec; tool: Tool
   registry: ToolRegistry; bindingGeneration?: number; validateBinding(): boolean

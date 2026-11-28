@@ -30,13 +30,13 @@ import { createOwnedMetadataFold } from '../src/lifecycle/owned-metadata-fold.ts
 import { acquireAssemblyResultStore } from '../src/lifecycle/result-store.ts'
 import { createSessionService } from '../src/service.ts'
 
-it.each(['known', 'unknown', 'nested', 'second-unknown', 'failed-before-retry-body'] as const)('retries a managed Shell only after original cleanup ACK (%s)', async mode => {
+it.each(['known', 'unknown', 'nested', 'second-unknown', 'failed-before-retry-body', 'mutating'] as const)('requires read-only execution and original cleanup before a managed Shell retries (%s)', async mode => {
   recoveryProbe.takes=[];recoveryProbe.handles=[];recoveryProbe.wrapped=new WeakSet()
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'shell-retry-'))
   const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true }, originalExecutionFoldFactory: createOwnedMetadataFold }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: 'main' })
   const output = createContextOutputService({ root: join(root, 'results'), workspaceId: 'retry', config: { enabled: false } })
-  let launches = 0, released = 0, cancelled = 0, allowCleanup = mode === 'known' || mode === 'nested' || mode === 'failed-before-retry-body'
+  let launches = 0, released = 0, cancelled = 0, allowCleanup = mode === 'known' || mode === 'nested' || mode === 'failed-before-retry-body' || mode === 'mutating'
   let revoke: (()=>void) | undefined
   const events: SessionEvent[] = []
   const native: TransportExecutionBackend = {
@@ -75,6 +75,8 @@ it.each(['known', 'unknown', 'nested', 'second-unknown', 'failed-before-retry-bo
       },
       async mountDefaultSurface(original) {
         original.tools.get('shell')!.timeoutMs = 1000
+        // Only the emulated read-only command scenarios permit another launch.
+        if (mode !== 'mutating' && mode !== 'unknown') original.tools.get('shell')!.isReadOnly = true
         revoke=()=>{original.tools.unregister('shell')}
         return { systemPrompt: () => 'system', modelToolSchemas: () => original.tools.schemas(), modelOverheadTokens: () => 0, prepareInput: async text => text, reconcileAuthority: async () => {} }
       },
@@ -94,7 +96,13 @@ it.each(['known', 'unknown', 'nested', 'second-unknown', 'failed-before-retry-bo
   })
   try {
     const run = service.submit('main', 'run controlled', new AbortController().signal)
-    if (mode === 'known' || mode === 'nested') {
+    if (mode === 'mutating') {
+      await run
+      expect(launches).toBe(1)
+      expect(cancelled).toBe(1)
+      expect(events.filter(event=>event.type==='tool/result')).toHaveLength(1)
+      expect(events.filter(event=>event.type==='exec/end')).toHaveLength(1)
+    } else if (mode === 'known' || mode === 'nested') {
       await run
       expect(launches).toBe(2)
       expect(released).toBe(2)

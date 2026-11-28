@@ -517,7 +517,7 @@ process.stdout.write(deny ? JSON.stringify({ block: true, reason: "stateful gate
       return next()
     })
     const registry = createToolRegistry(ctx)
-    registry.register(flakyTimeoutTool(opts.attempts, opts.signals))
+    registry.register({ ...flakyTimeoutTool(opts.attempts, opts.signals), isReadOnly: true })
     const retry = (): void => ctx.mount(createRetryGuard(ctx, { maxRetries: 2, initialDelayMs: 1, maxDelayMs: 5 }))
     if (opts.order === "hooks-outer") {
       await createHookRegistry(ctx, { configPath, configDir: opts.dir })

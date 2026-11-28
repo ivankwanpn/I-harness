@@ -131,6 +131,19 @@ export function createBatchRecords(ctx: PluginContext, session: BatchSource, too
     get committed() { return committed }, get startedUpTo() { return startedUpTo },
     get liveComplete() { return !unknownEffects && committed === batch.length && slots.length === batch.length && slots.every(slot => !!slot && slot.recorded === true && ('synthetic' in slot ? slot.execution?.outcome !== 'unknown' && slot.execution?.dispatch !== 'unknown' : !!slot.finalized && (!('retained' in slot) || !!slot.resolved))) },
     markStarted(index: number) { startedUpTo = index + 1 },
+    interruptedExecution(index: number): import('@i-harness/core-session').ResultExecution {
+      const prepared = preparedCalls.get(index)
+      if (prepared) {
+        try {
+          const execution = resultExecution(prepared)
+          if (execution.dispatch === 'not-dispatched') return { outcome: 'canceled', dispatch: 'not-dispatched' }
+          // A fill has no successful output to publish. Keep proven dispatch,
+          // while preserving a producer's own failed or canceled disposition.
+          return { ...execution, outcome: execution.outcome === 'succeeded' ? 'unknown' : execution.outcome }
+        } catch { /* A foreign registry supplies no original execution evidence. */ }
+      }
+      return { outcome: 'unknown', dispatch: 'unknown' }
+    },
     getSlot(index: number) { return slots[index] },
     setSlot(index: number, slot: BatchSlot) {
       if (slots[index]) return

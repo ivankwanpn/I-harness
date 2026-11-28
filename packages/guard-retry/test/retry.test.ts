@@ -16,6 +16,7 @@ function flakyTimeoutTool(timesToTimeout: number, attempts: number[]): Tool<{ x:
     description: "",
     inputSchema: { type: "object", properties: { x: { type: "number" } }, required: ["x"] },
     timeoutMs: 30,
+    isReadOnly: true,
     execute: async (_args, exec) => {
       attempts.push(1)
       const signal = exec.abortSignal!
@@ -152,6 +153,7 @@ describe("guard-retry", () => {
       description: "f",
       inputSchema: {},
       timeoutMs: 10, // first attempt times out (the retry loop only runs on TOOL_TIMEOUT)
+      isReadOnly: true,
       execute: async () => {
         attempts.push(attempts.length)
         await new Promise((r) => setTimeout(r, 30)) // does NOT honor abort: the tool itself keeps running

@@ -1,7 +1,7 @@
 import { onExecutionCascade } from '@i-harness/core-plugin'
 import { markCascadeRedispatch, type Plugin, type PluginContext } from "@i-harness/core-plugin"
 import type { ToolDispatchMetadata } from "@i-harness/core-tools"
-import { TOOL_TIMEOUT } from "@i-harness/guard-timeout"
+import { consumeToolTimeout } from "@i-harness/guard-timeout"
 
 export interface RetryConfig {
   maxRetries?: number
@@ -42,12 +42,17 @@ function resolveConfig(config: RetryConfig | undefined): ResolvedRetryConfig {
   return { maxRetries, initialDelayMs, maxDelayMs, jitterRatio }
 }
 
-function isToolTimeout(result: unknown): boolean {
-  return (result as { code?: string } | null | undefined)?.code === TOOL_TIMEOUT
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+function waitForRetry(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve()
+  return new Promise(resolve => {
+    const finish = () => {
+      clearTimeout(timer)
+      signal?.removeEventListener("abort", finish)
+      resolve()
+    }
+    const timer = setTimeout(finish, ms)
+    signal?.addEventListener("abort", finish, { once: true })
+  })
 }
 
 // Exponential backoff with jitter, capped at maxDelayMs (dsh backoff style).
@@ -71,10 +76,8 @@ export function createRetryGuard(_ctx: PluginContext, config?: RetryConfig): Plu
     mount(ctx: PluginContext): void {
       // OUTER to guard-timeout: core-plugin runs cascade handlers in
       // registration order with the FIRST-registered handler OUTERMOST, so
-      // this guard must be mounted BEFORE createTimeoutGuard to see the
-      // substituted TOOL_TIMEOUT raw value (the registry wraps it in
-      // { name, output } only after the cascade returns). On timeout it
-      // asks the original dispatcher for a fresh attempt (next() is one-shot).
+      // mount before createTimeoutGuard to consume this attempt's deadline
+      // result. The original dispatcher can then issue another read-only call.
       onExecutionCascade(ctx, "tools/execute", async (dispatch, next) => {
         const d = dispatch as ToolDispatchMetadata
         if (retrying.has(d)) return next() // nested re-dispatch frame: delegate, no retry loop
@@ -88,9 +91,9 @@ export function createRetryGuard(_ctx: PluginContext, config?: RetryConfig): Plu
           const upstream = d.exec.abortSignal
           let result = await next()
           let attempt = 0
-          while (isToolTimeout(result) && attempt < resolved.maxRetries) {
+          while (d.tool.isReadOnly === true && attempt < resolved.maxRetries && consumeToolTimeout(d, result)) {
             if (upstream?.aborted) break // step aborted during backoff — no re-dispatch
-            await sleep(backoffDelay(attempt, resolved))
+            await waitForRetry(backoffDelay(attempt, resolved), upstream)
             // The step can be cancelled during the backoff window; re-check after
             // the sleep so an aborted step never re-dispatches the tool.
             if (upstream?.aborted) break

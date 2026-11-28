@@ -1,6 +1,6 @@
 import { onExecutionCascade } from '@i-harness/core-plugin'
 import type { Plugin, PluginContext } from "@i-harness/core-plugin"
-import { TOOL_TIMEOUT, hasRetainedToolBody, type ToolExec } from "@i-harness/core-tools"
+import { TOOL_TIMEOUT, hasRetainedToolBody, type ToolDispatchMetadata } from "@i-harness/core-tools"
 
 // Re-exported from @i-harness/core-tools, which owns the tool-result contract
 // and the codes a synthetic result can carry (M5 T4 block ③ moved this one
@@ -8,6 +8,14 @@ import { TOOL_TIMEOUT, hasRetainedToolBody, type ToolExec } from "@i-harness/cor
 // importing this package). Kept here so every existing importer — guard-retry
 // reads it — does not move.
 export { TOOL_TIMEOUT }
+const timeoutResults = new WeakMap<object, { value: unknown }>()
+/** The retry guard consumes the exact deadline disposition for this dispatch. */
+export function consumeToolTimeout(dispatch: ToolDispatchMetadata, value: unknown): boolean {
+  const observed = timeoutResults.get(dispatch)
+  if (!observed || !Object.is(observed.value, value)) return false
+  timeoutResults.delete(dispatch)
+  return true
+}
 
 export interface TimeoutGuardConfig {
   // Reserved for future policy knobs; the current policy reads tool.timeoutMs
@@ -19,14 +27,16 @@ export function createTimeoutGuard(_ctx: PluginContext): Plugin {
     name: "guard-timeout",
     mount(ctx: PluginContext): void {
       onExecutionCascade(ctx, "tools/execute", async (dispatch, next) => {
-        const d = dispatch as {
-          name: string
-          args: unknown
-          exec: ToolExec
-          tool: { timeoutMs?: number }
-        }
+        const d = dispatch as ToolDispatchMetadata
         const timeoutMs = d.tool.timeoutMs
         if (timeoutMs === undefined) return next()
+        timeoutResults.delete(d)
+        const expireAttempt = d.captureAttemptDeadline?.()
+        const projectTimeout = async (output: Record<string, unknown>) => {
+          const value = await ctx.cascade("tools/project-synthetic-result", { name: d.name, output }, async () => output)
+          timeoutResults.set(d, { value })
+          return value
+        }
 
         const upstream = d.exec.abortSignal
         const controller = new AbortController()
@@ -42,10 +52,12 @@ export function createTimeoutGuard(_ctx: PluginContext): Plugin {
         const deadline = new Promise<never>((_, reject) => { rejectDeadline = reject })
         const timer = setTimeout(() => {
           timedOut = true
+          const reason = Object.assign(new Error(`tool call timed out after ${timeoutMs}ms`), { code: TOOL_TIMEOUT })
+          expireAttempt?.(reason)
           controller.abort()
           // A tool that ignores the abort signal must not hang the gate: settle
           // the race ourselves and let the catch below emit TOOL_TIMEOUT.
-          rejectDeadline(Object.assign(new Error(`tool call timed out after ${timeoutMs}ms`), { code: TOOL_TIMEOUT }))
+          rejectDeadline(reason)
         }, timeoutMs)
         d.exec.abortSignal = controller.signal // swap: the tool honors this
         try {
@@ -71,7 +83,7 @@ export function createTimeoutGuard(_ctx: PluginContext): Plugin {
               error: `tool call timed out after ${timeoutMs}ms`,
               code: TOOL_TIMEOUT,
             }
-            return ctx.cascade("tools/project-synthetic-result", { name: d.name, output }, async () => output)
+            return projectTimeout(output)
           }
           return result
         } catch (err) {
@@ -81,7 +93,7 @@ export function createTimeoutGuard(_ctx: PluginContext): Plugin {
           // the rejection aborts the whole agent run with no marker.
           if (timedOut) {
             const output = { error: `tool call timed out after ${timeoutMs}ms`, code: TOOL_TIMEOUT }
-            return ctx.cascade("tools/project-synthetic-result", { name: d.name, output }, async () => output)
+            return projectTimeout(output)
           }
           throw err
         } finally {

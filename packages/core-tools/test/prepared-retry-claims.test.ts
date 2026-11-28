@@ -29,7 +29,7 @@ it('expires each original Shell claim before the next attempt enters', async () 
     claims.push(claim)
     return claims.length
   }
-  const tool: Tool = { name: 'shell', description: '', inputSchema: {}, execute: leaf }
+  const tool: Tool = { name: 'shell', description: '', inputSchema: {}, isReadOnly: true, execute: leaf }
   const entry = bindPreparedShellLeaf(tool, leaf)
   registry.register(tool)
   try {
