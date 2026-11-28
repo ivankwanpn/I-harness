@@ -1,4 +1,4 @@
-import { canReplayContinuation, replayBlockOrder, stringifyJsonData, type LLMContentPart, type LLMRequest, type ProviderContinuation } from "@i-harness/llm-seam"
+import { canReplayContinuation, replayBlockOrder, replayVisibleToolOrder, stringifyJsonData, type LLMContentPart, type LLMRequest, type ProviderContinuation } from "@i-harness/llm-seam"
 import type { GeminiConfig } from "../types.ts"
 
 // Shape LLM content parts into GenAI content part objects. String content
@@ -102,15 +102,17 @@ export function toGeminiContents(messages: LLMRequest["messages"], config: Gemin
       const ordered = replayGeminiParts(matchingContinuation, m.content, m.toolCalls)
       if (ordered !== undefined) { contents.push({ role: "model", parts: ordered }); continue }
       const safeContinuation = matchingContinuation?.partOrder ? undefined : matchingContinuation
-      const parts: unknown[] = [
+      const calls = m.toolCalls.map(({ id, name, args }, index) => {
+        const signature = safeContinuation?.callSignatures[index]
+        return { functionCall: { id, name, args }, ...(signature ? { thoughtSignature: signature } : {}) }
+      })
+      const portable = !continuation ? replayVisibleToolOrder<unknown>(m, calls, text => ({ text })) : undefined
+      const parts = portable ?? [
         ...(safeContinuation?.thoughtParts ?? []).map((part) => ({ text: part.text, thought: true, ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}) })),
         ...(m.content !== "" ? [{ text: m.content, ...(safeContinuation?.textSignature ? { thoughtSignature: safeContinuation.textSignature } : {}) }] : []),
         ...(safeContinuation?.emptyTextSignatures ?? []).map((thoughtSignature) => ({ text: "", thoughtSignature })),
+        ...calls,
       ]
-      for (const [index, c] of m.toolCalls.entries()) {
-        const signature = safeContinuation?.callSignatures[index]
-        parts.push({ functionCall: { id: c.id, name: c.name, args: c.args }, ...(signature ? { thoughtSignature: signature } : {}) })
-      }
       contents.push({ role: "model", parts })
       continue
     }

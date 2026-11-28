@@ -1,5 +1,5 @@
 import { observeTextOutput } from './request/text-output.ts'
-import { officialXaiRoute, preparedModelClient, snapshotModelData, createPreparedHttpPayload, projectImagesForProvider, type ModelClient } from "@i-harness/llm-seam"
+import { isOfficialDeepSeekApi, officialXaiRoute, preparedModelClient, snapshotModelData, createPreparedHttpPayload, projectImagesForProvider, type ModelClient } from "@i-harness/llm-seam"
 import type { OpenAICompatibleConfig } from "./types.ts"
 import { createRequestBody } from "./request/body.ts"
 import { mergeConfiguredHeaders } from "./request/headers.ts"
@@ -10,11 +10,14 @@ import { describeContext, outputFacts } from "./context.ts"
 import { chatValidator } from './request/validate.ts'
 
 export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): ModelClient {
-  const baseUrl = config.baseUrl ?? "https://api.openai.com"
+  const baseUrl = config.baseUrl
   const xai = officialXaiRoute(baseUrl)
+  const deepSeek = isOfficialDeepSeekApi(baseUrl)
+  const endpoint = `${xai?.url ?? (deepSeek ? "https://api.deepseek.com" : baseUrl ?? "https://api.openai.com")}/v1/chat/completions`
   return preparedModelClient(async originalRequest => {
     const request = snapshotModelData(originalRequest)
-    const capturedConfig = snapshotModelData(config)
+    const capturedConfig = snapshotModelData(config, ["baseUrl"])
+    capturedConfig.baseUrl = baseUrl
     request.signal?.throwIfAborted()
     // M14 negative capability: text-only routes never see image bytes.
     const messages = await projectImagesForProvider(request.messages, capturedConfig.inputModalities?.includes("image") ?? false, request.signal)
@@ -36,8 +39,8 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
       transport: {
         label: 'openai-compatible', fetchOverride: capturedConfig.fetch,
         prepare(_actualBody, _serialized, control) {
-          return { url: xai ? `${xai.url}/v1/chat/completions` : `${baseUrl}/v1/chat/completions`, identity: capturedConfig.executionIdentity, state: undefined, init: {
-            ...(xai ? { redirect: "error" as const } : {}),
+          return { url: endpoint, identity: capturedConfig.executionIdentity, state: undefined, init: {
+            ...(xai || deepSeek ? { redirect: "error" as const } : {}),
             headers: mergeConfiguredHeaders(capturedConfig.headers, { "Content-Type": "application/json", Authorization: `Bearer ${capturedConfig.apiKey}` }),
             signal: control.signal,
           } }

@@ -1,6 +1,5 @@
-import { canReplayContinuation, officialXaiRoute, replayBlockOrder, type LLMContentPart, type LLMRequest } from "@i-harness/llm-seam"
+import { textProtocolToolResult, canReplayContinuation, isOfficialDeepSeekApi, officialXaiRoute, replayBlockOrder, replayVisibleToolOrder, type LLMContentPart, type LLMRequest } from "@i-harness/llm-seam"
 import type { OpenAIConfig } from "../types.ts"
-import { isDeepSeekResponses } from "./deepseek.ts"
 
 function toInputContent(content: string | LLMContentPart[]): unknown {
   if (typeof content === "string") return content
@@ -49,12 +48,12 @@ function splitToolContent(content: string | LLMContentPart[]): { text: string; i
 
 /** Map projected history, preserving native continuation ordering and tool images. */
 export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenAIConfig, "model" | "providerId" | "baseUrl">, codexSubscription: boolean): unknown[] {
-  const deepSeek = !codexSubscription && isDeepSeekResponses(config)
+  const deepSeek = !codexSubscription && isOfficialDeepSeekApi(config.baseUrl)
   return messages
     .map((m) => {
       if (m.role === "user") return { role: "user", content: toInputContent(m.content) }
       if (m.role === "tool") {
-        const { text, images } = splitToolContent(m.content)
+        const { text, images } = splitToolContent(textProtocolToolResult(m))
         const output = { type: "function_call_output", call_id: m.toolCallId, output: text }
         if (images.length === 0) return output
         return [output, { role: "user", content: images.map((part) => ({ type: "input_image", image_url: `data:${part.image.mediaType};base64,${part.image.dataBase64}` })) }]
@@ -62,10 +61,11 @@ export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenA
       // assistant
       const previous = m.providerContinuation
       const continuation = previous?.kind === "openai-responses" && canReplayContinuation(previous, config)
+        && (previous.deepSeekReplayFingerprint === undefined || deepSeek)
         && (previous.origin === undefined || previous.origin === officialXaiRoute(config.baseUrl)?.origin) ? previous : undefined
       // DeepSeek's two APIs use different envelopes for the same provider text.
       // Require explicit matching provenance before translating an older round.
-      const chatReasoning = deepSeek && previous?.kind === "openai-compatible" && previous.providerId === config.providerId && previous.model === config.model
+      const chatReasoning = deepSeek && config.providerId === "deepseek" && previous?.kind === "openai-compatible" && previous.providerId === config.providerId && previous.model === config.model
         ? previous.reasoningContent : undefined
       const originalReasoningItems = continuation?.reasoningItems ?? (chatReasoning ? [{ type: "reasoning", content: [{ type: "reasoning_text", text: chatReasoning }] }] : [])
       const calls = m.toolCalls?.map((c) => ({
@@ -78,6 +78,10 @@ export function mapMessages(messages: LLMRequest["messages"], config: Pick<OpenA
       const ordered = replayBlockOrder<unknown>(continuation?.outputOrder, m.content, originalReasoningItems, calls,
         (content, phase) => ({ role: "assistant", content, ...(phase !== undefined ? { phase } : {}) }))
       if (ordered !== undefined) return ordered
+      if (!continuation && !originalReasoningItems.length) {
+        const visible = replayVisibleToolOrder<unknown>(m, calls, text => ({ role: "assistant", content: text }))
+        if (visible) return visible
+      }
       // An order envelope that no longer matches the neutral message is
       // stale. Its native reasoning belongs to that old assistant text.
       // Old logs without an order envelope keep their historical replay.

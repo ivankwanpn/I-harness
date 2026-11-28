@@ -36,8 +36,9 @@ export function validateSeedNative(message: Extract<LLMMessage, { role: 'assista
     seedFields(native, ['kind', 'reasoningContent'], optional)
     if (!text(native.reasoningContent)) seedInvalid()
   } else if (native.kind === 'openai-responses') {
-    seedFields(native, ['kind', 'reasoningItems'], [...optional, 'outputOrder', 'origin'])
+    seedFields(native, ['kind', 'reasoningItems'], [...optional, 'outputOrder', 'origin', 'deepSeekReplayFingerprint'])
     if (native.origin !== undefined && native.origin !== 'xai-api' && native.origin !== 'xai-us-api') seedInvalid()
+    if (native.deepSeekReplayFingerprint !== undefined && (native.origin !== undefined || typeof native.deepSeekReplayFingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(native.deepSeekReplayFingerprint))) seedInvalid()
     if (!Array.isArray(native.reasoningItems) || native.reasoningItems.some(item => !item || typeof item !== 'object' || Array.isArray(item))) seedInvalid()
     order(native.outputOrder)
   } else if (native.kind === 'gemini') {

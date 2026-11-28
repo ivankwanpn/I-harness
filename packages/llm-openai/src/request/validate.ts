@@ -1,7 +1,6 @@
 import { subscriptionFields, publicFields } from './fields.ts'
-import { validationCollector, type FinalValidator } from '@i-harness/llm-seam'
+import { isOfficialDeepSeekApi, validationCollector, type FinalValidator } from '@i-harness/llm-seam'
 import type { OpenAIConfig } from '../types.ts'
-import { isDeepSeekResponses } from './deepseek.ts'
 import { isOfficialOpenAIResponses } from './route.ts'
 
 type Checks = ReturnType<typeof validationCollector>
@@ -164,7 +163,7 @@ function inputGroups(input: unknown[], body: Record<string, unknown>, check: Che
 }
 /** Literal final-body grammar, independent of the neutral encoder. */
 export function responsesValidator(config: Pick<OpenAIConfig, 'model' | 'baseUrl' | 'providerId'>, subscription: boolean): FinalValidator<unknown> {
-  const plainReasoning = !subscription && isDeepSeekResponses(config)
+  const plainReasoning = !subscription && isOfficialDeepSeekApi(config.baseUrl)
   return body => {
     const check = validationCollector(subscription ? 'openai-responses-subscription' : 'openai-responses')
     if (!record(body)) { check.issue('shape', 'request'); return check.finish() }

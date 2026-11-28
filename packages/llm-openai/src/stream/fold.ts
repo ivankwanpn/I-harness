@@ -1,10 +1,12 @@
-import { officialXaiRoute, type LLMStreamEvent, type ProviderBlockOrderEntry } from "@i-harness/llm-seam"
+import { deepSeekCallFingerprint, hasTextAfterTool, isOfficialDeepSeekApi, officialXaiRoute, type LLMStreamEvent, type ProviderBlockOrderEntry } from "@i-harness/llm-seam"
+import { projectionFingerprint } from "@i-harness/token-meter"
 import type { OpenAIConfig } from "../types.ts"
 import { mapUsage } from "./usage.ts"
 
 /** One response owns all terminal, continuation, and partial function-call state. */
 export function createResponseFold(config: Pick<OpenAIConfig, "model" | "providerId" | "baseUrl">, codexSubscription: boolean, onToolArguments: () => void) {
   const xai = codexSubscription ? undefined : officialXaiRoute(config.baseUrl)
+  const deepSeekCalls: string[] | undefined = !codexSubscription && config.providerId && isOfficialDeepSeekApi(config.baseUrl) ? [] : undefined
   let terminal: 'completed' | 'incomplete' | 'done' | 'failed' | undefined
   // M72 Ⅱ: the Responses wire's own truncation literal lives in
   // `response.incomplete.incomplete_details.reason` — set in `handleEvent`
@@ -30,6 +32,12 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
   }
   const pendingCalls = new Map<string, { name: string; argsBuffer: string; callId?: string; outputIndex?: number }>()
   const yieldedInline = new Set<string>()
+  const recordCall = (outputIndex: unknown, id: string | undefined, name: string, args: unknown): LLMStreamEvent => {
+    const call = { ...(id ? { id } : {}), name, args }
+    deepSeekCalls?.push(deepSeekCallFingerprint(call))
+    recordOutput(outputIndex, { kind: "tool", index: toolCount++ })
+    return { type: "tool_call", call }
+  }
   // M77 (fix wave): the Responses wire's OTHER refusal shape — a refusal
   // CONTENT PART (`ResponseOutputRefusal`, `{ type: "refusal", refusal:
   // string }`) rather than a stop reason, so `response.incomplete` never
@@ -92,8 +100,7 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
           try {
             const args = JSON.parse(item.arguments) as unknown
             if (item.id) yieldedInline.add(item.id)
-            recordOutput(event.output_index, { kind: "tool", index: toolCount++ })
-            return [{ type: "tool_call", call: { ...(item.call_id ? { id: item.call_id } : {}), name: item.name!, args } }]
+            return [recordCall(event.output_index, item.call_id, item.name!, args)]
           } catch {
             return [{ type: "error", error: new Error("openai malformed inline function_call arguments") }]
           }
@@ -121,8 +128,7 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
             const serialized = ev.arguments === undefined ? pending.argsBuffer : ev.arguments
             if (typeof serialized !== "string") throw new Error("Invalid final arguments")
             const args = JSON.parse(serialized) as unknown
-            recordOutput(pending.outputIndex, { kind: "tool", index: toolCount++ })
-            return [{ type: "tool_call", call: { ...(pending.callId ? { id: pending.callId } : {}), name: pending.name, args } }]
+            return [recordCall(pending.outputIndex, pending.callId, pending.name, args)]
           } catch {
             return [{ type: "error", error: new Error("openai malformed function_call arguments") }]
           }
@@ -200,10 +206,13 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
     // response that was both truncated and refused carries both. Both absent
     // ⇒ the byte-exact `{ type: "end" }` every clean ending returned before.
     const indexedOutput = [...outputItems.entries()].sort(([a], [b]) => a - b)
-    const outputOrder = outputOrderValid && indexedOutput.length > 0 && indexedOutput.every(([index], position) => index === position) && (reasoningItems.size > 0 || hasAssistantPhase)
-      ? indexedOutput.map(([, entry]) => entry)
+    const indexedOrder = outputOrderValid && indexedOutput.length > 0 && indexedOutput.every(([index], position) => index === position)
+      ? indexedOutput.map(([, entry]) => entry) : undefined
+    const outputOrder = indexedOrder && (reasoningItems.size > 0 || hasAssistantPhase || hasTextAfterTool(indexedOrder)) ? indexedOrder : undefined
+    const deepSeekReplayFingerprint = deepSeekCalls && outputOrder && reasoningItems.size > 0
+      ? projectionFingerprint([outputOrder.map(entry => entry.kind === "text" ? entry.text : "").join(""), deepSeekCalls])
       : undefined
-    return { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningItems.size || outputOrder ? { providerContinuation: { kind: "openai-responses", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), ...(xai ? { origin: xai.origin } : {}), reasoningItems: [...reasoningItems.values()], ...(outputOrder ? { outputOrder } : {}) } as const } : {}) }
+    return { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningItems.size || outputOrder ? { providerContinuation: { kind: "openai-responses", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), ...(xai ? { origin: xai.origin } : {}), reasoningItems: [...reasoningItems.values()], ...(outputOrder ? { outputOrder } : {}), ...(deepSeekReplayFingerprint ? { deepSeekReplayFingerprint } : {}) } as const } : {}) }
   }
   return { handleEvent, finish, done() { terminal = 'done' }, get terminal() { return terminal !== undefined } }
 }

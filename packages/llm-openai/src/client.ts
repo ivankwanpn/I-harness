@@ -1,5 +1,5 @@
 import { observeTextOutput } from './request/text-output.ts'
-import { officialXaiRoute, preparedModelClient, snapshotModelData, createPreparedHttpPayload, reportStreamActivity, projectImagesForProvider, type ModelClient } from "@i-harness/llm-seam"
+import { isOfficialDeepSeekApi, officialXaiRoute, preparedModelClient, snapshotModelData, createPreparedHttpPayload, reportStreamActivity, projectImagesForProvider, type ModelClient } from "@i-harness/llm-seam"
 import { createSubscriptionAffinity } from "./affinity.ts"
 import type { OpenAIConfig } from "./types.ts"
 import { createRequestBody } from "./request/body.ts"
@@ -21,9 +21,10 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
     throw new Error("Codex subscription requests do not support configurable headers")
   }
   const xai = officialXaiRoute(baseUrl)
+  const deepSeek = isOfficialDeepSeekApi(baseUrl)
   const endpoint = codexSubscription ? "https://chatgpt.com/backend-api/codex/responses"
     : isOfficialOpenAIResponses(baseUrl) ? "https://api.openai.com/v1/responses"
-    : xai ? `${xai.url}/v1/responses` : `${baseUrl}/v1/responses`
+    : xai ? `${xai.url}/v1/responses` : deepSeek ? "https://api.deepseek.com/v1/responses" : `${baseUrl}/v1/responses`
   const affinity = codexSubscription ? createSubscriptionAffinity() : undefined
   return preparedModelClient(async originalRequest => {
     const request = snapshotModelData(originalRequest)
@@ -80,7 +81,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         return { url: endpoint, identity: executionIdentity, state: routing, init: {
             method: "POST",
             headers: mergeConfiguredHeaders(capturedConfig.headers, { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}`, ...(codexSubscription ? { "ChatGPT-Account-Id": accountId!, originator: "i-harness", "User-Agent": "I-harness", Accept: "text/event-stream", ...routing!.headers } : {}) }),
-            ...(codexSubscription || xai ? { redirect: "error" as const } : {}),
+            ...(codexSubscription || xai || deepSeek ? { redirect: "error" as const } : {}),
             // M61: the caller's abort signal reaches the transport — cancel must
             // kill a parked request, not wait for the first event.
             ...(request.signal !== undefined ? { signal: request.signal } : {}),

@@ -1,4 +1,4 @@
-import { canReplayContinuation, replayBlockOrder, type LLMContentPart, type LLMRequest } from "@i-harness/llm-seam"
+import { canReplayContinuation, replayBlockOrder, replayVisibleToolOrder, type LLMContentPart, type LLMRequest } from "@i-harness/llm-seam"
 import type { BedrockConfig } from "../types.ts"
 import { bedrockCapabilities } from './capabilities.ts'
 
@@ -67,6 +67,7 @@ export function toConverseMessages(config: BedrockConfig, messages: LLMRequest["
         ? continuation.reasoningBlocks.map((block) => "reasoningText" in block ? { reasoningContent: { reasoningText: block.reasoningText } } : { reasoningContent: { redactedContent: Buffer.from(block.redactedContentBase64, "base64") } }) : []
       const tools = (m.toolCalls ?? []).map((c) => ({ toolUse: { toolUseId: c.id, name: c.name, input: c.args as Record<string, unknown> } }))
       const content: unknown[] = replayBlockOrder<unknown>(continuation?.contentOrder, m.content, blocks, tools, (text) => ({ text }))
+        ?? (!continuation ? replayVisibleToolOrder<unknown>(m, tools, text => ({ text })) : undefined)
         ?? [...blocks, ...(m.content.trim() !== "" ? [{ text: m.content }] : []), ...tools]
       wireMessages.push({ role: "assistant", content })
       continue

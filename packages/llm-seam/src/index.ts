@@ -107,6 +107,13 @@ export type LLMStreamEvent =
 // log); llm-seam re-exports it rather than re-declaring a duplicate type.
 export type { LLMMessage, LLMContentPart, ModelRetryInfo, ModelActivityInfo, ImageInput, ImageMediaType, ProviderThinkingBlock, ProviderContinuation, ProviderBlockOrderEntry } from "@i-harness/core-session"
 
+/** Preserve a tool failure on protocols whose result envelope carries only content. */
+export function textProtocolToolResult(message: Extract<LLMMessage, { role: "tool" }>): string | LLMContentPart[] {
+  if (!message.isError) return message.content
+  const status = "Tool returned an error.\n"
+  return typeof message.content === "string" ? status + message.content : [{ type: "text", text: status }, ...message.content]
+}
+
 /** Native replay metadata belongs to the route that produced it. Older logs
  * without provenance remain readable; new records reject a different model or
  * provider profile before protocol serialization. */
@@ -150,6 +157,23 @@ export function replayBlockOrder<T>(
   return visibleText === content && seenReasoning.size === reasoning.length && seenTools.size === tools.length ? result : undefined
 }
 
+/** Text after a tool call cannot be reconstructed from the two flattened fields. */
+export function hasTextAfterTool(order: readonly import("@i-harness/core-session").ProviderBlockOrderEntry[]): boolean {
+  const firstTool = order.findIndex(entry => entry.kind === "tool")
+  return firstTool >= 0 && order.some((entry, i) => i > firstTool && entry.kind === "text" && entry.text.length > 0)
+}
+
+/** Preserve public text/tool ordering across block-based protocols. The
+ * destination uses current tool arguments and receives no native metadata. */
+export function replayVisibleToolOrder<T>(message: Extract<LLMMessage, {role: "assistant"}>, tools: readonly T[], textBlock: (text: string) => T): T[] | undefined {
+  const native = message.providerContinuation
+  const order = native?.kind === "openai-responses" ? native.outputOrder : native?.kind === "gemini" ? native.partOrder
+    : native?.kind === "anthropic" || native?.kind === "bedrock" ? native.contentOrder : undefined
+  if (!order || !hasTextAfterTool(order)) return undefined
+  const visible = order.filter(entry => entry.kind === "tool" || entry.kind === "text" && entry.text !== "")
+  return replayBlockOrder(visible, message.content, [], tools, text => textBlock(text))
+}
+
 export { resolveRetryPolicy, backoffDelay } from './retry/policy.ts'
 export type { RetryableErrorCode, RetryBackoffConfig, NormalRetryPolicyConfig, AlwaysRetryPolicyConfig, RetryPolicyConfig, ResolvedRetryBackoff, ResolvedNormalRetryPolicy, ResolvedAlwaysRetryPolicy, ResolvedRetryPolicy } from './retry/policy.ts'
 
@@ -179,6 +203,7 @@ export interface ToolSchema {
  */
 export type ReasoningEffort = "off" | "low" | "medium" | "high" | "xhigh" | "max"
 export { officialXaiRoute, resolveXaiEffort } from "./xai.ts"
+export { isOfficialDeepSeekApi, deepSeekCallFingerprint } from "./deepseek.ts"
 
 /** Route opt-in for explicit prompt-cache metadata. Absence leaves the wire
  * unchanged. Retention controls Anthropic marker TTL only; other protocols

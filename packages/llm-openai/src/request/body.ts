@@ -1,8 +1,7 @@
-import { officialXaiRoute, resolveXaiEffort, resolvePromptCacheMode, type LLMRequest, type ReasoningEffort } from "@i-harness/llm-seam"
+import { isOfficialDeepSeekApi, officialXaiRoute, resolveXaiEffort, resolvePromptCacheMode, type LLMRequest, type ReasoningEffort } from "@i-harness/llm-seam"
 import type { OpenAIConfig } from "../types.ts"
 import { mapMessages, withoutCacheBreakpoints } from "./messages.ts"
 import type { GeneratedAffinity } from "./cache-evidence.ts"
-import { isDeepSeekResponses } from "./deepseek.ts"
 import { isOfficialOpenAIResponses } from "./route.ts"
 
 /**
@@ -44,7 +43,7 @@ export function createRequestBody(
   const xai = codexSubscription ? undefined : officialXaiRoute(config.baseUrl)
   const configuredEffort = (config.options?.reasoning as { effort?: unknown } | null | undefined)?.effort
   const reasoning = translateReasoning(config.model, resolveXaiEffort(config.baseUrl, config.model, request.reasoningEffort, configuredEffort))
-  if (reasoning && isDeepSeekResponses(config)) delete reasoning.reasoning.summary
+  if (reasoning && isOfficialDeepSeekApi(config.baseUrl)) delete reasoning.reasoning.summary
   const cacheMode = resolvePromptCacheMode(config.promptCache, request.promptCache)
   const firstPartyResponses = codexSubscription || isOfficialOpenAIResponses(config.baseUrl)
   const instructions = firstPartyResponses && cacheMode !== "off" ? splitDeveloperInstructions(config.model, config.options, request) : undefined

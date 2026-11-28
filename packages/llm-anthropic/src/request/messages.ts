@@ -1,5 +1,5 @@
 import { projectionFingerprint } from "@i-harness/token-meter"
-import { canReplayContinuation, replayBlockOrder, stringifyJsonData, type LLMContentPart, type LLMMessage, type LLMRequest } from "@i-harness/llm-seam"
+import { canReplayContinuation, replayBlockOrder, replayVisibleToolOrder, stringifyJsonData, type LLMContentPart, type LLMMessage, type LLMRequest } from "@i-harness/llm-seam"
 import type { AnthropicConfig } from "../types.ts"
 
 export function fingerprintPrefix(system: unknown, tools: unknown, messages: unknown): string {
@@ -59,7 +59,8 @@ export function toWireMessages(config: AnthropicConfig, request: LLMRequest, mes
         replayThinking = []
         orderedContent = replayBlockOrder<unknown>(order.filter((entry) => entry.kind !== "reasoning"), m.content, [], toolBlocks, (text) => ({ type: "text", text }))
       }
-      const content: unknown[] = orderedContent ?? [...replayThinking, ...(m.content.trim() !== "" ? [{ type: "text", text: m.content }] : []), ...toolBlocks]
+      const portable = !orderedContent && !sourceMatches ? replayVisibleToolOrder<unknown>(m, toolBlocks, text => ({ type: "text", text })) : undefined
+      const content: unknown[] = orderedContent ?? portable ?? [...replayThinking, ...(m.content.trim() !== "" ? [{ type: "text", text: m.content }] : []), ...toolBlocks]
       wireMessages.push({ role: "assistant", content })
       continue
     }
