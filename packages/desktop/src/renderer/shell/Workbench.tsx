@@ -681,7 +681,7 @@ export function Workbench({
         </section>}
       </main>
       </>}
-      {reviewOpen || visitedWork.current.tabs.size > 0 || visitedWorkspacePanes.current.tabs.size > 0 ? <aside className={`review-pane${workPaneTab === "files" && review?.projectFiles ? " review-pane-files" : ""}${workPaneTab === 'instructions' ? ' review-pane-instructions' : ''}`} aria-label={t("成果檢查")} hidden={!workVisible}>
+      {reviewOpen || visitedWork.current.tabs.size > 0 || visitedWorkspacePanes.current.tabs.size > 0 ? <aside className={`review-pane${workPaneTab === "files" && review?.projectFiles ? " review-pane-files" : ""}${workPaneTab === 'instructions' ? ' review-pane-instructions' : ''}${workPaneTab === "context" ? " review-pane-context" : ""}`} aria-label={t("成果檢查")} hidden={!workVisible}>
         <ReviewResizeHandle width={actualReviewWidth} min={reviewMin} max={reviewMax} onResize={workPaneTab === "context" ? setContextWidth : setReviewWidth} />
         <div className="work-pane-header">
           {primaryPaneOpen ? <PaneTabs id={workPaneId} label={t("成果檢查")} items={primaryTabs} selected={workPaneTab} onSelect={id => {
