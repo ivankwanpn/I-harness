@@ -59,8 +59,8 @@ export function WorktreePicker({ bridge, workspaceId, projectId, selection, onCh
   }
 
   return <div className="composer-worktree">
-    <button type="button" className="ghost-button" onClick={() => void toggle()} aria-expanded={open} aria-controls={id}>
-      <GitBranch size={14} aria-hidden="true" /> {label}
+    <button type="button" className="ghost-button" onClick={() => void toggle()} aria-expanded={open} aria-controls={id} aria-label={label} title={label}>
+      <GitBranch size={14} aria-hidden="true" /> <span>{label}</span>
     </button>
     {open ? <div id={id} className="composer-worktree-choices">
       {state === "loading" ? <span role="status">{copy("正在讀取 Git 工作樹…", "Reading Git worktrees…")}</span> : null}

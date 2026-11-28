@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useId, useRef, useState, useCallback, lazy, Suspense, type CSSProperties } from "react"
-import { Activity, ArrowLeft, Bell, Brain, Code2, FileDiff, FileText, FolderOpen, GitBranch, Globe, ListTodo, PanelLeft, PanelRight, Search, ShieldCheck, Target, TerminalSquare, UsersRound, Wrench, type LucideIcon } from "lucide-react"
+import { Activity, ArrowLeft, Bell, Brain, Code2, Command, FileDiff, FileText, FolderOpen, GitBranch, Globe, ListTodo, PanelLeft, PanelRight, Search, ShieldCheck, Target, TerminalSquare, UsersRound, Wrench, type LucideIcon } from "lucide-react"
 import { BrowserPane } from "../browser/BrowserPane.tsx"
 import { ContextComposerUsage, ContextUsageSidebar, ContextUsagePage } from "../session/ContextUsage.tsx"
 import { ContextSessionRecords } from "../session/ContextSessionRecords.tsx"
@@ -519,9 +519,9 @@ export function Workbench({
           {connection ? <span className={`connection-state connection-${connection}`} role="status">{t(connection === "online" ? "已連線" : connection === "idle" ? "待命" : connection === "offline" ? "連線已中斷" : connection === "reconnecting" ? "重新連線中…" : "正在開啟工作區…")}</span> : null}
           {selectedWorkspaceId ? <WorkbenchTools key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} groups={toolGroups} /> : null}
           <button type="button" className="icon-button header-action" aria-label={english ? "Command center" : "命令中心"}
-            title={english ? "Command center (Ctrl+K)" : "命令中心 (Ctrl+K)"} aria-keyshortcuts="Control+K"
-            onClick={() => setPaletteOpen(true)}><Search size={16} /></button>
-          {selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <button type="button" className="primary-button header-action" aria-label={t(surface === "search" ? "返回會話" : "搜尋會話")} title={t(surface === "search" ? "返回會話" : "搜尋會話")} onClick={() => setSurface(surface === "search" ? "conversation" : "search")}><Search size={16} /><span className="header-action-label">{t(surface === "search" ? "返回會話" : "搜尋會話")}</span></button> : null}
+            title={english ? "Command center (Ctrl+K)" : "命令中心 (Ctrl+K)"} aria-keyshortcuts="Control+K Meta+K"
+            onClick={() => setPaletteOpen(true)}><Command size={16} aria-hidden="true" /></button>
+          {selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <button type="button" className="primary-button header-action" aria-label={t(surface === "search" ? "返回會話" : "搜尋會話")} title={t(surface === "search" ? "返回會話" : "搜尋會話")} onClick={() => setSurface(surface === "search" ? "conversation" : "search")}>{surface === "search" ? <ArrowLeft size={16} aria-hidden="true" /> : <Search size={16} aria-hidden="true" />}<span className="header-action-label">{t(surface === "search" ? "返回會話" : "搜尋會話")}</span></button> : null}
         </TitleBar>
         <p data-testid="session-announcer" aria-live="polite" className="visually-hidden">
           {selectedSessionId === undefined ? "" : t("已選擇會話 {title}", { title: sessionTitle })}
@@ -679,7 +679,7 @@ export function Workbench({
         </section>}
       </main>
       </>}
-      {reviewOpen || visitedWork.current.tabs.size > 0 || visitedWorkspacePanes.current.tabs.size > 0 ? <aside className={`review-pane${workPaneTab === "files" && review?.projectFiles ? " review-pane-files" : ""}${workPaneTab === 'instructions' ? ' review-pane-instructions' : ''}${workPaneTab === "context" ? " review-pane-context" : ""}`} aria-label={t("成果檢查")} hidden={!workVisible}>
+      {reviewOpen || visitedWork.current.tabs.size > 0 || visitedWorkspacePanes.current.tabs.size > 0 ? <aside data-tool={workPaneTab} className={`review-pane${workPaneTab === "files" && review?.projectFiles ? " review-pane-files" : ""}${workPaneTab === 'instructions' ? ' review-pane-instructions' : ''}${workPaneTab === "context" ? " review-pane-context" : ""}`} aria-label={t("成果檢查")} hidden={!workVisible}>
         <ReviewResizeHandle width={actualReviewWidth} min={reviewMin} max={reviewMax} onResize={workPaneTab === "context" ? setContextWidth : setReviewWidth} />
         <div className="work-pane-header">
           {primaryPaneOpen ? <PaneTabs id={workPaneId} label={t("成果檢查")} items={primaryTabs} selected={workPaneTab} onSelect={id => {
@@ -688,7 +688,7 @@ export function Workbench({
           }} /> : <button type="button" className="work-pane-back" onClick={backToReview}><ArrowLeft size={15} aria-hidden="true" />{t("返回成果檢查")}</button>}
           <button type="button" className="icon-button" aria-label={t("關閉成果面板")} onClick={toggleReview}>×</button>
         </div>
-        <div role={primaryPaneOpen ? "tabpanel" : undefined} id={`${workPaneId}-panel`} aria-labelledby={primaryPaneOpen ? `${workPaneId}-${workPaneTab}` : undefined}>
+        <div className="work-pane-content" role={primaryPaneOpen ? "tabpanel" : undefined} id={`${workPaneId}-panel`} aria-labelledby={primaryPaneOpen ? `${workPaneId}-${workPaneTab}` : undefined}>
         {workVisible && paneSelection.unavailable ? <p role="status" className="notice">{t("目前工作區後端未提供此功能。")}</p> : null}
         {workVisible && workPaneTab === "context" ? <WithSessionContext>{usage => <ContextUsageSidebar usage={usage} modelState={conversation?.modelState}
           sessionTitle={sessionTitle} turnCount={sessionRow?.turnCount} updatedAt={sessionRow?.updatedAt}

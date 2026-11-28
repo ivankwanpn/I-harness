@@ -5,9 +5,9 @@
  * See packages/desktop/licenses/zcode/README.md.
  */
 import type { ReactNode } from "react"
-export function ComposerSurface({ editor, leadingActions, trailingActions, error, onSubmit }: {
+export function ComposerSurface({ editor, leadingActions, turnActions, trailingActions, error, onSubmit }: {
   editor: ReactNode; leadingActions: ReactNode; trailingActions: ReactNode;
-  error?: ReactNode; onSubmit(): void
+  turnActions?: ReactNode; error?: ReactNode; onSubmit(): void
 }) {
   return <div className="zc-composer">
     <form className="relative" onSubmit={(event) => { event.preventDefault(); onSubmit() }}>
@@ -18,6 +18,7 @@ export function ComposerSurface({ editor, leadingActions, trailingActions, error
           <div data-composer-leading-actions>
             <div data-composer-leading-content>{leadingActions}</div>
           </div>
+          {turnActions && <div className="composer-turn-actions">{turnActions}</div>}
           <div data-composer-trailing-actions>{trailingActions}</div>
         </div>
       </div>

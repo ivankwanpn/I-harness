@@ -4,6 +4,8 @@
 .notification-preference-controls select { min-inline-size:9em; }
 @container (min-width:480px) {
   .zc-settings-row-grid:has(.notification-preference-controls) { grid-template-columns:minmax(0,1fr) max-content; }
+  .notification-preference-controls { display:grid; grid-template-columns:max-content 8rem; }
+  .notification-preference-controls > :last-child { width:100%; }
 }
 .notification-preference-controls label { cursor:pointer; font-size:13px; }
 .zc-settings-row .notification-switch { appearance:none; position:relative; box-sizing:border-box; margin:0; padding:0; width:32px; height:18px; border:1px solid var(--ih-divider); border-radius:12px; background:var(--ih-field); cursor:pointer; }

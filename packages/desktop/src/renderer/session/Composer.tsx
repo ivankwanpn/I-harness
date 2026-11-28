@@ -777,7 +777,7 @@ function SessionComposer({
       leadingActions={<>
         {bridge && (fileReferencesEnabled || imageAttachmentsEnabled) ? <button type="button" className="icon-button composer-add" aria-label={t("新增附件")} title={t("新增附件")} disabled={picking || readingImages} onClick={() => { void pickAttachments() }}><Plus size={19} aria-hidden="true" /></button> : null}
         {permissionsEnabled && bridge ? <>
-          <button ref={permissionsTrigger} type="button" className="composer-approval-trigger" data-mode={effectiveApproval} aria-label={t(approvalLabel)} title={t("核準模式")} aria-haspopup="menu" aria-expanded={permissionsOpen} aria-controls={permissionsOpen ? permissionsMenuId : undefined} aria-busy={permissionsBusy || undefined}
+          <button ref={permissionsTrigger} type="button" className="composer-approval-trigger" data-mode={effectiveApproval} aria-label={t(approvalLabel)} title={t(approvalLabel)} aria-haspopup="menu" aria-expanded={permissionsOpen} aria-controls={permissionsOpen ? permissionsMenuId : undefined} aria-busy={permissionsBusy || undefined}
             onClick={() => { permissionsFocus.current = "current"; if (permissionsOpen) closePermissions(); else setPermissionsOpen(true) }}
             onKeyDown={event => { if (event.key === "Tab" && permissionsOpen) { closePermissions(false); return } if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); permissionsFocus.current = event.key === "ArrowDown" ? "first" : "last"; setPermissionsOpen(true) } }}>
             <Shield size={15} aria-hidden="true" /><span>{t(approvalLabel)}</span><ChevronDown size={12} aria-hidden="true" />
@@ -803,15 +803,17 @@ function SessionComposer({
           </div>, document.body) : null}
         </> : null}
       </>}
-      trailingActions={<>
+      turnActions={canSteer || stopProgress || restartAvailable && bridge ? <>
         {canSteer ? <span className="composer-delivery-control">
           <select className="composer-delivery" aria-label={t("輸入處理方式")} title={t("輸入處理方式")} value={delivery} disabled={primaryBusy} onChange={(event) => setDeliveryOverride(event.target.value as FollowupDelivery)}><option value="queue">{t("加入佇列")}</option><option value="steer">{t("引導目前執行")}</option></select>
           <ChevronDown size={12} aria-hidden="true" />
         </span> : null}
-        {contextUsage}
-        {modelControl ?? (modelLabel ? <span className="composer-model" title={modelLabel}>{modelLabel}</span> : null)}
         {stopProgress ? <span className="composer-stop-note" role="status">{t(stopProgress.timedOut ? "停止沒有回應" : "正在停止…")}</span> : null}
         {restartAvailable && bridge ? <button type="button" className="composer-force-stop" title={t("重新啟動將中斷此工作區的所有執行。")} onClick={() => { void forceStop() }}>{t("重新啟動工作區")}</button> : null}
+      </> : undefined}
+      trailingActions={<>
+        {contextUsage}
+        {modelControl ?? (modelLabel ? <span className="composer-model" title={modelLabel}><span>{modelLabel}</span></span> : null)}
         {running && !primaryStops ? <button type="button" className="composer-send" data-state="running" aria-label={t("停止")} title={stopLabel} disabled={stopDisabled} onClick={() => { void requestStop() }}>
           <Square size={14} fill="currentColor" aria-hidden="true" />
         </button> : null}

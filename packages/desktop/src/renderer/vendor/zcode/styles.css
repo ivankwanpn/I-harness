@@ -68,7 +68,17 @@
 .zc-review-file:disabled { opacity: .5; cursor: not-allowed; }
 .zc-review-file[aria-current="true"] { background: var(--color-selected); }
 .zc-search { flex: 1; min-width: 0; }
-.zc-search-input { width: 100%; background: var(--ih-panel); color: var(--ih-text); border: 1px solid var(--ih-divider); font: inherit; }
+.zc-search-input {
+  /* The native control skin also consumes this inset. Both icons occupy 28px. */
+  --ih-field-padding-inline: 36px;
+  width: 100%;
+  padding-inline: var(--ih-field-padding-inline);
+  background: var(--ih-panel);
+  color: var(--ih-text);
+  border: 1px solid var(--ih-divider);
+  font: inherit;
+}
+.zc-search-input::-webkit-search-cancel-button { appearance: none; }
 .zc-search-clear { display: grid; place-items: center; width: 24px; height: 24px; border: 0; background: transparent; cursor: pointer; }
 .session-search { flex: 1; min-height: 0; overflow-y: auto; padding: 24px 32px; }
 .session-search h1 { font-size: 24px; }

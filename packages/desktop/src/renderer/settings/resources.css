@@ -97,7 +97,7 @@
 .resource-settings .resource-card {
   min-height: 0;
   padding: 14px;
-  border-radius: 10px;
+  border-radius: var(--ih-radius-panel);
 }
 
 .resource-settings .resource-card-top {

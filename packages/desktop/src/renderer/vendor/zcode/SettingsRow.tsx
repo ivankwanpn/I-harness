@@ -15,5 +15,5 @@ export function SettingsRow({ label, description, control, detail }: { label: st
   </div>
 }
 export function SettingsGroup({ children }: { children: ReactNode }) {
-  return <div className="zc-settings-group overflow-hidden rounded-xl border border-border bg-card py-0 shadow-none"><div className="space-y-0 px-0">{children}</div></div>
+  return <div className="zc-settings-group overflow-hidden rounded-[var(--ih-radius-panel)] border border-border bg-card py-0 shadow-none"><div className="space-y-0 px-0">{children}</div></div>
 }

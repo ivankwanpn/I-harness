@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest"
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { CommandPalette, type CommandPaletteProps } from "../src/renderer/shell/CommandPalette.tsx"
 import { Workbench } from "../src/renderer/shell/Workbench.tsx"
 
@@ -74,4 +74,23 @@ it("restores the previously focused control when Esc closes the workbench comman
   fireEvent.keyDown(input, { key: "Escape" })
   expect(screen.queryByRole("dialog", { name: "命令中心" })).toBeNull()
   expect(document.activeElement).toBe(trigger)
+})
+
+it("distinguishes the title bar command launcher, conversation search and its back action", () => {
+  render(<Workbench bridge={{ request: async () => ({}), onEvent: () => () => {} }}
+    workspaces={[{ id: "w", label: "Project", path: "D:/project" }]} selectedWorkspaceId="w"
+    capabilities={{ "desktop-session-search": ["1"] }} onSelectWorkspace={() => {}} onSelectSession={() => {}} />)
+  const bar = within(screen.getByTestId("session-header"))
+  const commands = bar.getByRole("button", { name: "命令中心" })
+  const search = bar.getByRole("button", { name: "搜尋會話" })
+  expect(commands.querySelector("svg.lucide-command")).toBeTruthy()
+  expect(search.querySelector("svg.lucide-search")).toBeTruthy()
+  fireEvent.click(commands)
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "命令中心" }), { key: "Escape" })
+  fireEvent.click(search)
+  expect(screen.getByRole("searchbox", { name: "搜尋會話內容" })).toBeTruthy()
+  const back = bar.getByRole("button", { name: "返回會話" })
+  expect(back.querySelector("svg.lucide-arrow-left")).toBeTruthy()
+  fireEvent.click(back)
+  expect(screen.queryByRole("searchbox", { name: "搜尋會話內容" })).toBeNull()
 })

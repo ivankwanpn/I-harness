@@ -10,7 +10,7 @@
 .project-editor { display: grid; gap: 14px; }
 .project-editor label { display: grid; gap: 7px; font-size: 13px; }
 .project-editor h3 { font-size: 13px; margin: 4px 0 -6px; }
-.project-folder-list { border: 1px solid var(--ih-divider); border-radius: 8px; overflow: hidden; }
+.project-folder-list { border: 1px solid var(--ih-divider); border-radius: var(--ih-radius-panel); overflow: hidden; }
 .project-folder-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--ih-divider); }
 .project-folder-row > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .project-folder-row small { display: block; color: var(--ih-muted); font-size: 11px; margin-top: 3px; }

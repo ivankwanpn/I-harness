@@ -7,6 +7,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { ChevronRight, FolderOpen, Pin, Plus, Settings, SlidersHorizontal } from "lucide-react"
 import { useText } from "../design/i18n.ts"
 import { Button } from "../vendor/opencode/Button.tsx"
+import { SearchInput } from "../vendor/zcode/SearchInput.tsx"
 import { affectsSessionDashboard } from "../session/notifications.ts"
 import { createWorkspaceConnections } from "../session/workspace-connections.ts"
 import { useWindowVisibility } from "../window-visibility.tsx"
@@ -168,7 +169,8 @@ function ProjectTree(props: ProjectSidebarProps) {
       details={folder.id === selectedWorkspaceId ? props.dashboard : undefined} />)}
     <div className="sidebar-header">
     <div className="brand">I-harness</div>
-    <input className="project-sidebar-search" type="search" aria-label={t("搜尋會話")} placeholder={t("搜尋會話")} value={search} onChange={event => setSearch(event.target.value)} />
+    <div className="project-sidebar-search"><SearchInput aria-label={t("搜尋會話")} placeholder={t("搜尋會話")} value={search}
+      onChange={event => setSearch(event.target.value)} clearLabel={t("清除搜尋")} onClear={() => setSearch("")} /></div>
     <div className="project-sidebar-heading"><h2 className="sidebar-title">{t("專案")}</h2><Button variant="ghost" size="small" className="project-sidebar-manage" icon={<SlidersHorizontal size={14} />} onClick={props.onProjects}>{t("管理專案")}</Button></div>
     </div>
     <div className="sidebar-scroll">

@@ -84,8 +84,7 @@ function HookSettingsContent({ bridge, workspaceId, onAuthoringRequest, active =
         </div>
       </SettingsGroup>)}
       <h2>{t("已保存的 Hooks 授權")}</h2>
-      <SettingsGroup>{state.grants.map((grant) => <SettingsRow key={grant.sha256} label={grant.handlerId || grant.sha256} description={`${grant.script} · ${grant.sha256}`} control={<button disabled={busy} onClick={() => { void run({ action: "revoke", sha256: grant.sha256 }) }}>{t("撤銷授權")}</button>} />)}</SettingsGroup>
-      {!state.grants.length ? <p className="muted">{t("沒有已保存的 Hooks 授權")}</p> : null}
+      {state.grants.length ? <SettingsGroup>{state.grants.map((grant) => <SettingsRow key={grant.sha256} label={grant.handlerId || grant.sha256} description={`${grant.script} · ${grant.sha256}`} control={<button disabled={busy} onClick={() => { void run({ action: "revoke", sha256: grant.sha256 }) }}>{t("撤銷授權")}</button>} />)}</SettingsGroup> : <p className="muted">{t("沒有已保存的 Hooks 授權")}</p>}
     </> : null}
   </section>
 }

@@ -27,6 +27,13 @@
 .review-pane-files > [role="tabpanel"] > .retained-work-pane:not([hidden]) { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 .retained-work-pane { height: 100%; min-width: 0; min-height: 0; }
 .retained-work-pane[hidden] { display: none !important; }
+.review-pane:is([data-tool="browser"], [data-tool="terminal"], [data-tool="reminders"]) { display:flex; flex-direction:column; overflow:hidden; }
+.review-pane:is([data-tool="browser"], [data-tool="terminal"], [data-tool="reminders"]) > .work-pane-header { position:static; flex:none; }
+.review-pane:is([data-tool="browser"], [data-tool="terminal"], [data-tool="reminders"]) > .work-pane-content { flex:1; min-height:0; overflow:auto; }
+.review-pane .retained-work-pane > :is(.browser-pane, .terminal-pane, .schedule-pane) { height:100%; }
+.terminal-pane .terminal-emulator { border-radius: var(--ih-radius-panel); }
+/* FitAddon subtracts padding on .xterm itself when measuring the terminal grid. */
+.terminal-emulator > .xterm { padding: round(up, calc(var(--ih-radius-panel) / 3), 1px); }
 .project-git-trigger { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; border: 0; border-radius: 6px; padding: 6px 8px; color: var(--ih-muted); background: transparent; font: inherit; font-size: 12px; cursor: pointer; }
 .project-git-trigger:hover { color: var(--ih-text); background: var(--ih-panel); }
 .project-git-trigger:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: 2px; }

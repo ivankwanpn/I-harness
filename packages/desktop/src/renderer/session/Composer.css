@@ -51,24 +51,26 @@
 .session-composer .composer-input::placeholder { color: var(--ih-muted); opacity: .8; }
 .session-composer .composer-surface :is(.zc-composer-error, .composer-draft-error) { margin: 0; padding: .58rem .72rem; max-height: 6rem; overflow-y: auto; border-inline-start: 2px solid var(--ih-danger); background: var(--ih-field); color: var(--ih-danger); border-radius: var(--ih-radius-control); font-size: .86rem; overflow-wrap: anywhere; }
 .composer-draft-error > span { color: var(--ih-muted); }
-.composer-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .35rem; min-width: 0; }
+.composer-toolbar { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: .35rem; min-width: 0; }
+.composer-toolbar:has(.composer-turn-actions) { grid-template-columns: auto minmax(0, auto) minmax(0, 1fr); }
 .session-composer [data-composer-leading-actions] { display: flex; min-width: 0; max-width: 100%; }
-.session-composer [data-composer-leading-content] { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.session-composer [data-composer-leading-content] { display: flex; align-items: center; gap: 4px; min-width: 0; }
 
 .session-composer [data-composer-trailing-actions] {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 4px;
-  margin-left: auto;
   min-width: 0;
   max-width: 100%;
-  flex-shrink: 1;
-  flex-wrap: wrap;
-  row-gap: 6px;
+  flex-wrap: nowrap;
+  margin: 0;
 }
 
 .session-composer [data-composer-leading-actions] { flex: 0 1 auto; }
+.composer-turn-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 4px; min-width: 0; margin-inline-start: auto; }
+.session-composer .session-model-picker { flex: 0 1 auto; min-width: 0; }
+.session-composer .composer-effort { flex: none; }
 .session-composer .composer-add { display: grid; place-items: center; width: var(--ih-compact-height); height: var(--ih-compact-height); padding: 0; border-radius: var(--ih-radius-control); }
 .session-composer .composer-add:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: 2px; }
 .composer-file-chip small { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ih-muted); }
@@ -135,13 +137,29 @@
 .composer-approval-error { color: var(--ih-danger); }
 
 @container session-composer (max-width: 620px) {
-  .session-composer .composer-model { min-width: 0; max-width: 200px; font-size: 12px; }
-  .session-composer .composer-send { margin-left: auto; }
+  .composer-toolbar:has(.composer-turn-actions) { grid-template-columns: auto minmax(0, 1fr); }
+  .session-composer [data-composer-trailing-actions] { gap: 2px; }
+  .composer-turn-actions + [data-composer-trailing-actions] { grid-column: 1 / -1; }
+  .session-composer .composer-model { min-width: 0; max-width: 100%; }
 }
 
-@container session-composer (max-width: 420px) {
-  .session-composer .composer-model { max-width: 140px; }
-  .composer-delivery-control { max-width: 140px; }
+@container session-composer (max-width: 36rem) {
+  .session-composer :is(.composer-approval-trigger, .composer-model.composer-effort, .composer-worktree > button) {
+    display: inline-grid; place-items: center; flex: none;
+    width: var(--ih-compact-height); height: var(--ih-compact-height); padding: 0;
+  }
+  .composer-approval-trigger > :is(span, svg:last-child),
+  .composer-effort > :is(span, svg:last-child),
+  .composer-worktree > button > span { display: none; }
+  .session-composer .composer-worktree { flex: none; }
+}
+
+@container session-composer (max-width: 22rem) {
+  .session-composer [data-composer-trailing-actions] { grid-column: 1 / -1; }
+  .session-composer .context-usage-reading { display: none; }
+  .session-composer .composer-model:not(.composer-effort) { padding-inline: 4px; }
+  .session-model-picker > .composer-model:not(.composer-effort) > svg { display: none; }
+  .composer-turn-actions :is(.composer-stop-note, .composer-force-stop) { max-width: 100%; white-space: normal; }
 }
 .composer-worktree {
   position: relative;
@@ -164,4 +182,17 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The chooser is anchored to the card so it remains inside the conversation
+ * even when the worktree trigger shrinks to a single icon. */
+.session-composer .composer-surface:has(.composer-worktree-choices) { overflow: visible; }
+.session-composer .composer-worktree { position: static; }
+.session-composer .composer-worktree-choices {
+  inset-inline-end: 0;
+  bottom: calc(100% + .35rem);
+  width: min(28rem, 100%);
+  max-width: 100%;
+  max-height: min(20rem, 35vh);
+  overflow: auto;
 }
