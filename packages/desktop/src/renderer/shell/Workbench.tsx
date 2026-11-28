@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useId, useRef, useState, useCallback, lazy, Suspense, type CSSProperties } from "react"
 import { Activity, ArrowLeft, Bell, Brain, Code2, FileDiff, FileText, FolderOpen, GitBranch, Globe, ListTodo, PanelLeft, PanelRight, Search, ShieldCheck, Target, TerminalSquare, UsersRound, Wrench, type LucideIcon } from "lucide-react"
 import { BrowserPane } from "../browser/BrowserPane.tsx"
-import { ContextHeaderUsage, ContextUsageSidebar, ContextUsagePage } from "../session/ContextUsage.tsx"
+import { ContextComposerUsage, ContextUsageSidebar, ContextUsagePage } from "../session/ContextUsage.tsx"
 import { ContextSessionRecords } from "../session/ContextSessionRecords.tsx"
 import type { WireEvent } from "../session/history-events.ts"
 import { SessionContextScope, WithSessionContext } from "../session/SessionContextScope.tsx"
@@ -507,10 +507,6 @@ export function Workbench({
       <main className="center-pane">
         <TitleBar bridge={bridge} title={surface === "plugins" ? t("插件市場") : surface === "memory" ? t("工作區記憶") : surface === "search" ? t("搜尋會話") : selectedSessionId === undefined ? displayProject?.name ?? workspaceTitle : sessionTitle}
           leading={<button type="button" className="icon-button" aria-label={t("顯示側欄")} aria-expanded={drawer.narrow ? drawer.open : !sidebarCollapsed} onClick={toggleSidebar}><PanelLeft size={18} /></button>}>
-          {showContext && selectedWorkspaceId && selectedSessionId ? <WithSessionContext>{usage => <ContextHeaderUsage
-            bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} usage={usage} modelState={conversation?.modelState}
-            expanded={workVisible && workPaneTab === "context"} compact={viewportWidth - visibleSidebarWidth - (rightDocked ? actualReviewWidth : 0) < 700}
-            onToggle={() => { if (workVisible && workPaneTab === "context") toggleReview(); else openPane("context") }} />}</WithSessionContext> : null}
           <button type="button" className="icon-button review-toggle" aria-label={t("成果檢查")} aria-expanded={workVisible} onClick={() => {
             if (contextPageOpen) { openPane("context"); return }
             if (!reviewOpen) selectPane(fallbackPane)
@@ -607,6 +603,9 @@ export function Workbench({
                   fileReferencesEnabled={capabilities["prompt-context"]?.includes("1") && capabilities["desktop-review"]?.includes("1")}
                   imageAttachmentsEnabled={capabilities["prompt-images"]?.includes("1") && conversation.modelState?.status === "ready" && conversation.modelState.imageInput === true}
                   canCompact={conversation.canCompact}
+                  contextUsage={panes.context.available && !contextPageOpen ? <WithSessionContext>{usage =>
+                    <ContextComposerUsage usage={usage} modelState={conversation.modelState} expanded={workVisible && workPaneTab === "context"}
+                      onToggle={() => { if (workVisible && workPaneTab === "context") toggleReview(); else openPane("context") }} />}</WithSessionContext> : undefined}
                   onCompact={capabilities["desktop-compaction"]?.includes("1") ? conversation.onCompact : undefined}
                   bridge={bridge}
                   workspaceId={selectedWorkspaceId}

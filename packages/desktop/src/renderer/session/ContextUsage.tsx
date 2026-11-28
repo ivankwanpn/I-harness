@@ -1,5 +1,5 @@
 import { type CSSProperties, type ReactNode, useId, useLayoutEffect, useRef, useState } from "react"
-import { ArrowLeft, Maximize2, PanelRightOpen } from "lucide-react"
+import { ArrowLeft, Maximize2 } from "lucide-react"
 import { createPortal } from "react-dom"
 import type { SessionContextState } from "@i-harness/sdk/context"
 import type { SessionModelState } from "@i-harness/sdk"
@@ -276,38 +276,24 @@ function ContextGauge({ percent }: { percent?: number }) {
   )
 }
 
-const compactCounts = {
-  en: new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }),
-  "zh-TW": new Intl.NumberFormat("zh-TW", { notation: "compact", maximumFractionDigits: 1 }),
-}
-
-type ContextHeaderProps = ContextViews & ContextUsageScope & { compact?: boolean; expanded: boolean; onToggle(): void }
-
-export function ContextHeaderUsage(props: ContextHeaderProps) {
-  if (props.compact) return <ContextUsageTrigger {...props} compactHeader onOpenSidebar={() => { if (!props.expanded) props.onToggle() }} />
-  return <WideContextHeader {...props} />
-}
-
-function WideContextHeader(props: ContextHeaderProps) {
+export function ContextComposerUsage(props: ContextViews & { expanded: boolean; onToggle(): void }) {
   const t = useText()
-  const locale = useLocale(state => state.locale)
   const view = useContextReading(props)
   const descriptionId = useId()
-  const detail = [view.capacity ? `${view.sourceLabel} · ${view.capacity}` : undefined, view.basis, view.status]
+  const detail = [view.capacity ? `${view.sourceLabel} · ${view.capacity}` : undefined, view.basis, view.error || view.status]
     .filter(Boolean).join(" · ") || t("上下文容量")
-  const count = view.tokens === undefined ? "—" : compactCounts[locale].format(view.tokens)
   return <>
-    <button className={view.warning ? "context-header-usage context-usage-trigger-warning" : "context-header-usage"}
-      type="button" onClick={props.onToggle} aria-expanded={props.expanded} aria-label={t("上下文容量")}
+    <button type="button" className={`icon-button context-usage-trigger context-composer-usage${view.warning ? " context-usage-trigger-warning" : ""}`}
+      onClick={props.onToggle} aria-expanded={props.expanded} aria-label={t("上下文容量")}
       aria-describedby={descriptionId} title={detail}>
       <ContextGauge percent={view.percent} />
-      <span className="context-header-count">{count}</span>
+      <span className="context-usage-reading">{view.reading}</span>
     </button>
     <span id={descriptionId} hidden>{detail}</span>
   </>
 }
 
-function ContextUsageTrigger({ bridge, workspaceId, sessionId, usage, modelState, onOpenSidebar, compactHeader = false }: ContextUsageScope & ContextViews & { onOpenSidebar?(): void; compactHeader?: boolean }) {
+function ContextUsageTrigger({ bridge, workspaceId, sessionId, usage, modelState }: ContextUsageScope & ContextViews) {
   const t = useText()
   const panelId = useId()
   const readingId = useId()
@@ -352,13 +338,8 @@ function ContextUsageTrigger({ bridge, workspaceId, sessionId, usage, modelState
       if (rect && panel.current) {
         const maxRight = window.innerWidth - panel.current.getBoundingClientRect().width - 16
         const right = Math.max(16, Math.min(maxRight, window.innerWidth - rect.right))
-        if (compactHeader) {
-          const top = Math.max(8, rect.bottom + 6)
-          setPlacement({ right, top, maxHeight: `calc(100vh - ${top + 12}px)` })
-        } else {
-          const bottom = Math.max(16, window.innerHeight - rect.top + 10)
-          setPlacement({ right, bottom, maxHeight: `calc(100vh - ${bottom + 16}px)` })
-        }
+        const bottom = Math.max(16, window.innerHeight - rect.top + 10)
+        setPlacement({ right, bottom, maxHeight: `calc(100vh - ${bottom + 16}px)` })
       }
     }
     position()
@@ -368,32 +349,23 @@ function ContextUsageTrigger({ bridge, workspaceId, sessionId, usage, modelState
     const removeEscape = listenForegroundEscape(panel.current, () => { closePopup(true); if (mode === "explicit") trigger.current?.focus() })
     document.addEventListener("pointerdown", dismiss)
     return () => { window.removeEventListener("resize", position); document.removeEventListener("pointerdown", dismiss); removeEscape() }
-  }, [open, mode, compactHeader])
+  }, [open, mode])
   const view = useContextReading({ usage, modelState })
   const { reading, readingDetail, warning, percent } = view
   const detailId = `${readingId}-details`
 
   return <>
-    <button ref={trigger} type="button" className={`icon-button context-usage-trigger${warning ? " context-usage-trigger-warning" : ""}${compactHeader ? " context-header-compact" : ""}`} aria-label={t("上下文容量")} aria-describedby={readingDetail ? `${readingId} ${detailId}` : readingId} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? panelId : undefined} title={open ? undefined : `${t("上下文容量")} · ${reading}${readingDetail ? ` · ${readingDetail}` : ""}`} onClick={activate}
-      onMouseEnter={compactHeader ? undefined : preview} onMouseLeave={compactHeader ? undefined : scheduleClose}
-      onPointerEnter={event => { if (!compactHeader && event.pointerType !== "touch") preview() }} onPointerLeave={event => { if (!compactHeader && event.pointerType !== "touch") scheduleClose() }}>
+    <button ref={trigger} type="button" className={`icon-button context-usage-trigger${warning ? " context-usage-trigger-warning" : ""}`} aria-label={t("上下文容量")} aria-describedby={readingDetail ? `${readingId} ${detailId}` : readingId} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? panelId : undefined} title={open ? undefined : `${t("上下文容量")} · ${reading}${readingDetail ? ` · ${readingDetail}` : ""}`} onClick={activate}
+      onMouseEnter={preview} onMouseLeave={scheduleClose}
+      onPointerEnter={event => { if (event.pointerType !== "touch") preview() }} onPointerLeave={event => { if (event.pointerType !== "touch") scheduleClose() }}>
       <ContextGauge percent={percent} />
       <span id={readingId} className="context-usage-reading">{reading}</span>
     </button>
     {readingDetail ? <span id={detailId} hidden>{readingDetail}</span> : null}
-    {open ? createPortal(<div id={panelId} ref={panel} tabIndex={-1} className={`context-usage-popover ih-menu-surface${compactHeader ? " context-header-menu" : ""}`} style={placement} role="dialog" aria-label={t("上下文容量")}
-      onMouseEnter={cancelClose} onMouseLeave={compactHeader ? undefined : scheduleClose} onPointerEnter={cancelClose} onPointerLeave={event => { if (!compactHeader && event.pointerType !== "touch") scheduleClose() }}>
-      {compactHeader ? <>
-        <dl className="context-usage-fact-group">
-          <div className="context-usage-fact"><dt>{view.tokens === undefined ? t("輸入 Token") : view.sourceLabel}</dt><dd>{view.tokens === undefined ? "—" : number(view.tokens)}</dd></div>
-          <div className="context-usage-fact"><dt>{t("上下文用量")}</dt><dd>{view.reading}</dd></div>
-        </dl>
-        {view.percent !== undefined && view.basis ? <small>{view.basis}</small> : null}
-        <ContextNotice view={view} usage={usage} />
-      </> : <><strong>{t("上下文容量")}</strong><ContextFacts view={view} usage={usage} /></>}
-      {onOpenSidebar ? <Button variant="secondary" size="small" className="context-open-sidebar" onClick={() => { closePopup(); onOpenSidebar() }}>
-        <PanelRightOpen aria-hidden="true" size={14} />{t(compactHeader ? "檢視上下文用量" : "在側邊欄查看上下文")}
-      </Button> : null}
+    {open ? createPortal(<div id={panelId} ref={panel} tabIndex={-1} className="context-usage-popover ih-menu-surface" style={placement} role="dialog" aria-label={t("上下文容量")}
+      onMouseEnter={cancelClose} onMouseLeave={scheduleClose} onPointerEnter={cancelClose} onPointerLeave={event => { if (event.pointerType !== "touch") scheduleClose() }}>
+      <strong>{t("上下文容量")}</strong>
+      <ContextFacts view={view} usage={usage} />
     </div>, document.body) : null}
   </>
 }

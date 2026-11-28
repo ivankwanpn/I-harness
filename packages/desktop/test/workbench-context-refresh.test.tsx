@@ -7,7 +7,7 @@ import type { DesktopBridge } from "../src/shared/bridge.ts"
 
 afterEach(() => { cleanup(); useUiStore.setState({ surface: "conversation", reviewOpen: false, sidebarCollapsed: false }) })
 
-it("shares one session reading across the conversation header, right tab and expanded view, preserving the draft on return", async () => {
+it("opens full context from the single circle before the composer model selector, preserving the draft on return", async () => {
   const pending = Promise.withResolvers<unknown>()
   const request = vi.fn(async (input: { kind: string; sessionId?: string }) => input.kind === "session/context"
     ? input.sessionId === "second" ? pending.promise : { kind: "ready", estimatedTokens: 4321, contextWindow: 128000 }
@@ -18,13 +18,19 @@ it("shares one session reading across the conversation header, right tab and exp
     selectedWorkspaceId={workspace.id} selectedSessionId={sessionId} capabilities={{ "session-context": ["1"] }}
     dashboard={{ sessions: [{ id: "first", title: "First conversation", turnCount: 3, live: true }, { id: "second", title: "Second conversation", live: false }] }}
     onSelectWorkspace={() => {}} onSelectSession={() => {}}
-    conversation={{ rows: [], recentEvents: sessionId === "first" ? [{ type: "user/message", text: "Visible original fixture", seq: 0 }, { type: "user/message", text: "Internal fixture", internal: true, seq: 1 }] : [], canSend: true, running: false, pending: [],
+    conversation={{ rows: [], recentEvents: sessionId === "first" ? [{ type: "user/message", text: "Visible original fixture", seq: 0 }, { type: "user/message", text: "Internal fixture", internal: true, seq: 1 }] : [], modelLabel: "Fixture model", canSend: true, running: false, pending: [],
       onPrompt: async () => {}, onCancel() {}, onCancelTask() {}, onCancelQueue() {}, onReply: async () => {} }} />
   const view = render(renderSession("first"))
   const draft = screen.getByPlaceholderText("輸入提示…")
   fireEvent.change(draft, { target: { value: "keep this draft" } })
   await waitFor(() => expect(screen.getByRole("button", { name: "上下文容量" }).getAttribute("title")).toContain("3.4%"))
-  fireEvent.click(screen.getByRole("button", { name: "上下文容量" }))
+  const circle = screen.getByRole("button", { name: "上下文容量" })
+  const toolbar = draft.closest(".zc-composer")?.querySelector("[data-composer-trailing-actions]")
+  expect(toolbar?.contains(circle)).toBe(true)
+  const model = within(toolbar as HTMLElement).getByText("Fixture model")
+  expect(circle.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(document.querySelector(".desktop-titlebar")?.contains(circle)).toBe(false)
+  fireEvent.click(circle)
   expect(screen.queryByRole("dialog", { name: "上下文容量" })).toBeNull()
   const summary = screen.getByRole("region", { name: "上下文詳情" })
   expect(within(summary).getByText("4,321")).toBeTruthy()
