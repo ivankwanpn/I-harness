@@ -110,17 +110,19 @@ export function createSubagentCatalog(coordinator: SessionCoordinator, service: 
       const hint = hints.get(sessionId)
       const currentFormat = meta.subagentProtocolVersion === 1 || saved?.currentFormat === true || hint?.currentFormat === true || chain.some(id => invalidOwners.has(id))
       const entry = liveEntry || saved || hint ? { ...hint, ...saved, ...liveEntry } : undefined
-      // Snapshots omit cleared optional fields. Unlike identity metadata, an
-      // absent error on the current registry must not fall back to an older
-      // saved entry or the initial task's outcome after a successful retry.
-      const currentError = (liveEntry ?? saved ?? hint)?.error
-      let retained = (liveEntry ?? saved ?? hint)?.result
+      // Optional result fields belong to the same observation. A followup
+      // failure can clear the initial answer; a successful retry clears its error.
+      const registry = liveEntry ?? saved
+      const observation = registry ?? hint
+      const currentError = observation?.error
+      let retained = observation?.result
       let events: readonly SessionEvent[] = [], unavailable: string | undefined
       const childAuthority = runtime?.runtime && liveEntry ? { ownerId: runtime.ownerId, assembly: runtime.runtime.assembly, entry: liveEntry } : undefined
       try { if (!retained && (liveEntry || !currentFormat)) events = (await snapshot(sessionId, liveChild(sessionId, childAuthority))).events.slice(meta.seedLength ?? 0) }
       catch (error) { unavailable = errorText(error); errors.push({ sessionId, message: unavailable }) }
       const final = events.findLast((event) => event.type === "assistant/message")
-      const finalText = liveEntry?.finalText ?? (liveEntry ? undefined : saved?.finalText) ?? (final?.type === "assistant/message" ? final.text : undefined) ?? hint?.finalText
+      const finalText = retained || currentError !== undefined ? observation?.finalText
+        : registry?.finalText ?? final?.text ?? hint?.finalText
       const ended = events.findLastIndex((event) => event.type === "turn/end")
       const started = events.findLastIndex((event) => event.type === "turn/start")
       let state = status(entry?.status)
@@ -129,7 +131,7 @@ export function createSubagentCatalog(coordinator: SessionCoordinator, service: 
         state = entry?.status === "running" || entry?.status === "accepted" ? "unavailable" : proof?.status ?? "unavailable"
         if (state === 'unavailable' && retained.kind === 'retained') retained = { ...retained, envelope: { ...retained.envelope, execution: { outcome: 'unknown', dispatch: 'unknown' } } }
         else if (proof?.result) retained = proof.result
-        if (state === "unavailable") unavailable ??= "The original child result fact is unavailable; retained bytes do not certify its execution outcome."
+        if (state === "unavailable") unavailable ??= currentError || "The original child result fact is unavailable; retained bytes do not certify its execution outcome."
       } else if (!liveEntry && currentFormat) {
         state = 'unavailable'
         unavailable ??= 'The original child result fact is unavailable; saved history does not certify its execution outcome.'

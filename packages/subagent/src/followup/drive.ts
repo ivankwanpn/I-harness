@@ -3,7 +3,8 @@ import { isNondurableSession, type SessionEventView } from "@i-harness/core-sess
 import type { AgentRegistry } from "@i-harness/core-agent"
 import type { AgentTable, ChildAgentEntry } from "../agent-table.ts"
 import type { JobRegistry } from "../jobs.ts"
-import { beginFollowupExecution, type FollowupGeneration, type FollowupGenerationIntent } from './generation.ts'
+import { beginFollowupExecution, closedInboxOrigins, type FollowupGeneration, type FollowupGenerationIntent } from './generation.ts'
+import { advanceInboxCursor, pendingInboxEvents } from './mailbox.ts'
 import type { ResidentInboxActivation } from './activation.ts'
 
 // Drain all unconsumed durable inbox events as serialized turns on the child.
@@ -16,6 +17,7 @@ import type { ResidentInboxActivation } from './activation.ts'
 export interface FollowupDeps {
   activation?: ResidentInboxActivation
   captureGeneration?: (entry: ChildAgentEntry, input: Extract<SessionEventView, { type: 'subagent/inbox' }>) => FollowupGenerationIntent
+  settleClosedInbox?: (entry: ChildAgentEntry, input: Extract<SessionEventView, { type: 'subagent/inbox' }>, consume: () => void) => Promise<void>
   results?: import("../task/result.ts").TaskResultStore
   agents: AgentRegistry
   table: AgentTable
@@ -36,18 +38,18 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
   const activationCurrent = activation?.current.bind(activation), waitActivation = activation?.wait.bind(activation)
   const next = prev.then(async () => {
     if (signal?.aborted || entry.closing || deps.table.get(entry.path) !== entry) return
-    const pending = entry.session.events.filter(
-      (e): e is Extract<SessionEventView, { type: "subagent/inbox" }> =>
-        e.type === "subagent/inbox" && (e.seq ?? 0) > (entry.lastInboxSeq ?? -1),
-    )
+    const view = entry.session
+    let owner = entry.factOwner
+    const pending = pendingInboxEvents(view, entry.lastInboxSeq ?? -1, sessionId)
+    const closed = closedInboxOrigins(entry, sessionId, pending)
     for (const ev of pending) {
-      if (signal?.aborted || entry.closing || deps.table.get(entry.path) !== entry) return // closed/replaced mid-drain → stop
-      const intent = captureGeneration?.(entry, ev)
+      if (signal?.aborted || entry.closing || deps.table.get(entry.path) !== entry || entry.session !== view || entry.factOwner !== owner) return
+      const alreadyClosed = ev.seq !== undefined && closed?.get(ev.seq) === ev.messageId
+      const intent = alreadyClosed ? undefined : captureGeneration?.(entry, ev)
       const execution = beginFollowupExecution(intent, raw.promise)
-      const view = entry.session, pendingStop = entry.controller.signal
-      let owner = entry.factOwner
+      const pendingStop = entry.controller.signal
       let controller: AbortController | undefined, selectedAgent: ReturnType<AgentRegistry['get']>
-      let returned = false, dispatched = false, priorSettled = false
+      let returned = false, dispatched = false, priorSettled = false, failurePublished = false
       let resultStore = deps.results, generation: FollowupGeneration | undefined
       let outcome: { occurred: false } | { occurred: true; value: unknown } = { occurred: false }
       const identityCurrent = () => {
@@ -57,11 +59,16 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
         return !signal?.aborted && !entry.closing && deps.table.get(entry.path) === entry && entry.session === view && entry.factOwner === owner && (!owner || owner.view === view)
       }
       const executionCurrent = () => identityCurrent() && activationCurrent?.() !== false
-        && view.events.some(event => event.type === 'subagent/inbox' && event.seq === ev.seq && event.messageId === ev.messageId)
+        && (ev.seq !== undefined && view.events[ev.seq] === ev || view.events.some(event => event.type === 'subagent/inbox' && event.seq === ev.seq && event.messageId === ev.messageId))
         && (dispatched ? entry.lastInboxSeq === (ev.seq ?? 0) : (entry.lastInboxSeq ?? -1) < (ev.seq ?? 0))
         && (!controller || entry.controller === controller && !controller.signal.aborted)
         && (!selectedAgent || deps.agents.get(sessionId) === selectedAgent)
       const cancel = () => controller?.abort(signal?.reason)
+      const consumeTerminal = () => {
+        if (!executionCurrent()) return
+        advanceInboxCursor(entry, ev.seq!)
+        deps.table.update(entry.path, entry, { lastInboxSeq: entry.lastInboxSeq, mailbox: entry.mailbox })
+      }
       try {
         const replacement = new AbortController()
         const off = deps.table.subscribe(() => { if (!identityCurrent()) replacement.abort() })
@@ -71,6 +78,11 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
           if (waitActivation && !await waitActivation(gateSignal, pendingStop)) return
         } finally { off() }
         if (!executionCurrent()) return
+        if (alreadyClosed) {
+          if (deps.settleClosedInbox) await deps.settleClosedInbox(entry, ev, consumeTerminal)
+          else { await entry.resultCapture?.settle(); consumeTerminal() }
+          continue
+        }
         await execution?.settlePredecessors(executionCurrent)
         if (!executionCurrent()) return
         const previous = entry.resultCapture
@@ -109,7 +121,7 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
         if (entry.status !== 'running') deps.table.update(entry.path, entry, { status: 'running' })
         if (!executionCurrent()) return
         dispatched = true
-        entry.lastInboxSeq = ev.seq ?? 0
+        advanceInboxCursor(entry, ev.seq ?? 0)
         const followup = () => selectedAgent!.followup(ev.message, controller!.signal, generation?.options ?? { provenance: ev.provenance ?? { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.inbox", ...(entry.session.header?.parentSession ? { originSessionId: entry.session.header.parentSession } : {}) } })
         const result = await (execution ? execution.invoke(followup) : followup())
         // Clear a stale error (e.g. "aborted" from an earlier interrupted
@@ -147,6 +159,7 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
         }
         publish(capture?.projection())
         if (capture) publish(await (execution ? execution.settleResult() : capture.settle()))
+        failurePublished = true
       } finally {
         execution?.exitBody(outcome)
         signal?.removeEventListener('abort', cancel)
@@ -155,6 +168,10 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
           const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
           if (failures.length === 1) throw failures[0]
           if (failures.length) throw new AggregateError(failures, 'Original producer cleanup failed')
+          if (!dispatched && (!outcome.occurred || failurePublished) && generation && execution && executionCurrent() && ev.seq !== undefined &&
+            closedInboxOrigins(entry, sessionId, [ev])?.get(ev.seq) === ev.messageId) {
+            await execution.finishClosedInbox(consumeTerminal)
+          }
         }
         catch (cleanup) {
           if (outcome.occurred) throw new AggregateError([outcome.value, cleanup], 'Original inbox body and generation cleanup failed', { cause: outcome.value })

@@ -223,6 +223,7 @@ it('owned runtime mutation stays fenced while a restored mirror is still pending
   )])
   expect(()=>mounted!.jobs.registerJob('root','subagent','too early')).toThrow('pending')
   const originalEntry=mounted.table.get('root/a')!
+  expect(originalEntry.mailbox).toEqual(['pending'])
   const catalogRole={name:'catalog-only',description:'retained during mirror restore',systemPrompt:'fixture role',tools:[]}
   mounted.roles.register(catalogRole)
   expect(mounted.roles.get('catalog-only')).toEqual(catalogRole)
@@ -240,7 +241,7 @@ it('owned runtime mutation stays fenced while a restored mirror is still pending
   expect(mounted.roles.get('catalog-only')).toEqual(catalogRole)
   expect(mounted.table.get('root/a')).toBe(originalEntry)
   expect(originalEntry.sessionId).toBe('child')
-  expect(originalEntry.mailbox).toEqual(['pending'])
+  expect(originalEntry.mailbox).toEqual(['pending','original pending'])
   expect(originalEntry.session.events.map(event=>event.type)).toEqual(['plan/mode','subagent/inbox'])
   expect(await readFile(join(f.root,'child.jsonl'))).toEqual(childBytes)
   expect(mounted.jobs.read('subagent-1')).toBeDefined()

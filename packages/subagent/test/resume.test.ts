@@ -19,7 +19,7 @@ import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts
 import { describe, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
-import { createSession, type SessionView } from "@i-harness/core-session"
+import { createManagedSessionState, createSession, type SessionView } from "@i-harness/core-session"
 import { appendStandalone as append } from './standalone-fixture.ts'
 import { createMockClient } from "@i-harness/llm-mock"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
@@ -31,6 +31,7 @@ import { createRoleRegistry, builtinRoles } from "../src/roles.ts"
 import { createAgentTable, type ChildAgentEntry } from "../src/agent-table.ts"
 import { createSubagentTools, driveFollowups, ensureResidentAgent, sweepPendingInbox, type SubagentToolDeps } from "../src/tools.ts"
 import { registerSubagent } from "../src/index.ts"
+import { pendingInboxEvents, pendingMailbox } from '../src/followup/mailbox.ts'
 import { classifyRestoredTasks, createTaskRegistry } from "../src/task-protocol.ts"
 import type { SubagentStateSnapshot } from "../src/persist.ts"
 
@@ -684,6 +685,29 @@ describe("resume_agent semantics preserved", () => {
 // agent teams: recoverRoot delivers queued team messages to entry.session,
 // which must be a live mirror by then.
 describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
+  it("uses the inherited prefix length and the saved event ordinal independently in older child views", () => {
+    const older: SessionView = { formatVersion: 2, header: { seedLength: 1 }, events: [
+      { type: 'subagent/inbox', seq: 4, messageId: 'seed', message: 'same' },
+      { type: 'subagent/inbox', seq: 10, messageId: 'first', message: 'same' },
+      { type: 'subagent/inbox', seq: 22, messageId: 'second', message: 'same' },
+    ] }
+    expect(pendingInboxEvents(older, -1).map(event => event.messageId)).toEqual(['first', 'second'])
+    expect(pendingInboxEvents(older, 10).map(event => event.messageId)).toEqual(['second'])
+    const saved = { ...restoredEntry('sparse', 'general'), session: older, lastInboxSeq: 10, mailbox: ['older evidence', 'same', 'same'] }
+    expect(pendingMailbox(saved)).toEqual(['older evidence', 'same'])
+  })
+
+  it("inspects earlier records when an owned legacy view has one matching cursor position", () => {
+    const child = createManagedSessionState({ formatVersion: 2, header: { seedLength: 1 }, events: [
+      { type: 'subagent/inbox', seq: 9, messageId: 'seed', message: 'inherited' },
+      { type: 'subagent/inbox', seq: 8, messageId: 'ahead', message: 'inbox eight' },
+      { type: 'subagent/inbox', seq: 2, messageId: 'cursor', message: 'consumed' },
+      { type: 'subagent/inbox', seq: 5, messageId: 'later', message: 'inbox five' },
+    ] }, { sessionId: 'older' })
+    child.bindOwner({})
+    expect(pendingInboxEvents(child.view, 2, 'older').map(event => event.messageId)).toEqual(['ahead', 'later'])
+  })
+
   function restoreFixture(): SubagentStateSnapshot {
     return {
       formatVersion: 1,
@@ -716,6 +740,7 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
     const coordinator = await mockCoordinator()
     await coordinator.create({ sessionId: 'child-abc', origin: 'subagent', parentSession: 'main', seedLength: 0 })
     const original = await coordinator.openManagedDocument('child-abc')
+    await original.delivery.record({ type: 'subagent/inbox', messageId: 'already-dispatched', message: 'old' })
     await original.inputs.start(undefined, { type: 'user/message', text: 'old' })
     await original.agent.lifecycle({ type: 'turn/end' })
     await original.close()
@@ -726,7 +751,9 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
       await releaseLoad.promise
       return actualOpen(id)
     })
-    const subagent = registerWith(coordinator, restoreFixture())
+    const saved = restoreFixture()
+    saved.agentTable[0]!.mailbox = ['old']
+    const subagent = registerWith(coordinator, saved)
     const originalSession = subagent.table.get('root/helper')!.session
     const changes: { status: string; session: unknown; closing?: boolean }[] = []
     subagent.table.subscribe(change => changes.push({ status: change.entry.status, session: change.entry.session, closing: change.entry.closing }))
@@ -743,6 +770,9 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
       expect(entry.status).toBe('waiting')
       expect(entry.session).toBe(document.view)
       expect(entry.factOwner).toBe(document)
+      expect(entry.mailbox).toEqual([])
+      await subagent.flushPersistence()
+      expect(await coordinator.getDocument('main')).toMatchObject({ agentTable: [{ lastInboxSeq: 0, mailbox: [] }] })
       expect(entry.session.events.some(event => event.type === 'user/message' && event.text === 'old')).toBe(true)
       expect(entry.session.header).toMatchObject({ origin: 'subagent', parentSession: 'main' })
       expect(changes).toEqual([{ status: 'waiting', session: entry.session, closing: undefined }])
@@ -759,7 +789,9 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
   }, 10_000)
   it("fails visible when a child log is unavailable after resume (G1a)", async () => {
     const coordinator = await mockCoordinator() // actual missing owned log rejects
-    const subagent = registerWith(coordinator, restoreFixture())
+    const saved = restoreFixture()
+    saved.agentTable[0]!.mailbox = ['still pending']
+    const subagent = registerWith(coordinator, saved)
     const changes: unknown[] = []
     subagent.table.subscribe(change => changes.push({ status: change.entry.status, error: change.entry.error }))
     await subagent.ready
@@ -767,6 +799,7 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
     // NOT a silent empty stub anymore: the entry fails visible so the caller
     // (wait_agent / list_agents) sees why the child is unusable.
     expect(entry.status).toBe("error")
+    expect(entry.mailbox).toEqual(['still pending'])
     expect(entry.error).toBe("child log unavailable after resume")
     expect(changes).toEqual([{ status: "error", error: "child log unavailable after resume" }])
   }, 10_000)
@@ -816,10 +849,14 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
     expect(entry.session.events.some((e) => e.type === "user/message")).toBe(false)
   }, 10_000)
 
-  it("sweepPendingInbox leaves waiting entries with no unconsumed inbox untouched", async () => {
+  it("sweepPendingInbox leaves a waiting child with only inherited inbox history untouched", async () => {
     const { deps, table, agents } = setup()
     const entry = restoredEntry("child-1", "general")
     entry.status = "waiting"
+    const child = createSession()
+    child.header = { seedLength: 1 }
+    append(child, { type: "subagent/inbox", messageId: "parent", message: "parent inbox history" })
+    entry.session = child
     table.add(entry.path, entry)
     await sweepPendingInbox(deps, table)
     expect(agents.get("child-1")).toBeUndefined() // nothing pending → no rebuild, no drive

@@ -472,6 +472,32 @@ it.each([
   } finally { await f.close() }
 })
 
+it("shows the saved followup error without borrowing the initial task's answer", async () => {
+  const f = await fixture(true)
+  try {
+    await f.coordinator.create({ sessionId: "reader", parentSession: "parent", origin: "subagent", seedLength: 0 })
+    const identity = { path: "root/reader", sessionId: "reader", jobId: "reader-job", taskId: "reader-task" }
+    await f.coordinator.putDocumentStrict!(taskDocKey("parent"), { formatVersion: 2, tasks: [{
+      id: identity.taskId, jobId: identity.jobId, agentPath: identity.path, childSessionId: identity.sessionId,
+      outcome: "completed", resultText: "initial answer",
+    }] })
+    const body = { error: "Followup failed before dispatch" }
+    const result = { version: 1, kind: "retained", revision: "failed-followup", envelope: {
+      version: 1, execution: { outcome: "failed", dispatch: "not-dispatched" }, preview: "", media: [],
+      retention: { kind: "inline", value: body, encodedBytes: Buffer.byteLength(JSON.stringify(body)) },
+    } }
+    await f.coordinator.putDocumentStrict!("parent", { formatVersion: 2, roles: [], jobs: [], agentTable: [{
+      ...identity, status: "recovery-required", error: body.error, result,
+    }] })
+    const catalog = createDesktopSubagents(f.coordinator, f.service)
+    const row = (await catalog.list("parent")).agents.find(agent => agent.sessionId === identity.sessionId)
+    expect(row).toMatchObject({ status: "unavailable", error: body.error, result: {
+      revision: result.revision, envelope: { execution: { outcome: "unknown", dispatch: "unknown" } },
+    } })
+    expect(row).not.toHaveProperty("finalText")
+  } finally { await f.close() }
+})
+
 it("honors the parent Plan Mode for followup/message while retaining interrupt/close controls", async () => {
   const f = await fixture()
   const tools = createToolRegistry(createContext()), session = createSession()

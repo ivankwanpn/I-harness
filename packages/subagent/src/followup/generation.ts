@@ -1,4 +1,5 @@
-import { isNondurableSession, type SessionEventView, type FactOwner, type ManagedAction, type ProducerFactOutcome } from '@i-harness/core-session'
+import { isManagedFactOwner, isNondurableSession, readGenerationActions, type SessionEventView, type FactOwner, type ManagedAction, type ProducerFactOutcome } from '@i-harness/core-session'
+import { readOwnedGenerationActions } from '@i-harness/core-session/internal/execution'
 import type { AgentInputOptions, AgentGenerationLifecycle } from '@i-harness/core-agent'
 import type { ChildAgentEntry } from '../agent-table.ts'
 import type { SubagentToolDeps } from '../tools/types.ts'
@@ -8,6 +9,24 @@ import { childFactOwner } from '../child/document.ts'
 import { residentOwnerFor, inOriginalInvocation, invokeOriginal, refusedReentry, type RetainedResidentResource, type OriginalFollowupPublication } from './resident-lifetime.ts'
 
 type Inbox = Extract<SessionEventView, { type: 'subagent/inbox' }>
+
+/** A closed main action has already settled this exact inbox origin. Its
+ * previous result must survive a lagging parent cursor or a second wakeup. */
+export function closedInboxOrigins(entry: ChildAgentEntry, sessionId: string, pending: readonly Inbox[]) {
+  const view = entry.session
+  if (!pending.length || pending[0] === view.events.at(-1) || entry.sessionId !== sessionId ||
+    !entry.factOwner || !isManagedFactOwner(view, entry.factOwner)) return
+  const scope = { ...view.header, sessionId }
+  const actions = readOwnedGenerationActions(view, scope) ?? readGenerationActions(view.events, scope, view.formatVersion)
+  const closed = new Map<number, string>()
+  for (const { opened, closed: disposition } of actions) {
+    const origin = opened.origin
+    if (disposition && opened.ownerSessionId === sessionId && opened.purpose === 'main' && origin.kind === 'delegated-input' && origin.ref === 'inbox') {
+      closed.set(origin.seq, origin.messageId)
+    }
+  }
+  return closed
+}
 export interface FollowupGenerationIntent {
   readonly start: { readonly wall: number; readonly monotonic: number }
   readonly timeoutMs?: number
@@ -162,6 +181,12 @@ class OriginalGeneration implements RetainedResidentResource {
       this.previousResult = undefined; this.previousSettlement = undefined
     }
   }
+  async finishClosedInbox(consume: () => void): Promise<void> {
+    if (!this.cleanupAcknowledged) await this.close()
+    await this.settleResults()
+    consume()
+    this.releaseIfClean()
+  }
   admitSource(current?: () => boolean): void { this.sourceAdmitted = true; this.sourceAdmissionCurrent = current }
   retainSource(source: import('../task/result.ts').TaskResultStore): void {
     if (this.originalResultSource) throw new TypeError('Original result source already acquired')
@@ -252,6 +277,14 @@ class OriginalGeneration implements RetainedResidentResource {
 }
 
 const intents = new WeakMap<FollowupGenerationIntent, OriginalGeneration>()
+export async function settleClosedInbox(deps: SubagentToolDeps, entry: ChildAgentEntry, input: Inbox, consume: () => void): Promise<void> {
+  const owner = residentOwnerFor(deps)
+  const original = owner.generations(entry).find((record): record is OriginalGeneration =>
+    record instanceof OriginalGeneration && record.matches(entry, input))
+  if (original) return original.finishClosedInbox(consume)
+  await owner.settleEntryResult(entry)
+  consume()
+}
 export function captureFollowupGenerationIntent(deps: SubagentToolDeps, entry: ChildAgentEntry, input: Inbox): FollowupGenerationIntent {
   const owner = residentOwnerFor(deps)
   for (const record of owner.generations(entry)) if (record instanceof OriginalGeneration && record.matches(entry, input)) return record.intent

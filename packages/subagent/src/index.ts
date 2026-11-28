@@ -72,9 +72,11 @@ import { createNotificationDrain, type ParentInputAdmission } from "./task-notif
 import type { ReportPolicy } from "./report-policy.ts"
 import { subagentFactOwner } from './facts.ts'
 import { residentOwnerFor, refusedReentry } from './followup/resident-lifetime.ts'
+import { pendingMailbox } from './followup/mailbox.ts'
 import type { ManagedDocument } from '@i-harness/session-persistence'
 import { captureOwnedTaskContext } from './task/owned-context.ts'
 import { isColdBoundChild } from './task/cold-bindings.ts'
+import { readColdTaskConversations } from './task/cold-conversation.ts'
 import { createTaskStartupFacade } from './task/startup-facade.ts'
 import {isManagedExecutionAttachment} from '../../session-persistence/src/execution-internal.ts'
 import {isManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
@@ -255,8 +257,12 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // The original runtime containers are staged without observers. The public
   // facades route mutations through the task owner before reaching a producer.
   const stagedRuntime = { jobs, table, roles }
-  function deriveCanonicalTaskMirrors():void{
+  async function deriveCanonicalTaskMirrors():Promise<void>{
     const known=canonicalTaskChildren(taskOwner)
+    const saved = managed && !opts.restoredState
+      ? await readColdTaskConversations(opts.persist!.coordinator, opts.persist!.stateId, known)
+      : undefined
+    taskOwner.assertReady()
     const persistedJobs=new Map(stagedRuntime.jobs.listAll().map(job=>[job.id,job]))
     const projectedJobs=new Set(persistedJobs.keys()),latest=new Map<string,Readonly<TaskRecord>>()
     for(const task of known){
@@ -268,21 +274,24 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
         status:task.outcome==='completed'?'completed':task.outcome==='cancelled'?'killed':'error',
         output:task.outcome==='completed'?task.resultText??'':task.error??task.resultText??'',taskId:task.id,
         ...(task.result?{result:task.result,publication:task.publication??'unqualified',savedObservation:{status:task.outcome==='completed'?'completed' as const:task.outcome==='cancelled'?'killed' as const:'error' as const,...(task.result.kind==='retained'?{execution:task.result.envelope.execution}:{})}}:{}),
+        ...saved?.get(task.id)?.job,
       })
       projectedJobs.add(task.jobId)
     }
     for(const task of latest.values()){
       if(stagedRuntime.table.get(task.agentPath))continue
       const cached=persistedJobs.get(task.jobId!)
+      const conversation = saved?.get(task.id)
       // An explicitly removed conversation remains removed. Its historical
       // Task/result is still queryable; absence of a redundant cache is not
       // the same as a recorded removal of this exact original child.
-      if(cached?.taskId===task.id&&cached.agentPath===task.agentPath&&cached.sessionId===task.childSessionId)continue
+      if(conversation?.removed || cached?.taskId===task.id&&cached.agentPath===task.agentPath&&cached.sessionId===task.childSessionId)continue
       stagedRuntime.table.add(task.agentPath,{
         path:task.agentPath,status:task.outcome==='completed'?'waiting':task.outcome==='cancelled'?'killed':'error',
         session:createSession(),controller:new AbortController(),mailbox:[],taskId:task.id,jobId:task.jobId,sessionId:task.childSessionId,roleName:task.agent,
         ...(task.resultText!==undefined?{finalText:task.resultText}:{}),...(task.error!==undefined?{error:task.error}:{}),
         ...(task.result?{result:task.result}:{}),...(task.modelLabel!==undefined?{modelLabel:task.modelLabel}:{}),
+        ...conversation?.agent,
       })
     }
   }
@@ -527,7 +536,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       taskOwner.assertReady()
       await taskOwner.qualifyRestoredResults()
       await classifyRestoredTasks(taskOwner, opts.persist!.coordinator)
-      deriveCanonicalTaskMirrors()
+      await deriveCanonicalTaskMirrors()
       const wired = wireSubagentPersistence(stagedRuntime, { ...opts.persist!, factOwner: opts.persist!.factOwner ?? opts.factOwner }, captureOriginalTaskAuxiliaryData(taskOwner))
       factPersistence = wired
       mountedRuntime = wired
@@ -732,9 +741,14 @@ async function restoreMirrorsAndSweep(deps: SubagentToolDeps, table: AgentTable,
         const inspected=await deps.childSessions.coordinator.inspectChildBootstrap(canonical.childBirth.request)
         if(inspected.kind!=='ready'||canonicalTaskChild(deps.tasks,entry.sessionId,entry.taskId)!==canonical)throw Error('Original completed Task child changed')
       }
-      table.update(entry.path, entry, { session: document.view, factOwner: document })
+      const mailbox = pendingMailbox(entry, document.view)
+      table.update(entry.path, entry, { session: document.view, factOwner: document, ...(mailbox !== entry.mailbox ? { mailbox } : {}) })
     } catch {
       // G1a fail-visible: no silent empty-stub downgrade.
+      // An unqualified followup already reports recovery-required. Keep the
+      // saved child observation, including its original failure if any.
+      if (canonical && entry.status === 'recovery-required' && entry.publication === 'unqualified' &&
+          entry.result && entry.result.revision !== canonical.result?.revision) continue
       table.update(entry.path, entry, { status: "error", error: "child log unavailable after resume" })
     }
   }

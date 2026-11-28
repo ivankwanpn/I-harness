@@ -2,6 +2,7 @@ import { diagnosticsFor } from "@i-harness/diagnostics"
 import type { AgentTable } from "../agent-table.ts"
 import type { SubagentToolDeps } from "../tools/types.ts"
 import { driveFollowups } from "./drive.ts"
+import { pendingInboxEvents } from './mailbox.ts'
 import { ensureResidentAgent, followupDepsWithRebuild } from "./resident.ts"
 import { isColdBoundChild } from '../task/cold-bindings.ts'
 
@@ -33,10 +34,7 @@ export async function sweepPendingInbox(deps: SubagentToolDeps, table: AgentTabl
   for (const entry of table.entries().values()) {
     if (entry.status !== "waiting" || !entry.sessionId) continue
     if (isColdBoundChild(deps.tasks, entry.sessionId, entry.taskId)) continue
-    const hasPending = entry.session.events.some(
-      (e) => e.type === "subagent/inbox" && (e.seq ?? 0) > (entry.lastInboxSeq ?? -1),
-    )
-    if (!hasPending) continue
+    if (!pendingInboxEvents(entry.session, entry.lastInboxSeq ?? -1, entry.sessionId).length) continue
     if (!deps.agents.get(entry.sessionId)) {
       const ok = await ensureResidentAgent(deps, entry)
       if (!ok) continue // rebuild failed → skip (conservative; wakeup paths may retry lazily)

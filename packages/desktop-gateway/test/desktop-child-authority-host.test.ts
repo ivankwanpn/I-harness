@@ -345,6 +345,28 @@ it.skipIf(process.platform !== "win32").each(["off", "only"] as const)("a real r
     const saved = await readFile(journalPath)
     expect(saved.subarray(0, original.length).equals(original)).toBe(true)
     expect(fromJSONL(saved.toString("utf8")).events.slice(durable.events.length)).toContainEqual(resumedGrep)
+
+    const savedRegistry = async () => JSON.parse(await readFile(join(sessions, sessionId + ".doc.jsonl"), "utf8"))
+    const previous = (await savedRegistry()).agentTable.find((entry: { sessionId: string }) => entry.sessionId === childSessionId)
+    expect(previous).toMatchObject({ finalText: resumedAnswer, lastInboxSeq: expect.any(Number), result: { kind: "retained" } })
+    rounds.push(async (response, request) => {
+      expect(request.body.model).toBe("fixture-parent")
+      await writeSplitSse(response, [text("Parent continued alone"), completes])
+    })
+    const nextHost = await openHost()
+    await submit(nextHost, sessionId, "Continue the parent conversation", "parent-only-after-resident")
+    const afterParentOnly = await nextHost("desktop/session/subagents/list", { sessionId }) as typeof catalog
+    expect(afterParentOnly.agents).toContainEqual(expect.objectContaining({
+      sessionId: childSessionId, finalText: resumedAnswer, result: expect.objectContaining({ revision: previous.result.revision }),
+    }))
+    await trace.run("host/close", () => host!.close())
+    host = undefined
+    const reopened = await savedRegistry()
+    expect(reopened.agentTable).toContainEqual(expect.objectContaining({
+      sessionId: childSessionId, lastInboxSeq: previous.lastInboxSeq, finalText: resumedAnswer, result: expect.objectContaining({ revision: previous.result.revision }),
+    }))
+    expect(reopened.jobs).toContainEqual(expect.objectContaining({ id: previous.jobId, output: resumedAnswer, result: expect.objectContaining({ revision: previous.result.revision }) }))
+    expect(await readFile(journalPath)).toEqual(saved)
   } finally {
     childStarted.resolve()
     try { await host?.close() } finally { await server.close(); await rm(root, { recursive: true, force: true }) }

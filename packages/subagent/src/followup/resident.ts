@@ -10,7 +10,7 @@ import type { FollowupDeps } from "./drive.ts"
 import { composeSubagentPrompt, declaredRoleModel, estimateChildOverhead, modelLabelOf, resolveRoleTools, subagentModelSelectionGated } from "../child.ts"
 import { childFactOwner } from '../child/document.ts'
 import { selectChildRoleTools } from '../child/role-tools.ts'
-import { captureFollowupGenerationIntent, openFollowupGeneration } from './generation.ts'
+import { captureFollowupGenerationIntent, openFollowupGeneration, settleClosedInbox } from './generation.ts'
 import { ResidentPreparation, residentOwnerFor, invokeOriginal } from './resident-lifetime.ts'
 
 // M23 (Minor 4): lazy resident rebuild, extracted verbatim from resume_agent's
@@ -218,6 +218,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
 export function followupDepsWithRebuild(deps: SubagentToolDeps): FollowupDeps {
   return { results: deps.results, agents: deps.agents, table: deps.table, jobs: deps.jobs, activation: deps.residentActivation,
     captureGeneration: (entry, input) => captureFollowupGenerationIntent(deps, entry, input),
+    settleClosedInbox: (entry, input, consume) => settleClosedInbox(deps, entry, input, consume),
     rebuild: (entry, controller, current) => ensureResidentAgent(deps, entry, controller, current),
     openGeneration: (entry, input, controller, intent, current) => openFollowupGeneration(deps, entry, input, controller, intent, current) }
 }

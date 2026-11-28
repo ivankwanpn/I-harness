@@ -517,6 +517,10 @@ describe("subagent control tools", () => {
     expect(spy).toHaveBeenCalledWith(expect.objectContaining({ type: "subagent/inbox", message: "ping" }))
     expect((spy.mock.calls[0]![0] as { messageId: string }).messageId).toBeTruthy()
     expect(table.get("root/helper")?.mailbox).toEqual(["ping"])
+    const entry = table.get("root/helper")!
+    entry.mailbox.shift()
+    await send.execute({ target: entry.path, message: "next" }, {})
+    expect(entry.mailbox).toEqual(["ping", "next"])
   })
 
   it("followup_task queues, marks delivered, and appends a durable subagent/inbox event", async () => {
@@ -551,9 +555,21 @@ describe("subagent control tools", () => {
   it("followup_task drives a turn on the child (appends inbox + wakes the driver)", async () => {
     const spy = vi.fn()
     const entrySession = createSession((ev) => { spy(ev) })
+    entrySession.header = { seedLength: 1 }
+    append(entrySession, { type: "subagent/inbox", messageId: "from-parent", message: "inherited history" })
     const { ctx, table, jobs, roles, parentReg, session, resolveModel, model, exec } = setup()
     const agents = createAgentRegistry()
-    const followup = vi.fn().mockResolvedValue({ finalText: "ok2", turns: 2, reasoning: [] })
+    const started = Promise.withResolvers<void>(), finish = Promise.withResolvers<void>()
+    const dispatches: { cursor?: number; status: string; mailbox: string[] }[] = []
+    const followup = vi.fn(async () => {
+      const child = table.get("root/helper")!
+      dispatches.push({ cursor: child.lastInboxSeq, status: child.status, mailbox: [...child.mailbox] })
+      if (dispatches.length === 1) {
+        started.resolve()
+        await finish.promise
+      }
+      return { finalText: "ok2", turns: 2, reasoning: [] }
+    })
     const fakeAgent: Agent = { run: vi.fn(), followup }
     agents.register("child-1", fakeAgent)
     const { id: jobId } = jobs.registerJob("root", "subagent", "helper")
@@ -572,7 +588,23 @@ describe("subagent control tools", () => {
     const out = await follow.execute({ target: "root/helper", message: "again" }, {})
     expect(out).toEqual({ delivered: true })
     expect(spy).toHaveBeenCalledWith(expect.objectContaining({ type: "subagent/inbox", message: "again" }))
+    const send = all.find(t => t.name === "send_message")!
+    try {
+      await started.promise
+      expect(entry.mailbox).toEqual([])
+      await Promise.all(["again", "again"].map(message => send.execute({ target: entry.path, message }, {})))
+      expect(entry.mailbox).toEqual(["again", "again"])
+    } finally { finish.resolve() }
     await entry.followupChain
+    expect(entry).toMatchObject({ lastInboxSeq: 1, status: "waiting", mailbox: ["again", "again"] })
+    await all.find(t => t.name === "resume_agent")!.execute({ target: entry.path }, {})
+    await entry.followupChain
+    expect(entry.mailbox).toEqual([])
+    expect(dispatches).toEqual([
+      { cursor: 1, status: "running", mailbox: [] },
+      { cursor: 2, status: "running", mailbox: ["again"] },
+      { cursor: 3, status: "running", mailbox: [] },
+    ])
     expect(followup).toHaveBeenCalledWith("again", expect.any(AbortSignal), { provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.followup" } })
     expect(entry.status).toBe("waiting")
     expect(entry.finalText).toBe("ok2")

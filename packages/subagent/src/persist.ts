@@ -112,7 +112,7 @@ export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; rol
     ...(e.error !== undefined ? { error: e.error } : {}),
     ...(e.retention !== undefined ? { retention: e.retention } : {}),
     ...(e.retentionError !== undefined ? { retentionError: e.retentionError } : {}),
-    mailbox: e.mailbox,
+    mailbox: [...e.mailbox],
     ...(e.jobId !== undefined ? { jobId: e.jobId } : {}),
     ...(e.sessionId !== undefined ? { sessionId: e.sessionId } : {}),
     ...(e.roleName !== undefined ? { roleName: e.roleName } : {}),

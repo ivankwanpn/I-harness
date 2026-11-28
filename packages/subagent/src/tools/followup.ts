@@ -5,7 +5,31 @@ import { committedFactSeqs } from "@i-harness/core-session"
 import { childFactOwner } from '../child/document.ts'
 import { declaredRoleModel, subagentModelSelectionDisabled, subagentModelSelectionGated } from "../child.ts"
 import { driveFollowups } from "../followup/drive.ts"
+import { pendingMailbox } from "../followup/mailbox.ts"
 import { ensureResidentAgent, followupDepsWithRebuild } from "../followup/resident.ts"
+
+async function queueInboxMessage(deps: SubagentToolDeps, target: string, message: string, signal: AbortSignal | undefined, wake: boolean): Promise<void> {
+  const entry = deps.table.get(target)
+  if (!entry) throw new Error(`unknown subagent: ${target}`)
+  const owner = await childFactOwner(entry, deps.childSessions?.coordinator)
+  const action = owner.beginAction(signal)
+  try {
+    committedFactSeqs(await action.facts.delivery.record({
+      type: "subagent/inbox", messageId: randomUUID(), message,
+      provenance: {
+        kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.followup",
+        ...(deps.childSessions?.parentSessionId ? { originSessionId: deps.childSessions.parentSessionId } : {}),
+      },
+    }))
+    if (entry.session !== owner.view || entry.factOwner !== owner || deps.table.get(target) !== entry) return
+    const mailbox = pendingMailbox(entry)
+    if (mailbox !== entry.mailbox) deps.table.update(target, entry, { mailbox })
+    if (wake) {
+      action.assertOpen()
+      if (entry.sessionId) void driveFollowups(followupDepsWithRebuild(deps), entry, entry.sessionId, signal).catch(() => {})
+    }
+  } finally { action.finish() }
+}
 
 export function createSendTool(deps: SubagentToolDeps): Tool {
   const sendTool: Tool<{ target: string; message: string }, { queued: boolean }> = {
@@ -14,13 +38,7 @@ export function createSendTool(deps: SubagentToolDeps): Tool {
     inputSchema: { type: "object", properties: { target: { type: "string" }, message: { type: "string" } }, required: ["target", "message"] },
     isReadOnly: false,
     execute: async (args, exec) => {
-      const entry = deps.table.get(args.target)
-      if (!entry) throw new Error(`unknown subagent: ${args.target}`)
-      const action = (await childFactOwner(entry, deps.childSessions?.coordinator)).beginAction(exec.abortSignal)
-      try {
-        committedFactSeqs(await action.facts.delivery.record({ type: "subagent/inbox", messageId: randomUUID(), message: args.message, provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.followup", ...(deps.childSessions?.parentSessionId ? { originSessionId: deps.childSessions.parentSessionId } : {}) } }))
-        entry.mailbox.push(args.message)
-      } finally { action.finish() }
+      await queueInboxMessage(deps, args.target, args.message, exec.abortSignal, false)
       return { queued: true }
     },
   }
@@ -34,18 +52,7 @@ export function createFollowupTool(deps: SubagentToolDeps): Tool {
     inputSchema: { type: "object", properties: { target: { type: "string" }, message: { type: "string" } }, required: ["target", "message"] },
     isReadOnly: false,
     execute: async (args, exec) => {
-      const entry = deps.table.get(args.target)
-      if (!entry) throw new Error(`unknown subagent: ${args.target}`)
-      const action = (await childFactOwner(entry, deps.childSessions?.coordinator)).beginAction(exec.abortSignal)
-      try {
-        committedFactSeqs(await action.facts.delivery.record({ type: "subagent/inbox", messageId: randomUUID(), message: args.message, provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.followup", ...(deps.childSessions?.parentSessionId ? { originSessionId: deps.childSessions.parentSessionId } : {}) } }))
-        entry.mailbox.push(args.message)
-      // M23 (Minor 4): inject the lazy rebuild so a wakeup for a restored
-      // (fresh-registry) entry rebuilds the resident agent instead of
-      // silently dropping the drive.
-        action.assertOpen()
-        if (entry.sessionId) void driveFollowups(followupDepsWithRebuild(deps), entry, entry.sessionId, exec.abortSignal).catch(() => {})
-      } finally { action.finish() }
+      await queueInboxMessage(deps, args.target, args.message, exec.abortSignal, true)
       return { delivered: true }
     },
   }

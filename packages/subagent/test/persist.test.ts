@@ -151,9 +151,11 @@ describe("subagent state snapshot", () => {
     const s = makeState()
     s.table.add("root/helper", {
       path: "root/helper", status: "waiting", session: (() => { const x = { formatVersion: 2, events: [] as never[] }; return x })(),
-      controller: new AbortController(), mailbox: [], sessionId: "child-abc", lastInboxSeq: 6,
+      controller: new AbortController(), mailbox: ["repeat", "repeat"], sessionId: "child-abc", lastInboxSeq: 6,
     })
     const snap = snapshotState(s)
+    s.table.get("root/helper")!.mailbox.shift()
+    expect(snap.agentTable[0]?.mailbox).toEqual(["repeat", "repeat"])
     expect(snap.agentTable[0]?.lastInboxSeq).toBe(6)
     const fresh = makeState()
     restoreState(fresh, snap)
