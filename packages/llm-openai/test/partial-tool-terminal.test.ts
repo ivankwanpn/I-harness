@@ -21,6 +21,20 @@ async function collect(frames: unknown[], subscription = false) {
 }
 afterEach(() => vi.unstubAllGlobals())
 
+it("keeps unissued tools out of the continuation when the final snapshot contains a refusal", async () => {
+  const reasoning = { type: "reasoning", id: "rs1", summary: [] }
+  const refusal = { type: "message", role: "assistant", content: [{ type: "refusal", refusal: "declined" }] }
+  const events = await collect([
+    { type: "response.output_item.done", output_index: 0, item: reasoning },
+    sent([reasoning, a, refusal]),
+  ])
+  expect(events.map(event => event.type)).toEqual(["usage", "end"])
+  const end = events.at(-1)
+  expect(end).toMatchObject({ type: "end", refused: true })
+  if (end?.type !== "end" || end.providerContinuation?.kind !== "openai-responses") throw new Error("Missing Responses continuation")
+  expect(end.providerContinuation.outputOrder).toEqual([{ kind: "reasoning", index: 0 }])
+})
+
 it.each(["missing", "incomplete-status", "bad-args", "wrong-id", "changed-completed", "no-snapshot", "sentinel"])("does not accept a partial sibling group on %s", async fault => {
   const terminal = fault === "sentinel" ? "[DONE]" : fault === "no-snapshot" ? sent() : sent(
     fault === "missing" ? [a] : fault === "changed-completed" ? [{ ...a, arguments: '{"path":"changed"}' }, b] :

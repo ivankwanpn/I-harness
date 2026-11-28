@@ -236,10 +236,11 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
       if (response?.status !== undefined && response.status !== "completed") toolError = "OpenAI response did not complete"
       if (response?.output !== undefined && !Array.isArray(response.output)) toolError = "OpenAI response has an invalid output snapshot"
       if (Array.isArray(response?.output)) {
+        if (response.output.some(item => item?.type === "message" && refusalParts(item.content))) refused = true
+        if (refused) return events
         const finalCalls = new Set<Call>(), recovered: LLMStreamEvent[] = []
         for (const [index, item] of response.output.entries()) {
           if (item === null || typeof item !== "object" || typeof item.type !== "string") { toolError = "OpenAI response has an invalid output item"; break }
-          if (item?.type === "message" && refusalParts(item.content)) refused = true
           if (item?.type !== "function_call") continue
           const call = track(item, index)
           if (!call) break
@@ -249,12 +250,12 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
           recovered.push(...completeCall(call, item.arguments === undefined ? call.finalArgs : item.arguments, "openai malformed function_call arguments"))
         }
         if (!toolError && finalCalls.size !== calls.size) toolError = "OpenAI response omitted an announced function_call"
-        if (recovered.length && !toolError && !refused) {
+        if (recovered.length && !toolError) {
           // Only calls are backfilled. Recovering one must not hide narration
           // or native reasoning present only in the final response.
           if (!observedSnapshotContent(response.output)) toolError = "OpenAI final function_call snapshot is missing streamed assistant content"
         }
-        if (!toolError && !refused) events.push(...recovered)
+        if (!toolError) events.push(...recovered)
       }
       return events
     }
