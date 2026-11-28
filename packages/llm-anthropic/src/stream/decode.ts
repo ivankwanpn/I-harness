@@ -1,4 +1,4 @@
-import { SSEParseError, parseSseFrames, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
+import { readSseBlocks, SSEParseError, parseSseFrames, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
 import type { createAnthropicFold } from "./fold.ts"
 
 export function parseSSE(text: string): Record<string, unknown>[] {
@@ -11,11 +11,9 @@ export function parseSSE(text: string): Record<string, unknown>[] {
     }
   })
 }
-/** Own byte decoding and the reader lock; EOF alone produces the clean end. */
+/** Release the transport as soon as the message's terminal event arrives. */
 export async function* decodeAnthropicStream(body: ReadableStream<Uint8Array>, fold: ReturnType<typeof createAnthropicFold>, request: Pick<LLMRequest, "signal">): AsyncIterable<LLMStreamEvent> {
   const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
   const emitEvents = function* (events: LLMStreamEvent[]): Generator<LLMStreamEvent, boolean, unknown> {
     for (const ev of events) {
       if (ev.type === "error") {
@@ -27,24 +25,11 @@ export async function* decodeAnthropicStream(body: ReadableStream<Uint8Array>, f
     return false
   }
   try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true }).replace(/\r\n?/g, "\n")
-      // split on SSE boundaries; each data: line is one event
-      const chunks = buffer.split("\n\n")
-      buffer = chunks.pop() ?? ""
-      for (const chunk of chunks) {
-        for (const event of parseSSE(chunk)) {
-          if (yield* emitEvents(fold.handleEvent(event))) return
-        }
-      }
-    }
-    // flush any residual partial chunk left in the buffer before `end`
-    if (buffer.trim() !== "") {
-      for (const event of parseSSE(buffer)) {
+    for await (const chunk of readSseBlocks(reader)) {
+      for (const event of parseSSE(chunk)) {
         if (yield* emitEvents(fold.handleEvent(event))) return
       }
+      if (fold.terminal) break
     }
   } catch (err) {
     // M72 Ⅰ: a corrupt chunk is a provider failure → the seam's error channel.
@@ -53,6 +38,7 @@ export async function* decodeAnthropicStream(body: ReadableStream<Uint8Array>, f
     yield { type: "error", error: err instanceof Error ? err : new Error(String(err)) }
     return
   } finally {
+    if (fold.terminal) void reader.cancel().catch(() => {})
     reader.releaseLock()
   }
   yield fold.finish()

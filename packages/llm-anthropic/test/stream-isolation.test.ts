@@ -8,6 +8,20 @@ const request: LLMRequest = { systemPrompt: "Help", messages: [], tools: [] }
 const bytes = (...events: unknown[]) => new TextEncoder().encode(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(""))
 const client = () => createAnthropicClient({ apiKey: "fixture", model: "fixture-model", providerId: "fixture-provider", promptCache: { mode: "automatic" } })
 
+it("completes at message_stop and releases a still-open response without waiting for its producer", async () => {
+  let cancelled = false
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(bytes({ type: "message_stop" })) },
+    cancel() { cancelled = true; return new Promise<void>(() => {}) },
+  })
+  vi.stubGlobal("fetch", async () => new Response(body))
+  const events: LLMStreamEvent[] = []
+  for await (const event of client().stream(request)) events.push(event)
+  expect(events).toEqual([{ type: "end" }])
+  expect(cancelled).toBe(true)
+  expect(body.locked).toBe(false)
+})
+
 // Moving any decoder or fold state to the client lifetime contaminates these
 // overlapping streams, which deliberately reuse the same block indices.
 it("isolates overlapping SSE buffers, thinking signatures, tools, usage and terminal flags", async () => {
@@ -81,16 +95,18 @@ it("releases the reader on early consumer return without cancelling the response
   expect(cancellations).toBe(0)
 })
 
-it("keeps message_stop nonterminal until EOF and releases the reader on a subsequent error", async () => {
+it.each([true, false])("respects the first terminal event and releases the reader (stop first: %s)", async stopFirst => {
+  const stop = { type: "message_stop" }
+  const failure = { type: "error", error: { type: "overloaded_error", message: "fixture failure" } }
   const stream = new ReadableStream<Uint8Array>({ start(controller) {
-    controller.enqueue(bytes({ type: "message_stop" }, { type: "error", error: { type: "overloaded_error", message: "fixture failure" } }, { type: "message_delta", usage: { output_tokens: 99 } }))
+    controller.enqueue(bytes(...(stopFirst ? [stop, failure] : [failure, stop]), { type: "message_delta", usage: { output_tokens: 99 } }))
     controller.close()
   } })
   vi.stubGlobal("fetch", async () => new Response(stream))
   const events: LLMStreamEvent[] = []
   for await (const event of client().stream(request)) events.push(event)
   expect(events).toHaveLength(1)
-  expect(events[0]).toMatchObject({ type: "error", error: { message: "overloaded_error: fixture failure", code: "overloaded_error" } })
+  expect(events[0]).toMatchObject(stopFirst ? { type: "end" } : { type: "error", error: { message: "overloaded_error: fixture failure", code: "overloaded_error" } })
   expect(stream.locked).toBe(false)
 })
 

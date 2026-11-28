@@ -34,7 +34,7 @@ it('project snapshot and diagnostics failures are passive and failed usage stays
 })
 it('original payload diagnostics distinguish consumer Stop from an adapter end without inventing measured counters',async()=>{
  const rows:PassiveProducerRecord[]=[],facts:Array<{status:string;firstTokenMs?:number}>=[];let requests=0
- vi.stubGlobal('fetch',async()=>{requests++;return new Response('data: {"choices":[{"delta":{"content":"partial"}}],"usage":{"completion_tokens":3}}\n\n',{headers:{'content-type':'text/event-stream'}})})
+ vi.stubGlobal('fetch',async()=>{requests++;return new Response('data: {"choices":[{"delta":{"content":"partial"}}],"usage":{"completion_tokens":3}}\n\ndata: [DONE]\n\n',{headers:{'content-type':'text/event-stream'}})})
  const capture=createUsageCapture({workspace:'w',observationMode:true,passiveObserver:{capture:r=>rows.push(r),unavailable(){}},async record(){throw Error('legacy')},onRequestFacts:r=>facts.push(r)})
  const client=capture.buildClient(((_p,model)=>createOpenAICompatibleClient({apiKey:'fixture',model:model!,baseUrl:'https://models.invalid'})) as typeof buildModelClient)({name:'p',displayName:'P',protocol:'openai-compatible'},'m')
  for await(const e of client.stream({systemPrompt:'',messages:[],tools:[]}))if(e.type==='usage')break

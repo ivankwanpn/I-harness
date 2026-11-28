@@ -406,9 +406,9 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     const events: string[] = []
     for await (const ev of client.stream({ messages: [], tools: [], systemPrompt: "" } as LLMRequest)) {
       if (ev.type === "end") events.push("end")
-      if (ev.type === "usage") events.push(`u:${ev.usage.inputTokens}/${ev.usage.outputTokens}`)
+      if (ev.type === "usage") { expect(ev.usage.inputTokens).toBeUndefined(); events.push(String(ev.usage.measurementValidity)) }
     }
-    expect(events).toEqual(["end"])
+    expect(events).toEqual(["invalid", "end"])
   })
 
   // Measured, not assumed: the installed @aws-sdk/client-bedrock-runtime's
@@ -441,6 +441,27 @@ describe("llm-bedrock protocol (Converse wire)", () => {
       if (event.type === "usage") usage.push(event.usage)
     }
     expect(usage).toEqual([{ inputTokens: 7, inputTokenSemantics: "excludes-cache", measurementValidity: "invalid" }])
+  })
+
+  it.each([
+    [{ cacheDetails: [{ ttl: "1h", inputTokens: 13 }, { ttl: "5m", inputTokens: 17 }] }, 30, false],
+    [{ cacheWriteInputTokens: 30, cacheDetails: [{ ttl: "1h", inputTokens: 13 }, { ttl: "5m", inputTokens: 17 }] }, 30, false],
+    [{ cacheDetails: [] }, 0, false],
+    [{ cacheWriteInputTokens: 3, cacheDetails: [{ ttl: "1h", inputTokens: 13 }] }, 3, true],
+    [{ cacheDetails: [{ ttl: "5m", inputTokens: -1 }] }, undefined, true],
+    [{ totalTokens: 6 }, undefined, true],
+  ] as const)("reconciles a final Bedrock cache-write breakdown and validates total's lower bound (%j)", async (fields, writes, invalid) => {
+    const { fake } = fakeRuntime([{ messageStop: { stopReason: 'end_turn' } }, { metadata: { usage: {
+      inputTokens: 20, outputTokens: 7, cacheReadInputTokens: 40, ...fields,
+    } } }])
+    const client = createBedrockClient({ model: "fixture" }, fake)
+    const events: LLMStreamEvent[] = []
+    for await (const e of client.stream({ messages: [{role:'user',content:'hi'}], tools: [], systemPrompt: '' })) events.push(e)
+    expect(events).toEqual([
+      { type: 'usage', usage: { inputTokens: 20, outputTokens: 7, inputTokenSemantics: 'excludes-cache', cacheReadTokens: 40,
+        ...(writes === undefined ? {} : { cacheCreationTokens: writes }), ...(invalid ? {measurementValidity:'invalid'} : {}) } },
+      { type: 'end' },
+    ])
   })
 })
 
@@ -768,12 +789,7 @@ describe("M72 Ⅱ: the truncation bit (bedrock)", () => {
   })
 })
 
-// M77. Converse's refusal literal is `guardrail_intervened`: a guardrail stopped
-// the exchange, which arrives as a normal HTTP 200 stream with the reason on
-// `messageStop` — the sibling of `max_tokens` in the SDK's own `StopReason`
-// enum. Sibling literals this unit does NOT recognise (measured in the installed
-// SDK types, recorded as residual rather than guessed): `content_filtered`,
-// `malformed_model_output`, `malformed_tool_use`, `model_context_window_exceeded`.
+// ConverseStream reports model endings in HTTP 200 responses.
 describe("M77: the refusal bit (bedrock)", () => {
   it("M77: messageStop stopReason guardrail_intervened reaches the seam as refused", async () => {
     const { fake } = fakeRuntime([
@@ -785,6 +801,21 @@ describe("M77: the refusal bit (bedrock)", () => {
     for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
     expect(events.at(-1)).toEqual({ type: "end", refused: true })
   })
+})
+
+it.each([
+  ["content_filtered", "refused"],
+  ["model_context_window_exceeded", "truncated"],
+  ["malformed_model_output", "error"],
+  ["malformed_tool_use", "error"],
+] as const)("preserves text and trailing usage when Bedrock stops with %s", async (reason, outcome) => {
+  const { fake } = fakeRuntime([{ contentBlockDelta: { contentBlockIndex: 0, delta: { text: "partial" } } },
+    { messageStop: { stopReason: reason } }, { metadata: { usage: { inputTokens: 10, outputTokens: 4, totalTokens: 14 } } }])
+  const events: LLMStreamEvent[] = []
+  for await (const e of createBedrockClient({model:"fixture"},fake).stream({messages:[{role:"user", content:"hi"}], tools:[],systemPrompt:""})) events.push(e)
+  expect(events.slice(0,-1)).toEqual([{ type:"text/chunk", text:"partial" }, { type:"usage", usage:{inputTokens:10,outputTokens:4,inputTokenSemantics:"excludes-cache"} }])
+  if (outcome === "error") expect(events.at(-1)).toMatchObject({type:"error",error:{message:`Bedrock stopped with ${reason}`}})
+  else expect(events.at(-1)).toEqual({type:"end",[outcome]:true})
 })
 
 it("reports safe milestones without changing Converse input or stream events", async () => {

@@ -1,15 +1,20 @@
 import type { LLMUsage } from "@i-harness/llm-seam"
 
-/**
- * M72 Ⅲ: the wire's usage snapshot, under the seam's names.
- *
- * The SDK's optional cache counts stay absent when omitted. A malformed
- * counter invalidates the measurement while preserving raw numbers.
- * `totalTokens` is the wire's own sum of the two counts, not a new measurement,
- * so it is not mapped (`LLMUsage` has no home for it). The two cache counts take
- * the names anthropic's cache read/creation counts take. The field list is
- * MEASURED from the installed SDK's `TokenUsage`, not assumed.
- */
+const count = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+
+/** Converse cacheDetails is the breakdown of cache writes by TTL.
+ * A valid list can supply an omitted aggregate; it is never added to it. */
+function cacheWrites(details: unknown): number | undefined {
+  if (!Array.isArray(details)) return
+  let sum = 0
+  for (const detail of details) {
+    if (!detail || (detail.ttl !== '5m' && detail.ttl !== '1h') || !count(detail.inputTokens)) return
+    sum += detail.inputTokens
+  }
+  return count(sum) ? sum : undefined
+}
+
+/** Map the SDK's final TokenUsage, preserving zero and missing counters. */
 export function mapUsage(raw: unknown): LLMUsage | undefined {
   if (raw === null || typeof raw !== "object") return undefined
   const src = raw as Record<string, unknown>
@@ -25,10 +30,18 @@ export function mapUsage(raw: unknown): LLMUsage | undefined {
   take("outputTokens", "outputTokens")
   take("cacheReadInputTokens", "cacheReadTokens")
   take("cacheWriteInputTokens", "cacheCreationTokens")
+  if (src.cacheDetails !== undefined) {
+    const sum = cacheWrites(src.cacheDetails)
+    if (sum === undefined || (src.cacheWriteInputTokens !== undefined && sum !== src.cacheWriteInputTokens)) invalid = true
+    else if (src.cacheWriteInputTokens === undefined) out.cacheCreationTokens = sum
+  }
+  // Uncached input plus generated output is a lower bound regardless of
+  // whether the reported total also includes cache tokens.
+  if (src.totalTokens !== undefined && (!count(src.totalTokens) ||
+    (out.inputTokens ?? 0) + (out.outputTokens ?? 0) > src.totalTokens)) invalid = true
   // Converse inputTokens excludes both cache reads and cache writes (AWS
   // prompt-caching guide); preserve raw counters and declare that accounting.
   if (out.inputTokens !== undefined && Number.isSafeInteger(out.inputTokens) && out.inputTokens >= 0) out.inputTokenSemantics = "excludes-cache"
-  if (Object.keys(out).length === 0) return undefined
   if (invalid) out.measurementValidity = "invalid"
-  return out
+  return Object.keys(out).length ? out : undefined
 }

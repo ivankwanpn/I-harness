@@ -3,6 +3,7 @@ import { type LLMRequest } from "@i-harness/llm-seam"
 import type { ConverseStreamCommandInput } from "@aws-sdk/client-bedrock-runtime"
 import type { BedrockConfig } from "./types.ts"
 import { translateReasoning } from "./request/reasoning.ts"
+import { bedrockThinkingBudget } from "./request/capabilities.ts"
 export function describeContext(body: ConverseStreamCommandInput, config: BedrockConfig) {
   const counter = new ProjectionCounter("projected-pricing-v2")
   counter.structured("system", body.system)
@@ -48,7 +49,7 @@ export function describeContext(body: ConverseStreamCommandInput, config: Bedroc
   const input = counter.finish({ protocol: "bedrock", providerId: config.providerId, modelId: config.model, expectedModelId: config.model }, { system: body.system, tools: body.toolConfig, messages: body.messages, other }, { system: body.system, tools: body.toolConfig, other })
   return { input, packet: { sizeKind: "sdk-command-estimate" as const, inlineBinaryBytes: counter.inlineBinaryBytes, cacheMetadataBytes: counter.cacheMetadataBytes, signatureBytes: counter.signatureBytes } }
 }
-export function outputFacts(body: ConverseStreamCommandInput, request: LLMRequest) {
+export function outputFacts(body: ConverseStreamCommandInput, request: LLMRequest, nativeEndpoint: boolean) {
   const additional = body.additionalModelRequestFields as Record<string, unknown> | undefined
   const thinking = additional?.thinking as {
     type?: string
@@ -56,7 +57,9 @@ export function outputFacts(body: ConverseStreamCommandInput, request: LLMReques
   } | undefined
   const budget = thinking?.type === "enabled" ? thinking.budget_tokens : undefined
   const managed = request.reasoningEffort !== undefined && request.reasoningEffort !== 'off'
-  return { capSupport: "supported" as const, configuredCap: request.maxOutputTokens, effectiveCap: body.inferenceConfig?.maxTokens, minimumCap: budget !== undefined && managed ? 1025 : 1, reasoningBudget: typeof budget === 'number' && Number.isSafeInteger(budget) && budget >= 0 ? budget : undefined, source: request.maxOutputTokens !== undefined ? "request" as const : budget !== undefined && managed ? "adapter-default" as const : "provider-default" as const }
+  const manual = bedrockThinkingBudget(body, nativeEndpoint)
+  const minimumCap = budget !== undefined && managed ? 1025 : manual?.kind === 'known' ? manual.minimumCap : 1
+  return { capSupport: "supported" as const, configuredCap: request.maxOutputTokens, effectiveCap: body.inferenceConfig?.maxTokens, minimumCap, reasoningBudget: typeof budget === 'number' && Number.isSafeInteger(budget) && budget >= 0 ? budget : undefined, source: request.maxOutputTokens !== undefined ? "request" as const : budget !== undefined && managed ? "adapter-default" as const : "provider-default" as const }
 }
 export function capBody(body: ConverseStreamCommandInput, cap: number | undefined, request: LLMRequest, config: BedrockConfig): ConverseStreamCommandInput {
   const additional = body.additionalModelRequestFields as Record<string, unknown> | undefined

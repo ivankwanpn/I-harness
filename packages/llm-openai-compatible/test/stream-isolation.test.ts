@@ -11,7 +11,7 @@ const collect = async (events: AsyncIterable<LLMStreamEvent>) => {
 }
 
 describe("Chat stream ownership", () => {
-  it("isolates overlapping streams with identical tool indexes and fragmented UTF-8", async () => {
+  it.each([true, false])("isolates overlapping streams with identical tool indexes and fragmented UTF-8 (tool completion=%s)", async confirmed => {
     const encoder = new TextEncoder()
     const controllers: ReadableStreamDefaultController<Uint8Array>[] = []
     const bodies: ReadableStream<Uint8Array>[] = []
@@ -38,7 +38,7 @@ describe("Chat stream ownership", () => {
       const controller = controllers[index]!
       controller.enqueue(encoder.encode(frame({ choices: [{ delta: {
         tool_calls: [{ index: 0, function: { arguments: `"${index}"}` } }],
-      }, finish_reason: index === 0 ? "length" : "content_filter" }] })))
+      }, finish_reason: confirmed ? "tool_calls" : index === 0 ? "length" : "content_filter" }] })))
       // Usage arrives without a trailing boundary, exercising the residual path.
       controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [], usage: {
         prompt_tokens: index + 10, completion_tokens: index + 1, prompt_cache_hit_tokens: index + 2,
@@ -49,10 +49,10 @@ describe("Chat stream ownership", () => {
     const results = await Promise.all([first, second])
     expect(results).toEqual([0, 1].map(index => [
       { type: "reasoning", text: index === 0 ? "甲" : "乙" },
-      { type: "tool_call", call: { id: "same-id", name: "read", args: { path: String(index) } } },
       { type: "usage", usage: { inputTokens: index + 10, outputTokens: index + 1,
         cacheReadTokens: index + 2, inputTokenSemantics: "includes-cache" } },
-      { type: "end", ...(index === 0 ? { truncated: true } : { refused: true }),
+      ...(confirmed ? [{ type: "tool_call", call: { id: "same-id", name: "read", args: { path: String(index) } } }] : []),
+      { type: "end", ...(confirmed ? {} : index === 0 ? { truncated: true } : { refused: true }),
         providerContinuation: { kind: "openai-compatible", model: "deepseek", providerId: "gateway",
           reasoningContent: index === 0 ? "甲" : "乙" } },
     ]))

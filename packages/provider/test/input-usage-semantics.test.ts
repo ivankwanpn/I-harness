@@ -24,6 +24,17 @@ async function reports(client: ModelClient): Promise<LLMUsage[]> {
 }
 
 describe.each(factories)("$name input accounting metadata", ({ semantics, input, output, frame, create }) => {
+  it("reads a multiline SSE usage record when a CRLF falls between two network reads", async () => {
+    const record = JSON.stringify(frame({ [input]: 14 }))
+    const chunks = ["data: {\r", "\ndata: " + record.slice(1) + "\r\n\r\n"]
+    vi.stubGlobal("fetch", async () => new Response(new ReadableStream({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk))
+        controller.close()
+      },
+    })))
+    expect(await reports(create({ model: "fixture-model", apiKey: "fixture-key" }))).toEqual([{ inputTokens: 14, inputTokenSemantics: semantics }])
+  })
   it.each([0, 17])("labels reported input %i without fabricating cache measurements", async (count) => {
     vi.stubGlobal("fetch", async () => new Response(`data: ${JSON.stringify(frame({ [input]: count }))}\n\n`))
     expect(await reports(create({ model: "fixture-model", apiKey: "fixture-key" }))).toEqual([{ inputTokens: count, inputTokenSemantics: semantics }])

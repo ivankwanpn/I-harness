@@ -10,6 +10,7 @@ import { createBedrockSdkTerminal } from './sdk-terminal.ts'
 
 export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRuntimeFace): ModelClient {
   const terminal = createBedrockSdkTerminal(config, runtime), runtimeRegion = terminal.region
+  const nativeEndpoint = runtime === undefined && config.runtimeOptions?.endpoint === undefined
   return preparedModelClient(async originalRequest => {
     assertNativeProducerWitnesses(originalRequest.messages, 'bedrock')
     const request = snapshotModelData(originalRequest)
@@ -30,8 +31,8 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
     return terminal.prepare({
       textOutput: observeTextOutput,
       body: body, request, kind: "sdk-command-estimate", describe: body => describeContext(body, capturedConfig),
-      validate: bedrockValidator(capturedConfig, runtime === undefined, messages),
-      output: (body, request) => outputFacts(body, request),
+      validate: bedrockValidator(capturedConfig, runtime === undefined, messages, nativeEndpoint),
+      output: (body, request) => outputFacts(body, request, nativeEndpoint),
       cap: (body, cap) => capBody(body, cap, request, capturedConfig),
     }, capturedConfig)
   })

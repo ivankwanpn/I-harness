@@ -98,7 +98,7 @@ describe("llm-openai-compatible protocol", () => {
     ])
   })
 
-  it("rejects an invalid suffix on completed Chat arguments without emitting a second call", async () => {
+  it("rejects an invalid suffix on valid-looking Chat arguments before publishing the call", async () => {
     const sse = [
       { choices: [{ delta: { tool_calls: [{ index: 0, id: "chat-a", function: { name: "read", arguments: '{"path":"a"}' } }] } }] },
       { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "{}" } }] } }] },
@@ -106,10 +106,8 @@ describe("llm-openai-compatible protocol", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200 })))
     const events: LLMStreamEvent[] = []
     for await (const event of createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" }).stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
-    expect(events.map((event) => event.type)).toEqual(["tool_call", "error"])
-    expect(events[0]).toEqual({ type: "tool_call", call: { id: "chat-a", name: "read", args: { path: "a" } } })
-    expect((events[1] as Extract<LLMStreamEvent, { type: "error" }>).error.message).toContain("malformed tool args")
-    expect((events[1] as Extract<LLMStreamEvent, { type: "error" }>).error.message).not.toContain('"path"')
+    expect(events).toMatchObject([{ type: "error", error: { code: "MALFORMED_RESPONSE" } }])
+    expect((events[0] as Extract<LLMStreamEvent, { type: "error" }>).error.message).not.toContain('"path"')
   })
 
   it("M72 Ⅰ: a blank system prompt sends NO system message (nothing to say)", async () => {
@@ -162,8 +160,8 @@ describe("llm-openai-compatible protocol", () => {
     }
     expect(events).toEqual([
       { type: "text/chunk", text: "hel" },
-      { type: "tool_call", name: "write", args: { path: "a.txt" } },
       { type: "text/chunk", text: "lo" },
+      { type: "tool_call", name: "write", args: { path: "a.txt" } },
       { type: "end" },
     ])
   })
@@ -594,7 +592,7 @@ describe("M72 Ⅲ: one frame handler for both loops (openai-compatible)", () => 
 
   it("M72 Ⅲ: a tool call that arrives ONLY in a boundary-less final frame is not dropped", async () => {
     // no trailing "\n\n": the main loop parses nothing, the flush handles it
-    const body = `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "read", arguments: '{"path":"a.txt"}' } }] } }] })}`
+    const body = `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "read", arguments: '{"path":"a.txt"}' } }] }, finish_reason: "tool_calls" }] })}`
     vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } })))
     const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
     const events: LLMStreamEvent[] = []
@@ -659,7 +657,7 @@ describe("M72 Ⅲ: usage is asked for (openai-compatible)", () => {
   })
 
   it("M72 Ⅲ: the trailing usage-only chunk reaches the seam", async () => {
-    const sse = `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 9, completion_tokens: 4, prompt_cache_hit_tokens: 7 } })}\n\n`
+    const sse = `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 9, completion_tokens: 4, prompt_cache_hit_tokens: 7 } })}\n\ndata: [DONE]\n\n`
     vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
     const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
     const events: LLMStreamEvent[] = []
@@ -674,7 +672,7 @@ describe("M72 Ⅲ: usage is asked for (openai-compatible)", () => {
   // its happy path; these are the three a regression has to break.
   it("M72 Ⅲ: a frame with no usage object at all emits no usage event", async () => {
     // The non-object guard: an ordinary content frame carries no `usage` key.
-    const sse = `data: ${JSON.stringify({ choices: [{ delta: { content: "hi" } }] })}\n\n`
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: { content: "hi" } }] })}\n\ndata: [DONE]\n\n`
     vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
     const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
     const events: LLMStreamEvent[] = []
@@ -689,7 +687,7 @@ describe("M72 Ⅲ: usage is asked for (openai-compatible)", () => {
   // `{ type: "usage", usage: {} }` — an event that reads as a measurement nobody
   // made, exactly what the seam's absent-is-not-zero contract forbids.
   it("M72 Ⅲ: a usage object with no recognisable number emits no usage event", async () => {
-    const sse = `data: ${JSON.stringify({ choices: [], usage: {} })}\n\n`
+    const sse = `data: ${JSON.stringify({ choices: [], usage: {} })}\n\ndata: [DONE]\n\n`
     vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
     const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
     const events: LLMStreamEvent[] = []
@@ -703,7 +701,7 @@ describe("M72 Ⅲ: usage is asked for (openai-compatible)", () => {
   // coercing it would write an unvalidated value straight into `LLMUsage` — the
   // "number nobody made" this milestone exists to forbid.
   it("M72 Ⅲ: a token count the wire sent as a string is not taken", async () => {
-    const sse = `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: "9" } })}\n\n`
+    const sse = `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: "9" } })}\n\ndata: [DONE]\n\n`
     vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
     const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
     const events: LLMStreamEvent[] = []
@@ -727,7 +725,7 @@ describe("M72 Ⅲ: reasoning_content becomes a reasoning event (openai-compatibl
 
   it("M72 Ⅲ: delta.reasoning_content becomes a reasoning event", async () => {
     const sse = `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "weighing options" } }] })}\n\n` +
-      `data: ${JSON.stringify({ choices: [{ delta: { content: "done" } }] })}\n\n`
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "done" }, finish_reason: "stop" }] })}\n\n`
     vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
     const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
     const events: LLMStreamEvent[] = []
@@ -737,7 +735,7 @@ describe("M72 Ⅲ: reasoning_content becomes a reasoning event (openai-compatibl
   })
 
   it("M72 Ⅲ: an empty reasoning_content emits nothing", async () => {
-    const sse = `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "" } }] })}\n\n`
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "" } }] })}\n\ndata: [DONE]\n\n`
     vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
     const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
     const events: LLMStreamEvent[] = []
@@ -763,7 +761,7 @@ describe("M72 Ⅲ: reasoning_content becomes a reasoning event (openai-compatibl
   // must precede the content push inside the choice loop; moving it after
   // flips this assertion.
   it("M72 Ⅲ: a frame carrying both thinks before it answers (reasoning precedes content)", async () => {
-    const sse = `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "weighing", content: "done" } }] })}\n\n`
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "weighing", content: "done" }, finish_reason: "stop" }] })}\n\n`
     vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
     const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
     const events: LLMStreamEvent[] = []

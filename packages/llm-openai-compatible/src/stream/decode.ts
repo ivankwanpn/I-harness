@@ -1,5 +1,7 @@
-import { SSEParseError, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
+import { readSseBlocks, SSEParseError, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
 import { emit, type createChatFold } from "./fold.ts"
+
+const doneFrame = Object.freeze({ type: "[DONE]" })
 
 export function parseSSE(text: string): Record<string, unknown>[] {
   return text.replace(/\r\n|\r/g, '\n')
@@ -10,7 +12,7 @@ export function parseSSE(text: string): Record<string, unknown>[] {
       const data = lines.filter(line => line === 'data' || line.startsWith('data:')).map(line => field(line, 'data')).join('\n')
       const eventName = lines.filter(line => line.startsWith('event:')).map(line => field(line, 'event')).at(-1)
       if (!data && eventName !== 'error') return []
-      if (data.trim() === "[DONE]" && eventName !== 'error') return [{ type: "[DONE]" }]
+      if (data.trim() === "[DONE]" && eventName !== 'error') return [doneFrame]
       try {
         const parsed: unknown = JSON.parse(data)
         // The named SSE error carrier can contain either an error envelope or
@@ -33,45 +35,21 @@ export function parseSSE(text: string): Record<string, unknown>[] {
 /** Own one response reader, UTF-8 decoder and residual frame buffer. */
 export async function* decodeChatStream(body: ReadableStream<Uint8Array>, fold: ReturnType<typeof createChatFold>, request: LLMRequest): AsyncIterable<LLMStreamEvent> {
   const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
-  let pendingCR = false
   let receivedDone = false
-  // CR itself ends a line immediately, even on a connection left open after
-  // an error. Suppress its optional LF on the next chunk instead of holding
-  // the CR (which would defer a valid CR-only boundary indefinitely).
-  const append = (text: string) => {
-    if (!text) return
-    if (pendingCR && text.startsWith('\n')) text = text.slice(1)
-    pendingCR = text.endsWith('\r')
-    buffer += text.replace(/\r\n|\r/g, '\n')
-  }
   const dispatch = function* (text: string): Generator<LLMStreamEvent, boolean, unknown> {
     for (const event of parseSSE(text)) {
-      const frame = fold.handleFrame(event)
-      if (frame.done) { receivedDone = true; return true }
-      if (yield* emit(frame.events)) return true
-      if (yield* fold.flushParsedToolCalls()) return true
+      if (event === doneFrame) { receivedDone = true; return true }
+      if (yield* emit(fold.handleFrame(event))) return true
     }
     return false
   }
   try {
-    while (true) {
-      const { done, value } = await reader.read()
-      append(done ? decoder.decode() : decoder.decode(value, { stream: true }))
-      const chunks = buffer.split("\n\n")
-      buffer = chunks.pop() ?? ""
-      for (const chunk of chunks) {
-        if (yield* dispatch(chunk)) {
-          if (receivedDone) break
-          return
-        }
+    for await (const chunk of readSseBlocks(reader)) {
+      if (yield* dispatch(chunk)) {
+        if (receivedDone) break
+        return
       }
-      if (receivedDone || done) break
     }
-    // flush residual buffer
-    if (!receivedDone && buffer.trim() !== '' && (yield* dispatch(buffer)) && !receivedDone) return
-    if (yield* fold.finishToolCalls()) return
   } catch (err) {
     // M72 Ⅰ: a corrupt chunk is a provider failure → the seam's error channel.
     // Abort is NOT: an aborted signal keeps today's behaviour (a throw).
@@ -84,5 +62,5 @@ export async function* decodeChatStream(body: ReadableStream<Uint8Array>, fold: 
     void reader.cancel().catch(() => {})
     reader.releaseLock()
   }
-  yield fold.finish()
+  yield* fold.finish(receivedDone)
 }

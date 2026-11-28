@@ -85,7 +85,7 @@ it.each(['before-done', 'after-done', 'after-eof', 'after-residual'] as const)('
     expect(f.effects()).toBe(0)
     const failedFacts = await f.facts()
     expect(failedFacts.filter(event => event.type === 'model/exchange-accepted' || event.type === 'tool/dispatch' || event.type === 'context/usage')).toEqual([])
-    expect(failedFacts.filter(event => event.type === 'tool/call')).toHaveLength(hasPartial ? 1 : 0)
+    expect(failedFacts.filter(event => event.type === 'tool/call')).toHaveLength(0)
     expect(failedFacts.filter(event => event.type === 'step/failed')).toHaveLength(1)
     expect(failedFacts.filter(event => event.type === 'context/attempt' && event.op === 'reserve').map(event => event.ordinal)).toEqual([1])
     expect(failedFacts.filter(event => event.type === 'context/attempt' && event.op === 'settle').map(event => event.disposition)).toEqual(['failed'])
@@ -126,6 +126,27 @@ it('retries a real pre-output failure under explicit discard and charges both se
       { inputTokens: 30, inputTokenSemantics: 'includes-cache', outputTokens: 4 },
     ])
     expect(facts.filter(event => event.type === 'context/usage' && event.version === 2 && event.op === 'sample')).toHaveLength(1)
+  } finally { await f.close() }
+})
+
+it.each([
+  ['unconfirmed EOF', '', 'TRANSPORT'],
+  ['truncated', 'length', 'MODEL_OUTPUT_TRUNCATED'],
+  ['refused', 'content_filter', 'MODEL_REFUSED'],
+])('localhost %s records no proposed or dispatched effect and allows a clean follow-up', async (_name, ending, code) => {
+  const unfinished = frame({ choices: [{ delta: { tool_calls: [{ index: 1, id: 'incomplete-call', function: { name: 'effect', arguments: '{' } }] } }] })
+  const wire = partial + (ending ? unfinished + frame({ choices: [{ delta: {}, finish_reason: ending }] }) : '')
+  const f = await fixture((response, ordinal) => response.end(ordinal === 1 ? wire : success))
+  try {
+    await expect(f.service.submit(f.id, 'bounded effect', new AbortController().signal)).rejects.toMatchObject({ code })
+    const facts = await f.facts()
+    expect(facts.filter(event => event.type === 'tool/call' || event.type === 'tool/dispatch' || event.type === 'model/exchange-accepted')).toEqual([])
+    expect(f.effects()).toBe(0)
+    expect(f.bodies).toHaveLength(1)
+    await f.service.submit(f.id, 'ordinary follow-up', new AbortController().signal)
+    expect(f.bodies).toHaveLength(2)
+    expect(f.bodies[1]).not.toContain('failed-call')
+    expect(f.bodies[1]).not.toContain('incomplete-call')
   } finally { await f.close() }
 })
 

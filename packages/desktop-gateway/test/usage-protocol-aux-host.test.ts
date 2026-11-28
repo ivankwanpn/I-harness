@@ -15,7 +15,7 @@ vi.mock('../../media/src/video-decoder.ts',async()=>{const {PNG}=await import('.
 const sse=(...events:object[])=>events.map(e=>'data: '+JSON.stringify(e)+'\n\n').join('')
 const chat=(text:string,usage:object={prompt_tokens:8,completion_tokens:3,prompt_tokens_details:{cached_tokens:0}})=>sse({choices:[{delta:{content:text}}],usage},{choices:[{delta:{},finish_reason:'stop'}]})+'data: [DONE]\n\n'
 const tool=(name:string,args:object)=>sse({choices:[{delta:{tool_calls:[{index:0,id:'original-tool',type:'function',function:{name,arguments:JSON.stringify(args)}}]},finish_reason:'tool_calls'}],usage:{prompt_tokens:8,completion_tokens:3,prompt_tokens_details:{cached_tokens:0}}})+'data: [DONE]\n\n'
-const modes=['includes-correction','excludes-correction','responses-price','responses-missing','responses-write','responses-invalid','terminal-error','empty-eof','title','summary','guardian','media'] as const
+const modes=['includes-correction','excludes-correction','excludes-ttl-missing','excludes-ttl-invalid','responses-price','responses-missing','responses-write','responses-invalid','terminal-error','empty-eof','title','summary','guardian','media'] as const
 const originalFetch=globalThis.fetch
 
 it.each(modes)('actual protocol/auxiliary host boundary: %s',async mode=>{
@@ -24,7 +24,7 @@ it.each(modes)('actual protocol/auxiliary host boundary: %s',async mode=>{
  const requests:Array<{model:string;url:string;kind:string}>=[],frames:RpcMessage[]=[],cleanup:unknown[]=[],warnings:unknown[]=[]
  const nativeFetch=originalFetch
  vi.spyOn(console,'warn').mockImplementation((...args)=>warnings.push(args))
- const protocol=mode==='excludes-correction'?'anthropic-messages':mode.startsWith('responses-')?'openai-responses':'openai-completions'
+ const protocol=mode.startsWith('excludes-')?'anthropic-messages':mode.startsWith('responses-')?'openai-responses':'openai-completions'
  const server=createServer(async(req,res)=>{
   let bytes='';for await(const part of req)bytes+=part;const body=JSON.parse(bytes),serialized=JSON.stringify(body)
   const kind=body.model==='reviewer-model'?'guardian':body.model==='audio-model'?'media':serialized.includes('You are now acting as a compaction engine')?'summary':mode==='title'&&requests.length===1?'title':'main'
@@ -37,6 +37,16 @@ it.each(modes)('actual protocol/auxiliary host boundary: %s',async mode=>{
   if(mode==='media'&&requests.length===1){res.end(tool('read_video',{path:'clip.mp4'}));return}
   if(mode==='includes-correction'){res.end(sse({choices:[{delta:{content:'Controlled answer'}}],usage:{prompt_tokens:10,prompt_tokens_details:{cached_tokens:2}}},{choices:[],usage:{completion_tokens:3}},{choices:[],usage:{prompt_tokens:8}},{choices:[{delta:{},finish_reason:'stop'}]})+'data: [DONE]\n\n');return}
   if(mode==='excludes-correction'){res.end(sse({type:'message_start',message:{id:'original-message',role:'assistant',usage:{input_tokens:10,cache_read_input_tokens:2,cache_creation_input_tokens:1}}},{type:'content_block_start',index:0,content_block:{type:'text',text:''}},{type:'content_block_delta',index:0,delta:{type:'text_delta',text:'Controlled answer'}},{type:'content_block_stop',index:0},{type:'message_delta',delta:{stop_reason:'end_turn'},usage:{output_tokens:3}},{type:'message_delta',delta:{stop_reason:'end_turn'},usage:{input_tokens:8}},{type:'message_stop'}));return}
+  if (mode === 'excludes-ttl-missing' || mode === 'excludes-ttl-invalid') {
+    res.end(sse(
+      {type:'message_start', message:{id:'original-message',role:'assistant',usage:{input_tokens:2048, cache_read_input_tokens:1800,
+        cache_creation_input_tokens: mode === 'excludes-ttl-missing' ? null : 10,
+        cache_creation:{ephemeral_5m_input_tokens:148,ephemeral_1h_input_tokens:100}}}},
+      {type:'content_block_start',index:0,content_block:{type:'text',text:''}},
+      {type:'content_block_delta',index:0,delta:{type:'text_delta',text:'Controlled answer'}},
+      {type:'content_block_stop',index:0}, {type:'message_delta',delta:{stop_reason:'end_turn'},usage:{output_tokens:503}}, {type:'message_stop'}))
+    return
+  }
   if(mode.startsWith('responses-')){const details=mode==='responses-missing'?{cached_tokens:0}:mode==='responses-write'?{cached_tokens:2,cache_write_tokens:1,cache_write_tokens_details:{ttl_30m_tokens:1,ttl_12h_tokens:0}}:mode==='responses-invalid'?{cached_tokens:7,cache_write_tokens:2}:{cached_tokens:0,cache_write_tokens:0};res.end(sse({type:'response.output_text.delta',delta:'Controlled answer'},{type:'response.completed',response:{usage:{input_tokens:8,output_tokens:3,input_tokens_details:details}}})+'data: [DONE]\n\n');return}
   if(mode==='terminal-error'){res.end(sse({choices:[{delta:{content:'Measured partial answer'}}],usage:{prompt_tokens:8,completion_tokens:3}},{error:{message:'Controlled terminal error'}}));return}
   if(mode==='empty-eof'){res.end();return}
@@ -58,7 +68,14 @@ it.each(modes)('actual protocol/auxiliary host boundary: %s',async mode=>{
   pendingPrompt=call('session/prompt',{sessionId,prompt:mode==='summary'?'Original summary evidence '.repeat(2000):'Perform the controlled original task.'})
   let promptTimer:ReturnType<typeof setTimeout>|undefined
   const prompt=Promise.race([pendingPrompt,new Promise<never>((_,reject)=>{promptTimer=setTimeout(()=>reject(Error('Controlled prompt did not settle')),20000)})])
-  try{if(mode==='terminal-error')await expect(prompt).rejects.toThrow('model stream error');else await prompt}finally{clearTimeout(promptTimer);promptElapsedMs=performance.now()-promptStarted}
+  try {
+    if (mode === 'empty-eof') {
+      await expect(prompt).rejects.toThrow('GENERATION_UNCERTAIN')
+      expect(frames.filter(frame => 'error' in frame).map(frame => JSON.stringify(frame))).not.toContainEqual(expect.stringContaining('"code":"TLS"'))
+    }
+    else if (mode === 'terminal-error') await expect(prompt).rejects.toThrow('model stream error')
+    else await prompt
+  } finally { clearTimeout(promptTimer); promptElapsedMs = performance.now() - promptStarted }
   if(mode==='summary'){await call('session/prompt',{sessionId,prompt:'Continue the original bounded task once.'});compactResult=await call('desktop/session/compact',{sessionId});expect(compactResult).toMatchObject({compacted:true})}
   const expected=mode==='title'?2:mode==='summary'||mode==='guardian'||mode==='media'?3:1
   const ready=()=>new Set(state.rows.filter(row=>row.observation.type==='action-close').map(row=>row.observation.type==='action-close'?row.observation.actionId:'')).size>=expected
@@ -70,6 +87,26 @@ it.each(modes)('actual protocol/auxiliary host boundary: %s',async mode=>{
   expect(sends.map(s=>s.modelId).sort()).toEqual(requests.map(r=>r.model).sort());expect(sends.every(s=>s.projectId==='project')).toBe(true)
   if(mode==='includes-correction')expect(sends[0]).toMatchObject({inputTokens:8,outputTokens:3,cacheReadTokens:2,totalTokens:11,estimatedCostUsd:null})
   if(mode==='excludes-correction')expect(sends[0]).toMatchObject({inputTokens:8,outputTokens:3,cacheReadTokens:2,cacheCreationTokens:1,totalTokens:14,estimatedCostUsd:.000018})
+  if (mode === 'excludes-ttl-missing' || mode === 'excludes-ttl-invalid') {
+    const capacity = await call('session/context',{sessionId})
+    if (mode === 'excludes-ttl-missing') {
+      expect(sends[0]).toMatchObject({inputTokens:2048,outputTokens:503,cacheReadTokens:1800,cacheCreationTokens:248,totalTokens:4599})
+      expect(capacity).toMatchObject({lastReportedInputTokens:4096,lastReportedUsage:{inputTokens:4096,outputTokens:503,cacheReadTokens:1800,cacheCreationTokens:248}})
+    } else {
+      expect(sends[0]).toMatchObject({totalTokens:null,estimatedCostUsd:null})
+      expect(capacity).not.toHaveProperty('lastReportedInputTokens')
+    }
+    const afterFirst = frames.length
+    pendingPrompt = call('session/prompt',{sessionId,prompt:'Continue once with the same model.'})
+    await pendingPrompt
+    const nextBudget = frames.slice(afterFirst).flatMap(frame => {
+      if (!('method' in frame) || frame.method !== 'session/event') return []
+      const event = (frame.params as {event?: {type:string;snapshot?: {purpose:string;freshness:string;estimate:{source?:string}}}}).event
+      return event?.type === 'context/budget' && event.snapshot?.purpose === 'main' && event.snapshot.freshness === 'current' ? [event.snapshot] : []
+    })[0]
+    expect(requests).toHaveLength(2)
+    expect(nextBudget?.estimate.source).toBe(mode === 'excludes-ttl-invalid' ? 'projected-heuristic' : 'provider-anchor-plus-projection')
+  }
   if(mode==='responses-price')expect(sends[0]).toMatchObject({totalTokens:11,estimatedCostUsd:.000014})
   if(mode==='responses-write')expect(sends[0]).toMatchObject({totalTokens:11,cacheReadTokens:2,cacheCreationTokens:1,estimatedCostUsd:.000015})
   if(mode==='responses-missing'){expect(sends[0]).toMatchObject({totalTokens:11,estimatedCostUsd:null});expect(sends[0]).not.toHaveProperty('cacheCreationTokens')}

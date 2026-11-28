@@ -32,7 +32,7 @@ afterEach(() => vi.unstubAllGlobals())
 
 describe("buildModelClient retry wiring", () => {
   it("wraps the client with retry when retryPolicy is set: a 500 then a 200 yields output", async () => {
-    const okBody = `data: {"choices":[{"delta":{"content":"hello"}}]}\n\n`
+    const okBody = `data: {"choices":[{"delta":{"content":"hello"},"finish_reason":"stop"}]}\n\n`
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response("not a 200", { status: 500 }))
       .mockResolvedValueOnce(new Response(okBody, { status: 200 }))

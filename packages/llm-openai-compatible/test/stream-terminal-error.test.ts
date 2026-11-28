@@ -6,6 +6,22 @@ const request: LLMRequest = { messages: [], tools: [], systemPrompt: '' }
 const error = { error: { message: 'Fixture temporary server error', type: 'server_error', code: 'server_error' } }
 const frame = (value: unknown, eol = '\n') => `data: ${JSON.stringify(value)}${eol}${eol}`
 const partial = frame({ choices: [{ delta: { content: 'partial', tool_calls: [{ index: 0, id: 'failed-call', function: { name: 'effect', arguments: '{}' } }] } }] })
+
+it('keeps one candidate and discards every tool and finish reason of the other alternatives', async () => {
+  const secondary = { index: 1, delta: { content: 'other answer', tool_calls: [{ index: 0, function: { name: 'other', arguments: '{}' } }] }, finish_reason: 'length' }
+  const wire = frame({ choices: [secondary] }) + frame({ choices: [secondary, { index: 0, delta: { content: 'chosen' }, finish_reason: 'stop' }] })
+  expect(await collect(client(wire).stream(request))).toEqual([{ type: 'text/chunk', text: 'chosen' }, { type: 'end' }])
+})
+it('preserves partial text and reports an unconfirmed EOF as a transport failure', async () => {
+  const events = await collect(client(frame({ choices: [{ delta: { content: 'partial' } }] })).stream(request))
+  expect(events.map(event => event.type)).toEqual(['text/chunk', 'error'])
+  expect(events.at(-1)).toMatchObject({ error: { code: 'TRANSPORT' } })
+})
+it('reports DeepSeek resource exhaustion with observed usage and no successful end', async () => {
+  const events = await collect(client(frame({ choices: [{ delta: {}, finish_reason: 'insufficient_system_resource' }], usage: { completion_tokens: 2 } })).stream(request))
+  expect(events.map(event => event.type)).toEqual(['usage', 'error'])
+  expect(events.at(-1)).toMatchObject({ error: { code: 'CAPACITY' } })
+})
 async function collect(stream: AsyncIterable<LLMStreamEvent>) { const events: LLMStreamEvent[] = []; for await (const event of stream) events.push(event); return events }
 function client(wire: string, chunks?: Uint8Array[], cancel?: () => void | Promise<void>) {
   return createOpenAICompatibleClient({ apiKey: 'fixture-only', model: 'fixture', fetch: async () => new Response(new ReadableStream<Uint8Array>({
@@ -17,7 +33,7 @@ function client(wire: string, chunks?: Uint8Array[], cancel?: () => void | Promi
 it.each(['done', 'eof', 'residual'] as const)('propagates a valid explicit error at %s, before flushing any remaining tools', async ending => {
   const wire = partial + frame(error).trimEnd() + (ending === 'residual' ? '' : '\n\n') + (ending === 'done' ? 'data: [DONE]\n\n' : '')
   const events = await collect(client(wire).stream(request))
-  expect(events.map(event => event.type)).toEqual(['text/chunk', 'tool_call', 'error'])
+  expect(events.map(event => event.type)).toEqual(['text/chunk', 'error'])
   expect(retryErrorCode((events.at(-1) as Extract<LLMStreamEvent, { type: 'error' }>).error)).toBe('SERVER')
 })
 
@@ -72,13 +88,85 @@ it('keeps null optional error, keepalives, metadata, ordinary stop, usage and sp
     + frame({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '}' } }] }, finish_reason: 'stop' }] })
     + frame({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 3 } }) + 'data: [DONE]\n\n'
   const events = await collect(client(wire).stream(request))
-  expect(events.map(event => event.type)).toEqual(['text/chunk', 'tool_call', 'usage', 'end'])
+  expect(events.map(event => event.type)).toEqual(['text/chunk', 'usage', 'tool_call', 'end'])
   expect(events.at(-1)).toEqual({ type: 'end' })
 })
 
 it.each(['length', 'content_filter'])('retains the existing %s ending', async finish_reason => {
   const events = await collect(client(frame({ choices: [{ delta: {}, finish_reason }] })).stream(request))
   expect(events).toEqual([{ type: 'end', ...(finish_reason === 'length' ? { truncated: true } : { refused: true }) }])
+})
+
+const toolDelta = (...tool_calls: unknown[]) => frame({ choices: [{ index: 0, delta: { tool_calls } }] })
+const tool = (index: number, id: string, args: string) => ({ index, id, function: { name: 'read', arguments: args } })
+const finish = (finish_reason: string) => frame({ choices: [{ index: 0, delta: {}, finish_reason }] })
+
+it.each(['length', 'content_filter', 'refusal'])('discards both complete and partial calls on %s', async ending => {
+  const calls = toolDelta(tool(0, 'first', '{}'), tool(1, 'second', '{"unfinished":'))
+  const refusal = frame({ choices: [{ delta: { refusal: 'refused' }, finish_reason: 'stop' }] })
+  const events = await collect(client(calls + (ending === 'refusal' ? refusal : finish(ending))).stream(request))
+  expect(events).toEqual([{ type: 'end', ...(ending === 'length' ? { truncated: true } : { refused: true }) }])
+})
+
+it.each(['', frame({ type: '[DONE]' }), frame({ choices: [{ index: 1, delta: {}, finish_reason: 'tool_calls' }] })])('requires a primary completion or a real DONE marker at EOF', async suffix => {
+  expect(await collect(client(toolDelta(tool(0, 'first', '{}')) + suffix).stream(request)))
+    .toMatchObject([{ type: 'error', error: { code: 'TRANSPORT' } }])
+})
+
+it.each([
+  ['invalid last argument', toolDelta(tool(1, 'second', '{'))],
+  ['missing name', toolDelta({ index: 1, id: 'second', function: { arguments: '{}' } })],
+  ['duplicate id', toolDelta(tool(1, 'first', '{}'))],
+  ['inconsistent id', toolDelta({ index: 0, id: 'changed' })],
+  ['inconsistent name', toolDelta({ index: 0, function: { name: 'changed' } })],
+  ['invalid index', toolDelta(tool(-1, 'second', '{}'))],
+  ['unknown finish reason', finish('unknown')],
+  ['call after primary finish', finish('stop') + toolDelta(tool(1, 'late', '{}'))],
+])('rejects the entire parallel batch with %s', async (_name, suffix) => {
+  const events = await collect(client(toolDelta(tool(0, 'first', '{}')) + suffix + 'data: [DONE]\n\n').stream(request))
+  expect(events).toMatchObject([{ type: 'error', error: { code: 'MALFORMED_RESPONSE' } }])
+})
+
+it('does not accept a tool_calls finish with no calls', async () => {
+  expect(await collect(client(finish('tool_calls')).stream(request)))
+    .toMatchObject([{ type: 'error', error: { code: 'MALFORMED_RESPONSE' } }])
+})
+
+it('reports argument progress before completion, then publishes in provider index order', async () => {
+  let controller!: ReadableStreamDefaultController<Uint8Array>
+  const adapter = createOpenAICompatibleClient({ apiKey: 'fixture-only', model: 'fixture', fetch: async () => new Response(
+    new ReadableStream<Uint8Array>({ start(value) { controller = value } })
+  ) })
+  const receivedText = Promise.withResolvers<void>()
+  const activity: string[] = []
+  const events: LLMStreamEvent[] = []
+  const run = (async () => {
+    const stream = adapter.stream({ ...request, onStreamActivity(kind) {
+      if (kind === 'response-start') {
+        const text = frame({ choices: [{ delta: { content: 'still streaming' } }] })
+        controller.enqueue(new TextEncoder().encode(toolDelta(tool(1, 'second', '{}'), tool(0, 'first', '{}')) + text))
+      } else if (kind === 'tool-arguments') {
+        activity.push(kind)
+      }
+    } })
+    for await (const event of stream) {
+      events.push(event)
+      if (event.type === 'text/chunk') receivedText.resolve()
+    }
+  })()
+  try {
+    await receivedText.promise
+    expect(events).toEqual([{ type: 'text/chunk', text: 'still streaming' }])
+    expect(activity).toEqual(['tool-arguments', 'tool-arguments'])
+    controller.enqueue(new TextEncoder().encode(finish('tool_calls')))
+  } finally { controller.close() }
+  await run
+  expect(events).toMatchObject([
+    { type: 'text/chunk', text: 'still streaming' },
+    { type: 'tool_call', call: { id: 'first' } },
+    { type: 'tool_call', call: { id: 'second' } },
+    { type: 'end' },
+  ])
 })
 
 it('reports observed usage, including error-frame usage, before failure and ignores same-frame choices', async () => {
@@ -113,7 +201,7 @@ it.each(['\n', '\r\n', '\r'])('cancels an open failed body ending in %j without 
 it('does not retry partial observed output without explicit discard permission', async () => {
   const retrying = createRetryingClient(client(partial + frame(error)), resolveRetryPolicy({ mode: 'normal', maxRetries: 1 }))
   const events = await collect(retrying.stream(request))
-  expect(events.map(event => event.type)).toEqual(['text/chunk', 'tool_call', 'error'])
+  expect(events.map(event => event.type)).toEqual(['text/chunk', 'error'])
 })
 
 it.each([{ code: 'server_is_overloaded', message: 'private' }, { message: 'The selected model is at capacity. private' }])('retains the existing ten-second capacity delay and supports Stop while waiting: %j', async diagnostic => {

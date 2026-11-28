@@ -3,6 +3,31 @@ import { createBedrockClient } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 import type { BedrockRuntimeFace } from "../src/index.ts"
 afterEach(() => vi.unstubAllGlobals())
+
+it("keeps an explicit native Claude thinking budget when the final wire cap is reduced", async () => {
+  const model = "anthropic.claude-3-7-sonnet-20250219-v1:0"
+  const config = { model, region: "us-east-1", options: { thinking: { type: "enabled", budget_tokens: 4096 } } }
+  const request: LLMRequest = { messages: [{ role: "user", content: "hello" }], tools: [], systemPrompt: "", maxOutputTokens: 8192 }
+  const client = createBedrockClient(config)
+  const prepared = await client.prepare!(request)
+  expect(prepared.measurement.output).toMatchObject({ minimumCap: 4097, reasoningBudget: 4096 })
+  expect(prepared.withOutputCap(4097).measurement.output.effectiveCap).toBe(4097)
+  expect(() => prepared.withOutputCap(4096)).toThrow(/output-limit/)
+  await expect(client.prepare!({ ...request, maxOutputTokens: 1024 })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+  const compatible = await createBedrockClient({ ...config, runtimeOptions: { endpoint: "https://bedrock.fixture.invalid" } }).prepare!(request)
+  expect(compatible.measurement.output.minimumCap).toBe(1)
+  expect(compatible.withOutputCap(1024).measurement.output.effectiveCap).toBe(1024)
+})
+
+it("accounts for Claude 4's interleaved-thinking exception only when tools and its beta are present", async () => {
+  const client = createBedrockClient({ model: "anthropic.claude-sonnet-4-5-20250929-v1:0", region: "us-east-1",
+    options: { thinking: { type: "enabled", budget_tokens: 4096 }, anthropic_beta: ["interleaved-thinking-2025-05-14"] } })
+  const request: LLMRequest = { messages: [{ role:"user",content:"hello" }], tools: [{ name: "read", description: "Read", inputSchema: { type: "object" } }],
+    systemPrompt: "", maxOutputTokens: 1024 }
+  const prepared = await client.prepare!(request)
+  expect(prepared.measurement.output).toMatchObject({ effectiveCap: 1024, minimumCap: 1, reasoningBudget: 4096 })
+  await expect(client.prepare!({ ...request, tools: [] })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+})
 it("remeasures managed thinking caps and restores the original SDK command identity", async () => {
   let sent: Record<string, any> = {}
   const runtime = { async send(command: { input: Record<string, unknown> }) { sent = command.input; return { stream: [] } }, destroy() {} } as unknown as BedrockRuntimeFace
