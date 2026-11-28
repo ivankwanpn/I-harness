@@ -23,7 +23,8 @@ import { createManagedSessionState, createSession, type SessionView } from "@i-h
 import { appendStandalone as append } from './standalone-fixture.ts'
 import { createMockClient } from "@i-harness/llm-mock"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
-import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
+import { createAgentRegistry, type Agent, type ModelContextBindingDescriptor } from "@i-harness/core-agent"
+import { spawnChild } from "../src/child.ts"
 import { registerExec } from "@i-harness/exec"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createJobRegistry } from "../src/jobs.ts"
@@ -73,6 +74,49 @@ function restoredEntry(sessionId: string, roleName: string | undefined): ChildAg
 }
 
 describe("ensureResidentAgent", () => {
+  it.each(["spawn", "restore"])("retains compaction policy across inherited capacity changes after %s", async mode => {
+    const { deps, table } = setup()
+    const model: ModelClient = { prepare: prepareTextFixture, async *stream(request) {
+      const summary = String(request.messages.at(-1)?.content).includes("You are now acting as a compaction engine")
+      yield { type: "text/chunk", text: summary ? checkpointOfLength(600) : "done" }
+      yield { type: "end" }
+    } }
+    const unbounded: ModelContextBindingDescriptor = { identity: model }
+    let binding = unbounded
+    const live = { ...deps, parentModel: model, inheritedBindingForStep: () => binding }
+    let agent: Agent | undefined, entry: ChildAgentEntry
+    if (mode === "restore") {
+      entry = restoredEntry("budget-child", "general")
+      table.add(entry.path, entry)
+      expect(await ensureResidentAgent(live, entry, new AbortController())).toBe(true)
+      agent = deps.agents.get(entry.sessionId!)
+    } else {
+      const child = await spawnChild({ ...live, parentPath: "root", taskName: "budget-child", message: "Start.",
+        role: deps.roles.get("general")!, retainPublication(phase) { if (phase.kind === "agent") agent = phase.value as Agent } })
+      entry = table.get(child.path)!
+      await entry.followupChain
+    }
+    try {
+      const addWork = () => {
+        for (let i = 0; i < 4; i++) {
+          append(entry.session, { type: "user/message", text: "original work ".repeat(400) })
+          append(entry.session, { type: "assistant/message", text: "done" })
+        }
+      }
+      addWork()
+      expect((await agent!.compact!()).compacted).toBe(false)
+      binding = { identity: model, budgetBinding: { version: 1,
+        metadata: { version: 1, modelId: "independent", protocol: "openai-compatible", identityCoverage: "partial" },
+        limits: { inputTokens: { value: 50000, origin: "configured-model-row", sourceId: "child-input" } },
+        generation: { origin: "unspecified" }, capability: { version: 1, route: "openai-compatible",
+          evidenceId: "fixture", outputParameter: "optional", packetKind: "http-json-body" },
+      } }
+      expect(await agent!.compact!()).toMatchObject({ compacted: true, publication: "nondurable" })
+      binding = unbounded
+      addWork()
+      expect((await agent!.compact!()).compacted).toBe(false)
+    } finally { await entry.dispose?.(); await deps.parentCtx.scope.unmount() }
+  }, 30000)
   it("restores native tools under the current role override and the child's own registry", async () => {
     const { deps, table } = setup(), entry = restoredEntry("native-resume", "general")
     const original = { name: "grep", description: "parent", inputSchema: {}, exposure: "deferred" as const, execute: async () => "parent" }

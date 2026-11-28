@@ -28,18 +28,24 @@ it("never persists a provider input measurement from an invalid accepted attempt
     })())
   } }
   const ownerSessionId = "owned"
-  const agent = createAgentWithSummary(ctx, { executionIdentity: () => fixtureExecutionIdentity, session, sessionId: ownerSessionId, model, tools, systemPrompt: "p", maxOutputTokens: 2048 })
+  const contextMetadata = { version: 1 as const, providerId: 'route', modelId: 'm', protocol: 'anthropic-messages', identityCoverage: 'complete' as const, bindingConfigFingerprint: 'c'.repeat(64) }
+  const agent = createAgentWithSummary(ctx, { executionIdentity: () => fixtureExecutionIdentity, session, sessionId: ownerSessionId, model, tools, systemPrompt: "p", maxOutputTokens: 2048, contextMetadata })
   const sampledInputs = () => session.events.flatMap(event => event.type === "context/usage" && event.version === 2 && event.op === "sample"
     ? [event.checkpoint.reportedInputTokens] : [])
   expect((await agent.run("First")).finalText).toBe("Done")
   expect(deriveLastProviderInput(session.events, ownerSessionId)?.tokens).toBe(41)
+  expect(agent.contextBudget!({ includeLastUsage: true })).toMatchObject({ lastReportedUsage: { inputTokens: 41, outputTokens: 3 } })
   expect((await agent.followup("Second")).finalText).toBe("Done")
   expect(session.events.filter(event => event.type === "model/exchange-accepted" && event.version === 2)).toHaveLength(2)
   expect(sampledInputs()).toEqual([41])
   expect(deriveLastProviderInput(session.events, ownerSessionId)).toBeUndefined()
+  expect(agent.contextBudget!({ includeLastUsage: true })).not.toHaveProperty('lastReportedUsage')
   expect((await agent.followup("Third")).finalText).toBe("Done")
   expect(sampledInputs()).toEqual([41, 43])
   expect(deriveLastProviderInput(session.events, ownerSessionId)?.tokens).toBe(43)
+  expect(agent.contextBudget!({ includeLastUsage: true })).toMatchObject({ lastReportedUsage: { inputTokens: 43 } })
+  agent.updateContext!({ contextMetadata: { ...contextMetadata, modelId: 'other' } })
+  expect(agent.contextBudget!({ includeLastUsage: true })).not.toHaveProperty('lastReportedUsage')
 })
 
 it('revises compatibility budget evidence in physical usage/recovery order after installation', () => {

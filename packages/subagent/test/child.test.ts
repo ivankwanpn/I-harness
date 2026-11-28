@@ -1,4 +1,5 @@
 import { fixtureGenerationFor, controlledModel } from './generation-fixture.ts'
+import { fixtureExecutionIdentity } from '../../core-agent/test/fixtures/execution.ts'
 import { prepareTextFixture, checkpointOfLength } from '../../compaction/test/fixtures/checkpoint.ts'
 import { createSummaryPort } from '../../compaction/src/index.ts'
 import { mkdtempSync } from 'node:fs'
@@ -988,6 +989,40 @@ function spawnFixture() {
 }
 
 describe("a role's model goes through the host's resolver (not a registry)", () => {
+  it('answers an allowed context query from the child request that called it', async () => {
+    const f = spawnFixture(), toolName = 'get_context_remaining'
+    const parentRead = vi.fn(async () => ({ parent: true }))
+    f.parentReg.register({ ...makeTool(toolName), execute: parentRead })
+    const requests: LLMRequest[] = []
+    const childModel = controlledModel(async function*(request) {
+      requests.push(request)
+      if (requests.length === 1) yield { type: 'tool_call', call: { id: 'own-budget', name: toolName, args: {} } }
+      else yield { type: 'text/chunk', text: 'child done' }
+      yield { type: 'usage', usage: { inputTokens: 213, outputTokens: 6 } }
+      yield { type: 'end' }
+    }, { providerId: 'child-route', modelId: 'child-model', executionIdentity: fixtureExecutionIdentity })
+    const contextMetadata = { version: 1 as const, providerId: 'child-route', modelId: 'child-model', protocol: 'openai-compatible',
+      contextWindow: 32_000, identityCoverage: 'complete' as const, bindingConfigFingerprint: 'd'.repeat(64) }
+    const { path } = await spawnChild({
+      ...f, taskName: 'context', message: 'Read your budget', parentPath: 'root', parentRegistry: f.parentReg,
+      role: { ...f.roles.get('general')!, tools: [toolName], model: { provider: 'child-route', model: 'child-model' } },
+      allowSubagentModelSelection: true, resolveModel: async () => ({ status: 'ready', binding: {
+        client: childModel, providerId: 'child-route', modelId: 'child-model', label: 'child',
+        contextWindow: 32_000, maxOutputTokens: 100, contextMetadata,
+      } }),
+    })
+    const entry = f.table.get(path)!
+    try {
+      await entry.followupChain
+      expect(requests).toHaveLength(2)
+      const result = requests[1]!.messages.find(message => message.role === 'tool')
+      expect(result).toBeDefined()
+      expect(JSON.parse(String(result!.content))).toMatchObject({ kind: 'unavailable', lastReportedUsage: { inputTokens: 213, outputTokens: 6 },
+        observation: { modelId: 'child-model', dimensions: expect.arrayContaining([expect.objectContaining({ dimension: 'context', limit: 32000 })]) } })
+      expect(parentRead).not.toHaveBeenCalled()
+    } finally { await entry.dispose?.() }
+  })
+
   it("calls the resolver with the ROLE's selection and uses its client", async () => {
     const f = spawnFixture()
     const roleClient = createMockClient([{ role: "assistant", text: "from the role's model" }])
@@ -1504,10 +1539,13 @@ describe("the child's request carries the resolved budget", () => {
     expect(requests.at(-1)!.systemPrompt).toContain('root/helper')
   }, 15_000)
 
-  // At 512 the required output floor leaves no input room. The original 3k
-  // window instead admits two legal dedicated summary attempts, whose malformed
-  // replies still cannot replace or drop the inherited history.
-  it.each([512, 3000])("a strict provider preserves the inherited history after bounded summary failure (window=%s)", async contextWindow => {
+  // At 3k the overfull source needs a smaller recorded page. At 4k a whole
+  // source fits. Both versions still need to preserve history on invalid output.
+  it.each([
+    { contextWindow: 512, expectedSummaries: 0 },
+    { contextWindow: 3_000, expectedSummaries: 2 },
+    { contextWindow: 4_000, expectedSummaries: 2 },
+  ])("a strict provider preserves the inherited history after bounded summary failure (window=$contextWindow)", async ({ contextWindow, expectedSummaries }) => {
     const f = spawnFixture()
     // A large inherited head still requires reduction; admission must not drop it.
     const HEAD = "INHERITED-HEAD-SENTINEL " + "big ".repeat(1500)
@@ -1521,7 +1559,10 @@ describe("the child's request carries the resolved budget", () => {
       append(f.parentSession, { type: "assistant/message", text: `a${i}` })
       append(f.parentSession, { type: "turn/end" })
     }
-    const client = windowEnforcedClient(createMockClient([{ role: "assistant", text: "child done" }]), contextWindow)
+    const client = windowEnforcedClient(createMockClient([
+      { role: "assistant", text: "Missing checkpoint sections." },
+      { role: "assistant", text: "Still missing checkpoint sections." },
+    ]), contextWindow)
     const { path, jobId } = await spawnChild({
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
@@ -1538,25 +1579,22 @@ describe("the child's request carries the resolved budget", () => {
 
     expect(f.jobs.read(jobId).status).toBe("error")
     expect(f.jobs.read(jobId).output).toMatch(/prompt_too_long/)
-    if (contextWindow === 512) expect(client.served).toHaveLength(0)
-    else {
-      // The original 3k window fits dedicated summary requests. Their malformed
-      // replies exhaust bounded attempts; a main request still cannot fit.
-      expect(client.served).toHaveLength(2)
-      for (const request of client.served) {
-        expect(request.systemPrompt).toBe('')
-        expect(request.tools).toEqual([])
-        const sourceText = request.messages.slice(0, -1).flatMap(message => typeof message.content === 'string'
-          ? [message.content] : message.content.filter(part => part.type === 'text').map(part => part.text)).join('\n')
-        expect(sourceText).toContain('INHERITED-HEAD-SENTINEL')
-        expect(String(request.messages.at(-1)?.content)).toContain('summar')
-        const input = estimateContent(request.messages) + estimateChildOverhead(request.systemPrompt, request.tools)
-        expect(input + (request.maxOutputTokens ?? 0)).toBeLessThanOrEqual(contextWindow)
-      }
+    expect(client.served).toHaveLength(expectedSummaries)
+    for (const request of client.served) {
+      expect(request.systemPrompt).toBe('')
+      expect(request.tools).toEqual([])
+      const sourceText = request.messages.slice(0, -1).flatMap(message => typeof message.content === 'string'
+        ? [message.content] : message.content.filter(part => part.type === 'text').map(part => part.text)).join('\n')
+      expect(sourceText).toContain('INHERITED-HEAD-SENTINEL')
+      expect(String(request.messages.at(-1)?.content)).toContain('summar')
+      if (contextWindow === 3_000) expect(request.messages.at(-1)?.content).toContain('recorded-pages-v1')
+      const input = estimateContent(request.messages) + estimateChildOverhead(request.systemPrompt, request.tools)
+      expect(input + (request.maxOutputTokens ?? 0)).toBeLessThanOrEqual(contextWindow)
     }
+    if (expectedSummaries > 0) expect(client.served[1]!.messages.at(-1)?.content).toContain('Previous output failed checkpoint validation')
     expect(client.rejected).toHaveLength(0)
     const childSession = f.table.get(path)!.session
-    expect(childSession.events.some(event => event.type === "compaction/reset")).toBe(false)
+    expect(childSession.events.some(event => event.type === "compaction/reset" || event.type === "compaction/replacement")).toBe(false)
     expect(deriveMessages(childSession).map(message => String(message.content)).join("\n")).toContain("INHERITED-HEAD-SENTINEL")
   }, 15_000)
 

@@ -1,4 +1,5 @@
 import type { RequestBudgetSnapshotV2 } from './admission.ts'
+import type { ProviderReportedUsage } from './attribution.ts'
 
 /** Owned scalar facts only. Protocol payloads and prefix unit vectors are ephemeral. */
 export interface ContextBindingMetadata {
@@ -28,7 +29,7 @@ export interface RequestBudgetSnapshot {
   requestContext?: { version: 1; semanticRevision: string; protectionRevision: string; branchId: string; contextEpoch: string; surfaceRevision: string }
   postResponseContextRevision?: string
 }
-export type BudgetRead = { kind: "ready"; snapshot: RequestBudgetSnapshot; observation?: RequestBudgetSnapshotV2 } | { kind: "unavailable"; reason: string }
+export type BudgetRead = { kind: "ready"; snapshot: RequestBudgetSnapshot; observation?: RequestBudgetSnapshotV2; lastReportedUsage?: Readonly<ProviderReportedUsage> } | { kind: "unavailable"; reason: string }
 export interface ContextRecoveryFacts {
   version: 1; ownerSessionId: string; recoveryId: string; logicalStepSeq: number
   bindingFingerprint: string; rejectedInputFingerprint: string

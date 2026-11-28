@@ -28,8 +28,7 @@ export { validateJsonSchemaValue, type JsonSchemaNode } from "./json-schema.ts"
 export { waitForObservation, userSteerForTool, backgroundEventForTool, type UserSteerSource } from "./observation.ts"
 export { retainedToolOutcome, hasRetainedToolBody, type RetainedToolOutcome, type RetainedOutcomeSink } from './registry/retained-outcome.ts'
 
-// M27-R-A8: get_context_remaining — registered only when a contextWindow is
-// known (fail-closed); see context-remaining.ts.
+// Model-facing input budget and previous accepted request usage.
 export { registerContextRemaining } from "./context-remaining.ts"
 export type { ContextRemainingOptions } from "./context-remaining.ts"
 

@@ -224,9 +224,8 @@ export interface SessionServiceOptions extends AssemblyOptions {
   sessionFor?: (sessionId: string) => Promise<Session | undefined>
   /** M31 T3: per-session context-window resolver — evaluated at EVERY assembly
    * build (meta-aware, so session.modelSelection drives the window). When
-   * defined it ALWAYS wins over the static AssemblyOptions.contextWindow
-   * (undefined → fail-closed, get_context_remaining not registered); absent →
-   * the static value (legacy path). */
+   * supplied, its result takes precedence over AssemblyOptions.contextWindow.
+   * Independent input limits come from the resolved model binding. */
   contextWindowFor?: (sessionId: string, meta: SessionMeta | undefined) => number | undefined
   /** M32 T3: per-session reasoning-effort resolver — evaluated at EVERY
    * assembly build (meta-aware: session.meta.modelSelection.reasoningEffort).
@@ -999,23 +998,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           const result = await bindingFor(sessionId)
           if (result.status !== "ready") throw new ModelUnavailableError(result.reason)
           const binding = result.binding
-          // The BINDING is authoritative here: `modelBindingFor` exists so that
-          // state and construction share one resolution, so its window decides
-          // and its ABSENCE disables compaction. A window the host put in the
-          // config must not override a binding that deliberately has none — the
-          // service test for this supplies `contextWindow: 1`, which would leave
-          // the engine permanently over threshold.
-          //
-          // What changed is the SILENCE, not the rule: this used to drop the
-          // request without a word. It now says so, because the caller asked for
-          // compaction and will otherwise assume it is running.
-          const compact = binding.contextWindow !== undefined ? opts.compact : undefined
-          if (opts.compact !== undefined && binding.contextWindow === undefined) {
-            d.warn(
-              "[i-harness] the resolved model binding carries no contextWindow, so auto-compaction is DISABLED for this session despite the requested config. " +
-                "The binding is authoritative — a window from the config is not used to override its absence.",
-            )
-          }
+          // Resolve the policy against this model's own window or input limit.
+          // A window configured for a previous model cannot authorize a rewrite.
+          const compact = opts.compact && { ...opts.compact, contextWindow: binding.contextWindow }
           sandboxAtBuild = currentSandbox
           assembly = await createSessionAssembly({
             prepareHumanInput: opts.transformPrompt ? text => opts.transformPrompt!(assembly, text) : undefined,
@@ -1317,7 +1302,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       if(opts.managedRuntime!.ownedCode&&!shellOutput){let acquiring=true;try{shellOutput=await opts.managedRuntime!.ownedCode.acquireOutput(sessionId,cleanup=>{if(!acquiring||retired)throw Error('Original output retention expired');assertWritableOpen(sessionId);if(typeof cleanup!=='function')throw TypeError('Original output cleanup required');mounted.add(cleanup)})}finally{acquiring=false}assertWritableOpen(sessionId)}
       const filesystemPolicy=shellExecution?originalFilesystemPolicyFor(shellExecution,entry.execution):undefined
       if(opts.managedRuntime!.requireFilesystemPolicy&&!filesystemPolicy)throw TypeError('Original filesystem policy required')
+      const requestedCompaction = opts.managedRuntime!.compact ?? opts.compact
       const common={...opts.managedRuntime!,
+        compact: opts.modelBindingFor && requestedCompaction ? { ...requestedCompaction, contextWindow: undefined } : requestedCompaction,
         ...(opts.managedRuntime!.ownedCode ? { modelToolSchemas: () => {
           if (!codeSchemas) throw new Error('Original Code model schemas unavailable')
           return codeSchemas()

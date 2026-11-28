@@ -9,6 +9,7 @@ import { createToolRegistry, registerContextRemaining } from "@i-harness/core-to
 import { createAgent, type ReasoningEffort } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SpawnOptions } from "./types.ts"
+import { inputCapacityCeiling } from "@i-harness/token-meter"
 import { composeSubagentPrompt, estimateChildOverhead } from "./prompt.ts"
 import { resolveRoleTools } from "./role-tools.ts"
 import type { createChildNativeToolMount } from "./native-tool-mount.ts"
@@ -140,7 +141,8 @@ export async function assembleChild(
     // still completes" (the indivisible fixture) and "an over-window child
     // region that CAN be split is summarised" (the divisible one) in
     // test/child.test.ts.
-    ...(contextWindow !== undefined
+    // A child following its parent can acquire or lose a limit at the next step.
+    ...(inheritedBindingForStep || inputCapacityCeiling(contextWindow, budgetBinding?.limits) !== undefined
       ? { compact: { contextWindow, ...(overheadTokens !== undefined ? { overheadTokens } : {}) } }
       : {}),
     // Retained results and prepared calls keep the child's durable identity.
@@ -148,7 +150,7 @@ export async function assembleChild(
   })
   if (childReg.get("get_context_remaining")) {
     childReg.unregister("get_context_remaining")
-    registerContextRemaining(childCtx, childReg, { contextWindow, budgetRead: () => agent.contextBudget!() })
+    registerContextRemaining(childCtx, childReg, { budgetRead: () => agent.contextBudget!({ includeLastUsage: true }) })
   }
   return { childReg, codeModeMount, controller, agent }
 }

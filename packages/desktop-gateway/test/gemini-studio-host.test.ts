@@ -8,9 +8,12 @@ import { expect, it } from "vitest"
 import { isRpcSuccess, type RpcMessage } from "@i-harness/sdk"
 import { createDesktopHost } from "../src/host.ts"
 
-it("uses models discovered via a Gemini API key for a real desktop conversation", async () => {
+it.each([undefined, 2048])("uses the independent Gemini input limit after a real desktop turn with requested output cap %s", async requestedCap => {
   const requests: { path: string; key?: string; bearer?: string }[] = []
   const sentCaps: (number | undefined)[] = []
+  const hasBudgetTool: boolean[] = []
+  const budgetReplies: unknown[] = []
+  const budgetTool = 'get_context_remaining'
   const server = createServer(async (req, res) => {
     requests.push({ path: req.url!, key: req.headers["x-goog-api-key"] as string | undefined, bearer: req.headers.authorization })
     if (req.url === "/v1beta/models") {
@@ -21,11 +24,22 @@ it("uses models discovered via a Gemini API key for a real desktop conversation"
     if (req.method === "POST" && req.url === "/v1beta/models/studio-flash:streamGenerateContent?alt=sse") {
       let payload = ""
       for await (const block of req) payload += block
-      const input = JSON.parse(payload) as { contents: { parts: { text?: string }[] }[]; generationConfig?: { maxOutputTokens?: number } }
+      const input = JSON.parse(payload) as {
+        tools?: { functionDeclarations?: { name: string }[] }[]
+        contents: { parts: { text?: string; functionResponse?: { name: string; response: unknown } }[] }[]
+        generationConfig?: { maxOutputTokens?: number }
+      }
+      const exposed = input.tools?.some(tool => tool.functionDeclarations?.some(declaration => declaration.name === budgetTool)) ?? false
+      hasBudgetTool.push(exposed)
+      const reply = input.contents.flatMap(row => row.parts).find(part => part.functionResponse?.name === budgetTool)?.functionResponse
+      if (reply) budgetReplies.push(reply.response)
       sentCaps.push(input.generationConfig?.maxOutputTokens)
       if (input.contents.some(row => row.parts.some(part => part.text === "Confirm the Gemini route."))) {
         res.writeHead(200, { "content-type": "text/event-stream" })
-        res.end("data: " + JSON.stringify({ candidates: [{ content: { role: "model", parts: [{ text: "Gemini route confirmed." }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 321, cachedContentTokenCount: 64, candidatesTokenCount: 8, totalTokenCount: 329 } }) + "\n\n")
+        const part = exposed && !reply && sentCaps.length === 1
+          ? { functionCall: { id: 'budget', name: budgetTool, args: {} } }
+          : { text: "Gemini route confirmed." }
+        res.end("data: " + JSON.stringify({ candidates: [{ content: { role: "model", parts: [part] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 321, cachedContentTokenCount: 64, candidatesTokenCount: 8, totalTokenCount: 329 } }) + "\n\n")
         return
       }
     }
@@ -61,6 +75,7 @@ it("uses models discovered via a Gemini API key for a real desktop conversation"
     expect(models).toEqual([{ id: "studio-flash", name: "Studio Flash", inputTokenLimit: 65536, outputTokenLimit: 8192, protocol: "gemini" }])
     const { id: model, ...fields } = models[0]!
     await call("desktop/provider/mutate", { action: "model/add", id, model, fields })
+    if (requestedCap !== undefined) await call("desktop/provider/mutate", { action: "model/edit", id, model, fields: { maxTokens: requestedCap } })
     await call("desktop/provider/mutate", { action: "default/set", id, model })
     await host.close()
     host = await open()
@@ -74,8 +89,20 @@ it("uses models discovered via a Gemini API key for a real desktop conversation"
     const { events } = await call<{ events: { type: string; text?: string }[] }>("session/history", { sessionId, afterSeq: 0, limit: 100 })
     expect(events).toContainEqual(expect.objectContaining({ type: "assistant/message", text: "Gemini route confirmed." }))
     expect(events).toContainEqual(expect.objectContaining({ type: "turn/end" }))
-    expect(sentCaps).toEqual([undefined])
-    const state = await call<{ observation: { dimensions: { dimension: string; limit?: number }[] } }>("session/context", { sessionId })
+    expect(hasBudgetTool).toEqual([true, true])
+    expect(budgetReplies).toMatchObject([{
+      kind: 'unavailable',
+      lastReportedInputTokens: 321,
+      lastReportedUsage: { inputTokens: 321, outputTokens: 8, cacheReadTokens: 64 },
+      observation: { freshness: 'awaiting-projection', pressure: { basis: 'input-only', inputBudget: 65536 } },
+    }])
+    expect(budgetReplies[0]).not.toHaveProperty('remaining')
+    expect(JSON.stringify(budgetReplies[0])).not.toMatch(/"ownerSessionId"|"requestContext"|Fingerprint|"selectedSemanticId"|"selectedPayloadId"|[a-f0-9]{64}/)
+    expect(sentCaps).toEqual([requestedCap, requestedCap])
+    const state = await call<{ lastReportedInputTokens?: number; observation: { pressure: unknown; dimensions: { dimension: string; limit?: number }[] } }>("session/context", { sessionId })
+    expect(state.lastReportedInputTokens).toBe(321)
+    expect(state.observation).toHaveProperty('requestContext')
+    expect(state.observation.pressure).toMatchObject({ kind: "known", basis: "input-only", inputBudget: 65536 })
     expect(state.observation.dimensions).toEqual(expect.arrayContaining([
       expect.objectContaining({ dimension: "input", limit: 65536 }),
       expect.objectContaining({ dimension: "output", limit: 8192 }),
@@ -83,6 +110,7 @@ it("uses models discovered via a Gemini API key for a real desktop conversation"
     expect(state.observation.dimensions.find(row => row.dimension === "context")?.limit).toBeUndefined()
     expect(requests).toEqual([
       { path: "/v1beta/models", key: "local-fixture-key", bearer: undefined },
+      { path: "/v1beta/models/studio-flash:streamGenerateContent?alt=sse", key: "local-fixture-key", bearer: undefined },
       { path: "/v1beta/models/studio-flash:streamGenerateContent?alt=sse", key: "local-fixture-key", bearer: undefined },
     ])
   } finally {

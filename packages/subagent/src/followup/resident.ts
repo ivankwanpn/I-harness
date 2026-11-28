@@ -1,3 +1,4 @@
+import { inputCapacityCeiling } from "@i-harness/token-meter"
 import { createToolRegistryWithModelOrigin } from '@i-harness/core-tools/model-origin'
 import { createAgentModelOriginOwner } from '@i-harness/core-agent/model-origin'
 import { isNondurableSession } from '@i-harness/core-session'
@@ -101,6 +102,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   })
   if (!binding) return false
   const { client: model, reasoningEffort, budgetBinding, contextMetadata, contextWindow, maxOutputTokens } = binding
+  const bindingForStep = declared === undefined ? deps.inheritedBindingForStep : undefined
   if (!executionCurrent() || !record.current()) {
     return false
   }
@@ -146,7 +148,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
     ...(entry.sessionId && deps.generationFactoryFor ? { generationFactory: deps.generationFactoryFor(factOwner, entry.sessionId, () => model) } : {}),
     modelActionTimeoutMs: deps.modelActionTimeoutMs, modelActionMaxAttempts: deps.modelActionMaxAttempts,
     summaryFactory: deps.summaryFactory,
-    ...(declared === undefined && deps.inheritedBindingForStep ? { bindingForStep: deps.inheritedBindingForStep } : {}),
+    ...(bindingForStep ? { bindingForStep } : {}),
     isSubagent: true,
     ...(childCoordinator && childSessionId ? { ensureWritableContext: ownedContextReadiness(childCoordinator, childSessionId, entry.session) } : {}),
     ...(deps.autoCompactionEnabled ? { autoCompactionEnabled: deps.autoCompactionEnabled } : {}),
@@ -171,7 +173,8 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
     // `createAgent`, and without this spread a child that was compacting before
     // the restart falls back to the fail-closed throw at the next pressure
     // boundary. Same two locals, nothing re-derived.
-    ...(contextWindow !== undefined
+    // A resident following its parent also needs the policy for future bindings.
+    ...(bindingForStep || inputCapacityCeiling(contextWindow, budgetBinding?.limits) !== undefined
       ? { compact: { contextWindow, ...(overheadTokens !== undefined ? { overheadTokens } : {}) } }
       : {}),
     // M19 (Ruling 24): attribute the resumed child's tool calls to its
@@ -180,7 +183,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   }))
   if (childReg.get("get_context_remaining")) {
     childReg.unregister("get_context_remaining")
-    registerContextRemaining(childCtx, childReg, { contextWindow, budgetRead: () => agent.contextBudget!() })
+    registerContextRemaining(childCtx, childReg, { budgetRead: () => agent.contextBudget!({ includeLastUsage: true }) })
   }
   if (!executionCurrent() || !record.current()) return false
   if (entry.sessionId) deps.agents.register(entry.sessionId, agent)

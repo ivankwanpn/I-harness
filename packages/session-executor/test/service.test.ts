@@ -438,7 +438,7 @@ describe("createSessionService", () => {
     }
   })
 
-  it("normalizes compaction to the ready binding contextWindow", async () => {
+  it.each(["shared", "input-only"] as const)("uses the ready binding's %s capacity for compaction", async capacity => {
     const session = createSession()
     append(session, { type: "user/message", text: "x".repeat(4000) })
     const requests: LLMRequest[] = []
@@ -461,7 +461,16 @@ describe("createSessionService", () => {
           providerId: "fixture",
           modelId: "large-window",
           label: "fixture:large-window",
-          contextWindow: 128_000,
+          ...(capacity === "shared" ? { contextWindow: 128_000 } : {
+            budgetBinding: {
+              version: 1,
+              metadata: { version: 1, providerId: "fixture", modelId: "large-window", protocol: "openai-compatible", identityCoverage: "partial" },
+              limits: { inputTokens: { value: 128_000, origin: "configured-model-row", sourceId: "fixture-input" } },
+              generation: { origin: "unspecified" },
+              capability: { version: 1, route: "openai-compatible", evidenceId: "fixture-route", outputParameter: "optional", packetKind: "http-json-body" },
+              capacityDomain: { kind: "unknown", reason: "coupling-unverified" },
+            } as const,
+          }),
         },
       }),
     })

@@ -59,7 +59,10 @@ export async function generateSelectedSummary(model: ModelClient, source: Summar
       if (sizing >= 2) throw new SummaryBlockedError('shrink-limit')
       const pressure = prepared.decision.pressure
       const ratios = prepared.decision.dimensions.filter(d => d.state === 'fail' && d.actual && d.limit).map(d => d.limit! / d.actual!)
-      if (pressure.kind === 'known') ratios.push(pressure.inputBudget / Math.max(1, pressure.input))
+      // A preferred output cap may temporarily consume the entire window. A
+      // smaller input lets admission choose a smaller legal cap on the next
+      // preparation. Use the other measured ratios or the bounded default.
+      if (pressure.kind === 'known' && pressure.inputBudget > 0) ratios.push(pressure.inputBudget / Math.max(1, pressure.input))
       // A measured correction is a proposal, never a fit proof. The next exact page is prepared again.
       const ratio = Math.min(.9, ...ratios) * .9
       const next = Math.floor(page.textBytes * ratio)

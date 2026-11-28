@@ -73,10 +73,11 @@ function useContextReading({ usage, modelState }: ContextViews) {
   const state = current?.state
   const error = current?.error
   const observation = state?.observation
-  const { estimate: preparedEstimate, legacyReady, historical: stale, modelChanged, modelWindow, inputBudget,
+  const { estimate: preparedEstimate, legacyReady, historical: stale, modelChanged, modelWindow, inputBudget, inputLimit, outputLimit, usesInputLimit,
     measured, tokens, denominator, percent, reading, warning } = contextOccupancy(state, modelState)
   const snapshot = state?.snapshot
-  const basis = modelWindow !== undefined ? t(measured !== undefined ? "上次實測輸入 / 模型上下文視窗" : "估算輸入 / 模型上下文視窗")
+  const basis = usesInputLimit ? t(measured !== undefined ? "上次實測輸入 / 模型輸入上限" : "估算輸入 / 模型輸入上限")
+    : modelWindow !== undefined ? t(measured !== undefined ? "上次實測輸入 / 模型上下文視窗" : "估算輸入 / 模型上下文視窗")
     : inputBudget !== undefined ? t(measured !== undefined ? "上次實測輸入 / 可用輸入預算" : "估算輸入 / 可用輸入預算") : undefined
   const sourceLabel = measured !== undefined ? t("上次請求輸入（供應商回報）") : stale ? t("上次請求估算") : t("本次請求估算")
   const binding = observation ?? snapshot
@@ -86,6 +87,7 @@ function useContextReading({ usage, modelState }: ContextViews) {
   const canRetry = error !== undefined || state?.kind === "unavailable" && !historicalReading
   const status = modelChanged ? t("模型設定已變更，等待下一次請求的容量估算。") : reason === "capacity-unknown" && modelWindow !== undefined && inputBudget === undefined
     ? t("可用輸入預算尚未確認。")
+    : reason === "capacity-unknown" && inputLimit !== undefined ? t("此請求仍有未確認的容量條件。")
     : historicalReading && reason === "Prepared admission is historical" ? undefined
     : reason && Object.hasOwn(unavailableMessages, reason) ? t(unavailableMessages[reason]) : reason
   const readingDetail = [percent === undefined ? undefined : basis, !modelChanged && stale ? sourceLabel : undefined, warning || modelChanged ? status : undefined].filter(Boolean).join(" · ")
@@ -96,7 +98,7 @@ function useContextReading({ usage, modelState }: ContextViews) {
   const capacity = tokens === undefined ? undefined : denominator === undefined
     ? t("{count} Token", { count: number(tokens) }) : `${number(tokens)} / ${number(denominator)} (${reading})`
 
-  return { state, error, observation, snapshot, preparedEstimate, legacyReady, modelChanged, modelWindow, inputBudget,
+  return { state, error, observation, snapshot, preparedEstimate, legacyReady, modelChanged, modelWindow, inputBudget, inputLimit, outputLimit,
     measured, tokens, denominator, percent, reading, warning, basis, sourceLabel, model, canRetry, status, readingDetail,
     systemTokens, toolTokens, messageTokens, breakdownTotal, capacity }
 }
@@ -132,6 +134,7 @@ function ContextFacts({ view, usage }: { view: Reading; usage: ContextViews["usa
       <div className="context-usage-fact"><dt>{t(modelChanged ? "上次請求的模型" : "模型")}</dt><dd>{model}</dd></div>
       {(measured !== undefined || modelChanged) && preparedEstimate ? <div className="context-usage-fact"><dt>{t("上次估算輸入")}</dt><dd>~{number(preparedEstimate.value)}</dd></div> : null}
       {modelWindow !== undefined && tokens === undefined ? <div className="context-usage-fact"><dt>{t("模型上下文視窗")}</dt><dd>{t("{count} Token", { count: number(modelWindow) })}</dd></div> : null}
+      {!modelChanged && view.inputLimit !== undefined && tokens === undefined ? <div className="context-usage-fact"><dt>{t("模型輸入上限")}</dt><dd>{t("{count} Token", { count: number(view.inputLimit) })}</dd></div> : null}
       {!modelChanged && measured === undefined && state?.lastReportedInputTokens !== undefined ? <div className="context-usage-fact"><dt>{t("上次請求輸入（供應商回報）")}</dt><dd>{t("{count} Token", { count: number(state.lastReportedInputTokens) })}</dd></div> : null}
     </dl> : null}
     <ContextNotice view={view} usage={usage} />
@@ -220,7 +223,8 @@ function SessionContextDetails(props: SessionDetailsProps) {
       {provider ? <Stat label={t("供應商")}>{provider}</Stat> : null}
       {model ? <Stat label={t("模型")}>{model}</Stat> : null}
       {view.modelWindow !== undefined && !view.modelChanged ? <Stat label={t("模型上下文視窗")}>{number(view.modelWindow)}</Stat> : null}
-      {view.inputBudget !== undefined && view.inputBudget !== view.modelWindow && !view.modelChanged ? <Stat label={t("可用輸入預算")}>{number(view.inputBudget)}</Stat> : null}
+      {view.inputLimit !== undefined && !view.modelChanged ? <Stat label={t("模型輸入上限")}>{number(view.inputLimit)}</Stat> : null}
+      {view.inputBudget !== undefined && view.inputBudget !== view.modelWindow && view.inputBudget !== view.inputLimit && !view.modelChanged ? <Stat label={t("可用輸入預算")}>{number(view.inputBudget)}</Stat> : null}
       {view.tokens !== undefined ? <Stat label={view.sourceLabel}>{number(view.tokens)}</Stat> : null}
       <Stat label={t("上下文用量")} note={view.percent === undefined ? undefined : view.basis}>{view.reading}</Stat>
       {view.measured !== undefined && view.preparedEstimate ? <Stat label={t("上次估算輸入")}>~{number(view.preparedEstimate.value)}</Stat> : null}
@@ -236,7 +240,8 @@ function SessionContextDetails(props: SessionDetailsProps) {
     {view.observation && !view.modelChanged ? <section className="session-context-section" aria-label={t("請求限制")}>
       <h2>{t("請求限制")}</h2>
       <dl className="context-usage-fact-group">
-        <Stat label={t("輸出上限")}>{outputCapText(t, view.observation.output.capSupport, view.observation.output.effectiveCap)}</Stat>
+        {view.outputLimit !== undefined ? <Stat label={t("模型輸出上限")}>{number(view.outputLimit)}</Stat> : null}
+        <Stat label={t("請求輸出上限")}>{outputCapText(t, view.observation.output.capSupport, view.observation.output.effectiveCap)}</Stat>
         {view.observation.output.allowance !== undefined ? <Stat label={t("輸出預留")}>{number(view.observation.output.allowance)}</Stat> : null}
       </dl>
     </section> : null}

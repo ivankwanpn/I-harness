@@ -140,7 +140,7 @@ export function createAgent(ctx: PluginContext, host: AgentDeps & AgentConfig): 
   const startTurn: typeof runTurn = (...args) => withFactAction(args[1], signal => { args[1] = signal; return runTurn(...args) })
   return {
     runAdmitted: (task, signal, images, inputId, options) => track(() => startTurn(task, signal, images, inputId, options, 'agent.run')),
-    contextBudget: () => context.readBudget(),
+    contextBudget: options => context.readBudget(options?.includeLastUsage),
     updateContext(config) {
       if (activeOperations > 0) throw new Error("agent is busy")
       context.update(config)

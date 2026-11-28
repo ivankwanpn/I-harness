@@ -19,6 +19,8 @@ export interface DirectoryRow extends EditableProvider {
   videoAudioModel?: string
 }
 interface ProviderCardProps { row: DirectoryRow; onSave(command: ProviderCommand): Promise<void>; bridge?: DesktopBridge; workspaceId?: string; active?: boolean }
+const fullCount = new Intl.NumberFormat("en-US").format
+const compactCount = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format
 export function ProviderCard(props: ProviderCardProps) {
   return <SettingsDraftScope owner={props.bridge ?? props.onSave}><ProviderCardContent key={JSON.stringify([props.workspaceId, props.row.id])} {...props} /></SettingsDraftScope>
 }
@@ -83,7 +85,10 @@ function ProviderCardContent({ row, onSave, bridge, workspaceId, active = true }
         <div className="provider-model-name"><strong>{model.name || model.id}</strong>{model.name && model.name !== model.id ? <small>{model.id}</small> : null}</div>
         {fixedProtocol || model.protocol || row.protocol ? <span className="provider-model-protocol" title={t("通訊協定")}>{fixedProtocol || model.protocol || row.protocol}</span> : null}
         {model.inputModalities?.includes("image") ? <span className="provider-model-vision" title={t("輸入類型")}>{t("圖片")}</span> : null}
-        <span className="provider-model-context" title={`${t("上下文大小")}：${model.contextWindow === undefined ? t("未指定") : new Intl.NumberFormat("en-US").format(model.contextWindow)}`}>{model.contextWindow === undefined ? t("未指定") : new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(model.contextWindow)}</span>
+        {model.contextWindow !== undefined ? <span className="provider-model-context" title={`${t("上下文大小")}：${fullCount(model.contextWindow)}`}>{compactCount(model.contextWindow)}</span> : null}
+        {model.inputTokenLimit !== undefined ? <span className="provider-model-context" title={`${t("模型輸入上限")}：${fullCount(model.inputTokenLimit)}`}>{t("輸入 {count}", { count: compactCount(model.inputTokenLimit) })}</span> : null}
+        {model.outputTokenLimit !== undefined ? <span className="provider-model-context" title={`${t("模型輸出上限")}：${fullCount(model.outputTokenLimit)}`}>{t("輸出 {count}", { count: compactCount(model.outputTokenLimit) })}</span> : null}
+        {model.contextWindow === undefined && model.inputTokenLimit === undefined && model.outputTokenLimit === undefined ? <span className="provider-model-context" title={`${t("上下文大小")}：${t("未指定")}`}>{t("未指定")}</span> : null}
         <div className="provider-model-actions"><button title={t("編輯模型")} aria-label={t("編輯模型")} disabled={busy} onClick={(event) => openEditor(model, event.currentTarget)}><Pencil size={15} /></button><button title={t("設為預設模型")} aria-label={t("設為預設模型")} aria-pressed={row.selectedDefaultModel === model.id} disabled={busy} onClick={() => run({ action: "default/set", id: row.id, model: model.id })}><Star size={15} /></button><button title={t(confirm === `model:${model.id}` ? "確認移除模型" : "移除模型")} aria-label={t(confirm === `model:${model.id}` ? "確認移除模型" : "移除模型")} disabled={busy} onClick={() => remove(`model:${model.id}`, { action: "model/remove", id: row.id, model: model.id })}>{confirm === `model:${model.id}` ? t("確認移除模型") : <Trash2 size={15} />}</button></div>
       </div>)}
       {bridge && workspaceId ? <ProviderDiscovery active={active} bridge={bridge} workspaceId={workspaceId} id={row.id} onSave={save} /> : null}

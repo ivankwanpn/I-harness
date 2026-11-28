@@ -114,7 +114,7 @@ it("does not dismiss provider creation while its write is still pending", async 
 it("loads real directory metadata and supports retry without discovering models", async () => {
   const request = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue([{
     id: "local-route", displayName: "My provider", auth: { configured: true },
-    models: [{ id: "my-model", contextWindow: 272000 }],
+    models: [{ id: "my-model", contextWindow: 272000 }, { id: "gemini", inputTokenLimit: 65536, outputTokenLimit: 8192 }],
   }])
   render(<ProviderDirectory workspaceId="w1" bridge={{ request, onEvent: () => () => {} }} />)
   await screen.findByText("offline")
@@ -122,6 +122,9 @@ it("loads real directory metadata and supports retry without discovering models"
   await screen.findByRole("button", { name: /My provider/ })
   expect(screen.getByText("my-model")).toBeTruthy()
   expect(screen.getByTitle("上下文大小：272,000").textContent).toBe("272K")
+  expect(screen.getByTitle("模型輸入上限：65,536").textContent).toBe("輸入 65.5K")
+  expect(screen.getByTitle("模型輸出上限：8,192").textContent).toBe("輸出 8.2K")
+  expect(screen.queryByTitle("上下文大小：未指定")).toBeNull()
   await waitFor(() => expect(request).toHaveBeenCalledTimes(2))
   expect(request).toHaveBeenLastCalledWith({ kind: "desktop/provider/directory", workspaceId: "w1" })
 })

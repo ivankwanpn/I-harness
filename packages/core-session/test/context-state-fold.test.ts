@@ -52,6 +52,8 @@ it('keeps detached acceptance and usage witnesses only when another batch needs 
     index.stage([budget]).commit();
     expect(index.lastReportedInputTokens()).toBe(41);
     expect(index.lastConversationUsage()).toEqual({ inputTokens: 41 });
+    expect(index.lastConversationUsage(budget.seq)).toEqual({ inputTokens: 41 });
+    expect(index.lastConversationUsage(budget.seq - 1)).toBeUndefined();
     expect(Object.isFrozen(index.lastConversationUsage())).toBe(true);
 });
 

@@ -28,6 +28,7 @@ import { createGenerationLifecycle } from './lifecycle/generation-actions.ts'
 import { createSteerPreparationFactory } from './lifecycle/steer-preparation.ts'
 import { RewindError, RewindRecorder, RewindStore } from "@i-harness/rewind"
 import { createToolRegistry, registerContextRemaining, type PreparedApprovalInput, type ToolDispatchMetadata, type Tool, type ToolRegistry } from "@i-harness/core-tools"
+import { inputCapacityCeiling } from "@i-harness/token-meter"
 import { createAgent, type Agent, type ReasoningEffort } from "@i-harness/core-agent"
 import { approxTokens, type CompactionRequest, type CompactionResult } from "@i-harness/compaction"
 import { createMockClient, createCyclicMockClient, type MockStep } from "@i-harness/llm-mock"
@@ -266,9 +267,8 @@ export interface AssemblyOptions {
   /** When persist is active, append `job/status` events to the LIVE session too
    * (the web jobs surface reads them; CLI parity keeps them off — default). */
   jobStatusEvents?: boolean
-  /** M27-R-A8: model context window (tokens) — M15 provider-record knowledge
-   * supplied by the composition (e.g. web.ts via resolveModelContext). Absent →
-   * get_context_remaining is NOT registered (fail-closed). */
+  /** Optional shared window. A separate input ceiling in the binding can
+   * also enable get_context_remaining. */
   contextWindow?: number
   budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding
   contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata
@@ -1002,10 +1002,11 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       }
     })
   }
-  // M27-R-A8: context budget tool — registered against the live session (the
-  // M15 projection source) only when the composition supplied a window.
+  // Some providers publish an independent input limit without a shared window.
   let budgetRead: NonNullable<Agent["contextBudget"]> = () => ({ kind: "unavailable", reason: "Agent context is not initialized" })
-  if (opts.contextWindow !== undefined) registerContextRemaining(ctx, tools, { contextWindow: opts.contextWindow, session, budgetRead: () => budgetRead() })
+  if (inputCapacityCeiling(opts.contextWindow, opts.budgetBinding?.limits) !== undefined) {
+    registerContextRemaining(ctx, tools, { budgetRead: () => budgetRead() })
+  }
 
   // M40 A1/B8: session-scoped tools — todo_write (M21 whole-list snapshot,
   // model-visible via todo/write events) + read_image (M14 multimodal read:
@@ -1593,20 +1594,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       ? undefined
       : estimateAssemblyOverhead(systemPromptNow(), modelToolSchemas())
 
-    // M11/M31 T3: the engine needs a window, and the assembly is the layer that
-    // resolved one. When a caller asked for compaction but no window is available,
-    // the request CANNOT be honoured — and the honest response is to say so. The
-    // previous code passed `opts.compact` through unchanged in that case, which
-    // meant a config without the field the engine requires; the CLI, meanwhile,
-    // never set `compact` at all, so in practice layer 1 of the budget ladder was
-    // dead everywhere and long sessions fell to the fail-closed `prompt_too_long`.
-    // A silent drop would be the same class of bug wearing a different hat.
-    // The window may arrive two ways and both are legitimate: the assembly's own
-    // `contextWindow` (resolved from the model binding), or one the host put
-    // directly in the compact config. The assembly's value wins when both exist;
-    // the config's is the fallback. Requiring only the first would break callers
-    // that already supply the second — a regression the assembly tests caught.
-    const compactForAgent = composeCompactConfig(opts.compact, opts.contextWindow, overheadEstimate, d)
+    // The prepared request can be bounded by a shared window or an independent input limit.
+    const compactForAgent = composeCompactConfig(opts.compact, opts.contextWindow, overheadEstimate, d, opts.budgetBinding?.limits)
 
     const agent = createAgent(ctx, {
       modelCallOrigin,
@@ -1647,7 +1636,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // R-A1: steer-tier claims at the step boundary (mid-turn injection).
       stepInputs: { claimAtStepBoundary: (facts, prepare, claim) => inbox.claimAtStepBoundary(facts, prepare, claim) },
     })
-    budgetRead = () => agent.contextBudget!()
+    budgetRead = () => agent.contextBudget!({ includeLastUsage: true })
 
     constructionComplete = true
     if (!opts.residentActivation) residentActivation.activate()
@@ -1684,10 +1673,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         agent.updateContext!({
           budgetBinding: binding.budgetBinding,
           contextMetadata: binding.contextMetadata,
-          ...(binding.contextWindow === undefined ? {} : {
-            budget: { contextWindow: binding.contextWindow, overheadTokens: overhead },
-            ...(compact === undefined ? {} : { compact: { ...compact, contextWindow: binding.contextWindow, overheadTokens: compact.overheadTokens ?? overhead } }),
-          }),
+          ...(binding.contextWindow === undefined ? {} : { budget: { contextWindow: binding.contextWindow, overheadTokens: overhead } }),
+          compact: composeCompactConfig(compact && { ...compact, contextWindow: binding.contextWindow }, binding.contextWindow, overhead, d, binding.budgetBinding?.limits),
           ...(binding.maxOutputTokens === undefined ? {} : { maxOutputTokens: binding.maxOutputTokens }),
         })
         // No await between installing validated limits and the matching client.
@@ -1698,7 +1685,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         opts.budgetBinding = binding.budgetBinding
         opts.contextMetadata = binding.contextMetadata
         tools.unregister("get_context_remaining")
-        if (binding.contextWindow !== undefined) registerContextRemaining(ctx, tools, { contextWindow: binding.contextWindow, session, budgetRead })
+        if (inputCapacityCeiling(binding.contextWindow, binding.budgetBinding?.limits) !== undefined) {
+          registerContextRemaining(ctx, tools, { budgetRead })
+        }
       },
       // The second half of the pair, and the PAIRING IS THE INVARIANT: nothing
       // in these types forces the two calls to happen together. A rebind that

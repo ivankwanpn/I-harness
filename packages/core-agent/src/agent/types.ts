@@ -133,7 +133,7 @@ export interface Agent {
    * run/runAdmitted/followup/compact calls reject with code AGENT_BUSY before
    * admission or effects. Direct callers must await settlement or use their queue. */
   runAdmitted?: Agent['run']
-  contextBudget?(): BudgetRead
+  contextBudget?(options?: { includeLastUsage?: boolean }): BudgetRead
   run(task: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string, options?: AgentInputOptions): Promise<AgentResult>
   followup(message: string, signal?: AbortSignal, options?: AgentInputOptions): Promise<AgentResult>
   // M11: explicit manual compaction. Optional because a registry may hold

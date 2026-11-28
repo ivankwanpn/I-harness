@@ -124,7 +124,10 @@ export function createContextStateIndex(sessionId: string) {
         plan:plan.read,rewrite:rewrite.read,
         releasePayloads(){plan.releasePayloads();providerInput={}},
         lastReportedInputTokens(select?: 'conversation'){return (select === 'conversation' ? providerInput.conversationReported : providerInput.reported)?.tokens},
-        lastConversationUsage(){return providerInput.conversationReported?.usage},
+        lastConversationUsage(budgetSeq?: number){
+            const match = providerInput.conversationReported;
+            return match && (budgetSeq === undefined || match.budgetSeq === budgetSeq) ? match.usage : undefined;
+        },
         projectionRevision(){return rewrite.read().markers+prunes},
         conversationBudgetRewritten(){return conversationBudgetRewritten},
         contextRevision(){return contextRevision},scheduleRevision(){return scheduleRevision},

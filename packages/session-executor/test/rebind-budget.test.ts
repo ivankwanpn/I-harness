@@ -4,6 +4,53 @@ import { it, expect, vi } from "vitest"
 
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import { createSessionService } from "../src/service.ts"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
+import { composeJsonlTaskTransitionCoordinator } from "../../session-persistence-jsonl/src/task-document-factory.ts"
+import { taskDocumentStorageContract } from "../../subagent/src/task/storage-contract.ts"
+import { controlledModel } from "./controlled-model.ts"
+
+it.each(["legacy", "managed"])("changes compaction capacity with the current model in the %s service", async mode => {
+  const root = await mkdtemp(join(tmpdir(), "ih-compact-rebind-"))
+  const coordinator = mode === "managed"
+    ? composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract) : undefined
+  await coordinator?.create({ sessionId: "s" })
+  let summaries = 0
+  const model = controlledModel(async function*(request) {
+    const summary = String(request.messages.at(-1)?.content).includes("You are now acting as a compaction engine")
+    if (summary) summaries++
+    yield { type: "text/chunk", text: summary ? checkpointOfLength(600) : "done" }; yield { type: "end" }
+  })
+  const client = { providerId: "fixture", modelId: "fixture", label: "fixture", model }
+  const inputOnly = { ...client, budgetBinding: { version: 1,
+    metadata: { version: 1, modelId: "fixture", protocol: "openai-compatible", identityCoverage: "partial" },
+    limits: { inputTokens: { value: 50000, origin: "configured-model-row", sourceId: "fixture-input" } },
+    generation: { origin: "unspecified" }, capability: { version: 1, route: "openai-compatible",
+      evidenceId: "fixture", outputParameter: "optional", packetKind: "http-json-body" },
+  } } as const
+  const service = createSessionService({ workspace: root, compact: { auto: false, contextWindow: 77777, minSummaryChars: 1 },
+    ...(coordinator ? { coordinator, managedRuntime: { systemPrompt: "fixture", tools: [] } } : {}),
+    modelBindingFor: async () => ({ status: "ready", binding: { ...client, contextWindow: 100000 } }),
+  })
+  const addWork = async () => {
+    await service.submit("s", "remember real work ".repeat(300), new AbortController().signal)
+    await service.submit("s", "continue", new AbortController().signal)
+  }
+  try {
+    await addWork()
+    expect((await service.compact("s")).compacted).toBe(true)
+    service.rebindModel("s", inputOnly)
+    await addWork()
+    expect((await service.compact("s")).compacted).toBe(true)
+    const afterBounded = summaries
+    service.rebindModel("s", client)
+    await addWork()
+    expect((await service.compact("s")).compacted).toBe(false)
+    expect(summaries).toBe(afterBounded)
+  } finally { await service.close(); await coordinator?.close(); await rm(root, { recursive: true, force: true }) }
+}, 60_000)
 
 it("switches the live output cap, compaction window and context tool together", async () => {
   const requests: LLMRequest[] = []

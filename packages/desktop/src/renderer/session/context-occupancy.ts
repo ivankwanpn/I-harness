@@ -20,13 +20,22 @@ export function contextOccupancy(state?: SessionContextState, selected?: Session
   const limit = observation?.reason !== "capacity-conflict" && dimension?.sourceId !== undefined &&
     (dimension.state !== "fail" || pressure !== undefined) ? dimension.limit : undefined
   const modelWindow = limit !== undefined && limit > 0 ? limit : legacyReady?.contextWindow
+  const evidencedLimit = (dimension: "input" | "output") => {
+    const fact = observation?.dimensions.find(item => item.dimension === dimension)
+    return fact?.sourceId && fact.limit !== undefined && fact.limit > 0 ? fact.limit : undefined
+  }
+  const inputLimit = evidencedLimit("input")
+  const outputLimit = evidencedLimit("output")
   const historical = observation !== undefined && observation.freshness !== "current"
   const warning = !modelChanged && !!(observation?.fullByProvider || observation?.recoveryRequired ||
     observation?.disposition === "reduce" || observation?.disposition === "blocked" || pressure && !pressure.hardFits)
   const measured = !modelChanged && historical && !warning ? state?.lastReportedInputTokens : undefined
   const tokens = modelChanged ? undefined : measured ?? estimate?.value ?? legacyReady?.estimatedTokens
-  const denominator = modelChanged ? undefined : modelWindow ?? inputBudget
+  const conflict = observation?.reason === "capacity-conflict" || dimension?.state === "fail" && pressure === undefined
+  const usesInputLimit = !conflict && inputLimit !== undefined && (modelWindow === undefined || inputLimit < modelWindow)
+  const denominator = modelChanged || conflict ? undefined : usesInputLimit ? inputLimit : modelWindow ?? inputBudget
   const percent = tokens !== undefined && denominator !== undefined ? tokens / denominator * 100 : undefined
   const reading = percent === undefined ? "—" : tokens !== 0 && percent < 0.1 ? "<0.1%" : `${percent.toFixed(1)}%`
-  return { estimate, legacyReady, historical, modelChanged, modelWindow, inputBudget, measured, tokens, denominator, percent, reading, warning }
+  return { estimate, legacyReady, historical, modelChanged, modelWindow, inputBudget, inputLimit, outputLimit, usesInputLimit,
+    measured, tokens, denominator, percent, reading, warning }
 }

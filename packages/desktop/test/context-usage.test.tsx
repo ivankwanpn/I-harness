@@ -54,9 +54,47 @@ it.each([[undefined, "支援，未記錄上限數值"], [4096, "已套用 · 4,0
   }))
   render(<ContextUsagePage usage={{ current: { owner: {}, state, loading: false }, retry() {} }} onBack={() => {}} />)
   const limits = screen.getByRole("region", { name: "請求限制" })
-  expect(within(limits).getByText("輸出上限").nextElementSibling?.textContent).toBe(label)
+  expect(within(limits).getByText("請求輸出上限").nextElementSibling?.textContent).toBe(label)
 })
 const flush = () => act(async () => {})
+
+it.each([undefined, 2048])("shows measured input against a known independent limit when projected cost is unavailable, with output cap %s", async requestedCap => {
+  const state = {
+    ...contextStateFromObservation(observation({
+      estimate: { kind: "unknown", reason: "token-cost-unavailable" }, pressure: { kind: "unavailable", reason: "token-cost-unavailable" },
+      disposition: "compatibility", reason: "capacity-unknown", freshness: "awaiting-projection",
+      dimensions: [{ dimension: "input", state: "unchecked", limit: 65536, sourceId: "input-limit" },
+        { dimension: "output", state: "unchecked", limit: 8192, sourceId: "output-limit" }],
+      output: { capSupport: "supported", minimumCap: 1, ...(requestedCap !== undefined ? { effectiveCap: requestedCap } : {}) },
+    })), lastReportedInputTokens: 321, lastReportedUsage: { inputTokens: 321, outputTokens: 8, cacheReadTokens: 64 },
+  }
+  const { bridge } = connection(vi.fn().mockResolvedValue(state))
+  render(<><ContextUsage bridge={bridge} workspaceId="w" sessionId="s" />
+    <ContextUsagePage usage={{ current: { owner: {}, state, loading: false }, retry() {} }} onBack={() => {}} /></>)
+  await flush()
+  expect(trigger().textContent).toBe("0.5%")
+  expect(trigger().title).toContain("上次實測輸入 / 模型輸入上限")
+  expect(screen.getByText("模型輸入上限", { selector: "dt" }).nextElementSibling?.textContent).toBe("65,536")
+  expect(screen.getByText("模型輸出上限", { selector: "dt" }).nextElementSibling?.textContent).toBe("8,192")
+  expect(screen.getByText("請求輸出上限", { selector: "dt" }).nextElementSibling?.textContent).toBe(requestedCap === undefined ? "支援，未記錄上限數值" : "已套用 · 2,048")
+  expect(screen.queryByText("模型上下文視窗", { selector: "dt" })).toBeNull()
+})
+
+it("uses the tighter input ceiling for the circle while preserving a larger shared window in the inspector", async () => {
+  const state = contextStateFromObservation(observation({
+    dimensions: [{ dimension: "context", state: "pass", limit: 1000000, sourceId: "window" },
+      { dimension: "input", state: "pass", limit: 65536, sourceId: "input-limit" }],
+    pressure: { kind: "known", basis: "shared-context", input: 49000, inputBudget: 65536,
+      trigger: 60000, target: 55000, hardFits: true, softNeeded: false, targetReady: true },
+  }))
+  const { bridge } = connection(vi.fn().mockResolvedValue(state))
+  render(<><ContextUsage bridge={bridge} workspaceId="w" sessionId="s" />
+    <ContextUsageSidebar usage={{ current: { owner: {}, state, loading: false }, retry() {} }} onOpenPage={() => {}} /></>)
+  await flush()
+  expect(trigger().textContent).toBe("74.8%")
+  expect(trigger().title).toContain("估算輸入 / 模型輸入上限")
+  expect(screen.getByText("模型上下文視窗", { selector: "dt" }).nextElementSibling?.textContent).toBe("1,000,000")
+})
 
 it.each(["docked", "expanded"] as const)("keeps matched provider counts distinct from local estimates in the %s inspector", layout => {
   const state = {

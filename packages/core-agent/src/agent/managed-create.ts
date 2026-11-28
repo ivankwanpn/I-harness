@@ -189,7 +189,7 @@ function constructManagedAgent(ctx: PluginContext, host: ManagedAgentHost): Mana
         return value!;
     }
     const run: ManagedAgent['run'] = (task, signal, images, inputId, options) => operate(signal, state => turn.run(state, task, images, inputId, options));
-    const agent: ManagedAgent = Object.freeze({ run, runAdmitted: run, followup: (message: string, signal?: AbortSignal, options?: import('./managed-types.ts').ManagedAgentInputOptions) => run(message, signal, undefined, undefined, options), compact: (instructions?: string, options?: Parameters<ManagedAgent['compact']>[1]) => operate(options?.signal, state => turn.compact(state, instructions, options)), contextBudget: () => context.readBudget(), updateContext(config: Parameters<NonNullable<ManagedAgent['updateContext']>>[0]) {
+    const agent: ManagedAgent = Object.freeze({ run, runAdmitted: run, followup: (message: string, signal?: AbortSignal, options?: import('./managed-types.ts').ManagedAgentInputOptions) => run(message, signal, undefined, undefined, options), compact: (instructions?: string, options?: Parameters<ManagedAgent['compact']>[1]) => operate(options?.signal, state => turn.compact(state, instructions, options)), contextBudget: (options?: { includeLastUsage?: boolean }) => context.readBudget(options?.includeLastUsage), updateContext(config: Parameters<NonNullable<ManagedAgent['updateContext']>>[0]) {
             if (busy)
                 throw Error('agent is busy');
             context.update(config);

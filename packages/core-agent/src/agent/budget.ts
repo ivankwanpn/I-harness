@@ -1,5 +1,6 @@
 import { changesContextProjection, contextProjectionRevision, deriveContextRecovery, type BudgetRead, type SessionView as Session, type ExchangeAcceptedEventV2, type CalibrationRetirementReason, type FactPorts, type ProducerFactOutcome, type SettlementFacts, type SessionEvent } from "@i-harness/core-session"
 import { readManagedAssessmentEvents } from '@i-harness/core-session/internal/restoration'
+import { deriveLastProviderInput } from '@i-harness/core-session/internal/archive'
 import { agentFacts, committedFactSeqs } from './facts.ts'
 import { createAcceptedCalibration, type PreparedRequestMeasurement } from "@i-harness/token-meter"
 import { assessLegacyPreparedRequest, admissionObservation, readContextCoordinates } from "@i-harness/context-engine"
@@ -12,6 +13,7 @@ export interface OwnedBudgetHistory {
  recovery(binding?:{providerId?:string;modelId:string;protocol:string}):import('@i-harness/core-session').ContextRecoveryFacts|undefined
  coordinates():ReturnType<typeof readContextCoordinates>
  ownsAccepted(event:ExchangeAcceptedEventV2):boolean
+ lastConversationUsage(budgetSeq:number):Readonly<import('@i-harness/core-session').ProviderReportedUsage>|undefined
 }
 
 /** The only owner of prepared admission, pressure, calibration and scalar reads. */
@@ -37,6 +39,10 @@ export function createOwnedBudget(session: Session|undefined, ownerSessionId: st
     recovery: binding => deriveContextRecovery(session!, ownerSessionId, binding),
     coordinates: () => readContextCoordinates(session!, { ownerSessionId }),
     ownsAccepted: event => session!.events[event.seq!] === event,
+    lastConversationUsage(seq) {
+      const match = deriveLastProviderInput(session!.events, ownerSessionId, 'conversation')
+      return match?.budgetSeq === seq ? match.usage : undefined
+    },
   }
   const calibration = createAcceptedCalibration(ownerSessionId, observationLifetimeId)
   const compatibility = (evidence: RequestEvidence): Parameters<ReturnType<typeof createAcceptedCalibration>["probe"]>[1] => { const expected = expectedExecution(evidence.executionIdentity); return { ownerSessionId, observationLifetimeId, executionEpochId: expected.kind === "known" ? expected.identity.authEpoch : undefined, branchId: evidence.snapshot.coordinates.branchId, contextEpoch: evidence.snapshot.coordinates.contextEpoch, projectionRevision: evidence.projectionRevision } }
@@ -44,6 +50,7 @@ export function createOwnedBudget(session: Session|undefined, ownerSessionId: st
   const retire = (reason: CalibrationRetirementReason) => { const event = calibration.retire(reason); if (event) { calibrationRevision++; retirements.push(event) } }
   const drainRetirements = async () => { while (retirements.length) { committedFactSeqs(await (settlement()?.lifecycle ?? facts().agent).usage(retirements[0]!)); retirements.shift() } }
   let latest: BudgetRead = { kind: "unavailable", reason: "No prepared request budget is available" }
+  let acceptedBudgetSeq: number | undefined
   let latestDecision: import('@i-harness/context-engine').CapacityAssessment | undefined
   let bindingRevision = 0
   let captured: RequestCandidateIdentity | undefined
@@ -72,7 +79,7 @@ export function createOwnedBudget(session: Session|undefined, ownerSessionId: st
     invalidateCalibration() { retire("context-rewritten") },
     retire,
     invalidate(retireSample = true) { if (retireSample) retire("binding-changed"); invalidated = "Model context binding changed"; bindingRevision++ },
-    read(reason?: string): BudgetRead {
+    read(reason?: string, includeLastUsage = false): BudgetRead {
       if (latest.kind !== "ready") return latest
       if (latest.observation && history.projectionRewrittenSince(latest.observation.projectionRevision)) {
         return { kind: 'unavailable', reason: 'Conversation history changed since the last prepared budget' }
@@ -91,6 +98,12 @@ export function createOwnedBudget(session: Session|undefined, ownerSessionId: st
       if (read.kind === "ready" && recoveryRequired) return { ...read, ...(read.observation ? { observation: { ...read.observation, recoveryRequired: true, fullByProvider: true } } : {}), snapshot: { ...read.snapshot, recoveryRequired: true, fullByProvider: true,
         admission: read.snapshot.admission === "unavailable" ? "unavailable" : "compact", reason: "Provider context recovery remains required" } }
       if (read.kind === "ready" && recovery?.state === "resolved" && read.snapshot.recoveryRequired) return { ...read, ...(read.observation ? { observation: { ...read.observation, recoveryRequired: false, fullByProvider: false } } : {}), snapshot: { ...read.snapshot, recoveryRequired: false, fullByProvider: false } }
+      if (includeLastUsage && !unavailable && !recoveryRequired && read.kind === 'ready' &&
+        read.observation?.purpose === 'main' && read.observation.freshness === 'awaiting-projection' &&
+        read.observation.identityCoverage === 'complete' && read.observation.bindingConfigFingerprint && acceptedBudgetSeq !== undefined) {
+        const usage = history.lastConversationUsage(acceptedBudgetSeq)
+        if (usage) return { ...read, lastReportedUsage: { ...usage } }
+      }
       return read
     },
     pressure() {
@@ -113,6 +126,7 @@ export function createOwnedBudget(session: Session|undefined, ownerSessionId: st
         },
       })
       latest = { kind: "ready", snapshot: result.snapshot, observation: freezePreparedFacts(admissionObservation(result, purpose)) }
+      acceptedBudgetSeq = undefined
       latestDecision = result.decision
       assessedEvents = session?.events
       assessedCount = assessedEvents?.length ?? 0
@@ -148,7 +162,10 @@ export function createOwnedBudget(session: Session|undefined, ownerSessionId: st
           // This derived observation may be omitted on proved cancellation or
           // backend-proven absence. Neither grants capacity or revokes usage.
           // Issued uncertainty and failed installation remain real failures.
-          if (outcome.kind !== 'absent' && !(outcome.kind === 'not-issued' && outcome.code === 'FACT_CANCELLED')) committedFactSeqs(outcome)
+          if (outcome.kind !== 'absent' && !(outcome.kind === 'not-issued' && outcome.code === 'FACT_CANCELLED')) {
+            const [seq] = committedFactSeqs(outcome)
+            acceptedBudgetSeq = accepted ? seq : undefined
+          }
         }
       }
     },

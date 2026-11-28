@@ -9,7 +9,7 @@ import { createReductionBridge } from './bridge.ts'
 import { automaticReductionPolicy } from './automatic.ts'
 import type { ContextSnapshot } from '@i-harness/context-engine'
 import { randomUUID } from 'node:crypto'
-import { projectionFingerprint } from '@i-harness/token-meter'
+import { inputCapacityCeiling, projectionFingerprint } from '@i-harness/token-meter'
 import { beginSoftSequence } from './sequence.ts'
 import { reductionPolicyFacts } from './summary-policy.ts'
 import { withInstructionRun } from './instruction-lease.ts'
@@ -57,7 +57,7 @@ export function createContextReduction(deps: AgentDeps & AgentConfig, config: Co
       const unpriced = pressure.kind === 'unavailable' && pressure.reason === 'token-cost-unavailable'
         && probe.prepared.measurement.input.coverage === 'complete'
       const heuristicTokens = Object.values(probe.prepared.measurement.input.components).reduce((total, component) => total + component.heuristicTokens, 0)
-      const window = evidence.snapshot.surface.contextWindow
+      const window = inputCapacityCeiling(evidence.snapshot.surface.contextWindow, evidence.snapshot.surface.budgetBinding?.limits)
       const fallbackOver = unpriced && typeof window === 'number' && window > 0
         && heuristicTokens > window * (policy.thresholdRatio ?? .8)
       const over = pressure.kind === 'known' ? pressure.softNeeded : fallbackOver

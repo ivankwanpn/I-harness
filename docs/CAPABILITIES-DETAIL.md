@@ -73,7 +73,7 @@
 | 9 | skill_search + skill_get | 永遠 | `registerSkills`（:779） |
 | 10 | glob + grep（均 deferred） | 永遠 | `createFsSearchTools`（:784） |
 | 11 | session_search + lineage | 有 sessionQuery | `createSessionQueryTools`（:786） |
-| 12 | get_context_remaining | 有 contextWindow（fail-closed） | `registerContextRemaining`（:828） |
+| 12 | get_context_remaining | 有上下文視窗或獨立輸入上限 | `registerContextRemaining` |
 | 13 | MCP 工具（掛載期 sync） | 有 mcp 配置 | `mountMcpClient`（:999） |
 | 14 | LSP：lsp + lsp_diagnostics（每 server 一對） | 有 lsp 配置 | `mountLspClient`（:1048） |
 | 15 | workflow_run + workflow_list | 永遠 | `registerWorkflow`（:1050） |
@@ -156,7 +156,7 @@
 
 **interaction（packages/interaction/src/index.ts:121-150）** — `ask_user_input`：`question*`, `options?`(≤10)；timeout 宣告 600_000；無 provider → 同步 NO_PROVIDER throw；答案作為 tool result 回傳（唯一新記錄點）。同 operator 僅一人（非並行安全）。
 
-**context-remaining（packages/core-tools/src/context-remaining.ts:21-42）** — `get_context_remaining`：無參數；純讀；回 `{window, used, remaining, percentage}`；**無 contextWindow 知識即不註冊**（fail-closed）；used = `activeTokens(session)`（M15 投影規則：只對 deriveMessages 計價）。
+**get_context_remaining** 是唯讀工具。主會話依模型的上下文視窗或獨立輸入上限註冊，使用 Agent 已準備好的實際請求估算。確認目前容量後回傳 `window`、`used`、`remaining`、`percentage`。新一輪估算尚未完成時，可另查上一次已核對的供應商輸入用量。直接嵌入工具並只提供視窗的舊呼叫端使用標記為 `neutral-only` 的訊息估算。
 
 **plan-mode（packages/plan-mode/src/index.ts:21-34）** — `exit_plan_mode`：無參數；`plan/mode off` 事件；回 `{active}`；`ensurePlanModeTool` 防重複掛載。
 
@@ -330,7 +330,7 @@ session/start, session/end, session/request, session/queued, session/error, turn
 
 ### 3.3 上下文窗口解析鏈（統一、每 session、每 assembly）
 
-`contextWindowFor`（`session-executor/src/service.ts:112`；原引 `apps/cli/src/web.ts:288-298` 的 `sessionContextWindow`——該檔隨 web-host 於 M65 刪除。**`apps/` 目前無供給者**（`git grep contextWindowFor -- 'apps/**'` 零命中）：今天真正的路是 model binding——`resolveEffectiveModelContext`（`provider-runtime/src/index.ts:656`）→ `binding.contextWindow` → `service.ts:362` → assembly）：**userModel（settings `llm.providers.<route>.models[i].contextWindow`）> profile.modelContexts[modelId] > profile.contextWindow > model-catalog.json CARD.contextWindow > undefined**（`resolveEffectiveModelContext`，provider/src/index.ts:311）。per-session（meta.modelSelection → provider:model）；undefined → `get_context_remaining` 不註冊（fail-closed）、無 budget、無 compact 窗口覆寫（assembly.ts:828、:1243-1269）。檔案卡片欄位：`{contextWindow?, maxOutputTokens?}`（檔案在 packages/provider/src/model-catalog.json，只含 deepseek/gemini/bedrock seed 卡，`loadModelCatalog`（provider:161）於載入即驗證正整數（:207-211））。
+`contextWindowFor`（`session-executor/src/service.ts:112`；原引 `apps/cli/src/web.ts:288-298` 的 `sessionContextWindow`——該檔隨 web-host 於 M65 刪除。**`apps/` 目前無供給者**（`git grep contextWindowFor -- 'apps/**'` 零命中）：今天真正的路是 model binding——`resolveEffectiveModelContext`（`provider-runtime/src/index.ts:656`）→ `binding.contextWindow` → `service.ts:362` → assembly）：**userModel（settings `llm.providers.<route>.models[i].contextWindow`）> profile.modelContexts[modelId] > profile.contextWindow > model-catalog.json CARD.contextWindow > undefined**（`resolveEffectiveModelContext`，provider/src/index.ts:311）。per-session（meta.modelSelection → provider:model）；已發現的獨立輸入上限另存於 `budgetBinding.limits.inputTokens`。主會話取得其中一項輸入容量依據時就會註冊 `get_context_remaining`。檔案卡片欄位：`{contextWindow?, maxOutputTokens?}`（檔案在 packages/provider/src/model-catalog.json，只含 deepseek/gemini/bedrock seed 卡，`loadModelCatalog`（provider:161）於載入即驗證正整數（:207-211））。
 
 ### 3.4 壓縮引擎（packages/compaction）
 

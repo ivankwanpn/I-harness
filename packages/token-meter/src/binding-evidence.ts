@@ -13,6 +13,14 @@ export interface ModelLimits {
   readonly outputTokens?: NumericEvidence
   readonly bodyBytes?: NumericEvidence
 }
+
+/** Upper bound for model input before generation reserves or safety margins. */
+export function inputCapacityCeiling(contextWindow: number | undefined, limits?: ModelLimits): number | undefined {
+  const window = contextWindow ?? limits?.contextTokens?.value
+  const input = limits?.inputTokens?.value
+  if (window === undefined) return input
+  return input === undefined ? window : Math.min(window, input)
+}
 export interface GenerationPolicy {
   readonly outputCap?: NumericEvidence
   readonly origin: "explicit" | "configured" | "legacy-catalog-default" | "adapter-default" | "provider-managed" | "unspecified"

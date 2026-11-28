@@ -3,6 +3,7 @@ import {createManagedAgent,createManagedSessionExecutor,type ManagedAgent,type M
 import {createManagedAgentModelOriginOwner} from '@i-harness/core-agent/model-origin'
 import {createToolRegistryWithModelOrigin} from '@i-harness/core-tools/model-origin'
 import {registerContextRemaining} from '@i-harness/core-tools'
+import {inputCapacityCeiling} from '@i-harness/token-meter'
 import type {Tool,ToolResultRetention} from '@i-harness/core-tools'
 import type {ModelClient} from '@i-harness/llm-seam'
 import type {ExecutionObservation} from '@i-harness/core-session/internal/execution'
@@ -177,23 +178,24 @@ function finish(options:ManagedExecutionRuntimeOptions,prepared:ReturnType<typeo
  const budgetToolName='get_context_remaining'
  let budgetTool:Tool|undefined
  let readBudget:NonNullable<ManagedAgent['contextBudget']>=()=>({kind:'unavailable',reason:'Agent context is not initialized'})
- function syncBudgetTool(contextWindow:number|undefined){
+ function syncBudgetTool(capacity:number|undefined){
   const current=pair.registry.get(budgetToolName)
-  if(contextWindow===undefined){
+  if(capacity===undefined){
    if(budgetTool&&current===budgetTool)pair.registry.unregister(budgetToolName)
    budgetTool=undefined
   }else if(!current){
-   registerContextRemaining(ctx,pair.registry,{contextWindow,budgetRead:()=>readBudget()})
+   registerContextRemaining(ctx,pair.registry,{budgetRead:()=>readBudget()})
    budgetTool=pair.registry.get(budgetToolName)
   }
  }
- syncBudgetTool(options.contextWindow)
+ const originalBudget=typeof options.budgetBinding==='function'?options.budgetBinding():options.budgetBinding
+ syncBudgetTool(inputCapacityCeiling(options.contextWindow,originalBudget?.limits))
  const surface=options.defaultSurface
  const modelToolSchemas = surface ? () => surface.modelToolSchemas() : options.modelToolSchemas ?? (() => pair.registry.schemas())
  const modelOverheadTokens = surface ? () => surface.modelOverheadTokens() : () =>
   approxTokens(typeof options.systemPrompt === 'function' ? options.systemPrompt() : options.systemPrompt) + approxTokens(JSON.stringify(modelToolSchemas()))
  const overhead=options.contextWindow===undefined||surface?.prepareModelSurface?undefined:modelOverheadTokens()
- const compact=composeCompactConfig(options.compact,options.contextWindow,overhead,diagnosticsFor('mount'))
+ const compact=composeCompactConfig(options.compact,options.contextWindow,overhead,diagnosticsFor('mount'),originalBudget?.limits)
  const inputs=receivedExecutionInputsFor(execution)
  const agent=createManagedAgent(ctx,{execution,domain:origin.domain,hooks:captureExecutionHookChannel(ctx),modelCallOrigin:origin.bind(pair.registry,pair.driver),tools:pair.registry,get model(){return model},systemPrompt:surface?()=>surface.systemPrompt():options.systemPrompt,modelToolSchemas,modelOverheadTokens,...surface?.modelSurface?{modelSurface:()=>surface.modelSurface!()}:{} ,...surface?.prepareModelSurface?{prepareModelSurface:(signal:AbortSignal)=>surface.prepareModelSurface!(signal)}:{},
   ...(options.contextWindow!==undefined?{budget:{contextWindow:options.contextWindow,overheadTokens:overhead}}:{}),...(compact?{compact}:{}),summaryFactory,...(options.autoCompactionEnabled!==undefined?{autoCompactionEnabled:options.autoCompactionEnabled}:{}),maxOutputTokens:options.maxOutputTokens,requestContext,
@@ -204,7 +206,7 @@ function finish(options:ManagedExecutionRuntimeOptions,prepared:ReturnType<typeo
    return createExecutionGenerationLifecycle(execution,origin.domain.sessionId,action,undefined,dependencies&&options.passiveGeneration?{...dependencies,passiveGeneration:options.passiveGeneration}:dependencies)
   },
   inputPreparationFactory:createExecutionSteerPreparationFactory(execution,inputs.inbox,surface?async text=>{await surface.reconcileAuthority();return surface.prepareInput(text)}:options.prepareInput)})
- readBudget=()=>agent.contextBudget!()
+ readBudget=()=>agent.contextBudget!({includeLastUsage:true})
  lane=createManagedSessionExecutor({execution,agent})
  const originalLane=lane
  const runtime=Object.freeze({instructionDiagnostics:prepared.manager?.diagnostics,startSchedule,prepareInput:surface?async(text:string)=>{await surface.reconcileAuthority();return surface.prepareInput(text)}:options.prepareInput,reconcileAuthority:surface?()=>surface.reconcileAuthority():undefined,execution,domain:origin.domain,ctx,tools:pair.registry,agent,lane:originalLane,inbox:inputs.inbox,
@@ -236,14 +238,18 @@ function finish(options:ManagedExecutionRuntimeOptions,prepared:ReturnType<typeo
    const observedOverhead=surface?.prepareModelSurface?undefined:modelOverheadTokens()
    // A newly exposed tool changes the schema after the binding commits.
    // Its budget uses the same live overhead getter as the request surface.
-   const overhead=window!==undefined&&!pair.registry.get(budgetToolName)?undefined:observedOverhead
-   const update={budgetBinding,contextMetadata,...(window===undefined?{}:{budget:{contextWindow:window,...overhead===undefined?{}:{overheadTokens:overhead}},...(compactData===undefined?{}:{compact:{...compactData,contextWindow:window,...compactData.overheadTokens!==undefined?{overheadTokens:compactData.overheadTokens}:overhead!==undefined?{overheadTokens:overhead}:{}}})}),...(output===undefined?{}:{maxOutputTokens:output})}
+   const capacity=inputCapacityCeiling(window,budgetBinding?.limits)
+   const overhead=capacity!==undefined&&!pair.registry.get(budgetToolName)?undefined:observedOverhead
+   const update={budgetBinding,contextMetadata,
+    ...(window===undefined?{}:{budget:{contextWindow:window,...overhead===undefined?{}:{overheadTokens:overhead}}}),
+    compact:composeCompactConfig(compactData && {...compactData,contextWindow:window},window,overhead,diagnosticsFor('mount'),budgetBinding?.limits),
+    ...(output===undefined?{}:{maxOutputTokens:output})}
    if(closed||closeFlight)throw TypeError('Original open managed runtime required')
    if(originalLane.isRunning())throw Error('session is busy')
    origin.domain.assertCurrent()
    agent.updateContext!(update)
    model=nextModel;reasoningEffort=nextEffort;selectedBinding={model:nextModel,reasoningEffort:nextEffort,contextWindow:window,maxOutputTokens:output,budgetBinding,contextMetadata}
-   syncBudgetTool(window)
+   syncBudgetTool(capacity)
   },
   close(){if(this!==runtime)return Promise.reject(TypeError('Original managed runtime required'));return close()}})
  return runtime

@@ -5,7 +5,7 @@ import type { AgentBudgetConfig, AgentDeps, AgentConfig, Agent, ModelContextBind
 import { createOwnedBudget } from "./budget.ts"
 import { captureRequestCandidate, rejectUnsupportedRequestContext, sameRequestIdentity, type RequestCandidateIdentity } from "./request-snapshot.ts"
 import { readManagedContextSnapshotIdentity } from '@i-harness/context-engine'
-import { projectionFingerprint } from "@i-harness/token-meter"
+import { inputCapacityCeiling, projectionFingerprint } from "@i-harness/token-meter"
 import { snapshotModelData } from "@i-harness/llm-seam"
 import { agentFacts } from './facts.ts'
 import { createContextReduction } from './context-reduction/composition.ts'
@@ -85,7 +85,8 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
   function buildCompactor(compact: CompactionConfig | undefined) {
     return createContextReduction(deps, compact, captureCandidate, ownedBudget, () => bindingIsCurrent(), () => refreshBinding(), attempts => attempts ? reductionScopes.get(attempts) : undefined)
   }
-  const inheritedCompact = () => !currentCompact || inherited?.contextWindow === undefined ? undefined : { ...currentCompact, contextWindow: inherited.contextWindow }
+  const inheritedCompact = () => currentCompact && inherited && inputCapacityCeiling(inherited.contextWindow, inherited.budgetBinding?.limits) !== undefined
+    ? { ...currentCompact, contextWindow: inherited.contextWindow } : undefined
   let compactor = buildCompactor(inherited ? inheritedCompact() : currentCompact)
   let outputCap = inherited ? inherited.maxOutputTokens : deps.maxOutputTokens
   let updated = false
@@ -113,7 +114,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
     execution, contextMeter, projectionRevision, ownedBudget, metadata, refreshBinding, bindingIsCurrent, requestSurfaceFingerprint, captureCandidate,
     isCurrentCandidate: (before: RequestCandidateIdentity) => sameRequestIdentity(before, captureCurrentIdentity()),
     bindReductionScope(attempts: import('@i-harness/context-engine').ReductionAttempts, scope: import('@i-harness/llm-seam').LLMRequest['requestScope']) { reductionScopes.set(attempts, scope) },
-    readBudget: () => ownedBudget.read(deps.requestContext && !deps.requestContext.current(deps.requestContext.capture()) ? 'Observed instructions unavailable' : bindingIsCurrent() ? undefined : "Inherited model binding changed before the next logical step"),
+    readBudget: (includeLastUsage = false) => ownedBudget.read(deps.requestContext && !deps.requestContext.current(deps.requestContext.capture()) ? 'Observed instructions unavailable' : bindingIsCurrent() ? undefined : "Inherited model binding changed before the next logical step", includeLastUsage),
     get contextWindow() { return inherited ? inherited.contextWindow : metadata() ? metadata()!.contextWindow : budgetCfg?.contextWindow ?? currentCompact?.contextWindow },
     get reasoningEffort() { return reasoningEffort() },
     get compactor() { return compactor },

@@ -5,7 +5,7 @@ import type { ManagedAction, FactOutcome, SettlementFacts } from '@i-harness/cor
 import { resolveCompactSpec } from '@i-harness/compaction';
 import { prepareModelRequest, mapModelRequest, isGenerationError } from '@i-harness/llm-seam';
 import { assertExecutionGeneration } from '../../lifecycle/generation-actions.ts';
-import { projectionFingerprint } from '@i-harness/token-meter';
+import { inputCapacityCeiling, projectionFingerprint } from '@i-harness/token-meter';
 import { randomUUID } from 'node:crypto';
 import type { ManagedAgentHost, ManagedGenerationAction } from '../managed-types.ts';
 import type { createManagedAgentContext } from '../managed-context.ts';
@@ -73,7 +73,7 @@ export function createManagedReduction(host: ManagedAgentHost, context: ReturnTy
                 const unpriced = pressure.kind === 'unavailable' && pressure.reason === 'token-cost-unavailable'
                     && prepared.measurement.input.coverage === 'complete';
                 const heuristicTokens = Object.values(prepared.measurement.input.components).reduce((total, component) => total + component.heuristicTokens, 0);
-                const window = initial.snapshot.surface.contextWindow;
+                const window = inputCapacityCeiling(initial.snapshot.surface.contextWindow, initial.snapshot.surface.budgetBinding?.limits);
                 const fallbackOver = unpriced && typeof window === 'number' && window > 0
                     && heuristicTokens > window * (policy.thresholdRatio ?? .8);
                 const over = pressure.kind === 'known' ? pressure.softNeeded : fallbackOver;

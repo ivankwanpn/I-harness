@@ -99,7 +99,7 @@ readonly schedules:Readonly<{kind:'unavailable';reason:'original-schedule-adapte
  rewrite():Readonly<ProjectionRewrite>
  budget(select?:'conversation'):DeepReadonly<ReturnType<ReturnType<typeof createContextStateIndex>['budget']>>
  lastReportedInputTokens(select?:'conversation'):number|undefined
- lastConversationUsage():Readonly<import('../events/attribution.ts').ProviderReportedUsage>|undefined
+ lastConversationUsage(budgetSeq?:number):Readonly<import('../events/attribution.ts').ProviderReportedUsage>|undefined
  recovery(binding?:Parameters<ReturnType<typeof createContextStateIndex>['recovery']>[1]):DeepReadonly<ReturnType<ReturnType<typeof createContextStateIndex>['recovery']>>
  generations():DeepReadonly<readonly GenerationActionState[]>
  semanticsStartSeq():number|undefined

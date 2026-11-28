@@ -64,6 +64,7 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
         }
     };
     const history: OwnedBudgetHistory = { kind: 'managed-budget-history', assessmentRevision: () => String(host.execution.observe().contextRevision),
+        lastConversationUsage: seq => host.execution.observe().lastConversationUsage(seq),
         projectionRewrittenSince: revision => host.execution.observe().projectionRevision > revision,
         recovery: binding => { const value = host.execution.observe().recovery(binding); return value ? { ...value } : undefined; }, coordinates: () => {
             if (!active)
@@ -226,9 +227,9 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
             active!.evidence = retained;
             return current(retained, true, mode === 'archive') ? retained : undefined;
         },
-        readBudget(): import('@i-harness/core-session').BudgetRead {
+        readBudget(includeLastUsage = false): import('@i-harness/core-session').BudgetRead {
             try {
-                return budget.read();
+                return budget.read(undefined, includeLastUsage);
             }
             catch {
                 return { kind: 'unavailable', reason: 'Original context observation is unavailable' };
