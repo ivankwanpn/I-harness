@@ -176,6 +176,7 @@ button { font: inherit; color: inherit; }
 .session-header .session-header-id { color: var(--ih-muted); font-weight: 400; }
 
 .session-body { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 0 20px .85rem; overflow: hidden; }
+.session-body[hidden] { display: none; }
 
 .review-pane {
   position: relative;

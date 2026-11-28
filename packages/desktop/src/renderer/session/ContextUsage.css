@@ -49,3 +49,30 @@
 .context-usage-segment-system { background: var(--ih-accent); }
 .context-usage-segment-tools { background: color-mix(in srgb, var(--ih-accent) 55%, var(--ih-muted)); }
 .context-usage-segment-messages { background: var(--ih-muted); }
+
+.context-summary-pane,
+.session-context-content { min-width: 0; overflow-wrap: anywhere; }
+.context-summary-pane h2,
+.session-context-section h2 { margin: 0 0 .8rem; font-size: 1rem; font-weight: 600; }
+.context-summary-pane { padding-block: .5rem; }
+.context-summary-pane > .oc-button,
+.context-open-sidebar { margin-top: .9rem; }
+.context-summary-pane .context-usage-capacity,
+.session-context-section .context-usage-capacity { color: var(--ih-text); font-size: 1.25rem; margin: .4rem 0; }
+.context-summary-pane progress,
+.session-context-section progress { display: block; width: 100%; height: 7px; margin-top: .7rem; accent-color: var(--ih-accent); }
+.context-summary-pane small,
+.session-context-section small { display: block; margin-block: .65rem .25rem; color: var(--ih-muted); }
+.session-context-page { flex: 1; min-width: 0; min-height: 0; overflow: auto; }
+.session-context-content { width: min(100%, 56rem); margin-inline: auto; padding: 1.25rem clamp(1rem, 4vw, 3rem) 3rem; box-sizing: border-box; }
+.session-context-content header { margin: 1.5rem 0; }
+.session-context-content h1 { margin: 0; font-size: 1.6rem; font-weight: 600; }
+.session-context-content header p { margin: .4rem 0 0; color: var(--ih-muted); }
+.context-session-metadata { display: flex; flex-wrap: wrap; gap: .4rem 1.25rem; margin: .8rem 0 0; font-size: .85rem; }
+.context-session-metadata > div { display: flex; flex-wrap: wrap; gap: .35rem; }
+.context-session-metadata dt { color: var(--ih-muted); }
+.context-session-metadata dd { margin: 0; }
+.session-context-section { padding: 1.25rem 0; border-top: 1px solid var(--ih-divider); }
+.session-context-section .context-usage-fact-group { grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: .9rem 1.5rem; }
+.session-context-section .context-usage-fact { display: grid; gap: .25rem; }
+.session-context-section .context-usage-fact dd { text-align: start; }

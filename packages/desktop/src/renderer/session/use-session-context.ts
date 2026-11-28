@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { readSessionContextState, type SessionContextState } from "@i-harness/sdk/context"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 
@@ -6,15 +6,18 @@ const refreshDelay = 250
 const refreshInterval = 1000
 const contextEvents = new Set(["user/message", "assistant/message", "tool/call", "tool/result", "turn/end", "step/end", "compaction/start", "compaction/end", "context/budget", "context/usage", "context/recovery"])
 const historyRewrites = new Set(["compaction/summary", "compaction/replacement", "compaction/reset", "compaction/prune", "rewind/point"])
-type Estimate = { bridge: DesktopBridge; workspaceId: string; sessionId: string; refreshKey?: string; state?: SessionContextState; error?: string; loading: boolean }
+type Estimate = { owner: object; refreshKey?: string; state?: SessionContextState; error?: string; loading: boolean }
 type RefreshControl = { key?: string; invalidate(key: string | undefined, immediate?: boolean): void }
 
-export function useSessionContext(bridge: DesktopBridge, workspaceId: string, sessionId: string, refreshKey?: string) {
+export function useSessionContext(bridge: DesktopBridge, workspaceId?: string, sessionId?: string, refreshKey?: string) {
   const refresh = useRef<RefreshControl | undefined>(undefined)
   const latestKey = useRef(refreshKey)
   latestKey.current = refreshKey
   const [estimate, setEstimate] = useState<Estimate>()
+  const owner = useMemo(() => ({ bridge, workspaceId, sessionId }), [bridge, workspaceId, sessionId])
   useEffect(() => {
+    const { bridge, workspaceId, sessionId } = owner
+    if (!workspaceId || !sessionId) { setEstimate(undefined); return }
     let active = true
     let running = false
     let dirty = false
@@ -31,11 +34,11 @@ export function useSessionContext(bridge: DesktopBridge, workspaceId: string, se
         revision++
         // Keep model changes scoped without restarting an offline gateway.
         if (disconnected && !urgent) {
-          setEstimate({ bridge, workspaceId, sessionId, refreshKey: key, error: disconnected.message, loading: false })
+          setEstimate({ owner, refreshKey: key, error: disconnected.message, loading: false })
           return
         }
         if (urgent) disconnected = undefined
-        setEstimate({ bridge, workspaceId, sessionId, refreshKey: key, loading: true })
+        setEstimate({ owner, refreshKey: key, loading: true })
         schedule(urgent)
       },
     }
@@ -45,8 +48,8 @@ export function useSessionContext(bridge: DesktopBridge, workspaceId: string, se
       running = true; dirty = false; immediate = false; lastStarted = Date.now()
       const ticket = revision
       const key = control.key
-      const scope = { bridge, workspaceId, sessionId, refreshKey: key }
-      setEstimate(previous => previous?.bridge === bridge && previous.workspaceId === workspaceId && previous.sessionId === sessionId && previous.refreshKey === key
+      const scope = { owner, refreshKey: key }
+      setEstimate(previous => previous?.owner === owner && previous.refreshKey === key
         ? { ...previous, error: undefined, loading: true } : { ...scope, loading: true })
       try {
         const value = await bridge.request({ kind: "session/context", workspaceId, sessionId })
@@ -74,7 +77,7 @@ export function useSessionContext(bridge: DesktopBridge, workspaceId: string, se
         disconnected = { message: message.message }
         revision++; dirty = false; immediate = false
         clearTimeout(timer); timer = undefined
-        setEstimate({ bridge, workspaceId, sessionId, refreshKey: control.key, error: message.message, loading: false })
+        setEstimate({ owner, refreshKey: control.key, error: message.message, loading: false })
         return
       }
       if (disconnected) return
@@ -90,10 +93,10 @@ export function useSessionContext(bridge: DesktopBridge, workspaceId: string, se
     // model change can also invalidate the mount request before it starts.
     void Promise.resolve().then(() => { if (revision === mountRevision) return read() })
     return () => { active = false; clearTimeout(timer); unsubscribe(); if (refresh.current === control) refresh.current = undefined }
-  }, [bridge, workspaceId, sessionId])
+  }, [owner])
   useEffect(() => {
     if (refresh.current && refresh.current.key !== refreshKey) refresh.current.invalidate(refreshKey)
   }, [bridge, workspaceId, sessionId, refreshKey])
-  const current = estimate?.bridge === bridge && estimate.workspaceId === workspaceId && estimate.sessionId === sessionId && estimate.refreshKey === refreshKey ? estimate : undefined
-  return { current, retry: () => refresh.current?.invalidate(refreshKey, true) }
+  const current = estimate?.owner === owner && estimate.refreshKey === refreshKey ? estimate : undefined
+  return useMemo(() => ({ current, retry: () => refresh.current?.invalidate(refreshKey, true) }), [current, refreshKey])
 }

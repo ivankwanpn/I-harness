@@ -428,6 +428,8 @@ const english = {
   "其中重用推理": "Of which reused reasoning",
   "上次請求輸入（供應商回報）": "Previous request input (provider-reported)",
   "上次請求的模型": "Previous request model",
+  "上下文詳情": "Context details", "查看完整上下文": "View full context", "在側邊欄查看上下文": "View context in sidebar",
+  "請求限制": "Request limits", "回合數": "Turns",
   "上次請求的分項估算": "Estimated breakdown of the previous request",
   "分項依內容估算，合計可能與供應商實測的總數不同。": "These components are estimated from content and may add up to a different total than the provider reported.",
   "會話內容已重整，等待下一次請求的容量估算。": "Conversation history changed. A new estimate will be available when the next request is prepared.",

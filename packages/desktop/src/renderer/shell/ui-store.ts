@@ -3,7 +3,7 @@ import { resolveLocale, type Locale } from "../design/locale.ts"
 import type { FollowupDelivery } from "../../main/local-preferences.ts"
 
 export type Appearance = "dark" | "light" | "system"
-export type Surface = "conversation" | "memory" | "search" | "settings" | "plugins" | "projects"
+export type Surface = "conversation" | "context" | "memory" | "search" | "settings" | "plugins" | "projects"
 interface Preferences { appearance: Appearance; fontSize: number; sidebarCollapsed: boolean; sidebarWidth: number; reviewWidth: number }
 const defaults: Preferences = { appearance: "dark", fontSize: 14, sidebarCollapsed: false, sidebarWidth: 240, reviewWidth: 360 }
 const boundedWidth = (value: unknown, fallback: number, min: number, max: number) => typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.round(value))) : fallback
