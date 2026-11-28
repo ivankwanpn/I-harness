@@ -247,7 +247,6 @@ export interface ComposerProps {
   modelControl?: ReactNode
   fileReferencesEnabled?: boolean
   imageAttachmentsEnabled?: boolean
-  contextUsage?: ReactNode
   canCompact?: boolean
   onCompact?(instructions?: string): Promise<void>
   captureSubmission?(text: string, images: ImageInput[] | undefined, delivery: FollowupDelivery): Submission
@@ -408,7 +407,6 @@ function SessionComposer({
   onSteer,
   fileReferencesEnabled = false,
   imageAttachmentsEnabled = false,
-  contextUsage,
   onOpenHistory,
   onOpenProjectFile,
   canCompact = false,
@@ -808,7 +806,6 @@ function SessionComposer({
           <select className="composer-delivery" aria-label={t("輸入處理方式")} title={t("輸入處理方式")} value={delivery} disabled={primaryBusy} onChange={(event) => setDeliveryOverride(event.target.value as FollowupDelivery)}><option value="queue">{t("加入佇列")}</option><option value="steer">{t("引導目前執行")}</option></select>
           <ChevronDown size={12} aria-hidden="true" />
         </span> : null}
-        {contextUsage}
         {modelControl ?? (modelLabel ? <span className="composer-model" title={modelLabel}>{modelLabel}</span> : null)}
         {stopProgress ? <span className="composer-stop-note" role="status">{t(stopProgress.timedOut ? "停止沒有回應" : "正在停止…")}</span> : null}
         {restartAvailable && bridge ? <button type="button" className="composer-force-stop" title={t("重新啟動將中斷此工作區的所有執行。")} onClick={() => { void forceStop() }}>{t("重新啟動工作區")}</button> : null}

@@ -1,5 +1,5 @@
-import { useId, useLayoutEffect, useRef, useState } from "react"
-import { ArrowLeft, ArrowUpRight, PanelRightOpen } from "lucide-react"
+import { type CSSProperties, type ReactNode, useId, useLayoutEffect, useRef, useState } from "react"
+import { ArrowLeft, Maximize2, PanelRightOpen } from "lucide-react"
 import { createPortal } from "react-dom"
 import type { SessionContextState } from "@i-harness/sdk/context"
 import type { SessionModelState } from "@i-harness/sdk"
@@ -103,11 +103,10 @@ function useContextReading({ usage, modelState }: ContextViews) {
 
 type Reading = ReturnType<typeof useContextReading>
 
-function ContextFacts({ view, usage, layout = "popover" }: { view: Reading; usage: ContextViews["usage"]; layout?: "popover" | "sidebar" | "page" }) {
+function ContextFacts({ view, usage }: { view: Reading; usage: ContextViews["usage"] }) {
   const t = useText()
-  const { current, retry } = usage
   const { state, error, observation, snapshot, preparedEstimate, legacyReady, modelChanged, modelWindow, inputBudget,
-    measured, tokens, denominator, percent, warning, basis, sourceLabel, model, canRetry, status,
+    measured, tokens, denominator, percent, basis, sourceLabel, model,
     systemTokens, toolTokens, messageTokens, breakdownTotal, capacity } = view
   return <>
     {capacity !== undefined ? <>
@@ -135,16 +134,40 @@ function ContextFacts({ view, usage, layout = "popover" }: { view: Reading; usag
       {modelWindow !== undefined && tokens === undefined ? <div className="context-usage-fact"><dt>{t("模型上下文視窗")}</dt><dd>{t("{count} Token", { count: number(modelWindow) })}</dd></div> : null}
       {!modelChanged && measured === undefined && state?.lastReportedInputTokens !== undefined ? <div className="context-usage-fact"><dt>{t("上次請求輸入（供應商回報）")}</dt><dd>{t("{count} Token", { count: number(state.lastReportedInputTokens) })}</dd></div> : null}
     </dl> : null}
+    <ContextNotice view={view} usage={usage} />
+    <ContextBreakdown view={view} />
+  </>
+}
+
+type SessionDetailsProps = ContextViews & {
+  sessionTitle?: string
+  turnCount?: number
+  updatedAt?: number
+  children?: ReactNode
+}
+
+function ContextNotice({ view, usage }: { view: Reading; usage: ContextViews["usage"] }) {
+  const t = useText()
+  const { status, canRetry, warning, error } = view
+  const { current, retry } = usage
+  return <>
     {status || canRetry ? <div>
       <p className={warning ? "context-usage-warning" : undefined} role={error !== undefined ? "alert" : undefined}>{error || status || t("無法取得上下文容量。")}</p>
       {canRetry ? <Button variant="secondary" size="small" loading={current?.loading} loadingLabel={t("正在處理…")} onClick={retry}>{t("刷新狀態")}</Button> : null}
     </div> : null}
-    {layout !== "sidebar" && observation && preparedEstimate ? <div className="context-usage-facts" aria-label={t("已準備的上下文")}>
+  </>
+}
+
+function ContextBreakdown({ view, expanded = false }: { view: Reading; expanded?: boolean }) {
+  const t = useText()
+  const { observation, snapshot, preparedEstimate, measured, legacyReady, systemTokens, toolTokens, messageTokens } = view
+  return <>
+    {observation && preparedEstimate ? <div className="context-usage-facts" aria-label={t("已準備的上下文")}>
       <small>{t(measured !== undefined ? "上次請求的分項估算" : sourceLabels[preparedEstimate.source])}</small>
       <dl className="context-usage-fact-group" aria-label={t("輸入分項估算")}>
         <div className="context-usage-fact"><dt>{t("系統提示")}</dt><dd>~{number(observation.components.system)}</dd></div>
         <div className="context-usage-fact"><dt>{t("工具定義")}</dt><dd>~{number(observation.components.schema)}</dd></div>
-        {layout === "page" ? <>
+        {expanded ? <>
           <div className="context-usage-fact"><dt>{t("使用者訊息")}</dt><dd>~{number(observation.components.user)}</dd></div>
           <div className="context-usage-fact"><dt>{t("助手訊息")}</dt><dd>~{number(observation.components.assistant)}</dd></div>
           <div className="context-usage-fact"><dt>{t("工具訊息")}</dt><dd>~{number(observation.components.tool)}</dd></div>
@@ -154,7 +177,7 @@ function ContextFacts({ view, usage, layout = "popover" }: { view: Reading; usag
       {measured !== undefined ? <small>{t("分項依內容估算，合計可能與供應商實測的總數不同。")}</small>
         : preparedEstimate.source === "provider-anchor-plus-projection" ? <small>{t("分項由內容估算，合計可能與校準後的總數不同。")}</small> : null}
     </div> : null}
-    {layout !== "sidebar" && snapshot ? <div className="context-usage-facts" aria-label={t("已準備的上下文")}>
+    {snapshot ? <div className="context-usage-facts" aria-label={t("已準備的上下文")}>
       <small>{t(sourceLabels[snapshot.estimateSource])} · {t(confidenceLabels[snapshot.confidence])} · {t(coverageLabels[snapshot.coverage])}</small>
       <dl className="context-usage-fact-group">
         <div className="context-usage-fact"><dt>{t("系統提示")}</dt><dd>{legacyReady ? "~" : ""}{number(systemTokens)}</dd></div>
@@ -174,53 +197,117 @@ function ContextFacts({ view, usage, layout = "popover" }: { view: Reading; usag
   </>
 }
 
-export function ContextUsageSidebar(props: ContextViews & { onOpenPage(): void }) {
-  const t = useText()
-  const view = useContextReading(props)
-  return <section className="context-summary-pane" aria-label={t("上下文摘要")}>
-    <h2>{t("上下文摘要")}</h2>
-    <ContextFacts view={view} usage={props.usage} layout="sidebar" />
-    <Button variant="secondary" size="small" data-context-open-page onClick={props.onOpenPage}><ArrowUpRight aria-hidden="true" size={14} />{t("查看完整上下文")}</Button>
-  </section>
+function Stat({ label, children, note }: { label: string; children: ReactNode; note?: string }) {
+  return <div className="context-inspector-stat"><dt>{label}</dt><dd>{children}</dd>{note ? <dd className="context-inspector-note">{note}</dd> : null}</div>
 }
 
-export function ContextUsagePage(props: ContextViews & { onBack(): void; sessionTitle?: string; turnCount?: number; updatedAt?: number }) {
+/** Docked and expanded layouts project the same selected session and request. */
+function SessionContextDetails(props: SessionDetailsProps) {
   const t = useText()
   const locale = useLocale(state => state.locale)
   const view = useContextReading(props)
-  const observation = view.observation
+  const selected = props.modelState?.status === "ready" ? props.modelState : undefined
+  const source = view.modelChanged ? undefined : view.observation ?? view.snapshot
+  const reported = view.modelChanged ? undefined : view.state?.lastReportedUsage
+  const provider = source?.providerId ?? selected?.providerId
+  const model = source?.modelId ?? selected?.modelId
+  const lastActivity = props.updatedAt === undefined ? undefined : new Date(props.updatedAt)
+  const knownDate = lastActivity !== undefined && Number.isFinite(lastActivity.valueOf())
+  return <>
+    <dl className="context-inspector-grid" aria-label={t("上下文容量")}>
+      {props.sessionTitle ? <Stat label={t("會話名稱")}>{props.sessionTitle}</Stat> : null}
+      {props.turnCount !== undefined ? <Stat label={t("回合數")}>{props.turnCount.toLocaleString(locale)}</Stat> : null}
+      {provider ? <Stat label={t("供應商")}>{provider}</Stat> : null}
+      {model ? <Stat label={t("模型")}>{model}</Stat> : null}
+      {view.modelWindow !== undefined && !view.modelChanged ? <Stat label={t("模型上下文視窗")}>{number(view.modelWindow)}</Stat> : null}
+      {view.inputBudget !== undefined && view.inputBudget !== view.modelWindow && !view.modelChanged ? <Stat label={t("可用輸入預算")}>{number(view.inputBudget)}</Stat> : null}
+      {view.tokens !== undefined ? <Stat label={view.sourceLabel}>{number(view.tokens)}</Stat> : null}
+      <Stat label={t("上下文用量")} note={view.percent === undefined ? undefined : view.basis}>{view.reading}</Stat>
+      {view.measured !== undefined && view.preparedEstimate ? <Stat label={t("上次估算輸入")}>~{number(view.preparedEstimate.value)}</Stat> : null}
+      {view.measured === undefined && !view.modelChanged && view.state?.lastReportedInputTokens !== undefined ? <Stat label={t("上次請求輸入（供應商回報）")}>{number(view.state.lastReportedInputTokens)}</Stat> : null}
+      {reported?.outputTokens !== undefined ? <Stat label={t("上次輸出 Token")}>{number(reported.outputTokens)}</Stat> : null}
+      {reported?.cacheReadTokens !== undefined ? <Stat label={t("其中快取讀取 Token")}>{number(reported.cacheReadTokens)}</Stat> : null}
+      {reported?.cacheCreationTokens !== undefined ? <Stat label={t("其中快取寫入 Token")}>{number(reported.cacheCreationTokens)}</Stat> : null}
+      {knownDate ? <Stat label={t("最後活動")}><time dateTime={lastActivity.toISOString()}>{lastActivity.toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" })}</time></Stat> : null}
+    </dl>
+    {!view.state && view.error === undefined ? <p>{t("讀取上下文容量中…")}</p> : null}
+    <ContextNotice view={view} usage={props.usage} />
+    {view.modelChanged ? null : <ContextBreakdown view={view} expanded />}
+    {view.observation && !view.modelChanged ? <section className="session-context-section" aria-label={t("請求限制")}>
+      <h2>{t("請求限制")}</h2>
+      <dl className="context-usage-fact-group">
+        <Stat label={t("輸出上限")}>{outputCapText(t, view.observation.output.capSupport, view.observation.output.effectiveCap)}</Stat>
+        {view.observation.output.allowance !== undefined ? <Stat label={t("輸出預留")}>{number(view.observation.output.allowance)}</Stat> : null}
+      </dl>
+    </section> : null}
+    {props.children}
+  </>
+}
+
+export function ContextUsageSidebar(props: SessionDetailsProps & { onOpenPage(): void }) {
+  const t = useText()
+  return <section className="context-summary-pane" aria-label={t("上下文詳情")}>
+    <div className="context-inspector-tools">
+      <Button variant="ghost" size="small" data-context-open-page onClick={props.onOpenPage} icon={<Maximize2 aria-hidden="true" size={14} />}>{t("展開上下文")}</Button>
+    </div>
+    <SessionContextDetails {...props} />
+  </section>
+}
+
+export function ContextUsagePage(props: SessionDetailsProps & { onBack(): void }) {
+  const t = useText()
   const heading = useRef<HTMLHeadingElement>(null)
   useLayoutEffect(() => { heading.current?.focus({ preventScroll: true }) }, [])
-  const lastActivity = props.updatedAt === undefined ? undefined : new Date(props.updatedAt)
-  const hasDate = lastActivity !== undefined && Number.isFinite(lastActivity.valueOf())
   return <section className="session-context-page" aria-label={t("上下文詳情")}>
     <div className="session-context-content">
-      <Button variant="ghost" size="small" onClick={props.onBack}><ArrowLeft aria-hidden="true" size={14} />{t("返回會話")}</Button>
-      <header>
-        <h1 ref={heading} tabIndex={-1}>{t("上下文詳情")}</h1>
-        {props.sessionTitle ? <p>{props.sessionTitle}</p> : null}
-        {props.turnCount !== undefined || hasDate ? <dl className="context-session-metadata">
-          {props.turnCount !== undefined ? <div><dt>{t("回合數")}</dt><dd>{props.turnCount.toLocaleString(locale)}</dd></div> : null}
-          {hasDate ? <div><dt>{t("最後活動")}</dt><dd><time dateTime={lastActivity.toISOString()}>{lastActivity.toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" })}</time></dd></div> : null}
-        </dl> : null}
-      </header>
-      <section className="session-context-section" aria-label={t("上下文容量")}>
-        <h2>{t("上下文容量")}</h2>
-        <ContextFacts view={view} usage={props.usage} layout="page" />
-      </section>
-      {observation && !view.modelChanged ? <section className="session-context-section" aria-label={t("請求限制")}>
-        <h2>{t("請求限制")}</h2>
-        <dl className="context-usage-fact-group">
-          {view.modelWindow !== undefined ? <div className="context-usage-fact"><dt>{t("模型上下文視窗")}</dt><dd>{number(view.modelWindow)}</dd></div> : null}
-          <div className="context-usage-fact"><dt>{t("輸出上限")}</dt><dd>{outputCapText(t, observation.output.capSupport, observation.output.effectiveCap)}</dd></div>
-          {observation.output.allowance !== undefined ? <div className="context-usage-fact"><dt>{t("輸出預留")}</dt><dd>{number(observation.output.allowance)}</dd></div> : null}
-        </dl>
-      </section> : null}
+      <Button variant="ghost" size="small" onClick={props.onBack} icon={<ArrowLeft aria-hidden="true" size={14} />}>{t("返回會話")}</Button>
+      <h1 ref={heading} tabIndex={-1}>{t("上下文詳情")}</h1>
+      <SessionContextDetails {...props} />
     </div>
   </section>
 }
 
-export function ContextUsageTrigger({ bridge, workspaceId, sessionId, usage, modelState, onOpenSidebar }: ContextUsageScope & ContextViews & { onOpenSidebar?(): void }) {
+function ContextGauge({ percent }: { percent?: number }) {
+  return (
+    <svg className="context-usage-gauge" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <circle className="context-usage-gauge-track" cx="8" cy="8" r="6" />
+      {percent !== undefined && percent > 0 ? <circle className="context-usage-gauge-fill" cx="8" cy="8" r="6" pathLength="100" strokeDasharray={`${Math.min(percent, 100)} 100`} transform="rotate(-90 8 8)" /> : null}
+    </svg>
+  )
+}
+
+const compactCounts = {
+  en: new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }),
+  "zh-TW": new Intl.NumberFormat("zh-TW", { notation: "compact", maximumFractionDigits: 1 }),
+}
+
+type ContextHeaderProps = ContextViews & ContextUsageScope & { compact?: boolean; expanded: boolean; onToggle(): void }
+
+export function ContextHeaderUsage(props: ContextHeaderProps) {
+  if (props.compact) return <ContextUsageTrigger {...props} compactHeader onOpenSidebar={() => { if (!props.expanded) props.onToggle() }} />
+  return <WideContextHeader {...props} />
+}
+
+function WideContextHeader(props: ContextHeaderProps) {
+  const t = useText()
+  const locale = useLocale(state => state.locale)
+  const view = useContextReading(props)
+  const descriptionId = useId()
+  const detail = [view.capacity ? `${view.sourceLabel} · ${view.capacity}` : undefined, view.basis, view.status]
+    .filter(Boolean).join(" · ") || t("上下文容量")
+  const count = view.tokens === undefined ? "—" : compactCounts[locale].format(view.tokens)
+  return <>
+    <button className={view.warning ? "context-header-usage context-usage-trigger-warning" : "context-header-usage"}
+      type="button" onClick={props.onToggle} aria-expanded={props.expanded} aria-label={t("上下文容量")}
+      aria-describedby={descriptionId} title={detail}>
+      <ContextGauge percent={view.percent} />
+      <span className="context-header-count">{count}</span>
+    </button>
+    <span id={descriptionId} hidden>{detail}</span>
+  </>
+}
+
+function ContextUsageTrigger({ bridge, workspaceId, sessionId, usage, modelState, onOpenSidebar, compactHeader = false }: ContextUsageScope & ContextViews & { onOpenSidebar?(): void; compactHeader?: boolean }) {
   const t = useText()
   const panelId = useId()
   const readingId = useId()
@@ -230,7 +317,7 @@ export function ContextUsageTrigger({ bridge, workspaceId, sessionId, usage, mod
   const [popup, setPopup] = useState<PopupState>()
   const open = popup?.bridge === bridge && popup.workspaceId === workspaceId && popup.sessionId === sessionId
   const mode = open ? popup.mode : undefined
-  const [placement, setPlacement] = useState({ right: 24, bottom: 72 })
+  const [placement, setPlacement] = useState<CSSProperties>({ right: 24, bottom: 72 })
   function cancelClose() { clearTimeout(closeTimer.current); closeTimer.current = undefined }
   function closePopup(returnFocus = false) {
     cancelClose()
@@ -264,7 +351,14 @@ export function ContextUsageTrigger({ bridge, workspaceId, sessionId, usage, mod
       const rect = trigger.current?.getBoundingClientRect()
       if (rect && panel.current) {
         const maxRight = window.innerWidth - panel.current.getBoundingClientRect().width - 16
-        setPlacement({ right: Math.max(16, Math.min(maxRight, window.innerWidth - rect.right)), bottom: Math.max(16, window.innerHeight - rect.top + 10) })
+        const right = Math.max(16, Math.min(maxRight, window.innerWidth - rect.right))
+        if (compactHeader) {
+          const top = Math.max(8, rect.bottom + 6)
+          setPlacement({ right, top, maxHeight: `calc(100vh - ${top + 12}px)` })
+        } else {
+          const bottom = Math.max(16, window.innerHeight - rect.top + 10)
+          setPlacement({ right, bottom, maxHeight: `calc(100vh - ${bottom + 16}px)` })
+        }
       }
     }
     position()
@@ -274,27 +368,31 @@ export function ContextUsageTrigger({ bridge, workspaceId, sessionId, usage, mod
     const removeEscape = listenForegroundEscape(panel.current, () => { closePopup(true); if (mode === "explicit") trigger.current?.focus() })
     document.addEventListener("pointerdown", dismiss)
     return () => { window.removeEventListener("resize", position); document.removeEventListener("pointerdown", dismiss); removeEscape() }
-  }, [open, mode])
+  }, [open, mode, compactHeader])
   const view = useContextReading({ usage, modelState })
   const { reading, readingDetail, warning, percent } = view
   const detailId = `${readingId}-details`
 
   return <>
-    <button ref={trigger} type="button" className={warning ? "icon-button context-usage-trigger context-usage-trigger-warning" : "icon-button context-usage-trigger"} aria-label={t("上下文容量")} aria-describedby={readingDetail ? `${readingId} ${detailId}` : readingId} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? panelId : undefined} title={open ? undefined : `${t("上下文容量")} · ${reading}${readingDetail ? ` · ${readingDetail}` : ""}`} onClick={activate}
-      onMouseEnter={preview} onMouseLeave={scheduleClose} onPointerEnter={event => { if (event.pointerType !== "touch") preview() }} onPointerLeave={event => { if (event.pointerType !== "touch") scheduleClose() }}>
-      <svg className="context-usage-gauge" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-        <circle className="context-usage-gauge-track" cx="8" cy="8" r="6" />
-        {percent !== undefined && percent > 0 ? <circle className="context-usage-gauge-fill" cx="8" cy="8" r="6" pathLength="100" strokeDasharray={`${Math.min(percent, 100)} 100`} transform="rotate(-90 8 8)" /> : null}
-      </svg>
+    <button ref={trigger} type="button" className={`icon-button context-usage-trigger${warning ? " context-usage-trigger-warning" : ""}${compactHeader ? " context-header-compact" : ""}`} aria-label={t("上下文容量")} aria-describedby={readingDetail ? `${readingId} ${detailId}` : readingId} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? panelId : undefined} title={open ? undefined : `${t("上下文容量")} · ${reading}${readingDetail ? ` · ${readingDetail}` : ""}`} onClick={activate}
+      onMouseEnter={compactHeader ? undefined : preview} onMouseLeave={compactHeader ? undefined : scheduleClose}
+      onPointerEnter={event => { if (!compactHeader && event.pointerType !== "touch") preview() }} onPointerLeave={event => { if (!compactHeader && event.pointerType !== "touch") scheduleClose() }}>
+      <ContextGauge percent={percent} />
       <span id={readingId} className="context-usage-reading">{reading}</span>
     </button>
     {readingDetail ? <span id={detailId} hidden>{readingDetail}</span> : null}
-    {open ? createPortal(<div id={panelId} ref={panel} tabIndex={-1} className="context-usage-popover ih-menu-surface" style={{ ...placement, maxHeight: `calc(100vh - ${placement.bottom + 16}px)` }} role="dialog" aria-label={t("上下文容量")}
-      onMouseEnter={cancelClose} onMouseLeave={scheduleClose} onPointerEnter={cancelClose} onPointerLeave={event => { if (event.pointerType !== "touch") scheduleClose() }}>
-      <strong>{t("上下文容量")}</strong>
-      <ContextFacts view={view} usage={usage} />
+    {open ? createPortal(<div id={panelId} ref={panel} tabIndex={-1} className={`context-usage-popover ih-menu-surface${compactHeader ? " context-header-menu" : ""}`} style={placement} role="dialog" aria-label={t("上下文容量")}
+      onMouseEnter={cancelClose} onMouseLeave={compactHeader ? undefined : scheduleClose} onPointerEnter={cancelClose} onPointerLeave={event => { if (!compactHeader && event.pointerType !== "touch") scheduleClose() }}>
+      {compactHeader ? <>
+        <dl className="context-usage-fact-group">
+          <div className="context-usage-fact"><dt>{view.tokens === undefined ? t("輸入 Token") : view.sourceLabel}</dt><dd>{view.tokens === undefined ? "—" : number(view.tokens)}</dd></div>
+          <div className="context-usage-fact"><dt>{t("上下文用量")}</dt><dd>{view.reading}</dd></div>
+        </dl>
+        {view.percent !== undefined && view.basis ? <small>{view.basis}</small> : null}
+        <ContextNotice view={view} usage={usage} />
+      </> : <><strong>{t("上下文容量")}</strong><ContextFacts view={view} usage={usage} /></>}
       {onOpenSidebar ? <Button variant="secondary" size="small" className="context-open-sidebar" onClick={() => { closePopup(); onOpenSidebar() }}>
-        <PanelRightOpen aria-hidden="true" size={14} />{t("在側邊欄查看上下文")}
+        <PanelRightOpen aria-hidden="true" size={14} />{t(compactHeader ? "檢視上下文用量" : "在側邊欄查看上下文")}
       </Button> : null}
     </div>, document.body) : null}
   </>

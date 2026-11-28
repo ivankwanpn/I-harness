@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useId, useRef, useState, useCallback, lazy, Suspense, type CSSProperties } from "react"
 import { Activity, ArrowLeft, Bell, Brain, Code2, FileDiff, FileText, FolderOpen, GitBranch, Globe, ListTodo, PanelLeft, PanelRight, Search, ShieldCheck, Target, TerminalSquare, UsersRound, Wrench, type LucideIcon } from "lucide-react"
 import { BrowserPane } from "../browser/BrowserPane.tsx"
-import { ContextUsageTrigger, ContextUsageSidebar, ContextUsagePage } from "../session/ContextUsage.tsx"
+import { ContextHeaderUsage, ContextUsageSidebar, ContextUsagePage } from "../session/ContextUsage.tsx"
+import { ContextSessionRecords } from "../session/ContextSessionRecords.tsx"
+import type { WireEvent } from "../session/history-events.ts"
 import { SessionContextScope, WithSessionContext } from "../session/SessionContextScope.tsx"
 import { WorkbenchTools, type WorkbenchTool } from "./WorkbenchTools.tsx"
 import { CommandPalette } from "./CommandPalette.tsx"
@@ -70,6 +72,7 @@ function isPrimaryPane(id: WorkPaneId): id is PrimaryPaneId {
 
 export interface ConversationView {
   rows: TimelineRow[]
+  recentEvents?: readonly WireEvent[]
   history?: HistoryScroll
   assistantPreview?: import("../session/event-window.ts").AssistantPreview
   loading?: boolean
@@ -336,6 +339,7 @@ export function Workbench({
   const reviewOpen = useUiStore((state) => state.reviewOpen)
   const reviewWidth = useUiStore((state) => state.reviewWidth)
   const setReviewWidth = useUiStore((state) => state.setReviewWidth)
+  const [contextWidth, setContextWidth] = useState<number>()
   const toggleReview = useUiStore((state) => state.toggleReview)
   function selectPane(id: WorkPaneId) {
     if (isPrimaryPane(id)) lastPrimaryPane.current = id
@@ -464,7 +468,11 @@ export function Workbench({
   const visibleSidebarWidth = pageOpen || drawer.narrow || sidebarCollapsed ? 0 : sidebarWidth
   const reviewMax = Math.max(1, Math.min(1200, viewportWidth - 48 - (rightDocked ? 8 + visibleSidebarWidth + 400 : 24)))
   const reviewMin = Math.min(280, reviewMax)
-  const actualReviewWidth = Math.min(reviewMax, Math.max(reviewMin, reviewWidth))
+  const preferredReviewWidth = workPaneTab === "context" ? contextWidth ?? Math.round((viewportWidth - visibleSidebarWidth - 56) * 0.6) : reviewWidth
+  const actualReviewWidth = Math.min(reviewMax, Math.max(reviewMin, preferredReviewWidth))
+  const contextRecords = selectedWorkspaceId && selectedSessionId && conversation?.recentEvents
+    ? <ContextSessionRecords key={workScope} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId}
+        recent={conversation.recentEvents} instructions={panes.instructions.available} /> : null
 
   return (
     <SessionContextScope bridge={bridge} workspaceId={showContext ? selectedWorkspaceId : undefined} sessionId={showContext ? selectedSessionId : undefined}
@@ -499,6 +507,10 @@ export function Workbench({
       <main className="center-pane">
         <TitleBar bridge={bridge} title={surface === "plugins" ? t("插件市場") : surface === "memory" ? t("工作區記憶") : surface === "search" ? t("搜尋會話") : selectedSessionId === undefined ? displayProject?.name ?? workspaceTitle : sessionTitle}
           leading={<button type="button" className="icon-button" aria-label={t("顯示側欄")} aria-expanded={drawer.narrow ? drawer.open : !sidebarCollapsed} onClick={toggleSidebar}><PanelLeft size={18} /></button>}>
+          {showContext && selectedWorkspaceId && selectedSessionId ? <WithSessionContext>{usage => <ContextHeaderUsage
+            bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} usage={usage} modelState={conversation?.modelState}
+            expanded={workVisible && workPaneTab === "context"} compact={viewportWidth - visibleSidebarWidth - (rightDocked ? actualReviewWidth : 0) < 700}
+            onToggle={() => { if (workVisible && workPaneTab === "context") toggleReview(); else openPane("context") }} />}</WithSessionContext> : null}
           <button type="button" className="icon-button review-toggle" aria-label={t("成果檢查")} aria-expanded={workVisible} onClick={() => {
             if (contextPageOpen) { openPane("context"); return }
             if (!reviewOpen) selectPane(fallbackPane)
@@ -536,7 +548,7 @@ export function Workbench({
             const owner = workspaceScope.current
             setSurface("conversation")
             requestAnimationFrame(() => { if (workspaceScope.current === owner) document.querySelector<HTMLElement>("[data-context-open-page]")?.focus() })
-          }} />}</WithSessionContext> : null}
+          }}>{contextRecords}</ContextUsagePage>}</WithSessionContext> : null}
         {surface === "plugins" && selectedWorkspaceId ? <PluginMarketplace key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : surface === "search" && selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <SessionSearch key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} titles={Object.fromEntries((dashboard?.sessions ?? []).filter((row) => row.title).map((row) => [row.id, row.title!]))} onSelect={(target) => { if (onSelectHistory) onSelectHistory(target); else { setSurface("conversation"); onSelectSession(target.sessionId) } }} /> : memoryOpen && selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <MemoryPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} onAuthoringRequest={capabilities["desktop-memory-authoring"]?.includes("1") ? authoringRequest : undefined} /> : historicalView && !contextPageOpen ? <SessionHistoryView {...historicalView} resultReader={historyResultReader} navigation={fileNavigation} /> : <section className="session-body" hidden={contextPageOpen} aria-label={t("會話")}>
           {selectedSessionId !== undefined && selectedWorkspaceId !== undefined && conversation !== undefined
             ? (
@@ -594,12 +606,6 @@ export function Workbench({
                   workflowEnabled={capabilities["desktop-workflow"]?.includes("1")}
                   fileReferencesEnabled={capabilities["prompt-context"]?.includes("1") && capabilities["desktop-review"]?.includes("1")}
                   imageAttachmentsEnabled={capabilities["prompt-images"]?.includes("1") && conversation.modelState?.status === "ready" && conversation.modelState.imageInput === true}
-                  contextUsage={panes.context.available && !contextPageOpen ? <WithSessionContext>{usage => <ContextUsageTrigger
-                    bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} usage={usage}
-                    modelState={conversation.modelState} onOpenSidebar={() => {
-                      openPane("context")
-                      requestAnimationFrame(() => document.getElementById(`${workPaneId}-context`)?.focus())
-                    }} />}</WithSessionContext> : undefined}
                   canCompact={conversation.canCompact}
                   onCompact={capabilities["desktop-compaction"]?.includes("1") ? conversation.onCompact : undefined}
                   bridge={bridge}
@@ -676,7 +682,7 @@ export function Workbench({
       </main>
       </>}
       {reviewOpen || visitedWork.current.tabs.size > 0 || visitedWorkspacePanes.current.tabs.size > 0 ? <aside className={`review-pane${workPaneTab === "files" && review?.projectFiles ? " review-pane-files" : ""}${workPaneTab === 'instructions' ? ' review-pane-instructions' : ''}`} aria-label={t("成果檢查")} hidden={!workVisible}>
-        <ReviewResizeHandle width={actualReviewWidth} min={reviewMin} max={reviewMax} onResize={setReviewWidth} />
+        <ReviewResizeHandle width={actualReviewWidth} min={reviewMin} max={reviewMax} onResize={workPaneTab === "context" ? setContextWidth : setReviewWidth} />
         <div className="work-pane-header">
           {primaryPaneOpen ? <PaneTabs id={workPaneId} label={t("成果檢查")} items={primaryTabs} selected={workPaneTab} onSelect={id => {
             const tab = primaryTabs.find(tab => tab.id === id)
@@ -687,7 +693,8 @@ export function Workbench({
         <div role={primaryPaneOpen ? "tabpanel" : undefined} id={`${workPaneId}-panel`} aria-labelledby={primaryPaneOpen ? `${workPaneId}-${workPaneTab}` : undefined}>
         {workVisible && paneSelection.unavailable ? <p role="status" className="notice">{t("目前工作區後端未提供此功能。")}</p> : null}
         {workVisible && workPaneTab === "context" ? <WithSessionContext>{usage => <ContextUsageSidebar usage={usage} modelState={conversation?.modelState}
-          onOpenPage={() => { drawer.closeTemporary(); setSurface("context") }} />}</WithSessionContext> : null}
+          sessionTitle={sessionTitle} turnCount={sessionRow?.turnCount} updatedAt={sessionRow?.updatedAt}
+          onOpenPage={() => { drawer.closeTemporary(); setSurface("context") }}>{contextRecords}</ContextUsageSidebar>}</WithSessionContext> : null}
         {workVisible && workPaneTab === "diagnostics" && selectedWorkspaceId ? <DiagnosticsPane key={`diagnostics:${selectedWorkspaceId}:${selectedSessionId ?? ""}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} /> : null}
         {workVisible && workPaneTab === "execution" && selectedWorkspaceId && selectedSessionId ? <ExecutionPane key={`execution:${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} /> : null}
         {workVisible && workPaneTab === "instructions" && selectedWorkspaceId && selectedSessionId ? <InstructionsPane key={`instructions:${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} /> : null}

@@ -912,6 +912,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     ? undefined
     : {
         rows: conversationRows,
+        recentEvents: windowKey === currentScope ? events : undefined,
         history: scrollHistory.earlier || scrollHistory.viewport || scrollHistory.loading || scrollHistory.error ? scrollHistory : undefined,
         assistantPreview: windowKey === currentScope && eventWindow.assistantPreview?.offset === 0 ? eventWindow.assistantPreview : undefined,
         loading: historyLoading,

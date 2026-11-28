@@ -5,7 +5,7 @@ import { contextStateFromObservation } from "../../core-session/src/context.ts"
 import type { RequestBudgetSnapshotV2 } from "@i-harness/sdk/context"
 import { afterEach, expect, it, vi } from "vitest"
 import type { DesktopBridge, DesktopEvent } from "../src/shared/bridge.ts"
-import { ContextUsage, ContextUsagePage } from "../src/renderer/session/ContextUsage.tsx"
+import { ContextUsage, ContextUsagePage, ContextUsageSidebar } from "../src/renderer/session/ContextUsage.tsx"
 
 function deferred() {
   let resolve!: (value: unknown) => void
@@ -57,6 +57,34 @@ it.each([[undefined, "支援，未記錄上限數值"], [4096, "已套用 · 4,0
   expect(within(limits).getByText("輸出上限").nextElementSibling?.textContent).toBe(label)
 })
 const flush = () => act(async () => {})
+
+it.each(["docked", "expanded"] as const)("keeps matched provider counts distinct from local estimates in the %s inspector", layout => {
+  const state = {
+    ...contextStateFromObservation(observation({ freshness: "awaiting-projection" })),
+    lastReportedInputTokens: 47000,
+    lastReportedUsage: { inputTokens: 47000, outputTokens: 82, cacheReadTokens: 1200, cacheCreationTokens: 0 },
+  }
+  const props = { usage: { current: { owner: {}, state, loading: false }, retry() {} }, sessionTitle: "Scanned project", turnCount: 2 }
+  const view = (changed: boolean) => {
+    const modelState = changed ? { status: "ready" as const, providerId: "other", modelId: "different", label: "Different" } : undefined
+    return layout === "docked" ? <ContextUsageSidebar {...props} modelState={modelState} onOpenPage={() => {}} />
+      : <ContextUsagePage {...props} modelState={modelState} onBack={() => {}} />
+  }
+  const rendered = render(view(false))
+  const content = within(screen.getByRole("region", { name: "上下文詳情" }))
+  const stat = (name: string) => content.getByText(name, { selector: "dt" }).nextElementSibling?.textContent
+  expect(stat("上次請求輸入（供應商回報）")).toBe("47,000")
+  expect(stat("上下文用量")).toBe("4.7%")
+  expect(stat("上次輸出 Token")).toBe("82")
+  expect(stat("其中快取讀取 Token")).toBe("1,200")
+  expect(stat("其中快取寫入 Token")).toBe("0")
+  expect(stat("上次估算輸入")).toBe("~49,000")
+  expect(stat("使用者訊息")).toBe("~900")
+  rendered.rerender(view(true))
+  expect(stat("上下文用量")).toBe("—")
+  expect(content.queryByText("其中快取讀取 Token")).toBeNull()
+  expect(content.queryByText("上次輸出 Token")).toBeNull()
+})
 const advance = (milliseconds: number) => act(async () => { await vi.advanceTimersByTimeAsync(milliseconds) })
 
 afterEach(() => { cleanup(); vi.useRealTimers() })
